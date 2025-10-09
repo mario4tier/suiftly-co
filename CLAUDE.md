@@ -4,35 +4,39 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Overview
 
-**suiftly-co** - A new repository currently in initial setup phase.
+**suiftly-co** - Customer-facing platform for Suiftly services (Sui blockchain infrastructure).
 
 Repository: https://github.com/mario4tier/suiftly-co
 
+## What This Project Does
+
+Self-service dashboard where customers configure and manage Suiftly infrastructure services:
+- Web dashboard (SPA) for service configuration
+- Wallet-based authentication (sign-in with Sui)
+- Usage-based billing with Web3 wallet integration
+- API backend with tRPC (type-safe)
+
+Infrastructure (HAProxy, Seal servers) lives in separate **walrus** project.
+
+## Architecture
+
+**Read [ARCHITECTURE.md](ARCHITECTURE.md) for complete details.**
+
+**System diagram:** [docs/Suiftly - Seal Ops.png](docs/Suiftly - Seal Ops.png) shows the complete infrastructure (this repo builds the red NetOps components: SPA, API servers, PostgreSQL, Global Manager).
+
+Key points:
+- **Monorepo:** Turborepo + npm workspaces
+- **Stack:** TypeScript everywhere (Vite + React, Fastify, PostgreSQL)
+- **Auth:** Wallet signature verification (no passwords)
+- **Self-hosted:** No cloud dependencies
+
 ## Current Status
 
-This repository is in its initial stage with no established codebase yet. When developing this project:
-
-1. **Check for Updates**: This CLAUDE.md should be updated as the project evolves with:
-   - Chosen technology stack and architecture
-   - Build, test, and development commands
-   - Project structure and key architectural decisions
-
-2. **Project Name Context**: The name "suiftly-co" may suggest a Sui blockchain-related project. Confirm the project's purpose and technology choices with the user before making architectural decisions.
+Initial setup phase - no code scaffolded yet.
 
 ## Development Guidelines
 
-Until the project structure is established:
-- Ask the user about the intended technology stack if unclear
-- Follow the conventions of the chosen framework/language once determined
-- Update this CLAUDE.md file as the project structure emerges
-
-## Notes
-
-- No existing build/test/lint commands yet
-- No established architecture patterns yet
-- No dependencies configured yet
-
-This file should be updated as the project develops to include:
-- Common development commands
-- High-level architecture overview
-- Key patterns and conventions specific to this codebase
+- Follow architecture decisions in ARCHITECTURE.md
+- Keep it simple (rapid development principle)
+- TypeScript strict mode
+- Update this file only when adding commands or major patterns
