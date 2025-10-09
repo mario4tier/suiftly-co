@@ -25,11 +25,11 @@ Infrastructure (HAProxy, Seal servers, control plane) handled by **walrus** proj
 
 ### Frontend (SPA)
 
-**Framework:** Vite + React 18+
-**Routing:** TanStack Router (type-safe, page navigation)
+**Framework:** Vite 7 + React 19
+**Routing:** TanStack Router v1 (type-safe, page navigation)
 **Styling:** Tailwind CSS + shadcn/ui
 **State:**
-- Server state: TanStack Query (via tRPC)
+- Server state: TanStack Query v5 (via tRPC)
 - Global UI state: Zustand (auth, theme, sidebar, preferences)
 - Form state: React Hook Form
 - Route state: URL params
@@ -39,24 +39,26 @@ Infrastructure (HAProxy, Seal servers, control plane) handled by **walrus** proj
 
 ### Backend (API)
 
-**Runtime:** Node.js 20+ with TypeScript 5+
-**Framework:** Fastify 4+
-**API:** tRPC v11 (end-to-end type safety)
+**Runtime:** Node.js 22 LTS (Active LTS until Oct 2025) with TypeScript 5.9
+**Framework:** Fastify 5 (v4 EOL June 2025)
+**API:** tRPC v11 (end-to-end type safety, SSE subscriptions)
 **Validation:** Zod (shared schemas with frontend)
 **Auth:** Wallet-based authentication (sign-in with Sui) → JWT via jose
 **Rate Limit:** @fastify/rate-limit
 
 ### Database
 
-**DB:** PostgreSQL 15+ (self-hosted, US-East)
-**Extension:** TimescaleDB (HAProxy logs time-series)
-**ORM:** Drizzle ORM (TypeScript-first, SQL-like)
+**DB:** PostgreSQL 16 (mature, supported until Nov 2028) or PostgreSQL 17 (latest)
+**Extension:** TimescaleDB 2.17+ (PG 17 compatible, avoid PG 17.1)
+**ORM:** Drizzle ORM (TypeScript-first, identity columns, SQL-like)
 **Migrations:** Drizzle Kit
+
+**Note:** TimescaleDB 2.17+ required for PostgreSQL 17. Use PG 17.2+ (not 17.1 due to ABI break).
 
 ### Billing Worker
 
 **Type:** Periodic cron job (idempotent)
-**Runtime:** Node.js or Bun
+**Runtime:** Node.js 22 LTS (or Bun for performance)
 **Schedule:** Runs hourly (configurable)
 **Tasks:** Log aggregation, usage calculation, billing
 
@@ -91,7 +93,8 @@ Origin Servers (Self-Hosted)
 - Frontend: Static files from origin (HAProxy cache)
 - API: PM2 on US-East servers
 - DB: Self-hosted PostgreSQL (co-located with API)
-- Backups: pg_dump → Cloudflare R2
+- Backups: pg_dump → Cloudflare R2 (daily via cron)
+- **All operations via idempotent Python scripts** (disaster recovery ready)
 
 ---
 
@@ -121,11 +124,27 @@ suiftly-co/
 │     └─ package.json
 │
 ├─ packages/
-│  ├─ database/                 # Drizzle schema, migrations
+│  ├─ database/                 # Drizzle schema, migrations, fixtures
+│  │  ├─ src/
+│  │  │  ├─ schema/             # Table definitions
+│  │  │  ├─ migrations/         # Generated SQL migrations
+│  │  │  └─ testUtils.ts        # resetTestDB, seed helpers
+│  │  └─ tests/                 # Migration tests
 │  └─ shared/                   # Shared types, Zod schemas, utils
 │
-└─ services/
-   └─ billing-worker/           # Cron-based billing processor
+├─ services/
+│  └─ billing-worker/           # Cron-based billing processor
+│
+└─ scripts/                     # Idempotent deployment scripts (Python)
+   ├─ provision-server.py       # New server setup (PostgreSQL, Node.js, PM2)
+   ├─ deploy.py                 # Application deployment (rolling updates)
+   ├─ backup.py                 # Database backup to R2
+   ├─ restore.py                # Restore from backup
+   └─ lib/
+      ├─ server.py              # SSH, rsync, apt utilities
+      ├─ postgres.py            # PostgreSQL management helpers
+      ├─ healthcheck.py         # Health check polling
+      └─ r2.py                  # Cloudflare R2 operations
 ```
 
 **Monorepo:** Turborepo + npm workspaces
@@ -211,11 +230,76 @@ appRouter = {
 
 ## Development
 
-**Local Setup:**
-```bash
-npm install
-cd packages/database && npm run db:push
+**PostgreSQL Setup (Native - Production Parity):**
 
+Both development and production use **native PostgreSQL** (no Docker). This ensures identical behavior, performance, and troubleshooting.
+
+**Ubuntu/Debian (WSL2 or Linux):**
+```bash
+# Install PostgreSQL 16 + TimescaleDB 2.17+
+# (PG 16 recommended for maturity, PG 17 for latest features)
+sudo apt update
+sudo apt install postgresql-16 postgresql-16-timescaledb
+
+# Start PostgreSQL service
+sudo service postgresql start
+
+# Create development and test databases
+sudo -u postgres psql <<SQL
+CREATE DATABASE suiftly_dev;
+CREATE DATABASE suiftly_test;
+\c suiftly_dev
+CREATE EXTENSION timescaledb;
+\c suiftly_test
+CREATE EXTENSION timescaledb;
+SQL
+
+# Configure connection (create .env file)
+cat > .env <<EOF
+DATABASE_URL=postgresql://postgres@localhost/suiftly_dev
+TEST_DATABASE_URL=postgresql://postgres@localhost/suiftly_test
+EOF
+```
+
+**macOS:**
+```bash
+# Install PostgreSQL 16 + TimescaleDB
+brew install postgresql@16 timescaledb
+
+# Start PostgreSQL
+brew services start postgresql@16
+
+# Create databases (same commands as above)
+psql postgres <<SQL
+CREATE DATABASE suiftly_dev;
+CREATE DATABASE suiftly_test;
+\c suiftly_dev
+CREATE EXTENSION timescaledb;
+\c suiftly_test
+CREATE EXTENSION timescaledb;
+SQL
+
+# Configure connection
+cat > .env <<EOF
+DATABASE_URL=postgresql://postgres@localhost/suiftly_dev
+TEST_DATABASE_URL=postgresql://postgres@localhost/suiftly_test
+EOF
+```
+
+**First-Time Project Setup:**
+```bash
+# Install dependencies
+npm install
+
+# Apply migrations to dev database
+npm run db:migrate
+
+# Optional: seed test data
+npm run db:seed
+```
+
+**Daily Development Workflow:**
+```bash
 # Terminal 1: API
 cd apps/api && npm run dev
 
@@ -224,6 +308,18 @@ cd apps/webapp && npm run dev
 
 # Terminal 3: Worker (optional)
 cd services/billing-worker && npm run dev
+
+# Run tests (uses suiftly_test database)
+npm run test
+```
+
+**Database Management:**
+```bash
+npm run db:studio        # Visual database browser (Drizzle Studio)
+npm run db:push          # Dev: sync schema instantly (no migration files)
+npm run db:generate      # Prod: create migration from schema changes
+npm run db:migrate       # Prod: apply migrations
+npm run db:test:reset    # Reset test database to clean state
 ```
 
 **CI/CD Pipeline (GitHub Actions):**
@@ -231,11 +327,22 @@ cd services/billing-worker && npm run dev
 # .github/workflows/ci.yml
 on: [push, pull_request]
 jobs:
+  test:
+    services:
+      postgres:
+        image: timescale/timescaledb:latest-pg15
+        env:
+          POSTGRES_DB: suiftly_test
+    steps:
+      - npm ci
+      - npm run test:unit          # Fast unit tests
+      - npm run test:integration   # API + DB tests
+      - npm run test:e2e          # E2E (main branch only)
+
   validate:
-    - npm ci
     - turborepo build (all packages)
     - typecheck (tRPC + Drizzle schemas)
-    - lint + tests
+    - lint
     - migration check (fail if schema changed but no migration)
 
   deploy (main branch only):
@@ -292,62 +399,225 @@ git commit -m "Migration: add feature"
 ## Key Dependencies
 
 **Frontend:**
-- react, @tanstack/react-router, @tanstack/react-query
-- @trpc/client, @trpc/react-query
+- react@19, @tanstack/react-router@^1, @tanstack/react-query@^5
+- @trpc/client@^11, @trpc/react-query@^11
 - zustand, react-hook-form, zod
 - @mysten/sui.js, @mysten/dapp-kit
-- tailwindcss, vite
+- tailwindcss, vite@^7
 
 **Backend:**
-- fastify, @fastify/jwt, @fastify/cors
-- @trpc/server, drizzle-orm, postgres
+- fastify@^5, @fastify/jwt, @fastify/cors, @fastify/rate-limit
+- @trpc/server@^11, drizzle-orm, postgres
 - zod, jose, pino
+- typescript@^5.9
 
 **Worker:**
 - node-cron, drizzle-orm, postgres
+
+**Dev Tools:**
+- vitest, playwright, drizzle-kit
 
 ---
 
 ## Deployment (Zero-Downtime)
 
-**Build:**
-```bash
-cd apps/webapp && npm run build  # → dist/
-cd apps/api && npm run build     # → dist/
-cd services/billing-worker && npm run build
+**Philosophy:** All deployment and server provisioning uses **idempotent Python scripts**. Scripts check current state and only perform necessary actions. Safe to run repeatedly. Critical for disaster recovery and spinning up new servers quickly.
+
+**Deployment Scripts Structure:**
+```
+scripts/
+├─ provision-server.py      # New server setup (PostgreSQL, Node.js, PM2)
+├─ deploy.py                # Application deployment (rolling updates)
+├─ backup.py                # Database backup to R2
+├─ restore.py               # Restore from backup
+└─ lib/
+   ├─ server.py             # SSH, rsync utilities
+   ├─ postgres.py           # PostgreSQL management
+   └─ healthcheck.py        # Health check utilities
 ```
 
-**Rolling Deployment Script:**
+**Build Artifacts:**
 ```bash
-#!/bin/bash
-# deploy.sh
+# Local build (before deployment)
+npm run build  # Turborepo builds all apps
+# → apps/webapp/dist/
+# → apps/api/dist/
+# → services/billing-worker/dist/
+```
 
-# 1. Run migrations (backward-compatible only)
-npm run db:migrate
+**Provision New Server (Idempotent):**
+```python
+#!/usr/bin/env python3
+# scripts/provision-server.py
 
-# 2. Rolling update API servers (zero downtime)
-for SERVER in api1 api2 api3; do
-  # Upload new version
-  rsync -avz apps/api/dist/ $SERVER:/var/www/api/
+"""
+Idempotent server provisioning for Suiftly API/DB servers.
+Safe to run multiple times - only installs missing components.
+"""
 
-  # Graceful reload (PM2 handles zero-downtime)
-  ssh $SERVER "pm2 reload suiftly-api"
+import argparse
+from lib.server import SSH
 
-  # Health check
-  sleep 3
-  curl -f http://$SERVER:3000/health || exit 1
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('host', help='Server hostname or IP')
+    parser.add_argument('--role', choices=['api', 'db'], required=True)
+    args = parser.parse_args()
 
-  echo "$SERVER deployed"
-done
+    ssh = SSH(args.host)
 
-# 3. Deploy frontend (static files)
-rsync -avz apps/webapp/dist/ origin:/var/www/suiftly-app/
+    # Install PostgreSQL 16 + TimescaleDB 2.17+ (idempotent)
+    if args.role == 'db':
+        if not ssh.check_installed('postgresql-16'):
+            ssh.apt_install(['postgresql-16', 'postgresql-16-timescaledb'])
+            ssh.systemctl('enable', 'postgresql')
+            ssh.systemctl('start', 'postgresql')
 
-# 4. Deploy worker
-rsync -avz services/billing-worker/dist/ api1:/var/www/billing/
-ssh api1 "pm2 reload suiftly-billing"
+        # Create databases if not exist
+        ssh.run_as_postgres("""
+            SELECT 'CREATE DATABASE suiftly_prod'
+            WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'suiftly_prod')
+            \\gexec
+        """)
 
-echo "Deployment complete!"
+        ssh.run_as_postgres("CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE", db='suiftly_prod')
+
+    # Install Node.js 22 LTS + PM2 (idempotent)
+    if args.role == 'api':
+        if not ssh.check_command('node --version | grep v22'):
+            ssh.run('curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -')
+            ssh.apt_install(['nodejs'])
+
+        if not ssh.check_command('pm2 --version'):
+            ssh.run('npm install -g pm2')
+            ssh.run('pm2 startup systemd -u deploy --hp /home/deploy')
+
+    # Create directory structure (idempotent)
+    ssh.run('mkdir -p /var/www/{api,billing,webapp}')
+    ssh.run('chown -R deploy:deploy /var/www')
+
+    print(f"✓ Server {args.host} provisioned successfully")
+
+if __name__ == '__main__':
+    main()
+```
+
+**Application Deployment (Rolling Updates):**
+```python
+#!/usr/bin/env python3
+# scripts/deploy.py
+
+"""
+Zero-downtime rolling deployment.
+Idempotent - safe to re-run if deployment fails mid-way.
+"""
+
+import sys
+from lib.server import SSH, rsync
+from lib.postgres import run_migrations
+from lib.healthcheck import wait_for_health
+
+SERVERS = {
+    'api': ['api1.suiftly.io', 'api2.suiftly.io', 'api3.suiftly.io'],
+    'db': 'db1.suiftly.io'
+}
+
+def deploy():
+    # 1. Run database migrations (idempotent by design)
+    print("→ Running migrations...")
+    run_migrations(SERVERS['db'], database='suiftly_prod')
+
+    # 2. Rolling update API servers (zero downtime)
+    for server in SERVERS['api']:
+        print(f"→ Deploying to {server}...")
+        ssh = SSH(server)
+
+        # Upload new version (rsync is idempotent)
+        rsync('apps/api/dist/', f'{server}:/var/www/api/')
+
+        # Graceful reload (PM2 handles zero-downtime)
+        ssh.run('pm2 reload suiftly-api || pm2 start /var/www/api/server.js --name suiftly-api')
+
+        # Health check (wait up to 30s)
+        if not wait_for_health(f'http://{server}:3000/health', timeout=30):
+            print(f"✗ Health check failed for {server}")
+            sys.exit(1)
+
+        print(f"✓ {server} deployed successfully")
+
+    # 3. Deploy frontend (static files, idempotent)
+    print("→ Deploying webapp...")
+    rsync('apps/webapp/dist/', 'origin.suiftly.io:/var/www/webapp/')
+
+    # 4. Deploy billing worker (idempotent)
+    print("→ Deploying billing worker...")
+    primary_api = SERVERS['api'][0]
+    ssh = SSH(primary_api)
+    rsync('services/billing-worker/dist/', f'{primary_api}:/var/www/billing/')
+    ssh.run('pm2 reload suiftly-billing || pm2 start /var/www/billing/worker.js --name suiftly-billing --cron "0 * * * *"')
+
+    print("✓ Deployment complete!")
+
+if __name__ == '__main__':
+    deploy()
+```
+
+**Database Backup (Idempotent):**
+```python
+#!/usr/bin/env python3
+# scripts/backup.py
+
+"""
+Backup PostgreSQL to Cloudflare R2.
+Runs daily via cron. Idempotent - safe to run multiple times.
+"""
+
+from datetime import datetime
+from lib.postgres import pg_dump
+from lib.r2 import upload_to_r2
+
+def backup():
+    timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+    backup_file = f'/tmp/suiftly_backup_{timestamp}.sql.gz'
+
+    # Dump database (compressed)
+    pg_dump(
+        host='db1.suiftly.io',
+        database='suiftly_prod',
+        output=backup_file,
+        compress=True
+    )
+
+    # Upload to R2 (idempotent - same filename overwrites)
+    upload_to_r2(
+        bucket='suiftly-backups',
+        local_file=backup_file,
+        remote_key=f'daily/{timestamp}.sql.gz'
+    )
+
+    # Keep only last 30 days (cleanup old backups)
+    cleanup_old_backups(bucket='suiftly-backups', keep_days=30)
+
+    print(f"✓ Backup completed: {backup_file}")
+
+if __name__ == '__main__':
+    backup()
+```
+
+**Usage:**
+```bash
+# Provision new server (disaster recovery)
+python scripts/provision-server.py api4.suiftly.io --role=api
+python scripts/provision-server.py db2.suiftly.io --role=db
+
+# Deploy application (rolling update)
+python scripts/deploy.py
+
+# Backup database
+python scripts/backup.py
+
+# Restore from backup
+python scripts/restore.py --backup=20250109_120000.sql.gz --target=db1.suiftly.io
 ```
 
 **How Zero-Downtime Works:**
@@ -427,12 +697,143 @@ process.on('SIGTERM', async () => {
 
 ---
 
+## Testing Strategy
+
+**Test Infrastructure (Vitest + Playwright):**
+
+Fast, low-maintenance testing for rapid bug isolation during Claude Code-assisted development.
+
+**Test Pyramid:**
+```
+E2E Tests (Playwright)      ← Minimal (critical paths only)
+Integration Tests (Vitest)  ← Medium (API + DB)
+Unit Tests (Vitest)         ← Maximum (business logic)
+```
+
+**Project Structure:**
+```
+apps/
+├─ webapp/
+│  └─ tests/
+│     ├─ unit/              # Components, utilities
+│     └─ e2e/               # Playwright (critical flows)
+└─ api/
+   └─ tests/
+      ├─ unit/              # Services, utilities
+      └─ integration/       # tRPC routers + DB queries
+packages/
+└─ database/
+   └─ tests/
+      ├─ migrations.test.ts # Migration idempotency
+      └─ fixtures/          # Seed data for tests
+```
+
+**Test Commands:**
+```bash
+npm run test              # All tests (CI)
+npm run test:unit         # Fast (<5s) - business logic
+npm run test:integration  # Medium (10-30s) - API + DB
+npm run test:e2e          # Slow (1-2min) - critical flows only
+npm run test:watch        # Dev mode (auto-rerun)
+```
+
+**Test Database Strategy:**
+- Uses `suiftly_test` database (separate from dev)
+- Reset between test suites (`TRUNCATE CASCADE`)
+- Fixtures in `packages/database/fixtures/` for seed data
+- Real PostgreSQL queries (no mocks) for integration tests
+
+**Unit Tests (Vitest):**
+```typescript
+// packages/shared/tests/validation.test.ts
+import { serviceConfigSchema } from '../schemas'
+
+test('validates service config', () => {
+  const result = serviceConfigSchema.safeParse({ type: 'seal', region: 'us-east' })
+  expect(result.success).toBe(true)
+})
+```
+
+**Integration Tests (Vitest + Real DB):**
+```typescript
+// apps/api/tests/integration/services.test.ts
+import { appRouter } from '../../src/routes'
+import { db } from '@suiftly/database'
+
+beforeEach(async () => {
+  await db.execute(sql`TRUNCATE customers, service_configs CASCADE`)
+})
+
+test('creates service config', async () => {
+  const caller = appRouter.createCaller({ user: { id: 1 } })
+  const config = await caller.services.updateConfig({ type: 'seal', region: 'us-east' })
+  expect(config.type).toBe('seal')
+})
+```
+
+**E2E Tests (Playwright - Minimal):**
+```typescript
+// apps/webapp/tests/e2e/auth.spec.ts
+test('wallet connect → authenticate → dashboard', async ({ page }) => {
+  await page.goto('/')
+  await page.click('[data-testid="connect-wallet"]')
+  // ... wallet interaction
+  await expect(page).toHaveURL('/dashboard')
+})
+```
+
+**CI Pipeline (GitHub Actions):**
+```yaml
+# .github/workflows/ci.yml
+jobs:
+  test:
+    services:
+      postgres:
+        image: timescale/timescaledb:latest-pg15
+        env:
+          POSTGRES_DB: suiftly_test
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+    steps:
+      - run: npm run test:unit
+      - run: npm run test:integration
+      - run: npm run test:e2e  # Only on main branch
+```
+
+**Test Utilities:**
+```typescript
+// packages/database/src/testUtils.ts
+export async function resetTestDB() {
+  await db.execute(sql`TRUNCATE customers, service_configs, billing_transactions CASCADE`)
+}
+
+export async function seedCustomer(override?: Partial<Customer>) {
+  return db.insert(customers).values({
+    email: 'test@example.com',
+    wallet_address: '0x123...',
+    ...override
+  }).returning()
+}
+```
+
+**Testing Principles:**
+1. Test behavior, not implementation
+2. Favor integration tests over mocks (real DB)
+3. E2E for critical user flows only
+4. Fast feedback (<30s for unit + integration)
+5. Idempotent tests (can run in any order)
+
+---
+
 ## Next Steps
 
-1. Scaffold monorepo structure
-2. Setup PostgreSQL + TimescaleDB
-3. Create Drizzle schema
-4. Build API (Fastify + tRPC)
-5. Build webapp (Vite + React)
-6. Connect tRPC client → API → DB
-7. Deploy (SCP + PM2)
+1. Scaffold monorepo structure (Turborepo + workspaces)
+2. Create idempotent deployment scripts (provision-server.py, deploy.py)
+3. Setup PostgreSQL + TimescaleDB (via provision script)
+4. Create Drizzle schema + migrations + test infrastructure
+5. Build API (Fastify + tRPC) with integration tests
+6. Build webapp (Vite + React) with unit tests
+7. Connect tRPC client → API → DB
+8. Add E2E tests for critical flows
+9. Test deployment scripts on staging server
+10. Production deployment (using deploy.py)
