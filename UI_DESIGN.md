@@ -4,6 +4,9 @@
 
 Customer-facing platform for Suiftly infrastructure services with a Cloudflare-inspired UX.
 
+**Related Documents:**
+- **[ESCROW_DESIGN.md](ESCROW_DESIGN.md)** - Complete escrow account architecture, smart contract interface, and financial flows
+
 **Design Principles:**
 - Clean, professional interface (Cloudflare/Vercel-like)
 - Self-service configuration (no sales calls needed)
@@ -79,7 +82,7 @@ Customer-facing platform for Suiftly infrastructure services with a Cloudflare-i
 │ Header: Logo | [Wallet Widget] | User Menu          │
 ├─────────────┬───────────────────────────────────────┤
 │             │                                       │
-│  Sidebar    │         Main Content Area            │
+│  Sidebar    │         Main Content Area             │
 │             │                                       │
 │  - Seal     │                                       │
 │  - gRPC     │                                       │
@@ -98,11 +101,51 @@ Customer-facing platform for Suiftly infrastructure services with a Cloudflare-i
 
 ---
 
-## Authentication Flow
+## Authentication & Session Flow
 
 **No traditional login page - wallet-based authentication only.**
 
 **Key principle:** Users can explore the entire dashboard WITHOUT connecting wallet (Cloudflare-style). Wallet connection only required when enabling services or viewing existing configs.
+
+### Auth State Machine & JWT Issuance
+
+**Connection & JWT Issuance Flow**:
+1. User clicks "Connect Wallet"
+2. Wallet extension prompts for approval
+3. App generates ephemeral nonce (UUID v4)
+4. User signs challenge message: `"Sign in to Suiftly\nNonce: {nonce}\nTimestamp: {ISO8601}"`
+5. Frontend sends `{walletAddress, signature, nonce, timestamp}` to `POST /api/auth/verify`
+6. Backend verifies:
+   - Signature matches wallet address
+   - Nonce hasn't been used (stored in Redis/DB with 5-min TTL)
+   - Timestamp within 5 minutes of server time
+7. Backend issues JWT with:
+   - `exp`: 4 hours (short-lived for security)
+   - `iat`: now
+   - `sub`: wallet address
+   - `nonce`: original nonce (prevents replay)
+8. Backend sets **httpOnly cookie** with JWT (preferred method - XSS-resistant)
+   - Cookie name: `suiftly_session`
+   - Flags: `HttpOnly`, `Secure`, `SameSite=Strict`
+   - Max-Age: 4 hours
+   - Fallback for dev: If cookies unavailable, store in `sessionStorage` (NOT localStorage) with explicit XSS warning in console
+9. All API calls automatically include cookie (no manual header needed)
+
+**Session Refresh (Silent Re-sign)**:
+- When JWT expiry approaches (<30 min remaining), app prompts silent re-sign
+- Show subtle toast: "Session expiring soon. Please sign to continue."
+- User signs new challenge → new JWT issued → cookie updated
+- If user ignores, session expires and requires full reconnect
+
+**Session Invalidation**:
+- Disconnect wallet: Backend clears cookie, redirect to home
+- JWT expiry: API returns 401 → app clears cookie → shows "Session expired, reconnect wallet" toast
+- No refresh tokens (user must sign new challenge for session extension)
+
+**Authorization Model (MVP)**:
+- Single-user per wallet address (no teams/orgs in v1)
+- All API keys, services, and billing tied to wallet address
+- Future: Organization linking (wallet signs to create/join org, roles managed separately)
 
 ### First-Time User Flow (No Wallet Connection)
 
@@ -112,23 +155,29 @@ Customer-facing platform for Suiftly infrastructure services with a Cloudflare-i
    - All service pages accessible
    - Pricing calculator works
    - Stats/Logs tabs show placeholder states
+   - **"Demo Mode" banner appears at top of every page/tab** (dismissible, reappears on page reload)
 3. Header shows: **[Connect Wallet]** button (top-right, prominent)
 4. User can explore freely:
    - Navigate to Seal/gRPC/GraphQL pages
    - Adjust config options and see live pricing
    - Read tooltips and help text
    - View Support page, FAQ
-   - Everything works EXCEPT "Enable Service" button
+   - All pages/tabs show "Demo Mode" banner
+   - Everything works EXCEPT "Enable Service" toggle (requires wallet - see toggle behavior below)
 
 ### Wallet Connection Trigger
 
 **Wallet connection required when:**
-- User clicks "Enable Service" button (first attempt to activate)
+- User toggles "Enable Service" switch (first attempt to activate)
 - User tries to view existing service config (if they have one)
 - User clicks wallet balance/deposit/withdraw
+- User clicks "Add New API Key"
+- User clicks "Add New Seal Key"
+- User clicks "Add Package to this Seal Key"
+- User attempts to edit/delete keys or packages
 
 **Connection Flow:**
-1. User clicks "Enable Service" (without wallet connected)
+1. User toggles "Enable Service" switch (without wallet connected)
 2. Modal appears:
    ```
    ┌──────────────────────────────────────┐
@@ -143,7 +192,7 @@ Customer-facing platform for Suiftly infrastructure services with a Cloudflare-i
 3. Click "Connect Wallet" → Sui wallet popup (or dev mock)
 4. User approves connection + signs challenge message
 5. Backend verifies signature → issues JWT
-6. Modal closes → "Enable Service" action proceeds automatically
+6. Modal closes → "Enable Service" toggle completes automatically (switches to ON)
 7. Header updates: Shows wallet address + balance
 
 ### Returning User (With Wallet)
@@ -188,6 +237,76 @@ if (import.meta.env.DEV) {
 
 ---
 
+## Demo Mode Banner
+
+**Purpose:** Indicates to users that they're exploring without a connected wallet.
+
+**Appearance:**
+```
+┌──────────────────────────────────────────────────────┐
+│ ⓘ Demo Mode - Connect wallet to enable services  [✕] │
+└──────────────────────────────────────────────────────┘
+```
+
+**Design:**
+- **Background:** Light info color (rgba(47, 123, 191, 0.1) - Cloudflare Marine tint)
+- **Border:** 1px solid info color (#2F7BBF - Cloudflare Marine)
+- **Text:** "Demo Mode - Connect wallet to enable services"
+- **Icon:** Info icon (ⓘ) on left
+- **Dismiss button:** [✕] on right
+- **Position:** Top of content area (below header, above main content)
+- **Width:** Full width of content area
+- **Padding:** 12px vertical, 16px horizontal
+
+**Behavior:**
+- Appears on ALL pages and tabs when wallet is NOT connected
+- Dismissible via [✕] button
+- Dismissed state stored in sessionStorage (persists only during current browser session)
+- On page reload: banner reappears if wallet still not connected (sessionStorage cleared on tab close)
+- On wallet connect: banner disappears permanently (until disconnect)
+- Does not appear when wallet is connected
+- Clicking anywhere on banner (except [✕]) can optionally trigger "Connect Wallet" modal
+
+**Pages/Tabs where banner appears:**
+- Seal service configuration form and all tabs (Configuration, Keys, Stats, Logs)
+- Coming soon pages (gRPC, GraphQL) - optional, may not be needed for placeholder pages
+- Billing page
+- Support page (optional - could skip here)
+
+**CSS Example:**
+```css
+.demo-mode-banner {
+  background: rgba(47, 123, 191, 0.1);
+  border: 1px solid #2F7BBF;
+  border-radius: 3px;
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24px;
+  font-size: 0.86667rem; /* Cloudflare sm */
+  color: #2F7BBF;
+}
+
+.demo-mode-banner__content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.demo-mode-banner__dismiss {
+  cursor: pointer;
+  padding: 4px;
+  opacity: 0.7;
+}
+
+.demo-mode-banner__dismiss:hover {
+  opacity: 1;
+}
+```
+
+---
+
 ## Sidebar Navigation
 
 ### Structure
@@ -196,14 +315,14 @@ if (import.meta.env.DEV) {
 ┌─────────────────┐
 │ Services        │
 ├─────────────────┤
-│ 󰤄 Seal         │  ← Icon + label
-│ 󰖟 gRPC         │
-│ 󰘦 GraphQL      │
+│ 󰤄 Seal          │  ← Icon + label
+│ 󰖟 gRPC          │
+│ 󰘦 GraphQL       │
 │                 │
 │ ─────────────   │  ← Divider
 │                 │
-│ 󰵀 Billing      │
-│ 󰋗 Support      │
+│ 󰵀 Billing       │
+│ 󰋗 Support       │
 └─────────────────┘
 ```
 
@@ -221,6 +340,89 @@ if (import.meta.env.DEV) {
 - Billing shows "—" (no usage yet)
 - Support always visible (no status indicator)
 
+### Page 4: Settings (Spending Limits)
+
+**URL:** `/settings/spending-limits`
+
+**Purpose:** Manage on-chain escrow spending protections.
+
+**Wallet Required:** Yes
+
+```
+┌──────────────────────────────────────────────────────┐
+│ Settings → Spending Limit                            │
+├──────────────────────────────────────────────────────┤
+│                                                       │
+│  Monthly Spending Limit (On-Chain Protection)        │
+│                                                       │
+│  ⓘ This limit protects your escrow account from     │
+│     excessive charges. Changes require wallet         │
+│     signature to update the smart contract.           │
+│                                                       │
+│  Current Limit: $2,000 per month (30-day window)     │
+│                                                       │
+│  [━━━━━━━━━━━━━━━━━━━] $680 / $2,000               │
+│  This month: $680 (34%) - Resets in 12 days          │
+│                                                       │
+│  Recent charges:                                      │
+│  • Jan 9: Service enabled - $60                       │
+│  • Jan 15: Tier upgrade - $20                         │
+│  • Jan 18: Added 10 API keys - $10                    │
+│  • Jan 28: Monthly usage fees - $590                  │
+│                                                       │
+│  [ Change Limit ]                                     │
+│                                                       │
+│  ─────────────────────────────────────                │
+│                                                       │
+│  Withdrawal Protection                                │
+│                                                       │
+│  ⓘ Minimum balance required while services active:  │
+│     $50.00 (prevents accidental service interruption) │
+│                                                       │
+│  Active services: 1 (Seal)                            │
+│  Current balance: $127.50                             │
+│  Available to withdraw: $77.50                        │
+│                                                       │
+│  [ Withdraw Funds ]                                   │
+│                                                       │
+└──────────────────────────────────────────────────────┘
+```
+
+**Change Spending Limit Modal:**
+```
+┌──────────────────────────────────────────────────────┐
+│ Change Monthly Spending Limit                        │
+├──────────────────────────────────────────────────────┤
+│                                                       │
+│  Current limit: $2,000 per month                      │
+│  Spent this month: $680                               │
+│                                                       │
+│  New limit: [$ 5000  ]  (min: $100, max: $50,000)    │
+│                                                       │
+│  Suggested:                                           │
+│  • $500/month  - Single service (Starter/Pro)        │
+│  • $2,000/month - Default (most users)               │
+│  • $5,000/month - Heavy usage / multiple services    │
+│                                                       │
+│  ⓘ This change requires a wallet signature to       │
+│     update the on-chain escrow contract.              │
+│                                                       │
+│  [ Update Limit ]  [ Cancel ]                         │
+│                                                       │
+└──────────────────────────────────────────────────────┘
+```
+
+**Interactions:**
+- Clicking [Change Limit] opens modal
+- User enters new value (validated: min $100, max $50,000)
+- Clicking "Update Limit" triggers wallet signature request
+- On-chain transaction updates escrow contract config
+- Toast: "Monthly spending limit updated: $5,000"
+- Activity log: "Monthly spending limit changed: $2,000 → $5,000"
+
+**Tooltip:**
+- **Monthly Limit:** "Maximum Suiftly can charge in any 30-day rolling window. Protects your escrow from excessive billing."
+
 ---
 
 ## Page Layouts
@@ -233,7 +435,7 @@ Each service page has **two states:**
 1. **Not Configured State** (onboarding)
 2. **Configured State** (active service with tabs)
 
-**Note:** All services share the same configuration options (tier-based pricing model).
+**Note:** For MVP, only the Seal service is fully implemented with configuration. gRPC and GraphQL show "coming soon" placeholders (see [docs/COMING_SOON_PAGE.md](../docs/COMING_SOON_PAGE.md)).
 
 ---
 
@@ -241,9 +443,16 @@ Each service page has **two states:**
 
 **Full-page configuration form with live pricing.**
 
+**When wallet NOT connected:**
+- Shows "Demo Mode" banner at top with "Connect wallet to enable services" message
+- All tabs visible (Config, Keys, Stats, Logs) with placeholder data
+- Enable Service toggle disabled until wallet connects
+
 ```
 ┌──────────────────────────────────────────────────────┐
 │ Seal Configuration                                    │
+├──────────────────────────────────────────────────────┤
+│ ⓘ Demo Mode - Connect wallet to enable services  [✕] │
 ├──────────────────────────────────────────────────────┤
 │                                                       │
 │  ✓ Always Included:                                  │
@@ -296,7 +505,7 @@ Each service page has **two states:**
 │  • Requests: $0.XX per 1M requests                   │
 │  • Bandwidth: $0.XX per GB (beyond guaranteed)       │
 │                                                       │
-│                      [ Enable Service ]              │
+│  Enable Service                         [OFF] ⟳ ON   │
 │                                                       │
 └──────────────────────────────────────────────────────┘
 ```
@@ -305,16 +514,11 @@ Each service page has **two states:**
 - **Live price calculation:** As user changes options, "Total Monthly Fee" updates in real-time (using `useMemo()`)
 - **Usage fees:** Listed below monthly fee (metered separately, not included)
 - **Tooltips (?):** Click to show explanation for each field
-- **"Enable Service" button:**
-  - **If wallet NOT connected:** Show "Connect Wallet Required" modal
-    - Modal offers: [Connect Wallet] or [Cancel]
-    - After connecting → proceeds with enable automatically
-  - **If wallet connected:**
-    - Validates form (Zod schema)
-    - Creates service config in DB
-    - Charges wallet
-    - Transitions to "Configured State" (tabs appear)
-    - Shows success toast: "Seal service enabled. $XX.XX charged."
+- **"Enable Service" toggle switch:**
+  - **No wallet connected:** Triggering toggle prompts "Connect Wallet" modal → After connection, service enables automatically (toggle switches to ON)
+  - **Wallet connected:** Toggle validates form and enables service immediately (switches to ON)
+  - **Service already provisioned:** Form is replaced with server-side state (shows configured view with tabs)
+- **Server state precedence:** If service exists in DB, page shows configured state instead of onboarding form
 
 **Form Fields (All Services):**
 
@@ -363,20 +567,29 @@ Each service page has **two states:**
 3. **Packages Per Seal Key (?)**
    - Type: Number input (starts at 3)
    - Default: 3 (included with all tiers)
-   - Tooltip: "Number of packages per Seal key for organizing your services. Each additional package costs $1/month."
-   - Pricing: (count - 3) × $1/month
+   - Tooltip: "Number of packages per Seal key for organizing your services. Packages are children of seal keys. Each additional package costs $1/month per seal key."
+   - Pricing: For each seal key: max(0, packagesPerSealKey - 3) × $1/month
+     - **Example:** If you have 2 seal keys and set packagesPerSealKey to 5:
+       - Seal Key 1: (5-3) × $1 = $2/month
+       - Seal Key 2: (5-3) × $1 = $2/month
+       - Total additional packages cost: $4/month
+   - Note: When you create a new seal key, it comes with this many packages
 
-4. **Additional API Keys (?)**
-   - Type: Number input (starts at 1)
+4. **Total API Keys (?)**
+   - Type: Number input (starts at 1, min: 1)
    - Default: 1 (included with all tiers)
-   - Tooltip: "API keys for authenticating requests. Each additional key costs $1/month."
-   - Pricing: (count - 1) × $1/month
+   - Label: "Total API Keys (1 included)"
+   - Tooltip: "API keys for authenticating requests. You get 1 free, each additional key costs $1/month."
+   - Pricing: max(0, totalApiKeys - 1) × $1/month
+   - UI: Number input with decrement disabled at 1, increment button increases count
 
-5. **Additional Seal Keys (?)**
-   - Type: Number input (starts at 1)
+5. **Total Seal Keys (?)**
+   - Type: Number input (starts at 1, min: 1)
    - Default: 1 (included with all tiers)
-   - Tooltip: "Seal-specific keys for cryptographic operations. Each additional key costs $5/month."
-   - Pricing: (count - 1) × $5/month
+   - Label: "Total Seal Keys (1 included)"
+   - Tooltip: "Seal-specific keys for cryptographic operations. You get 1 free, each additional key costs $5/month."
+   - Pricing: max(0, totalSealKeys - 1) × $5/month
+   - UI: Number input with decrement disabled at 1, increment button increases count
 
 **Pricing Display:**
 - **Total Monthly Fee:** Total recurring monthly charge (all config options summed)
@@ -384,18 +597,21 @@ Each service page has **two states:**
   - Requests (per million)
   - Bandwidth overages (beyond guaranteed)
 
-**Pricing Example (Business tier, burst enabled, 5 packages per key, 2 API keys, 1 Seal key):**
+**Pricing Example (Business tier, burst enabled, 5 packages per key, 2 total seal keys, 2 total API keys):**
 ```
 Business tier: $80/month
 Burst enabled: $10/month
-Packages per Seal key: (5-3) × $1 = $2/month
-Additional API keys: (2-1) × $1 = $1/month
-Additional Seal keys: (1-1) × $5 = $0/month
+Total Seal Keys: 2 (1 included, 1 additional × $5) = $5/month
+Packages per Seal key: 5 (3 included per key, 2 additional per key × $1)
+  - Seal Key 1: (5-3) × $1 = $2/month
+  - Seal Key 2: (5-3) × $1 = $2/month
+  - Total: $4/month
+Total API keys: 2 (1 included, 1 additional × $1) = $1/month
 ────────────────────────────────
-Total Monthly Fee: $93/month
+Total Monthly Fee: $100/month
 ```
 
-**Note:** All services (Seal, gRPC, GraphQL) use the same configuration form and pricing model.
+**Note:** When gRPC and GraphQL are implemented in the future, they will use the same configuration form and pricing model as Seal.
 
 ---
 
@@ -403,9 +619,17 @@ Total Monthly Fee: $93/month
 
 **Tab-based layout with read-only config.**
 
+**When wallet disconnected:**
+- Shows "Demo Mode" banner at top
+- Config displayed as read-only (Edit button disabled)
+- Enable Service toggle disabled
+- Reconnect wallet to manage service
+
 ```
 ┌──────────────────────────────────────────────────────┐
 │ Seal Service                     [Status: Active 🟢] │
+├──────────────────────────────────────────────────────┤
+│ ⓘ Demo Mode - Connect wallet to enable services  [✕] │
 ├──────────────────────────────────────────────────────┤
 │                                                       │
 │  [ Configuration ]  [ Keys ]  [ Stats ]  [ Logs ]    │  ← Tabs
@@ -427,7 +651,7 @@ Total Monthly Fee: $93/month
 │  • Requests: 12.5M ($1.25)                           │
 │  • Bandwidth: 450 GB ($0.00 - within guaranteed)     │
 │                                                       │
-│                              [ Disable Service ]     │
+│  Enable Service                         OFF ⟳ [ON]   │
 │                                                       │
 └──────────────────────────────────────────────────────┘
 ```
@@ -442,7 +666,7 @@ Total Monthly Fee: $93/month
   - "Save Changes" button → Updates config
   - Note: Config changes may cause charges/credits (handled later)
 - **Current usage** (this billing period)
-- **Disable Service** button (bottom, less prominent)
+- **"Enable Service" toggle** (ON position) → Switch to OFF to disable service
 
 **Tab 2: Keys**
 
@@ -455,37 +679,39 @@ Total Monthly Fee: $93/month
 │  │  key_abc123...  [Copy] [Revoke]       │          │
 │  │  key_def456...  [Copy] [Revoke]       │          │
 │  └────────────────────────────────────────┘          │
-│                         [ Generate New API Key ]     │
+│                          [ Add New API Key ]         │
 │                                                       │
-│  Seal Keys (1 active)                                 │
+│  Seal Keys & Packages (1 seal key)                    │
 │  ┌────────────────────────────────────────┐          │
-│  │  seal_xyz789...  [Copy] [Revoke]      │          │
+│  │  seal_xyz789...  [Copy] [Revoke] [▼]  │          │
+│  │                                        │          │
+│  │  Packages (5):                         │          │
+│  │    • package-1  [Edit] [Delete]        │          │
+│  │    • package-2  [Edit] [Delete]        │          │
+│  │    • package-3  [Edit] [Delete]        │          │
+│  │    • package-4  [Edit] [Delete]        │          │
+│  │    • package-5  [Edit] [Delete]        │          │
+│  │                                        │          │
+│  │    [ Add Package to this Seal Key ]    │          │
 │  └────────────────────────────────────────┘          │
-│                        [ Generate New Seal Key ]     │
-│                                                       │
-│  Packages (5 configured)                              │
-│  ┌────────────────────────────────────────┐          │
-│  │  package-1  [Edit] [Delete]            │          │
-│  │  package-2  [Edit] [Delete]            │          │
-│  │  package-3  [Edit] [Delete]            │          │
-│  │  package-4  [Edit] [Delete]            │          │
-│  │  package-5  [Edit] [Delete]            │          │
-│  └────────────────────────────────────────┘          │
-│                           [ Add New Package ]        │
+│                         [ Add New Seal Key ]         │
 │                                                       │
 └──────────────────────────────────────────────────────┘
 ```
 
-**Keys Tab (Before Service Enabled):**
+**Keys Tab (Before Service Enabled / Demo Mode):**
 ```
 ┌──────────────────────────────────────────────────────┐
 │  Keys & Packages                                      │
+├──────────────────────────────────────────────────────┤
+│ ⓘ Demo Mode - Connect wallet to enable services  [✕] │
+├──────────────────────────────────────────────────────┤
 │                                                       │
 │  ⓘ After enabling this service, you'll be able to:  │
 │                                                       │
-│  • Generate and manage API keys                      │
-│  • Create and manage Seal keys                       │
-│  • Configure packages for service organization       │
+│  • Add and manage API keys                           │
+│  • Add and manage Seal keys                          │
+│  • Add packages to Seal keys for organization        │
 │                                                       │
 │  Enable the service from the Configuration tab       │
 │  to access these features.                           │
@@ -495,28 +721,99 @@ Total Monthly Fee: $93/month
 
 **Keys Tab Behavior (After Service Enabled):**
 - **API Keys Section:**
-  - List of active keys (truncated display)
+  - List of active API keys (truncated display)
   - Copy button → Copies full key to clipboard
-  - Revoke button → Disables key (confirmation required)
-  - "Generate New API Key" → Creates new key, shows full key once (copy prompt)
+  - Revoke button → Disables key (confirmation required, requires wallet)
+  - **"Add New API Key":**
+    - If wallet not connected → Prompts "Connect Wallet" modal, then creates key after connection
+    - If wallet connected → Creates new key (+$1/month), shows full key once (copy prompt)
 
-- **Seal Keys Section:**
-  - Same pattern as API keys
-  - Higher cost ($5/month vs $1/month)
+- **Seal Keys & Packages Section:**
+  - Each seal key has an expandable card ([▼] to collapse/expand)
+  - **Seal Key actions:**
+    - Copy → Copies full seal key to clipboard
+    - Revoke → Disables seal key and all its packages (confirmation required, requires wallet)
+  - **Packages (nested under each seal key):**
+    - Packages are children of their parent seal key
+    - Each package shows: name + [Edit] [Delete] actions
+    - Edit → Rename package (requires wallet)
+    - Delete → Remove package (confirmation if deleting would go below 3 total packages, requires wallet)
+    - **"Add Package to this Seal Key":**
+      - If wallet not connected → Prompts "Connect Wallet" modal, then creates package after connection
+      - If wallet connected → Creates new package under this seal key (+$1/month)
+  - **"Add New Seal Key":**
+    - If wallet not connected → Prompts "Connect Wallet" modal, then creates seal key after connection
+    - If wallet connected → Creates new seal key (+$5/month) with default 3 packages, appears as collapsed card
 
-- **Packages Section:**
-  - List of configured packages
-  - Edit → Rename package
-  - Delete → Remove package (confirmation required, only if count > 3)
-  - "Add New Package" → Creates new package (+$1/month charge)
+**Hierarchy:** Service → Seal Keys → Packages (each seal key owns its packages)
 
-**Note:** Generating/deleting keys updates monthly fee and triggers billing events.
+**Note:** Adding/deleting keys or packages updates monthly fee and triggers billing events.
+
+### Key Lifecycle & Revocation Semantics
+
+**Key Creation:**
+- New keys generated server-side (secure random)
+- Shown once in modal: "Copy this key now - it won't be shown again"
+- Stored hashed in database
+- Billing adjustment applied immediately (pro-rated for current month)
+- Logged in activity feed with timestamp
+
+**Key Revocation:**
+- **Effect Timing:** Immediate (no grace period)
+- **Confirmation Required:** "Are you sure? This key will stop working immediately and cannot be recovered."
+- **Impact on Traffic:** Requests using revoked key receive 401 Unauthorized
+- **Billing:** Credit applied immediately (pro-rated for remaining month)
+- **Audit Trail:** Logged with timestamp, key ID (last 4 chars), and revoking wallet address
+
+**Key Rotation Best Practices (shown in tooltip/help):**
+1. Create new key (+$1/month temporarily)
+2. Update your applications to use new key
+3. Test that new key works
+4. Revoke old key (credit applied)
+- **Recommended rotation:** Every 90 days or on security event
+
+**Package Deletion:**
+- Can delete packages down to minimum (3 per seal key)
+- Deleting below 3 shows error: "Each seal key must have at least 3 packages"
+- Deletion is immediate (no grace period)
+- Credit applied pro-rated for remaining month
+
+**Seal Key Revocation:**
+- Revokes parent seal key AND all child packages
+- Confirmation: "This will revoke the seal key and all {N} packages under it. Continue?"
+- Immediate effect (401 on requests)
+- Pro-rated credit for seal key + all packages
+
+### Anti-Abuse & Rate Limiting (Key Operations)
+
+**Rate Limits (Per Wallet Address):**
+- **API Key Create/Revoke:** Max 5 operations per hour
+- **Seal Key Create/Revoke:** Max 3 operations per hour
+- **Package Add/Delete:** Max 10 operations per hour
+- **Config Updates (billing changes):** Max 2 per hour
+
+**Minimum Time Windows:**
+- Cannot revoke a key within 5 minutes of creation (prevents accidental spam)
+- Cannot change billing-impacting config more than twice per hour
+
+**Abuse Detection & Throttling:**
+- Backend monitors for rapid create/revoke cycles
+- If detected: Throttle operations + show warning: "Too many changes. Please wait {minutes} before trying again."
+- If repeated abuse: Temporary account lock (manual review required)
+
+**Billing Implications:**
+- All billing changes (add/remove keys, packages, config) are logged with wallet signature
+- Prevents disputes: "You authorized this change at {timestamp}"
+- Pro-rated charges/credits prevent gaming the system (e.g., rapid add/remove cycles)
 
 **Tab 3: Stats**
 
 ```
 ┌──────────────────────────────────────────────────────┐
 │  Stats                                                │
+├──────────────────────────────────────────────────────┤
+│ ⓘ Demo Mode - Connect wallet to enable services  [✕] │
+├──────────────────────────────────────────────────────┤
 │                                                       │
 │  ⓘ Stats are updated hourly. Data appears after     │
 │     24 hours of service activity.                    │
@@ -560,6 +857,9 @@ Total Monthly Fee: $93/month
 ```
 ┌──────────────────────────────────────────────────────┐
 │  Activity Log                                         │
+├──────────────────────────────────────────────────────┤
+│ ⓘ Demo Mode - Connect wallet to enable services  [✕] │
+├──────────────────────────────────────────────────────┤
 │                                                       │
 │  ┌────────────────────────────────────────┐          │
 │  │ Jan 9, 2025 14:23                      │          │
@@ -666,10 +966,12 @@ Total Monthly Fee: $93/month
 
 **Two States: Connected vs. Not Connected**
 
-**State 1: Wallet Not Connected**
+**State 1: Wallet Not Connected (Demo Mode)**
 ```
 ┌──────────────────────────────────────────────────────┐
 │ Billing & Usage                                       │
+├──────────────────────────────────────────────────────┤
+│ ⓘ Demo Mode - Connect wallet to enable services  [✕] │
 ├──────────────────────────────────────────────────────┤
 │                                                       │
 │  ⓘ Connect your wallet to view billing information  │
@@ -754,6 +1056,55 @@ Total Monthly Fee: $93/month
 - Withdraw → Release SUI tokens from escrow
 - Auto-billing: Charges deducted from balance automatically
 
+### Billing & Currency Model
+
+**See [ESCROW_DESIGN.md](ESCROW_DESIGN.md) for complete escrow account architecture, protections, and flows.**
+
+**Summary:**
+
+**Canonical Currency: USD (denominated), SUI (settled)**
+
+All prices displayed in USD, but payments/deposits/withdrawals use SUI tokens on Sui blockchain.
+
+**Key UX Elements (detailed flows in [ESCROW_DESIGN.md](ESCROW_DESIGN.md)):**
+
+- **Rate Display:** Always show SUI/USD rate with timestamp and source count
+  - Example: "1 SUI = $2.45 (updated 47s ago, from 3 sources)"
+
+- **Escrow Account Model:**
+  - User deposits once → Suiftly auto-charges for services (no repeated signatures)
+  - Balance shown in USD throughout UI
+  - User can withdraw anytime (minimum $50 if services active)
+
+- **Monthly Spending Limit (On-Chain):**
+  - Default: $2,000/month (user-adjustable: $100-$50,000)
+  - Enforced by smart contract
+  - User sets limit on first deposit
+
+- **Proactive Validation:**
+  - Frontend validates balance + monthly limit in real-time
+  - "Save Changes" button disabled if insufficient funds or would exceed limit
+  - Clear error banners show exact problem and solution
+  - No failed save attempts
+
+- **Charging Behavior:**
+  - Immediate: Service enable, tier changes, add keys/packages
+  - Deferred: Usage fees (end of month)
+  - Credits: Instant (revoke keys, tier downgrades)
+
+- **Low Balance Warnings:**
+  - Balance < estimate: Warning toast
+  - Balance < $10: Warning banner on all pages
+  - Balance = $0: Service paused, 7-day grace period
+
+**See [ESCROW_DESIGN.md](ESCROW_DESIGN.md) for:**
+- Complete deposit/withdrawal flows
+- Smart contract interface
+- Database schema
+- Ledger reconciliation details
+- Security considerations
+- Testing scenarios
+
 ---
 
 ## Header Components
@@ -803,8 +1154,19 @@ Click balance to expand:
 - **Connect Wallet:** Opens wallet connection modal (Sui wallet)
 - **Top Up:** Opens deposit modal (Web3 transaction) [requires connected wallet]
 - **Withdraw:** Opens withdrawal modal (Web3 transaction) [requires connected wallet]
-- **Disconnect Wallet:** Clears JWT, resets to "not connected" state
+- **Disconnect Wallet:** Clears JWT from localStorage, clears auth state, header returns to "Connect Wallet" button
 - **Recent Activity:** Last 5 transactions (link to full billing page)
+
+**Disconnect Behavior:**
+1. User clicks "Disconnect Wallet" in dropdown
+2. Confirmation prompt: "Disconnect wallet? You'll need to reconnect to manage services."
+3. If confirmed:
+   - Clear JWT from localStorage
+   - Clear Zustand auth store (wallet address, balance, etc.)
+   - Header shows "Connect Wallet" button again
+   - Service pages remain accessible (exploration mode)
+   - Configured services show in read-only mode (can't edit without reconnecting)
+4. Toast: "Wallet disconnected"
 
 **Development Mock:**
 - Show "Connect Wallet" OR "Use Mock Wallet" button
@@ -898,19 +1260,23 @@ Click balance to expand:
     ↓
 12. Sui wallet popup → Approve + Sign
     ↓
-13. Wallet connected → Modal closes
+13. Modal shows "Verifying signature..." spinner
     ↓
-14. Validation (Zod schema)
+14. Backend verifies signature → JWT issued → Modal updates
     ↓
-15. API call: POST /api/services.updateConfig
+15. Modal shows "Enabling service..." with spinner
     ↓
-16. Success → Config saved → Tabs appear
+16. Validation (Zod schema)
     ↓
-17. Wallet charged: $63.00 (pro-rated for current month)
+17. API call: POST /api/services.updateConfig
     ↓
-18. Toast: "Seal service enabled. $63.00 charged."
+18. Success → Config saved → Modal closes → Tabs appear
     ↓
-19. Header shows wallet address + balance
+19. Wallet charged: $63.00 (pro-rated for current month)
+    ↓
+20. Toast: "Seal service enabled. $63.00 charged."
+    ↓
+21. Header shows wallet address + balance
 ```
 
 ---
@@ -924,30 +1290,45 @@ Click balance to expand:
    ↓
 3. Modal opens with current config pre-filled
    ↓
-4. Change Endpoints: 2 → 3
+4. Change tier: Pro ($40) → Business ($80)
    ↓
-5. See new Monthly Estimate: $55.00
+5. See new Monthly Estimate: $80.00
    ↓
-6. See note: "You'll be charged $10.00 (pro-rated) immediately"
+6. See note: "You'll be charged $X.XX (pro-rated) immediately from your escrow balance"
    ↓
-7. Click "Save Changes"
+7. Check balance sufficient (if not, show error: "Insufficient balance. Top up required.")
    ↓
-8. API call: PATCH /api/services.updateConfig
+8. Click "Save Changes"
    ↓
-9. Success → Config updated → Modal closes
+9. API call: PATCH /api/services.updateConfig
    ↓
-10. Wallet charged: $10.00 (pro-rated)
+10. Backend validates balance → Calculates pro-rated charge
     ↓
-11. Logs tab shows new entry: "Configuration updated"
+11. Success → Charge auto-deducted from escrow balance (no wallet signature needed)
     ↓
-12. Toast: "Configuration updated. $10.00 charged."
+12. Config updated → Modal closes
+    ↓
+13. Balance decremented: $127.50 → $107.50 (example: $20 pro-rated charge)
+    ↓
+14. Logs tab shows new entry: "Configuration updated - Business tier enabled - Charged $20.00 (pro-rated)"
+    ↓
+15. Toast: "Configuration updated. $20.00 charged from escrow balance."
 ```
 
-**Note:** Handle credits later (e.g., downgrading from 3 → 2 endpoints).
+**Downgrade Example (Credit Applied):**
+```
+User changes tier: Business ($80) → Pro ($40)
+Pro-rated credit: +$X.XX added to escrow balance
+Toast: "Configuration updated. $X.XX credit applied to your balance."
+Balance shown increases immediately
+User can withdraw credit at any time
+```
+
+**Note:** All charges/credits applied immediately via escrow model (no additional wallet signatures needed).
 
 ---
 
-### Flow 4: Top-Up Wallet
+### Flow 4: Top-Up Wallet (Deposit to Escrow)
 
 ```
 1. User clicks wallet widget in header
@@ -956,22 +1337,34 @@ Click balance to expand:
    ↓
 3. Click "Top Up"
    ↓
-4. Modal opens: "Deposit Funds"
+4. Modal opens: "Deposit Funds to Escrow"
    ↓
 5. Enter amount: $100
    ↓
-6. Click "Deposit"
+6. Shows conversion: "Deposit ~40.82 SUI to escrow (rate: 1 SUI = $2.45, from 3 sources, updated 23s ago)"
    ↓
-7. Web3 wallet popup → Approve transaction
+7. Click "Deposit"
    ↓
-8. Transaction confirmed
+8. Wallet popup → User approves blockchain transaction to Suiftly escrow contract
    ↓
-9. Balance updates: $127.50 → $227.50
+9. Transaction submitted → Modal shows "Pending confirmation... (TX: 0xabc123...)"
    ↓
-10. Modal closes
+10. Backend monitors: 0 → 1 → 2 → 3 confirmations (~3-5 seconds)
     ↓
-11. Toast: "Deposit successful. +$100.00"
+11. After 3 confirmations → Transaction finalized
+    ↓
+12. Backend credits USD balance in database (SUI now in escrow)
+    ↓
+13. Balance updates: $127.50 → $227.50
+    ↓
+14. Modal closes
+    ↓
+15. Toast: "Deposit successful. +$100.00 added to your escrow balance."
+    ↓
+16. Activity log entry: "Deposit: +$100.00 (40.82 SUI) - TX: 0xabc123..."
 ```
+
+**Note:** Once deposited, Suiftly can auto-charge for services without requiring additional wallet signatures. User can withdraw remaining balance at any time.
 
 **Development Mock:**
 - Skip Web3 transaction
@@ -990,6 +1383,7 @@ Click balance to expand:
 | `Header` | Logo + wallet widget + user menu | `components/layout/` |
 | `Sidebar` | Service navigation + billing link | `components/layout/` |
 | `ServiceLayout` | Tab wrapper for service pages | `components/layout/` |
+| `DemoModeBanner` | Info banner shown when wallet not connected | `components/layout/` |
 
 ### Wallet Components
 
@@ -1039,8 +1433,9 @@ Click balance to expand:
 |-----------|---------|----------|
 | `KeysList` | Display API/Seal keys with actions | `components/keys/` |
 | `KeyCard` | Individual key display (copy/revoke) | `components/keys/` |
-| `GenerateKeyButton` | Create new key (shows modal) | `components/keys/` |
-| `PackagesList` | Manage packages | `components/keys/` |
+| `AddKeyButton` | Add new key (shows modal) | `components/keys/` |
+| `SealKeyCard` | Expandable seal key with nested packages | `components/keys/` |
+| `PackagesList` | Manage packages nested under seal keys | `components/keys/` |
 | `KeysPlaceholder` | Pre-enable info message | `components/keys/` |
 
 ### Support Components
@@ -1057,7 +1452,7 @@ Click balance to expand:
 |-----------|-------|
 | `Button` | All buttons (primary/secondary/ghost) |
 | `Card` | Config cards, pricing cards |
-| `Modal` | Edit config, deposit/withdraw, key generation, "Connect Wallet Required" |
+| `Modal` | Edit config, deposit/withdraw, add keys, "Connect Wallet Required" |
 | `Tabs` | Service page tabs (Config/Keys/Stats/Logs) |
 | `Table` | Usage table, invoice list |
 | `Input` | Form fields (number inputs for keys/packages) |
@@ -1085,7 +1480,8 @@ Click balance to expand:
 
 /support                       → Support page (public, no wallet needed)
 
-/settings (future)             → User settings (requires wallet)
+/settings                      → User settings (requires wallet)
+/settings/spending-limits      → Configure on-chain spending caps
 ```
 
 **Route Access:**
@@ -1097,7 +1493,7 @@ Click balance to expand:
 - **Wallet-Required Actions:**
   - Enable/disable services
   - Edit service configs
-  - Generate/revoke keys
+  - Add/revoke keys
   - View invoice details
   - Top-up/withdraw wallet
 
@@ -1111,17 +1507,17 @@ Click balance to expand:
 
 ## Form Schemas (Zod)
 
-### Service Config (All Services)
+### Service Config (Seal Service)
 
-**All services (Seal, gRPC, GraphQL) use the same configuration schema.**
+**For MVP, this schema applies to the Seal service only. Future services (gRPC, GraphQL) will use the same schema when implemented.**
 
 ```typescript
 const serviceConfigSchema = z.object({
   guaranteedBandwidth: z.enum(['starter', 'pro', 'business']),
   burstEnabled: z.boolean(),
   packagesPerSealKey: z.number().min(3), // Comes with 3, can add more
-  additionalApiKeys: z.number().min(1),  // Comes with 1, can add more
-  additionalSealKeys: z.number().min(1), // Comes with 1, can add more
+  totalApiKeys: z.number().min(1),       // Total API keys (1 included)
+  totalSealKeys: z.number().min(1),      // Total Seal keys (1 included)
 }).refine((data) => {
   // Burst only available for Pro and Business
   if (data.burstEnabled && data.guaranteedBandwidth === 'starter') {
@@ -1143,7 +1539,7 @@ const PRICING = {
     business: { base: 80, reqPerSec: 2000 },
   },
   burst: 10, // +$10/month if enabled
-  additionalPackage: 1, // $1/month per package (after 3)
+  additionalPackagePerKey: 1, // $1/month per package (after 3) per seal key
   additionalApiKey: 1, // $1/month per key (after 1)
   additionalSealKey: 5, // $5/month per key (after 1)
 }
@@ -1156,9 +1552,15 @@ function calculateMonthlyFee(config: ServiceConfig): number {
     total += PRICING.burst
   }
 
-  total += Math.max(0, config.packagesPerSealKey - 3) * PRICING.additionalPackage
-  total += Math.max(0, config.additionalApiKeys - 1) * PRICING.additionalApiKey
-  total += Math.max(0, config.additionalSealKeys - 1) * PRICING.additionalSealKey
+  // Additional API keys cost (1 included)
+  total += Math.max(0, config.totalApiKeys - 1) * PRICING.additionalApiKey
+
+  // Additional seal keys cost (1 included)
+  total += Math.max(0, config.totalSealKeys - 1) * PRICING.additionalSealKey
+
+  // Packages cost: per seal key, 3 included per key
+  const additionalPackagesPerKey = Math.max(0, config.packagesPerSealKey - 3)
+  total += additionalPackagesPerKey * config.totalSealKeys * PRICING.additionalPackagePerKey
 
   return total
 }
@@ -1444,6 +1846,122 @@ boxShadow: {
 
 ---
 
+## Error States & Handling
+
+### Wallet Connection Errors
+
+**Wallet Rejection (User Cancels):**
+- Modal closes
+- Toast: "Wallet connection cancelled"
+- User remains in demo mode
+
+**Signature Verification Failure:**
+- Modal shows error: "Signature verification failed. Please try again."
+- Retry button in modal
+- Option to cancel and stay in demo mode
+
+**Network Error (Can't Reach Backend):**
+- Modal shows: "Network error. Check your connection and try again."
+- Retry button
+- Fall back to demo mode on cancel
+
+### Service Enable/Config Update Errors
+
+**Insufficient Balance:**
+- Before enable: Check balance, show warning if insufficient
+- Error modal: "Insufficient balance ($X needed, $Y available). Top up your wallet to continue."
+- [Top Up] button in error modal
+- [Cancel] returns to config form
+
+**Validation Errors:**
+- Inline form errors (Zod schema validation)
+- Highlight invalid fields in red
+- Show specific error message below field
+- Example: "Burst is only available for Pro and Business tiers"
+
+**Backend Error (500, timeout):**
+- Toast: "An error occurred. Please try again."
+- Config form state preserved (don't lose user's input)
+- Retry button or manual retry
+
+**Rate Limit:**
+- Toast: "Too many requests. Please wait a moment and try again."
+- Disable form submit for 10 seconds
+
+### Key Management Errors
+
+**Key Creation Failure:**
+- Modal shows error: "Failed to create key. Please try again."
+- Retry button
+- Billing not charged if creation fails
+
+**Revocation Failure:**
+- Toast: "Failed to revoke key. Please try again."
+- Key remains active (not revoked) until success
+
+**Copy to Clipboard Failure:**
+- Toast: "Failed to copy. Please select and copy manually."
+- Key displayed in selectable text field
+
+### Billing & Payment Errors
+
+**Top-Up Transaction Failure:**
+- Modal shows: "Transaction failed. Please check your wallet and try again."
+- Show blockchain error message if available
+- Balance not updated until blockchain confirms
+
+**Withdrawal Transaction Failure:**
+- Modal shows: "Withdrawal failed: {reason}"
+- Balance not decremented
+- Link to transaction explorer if TX was submitted
+
+**Low Balance Warning:**
+- Toast (dismissible): "Low balance: $X remaining. Top up to avoid service interruption."
+- Trigger when balance < 1 month estimated charges
+- Show once per day max
+
+**Insufficient Funds (Service Pause):**
+- Banner on all service pages: "Service paused due to insufficient funds. Top up within 7 days to resume."
+- Grace period: 7 days before termination
+- [Top Up] button in banner
+- Email notification sent
+
+### General Network & API Errors
+
+**API Timeout:**
+- Toast: "Request timed out. Please try again."
+- Preserve form state
+
+**401 Unauthorized (JWT Expired):**
+- Clear auth state
+- Redirect to home
+- Toast: "Session expired. Please reconnect your wallet."
+
+**403 Forbidden:**
+- Toast: "You don't have permission to perform this action."
+- Log to console for debugging
+
+**404 Not Found (Service/Key):**
+- Redirect to parent page (e.g., service list)
+- Toast: "Resource not found."
+
+**429 Rate Limit:**
+- Toast: "Too many requests. Please wait {seconds}s."
+- Exponential backoff for retries
+
+### Empty States (Not Errors, but Worth Documenting)
+
+**No Services Configured:**
+- Show onboarding card: "Get started by configuring your first service"
+- Large [Configure Seal] button
+
+**No Usage Data Yet:**
+- Stats tab: "Stats updated hourly. Data appears after 24 hours of activity."
+- Empty graph placeholders
+
+**No Activity Logs:**
+- Logs tab: "No activity yet. Enable a service to see logs."
+
 ## Performance Considerations
 
 ### Lazy Loading
@@ -1454,14 +1972,15 @@ boxShadow: {
 
 ### Optimistic UI
 
-- **Config updates:** Show new config immediately, revert if API fails
-- **Wallet balance:** Update UI before blockchain confirmation
+- **Config updates (non-financial):** Show new config immediately, revert if API fails
+- **Financial operations (deposits, charges):** NEVER optimistic - always wait for confirmation
 
 ### Caching (TanStack Query)
 
 - **Service configs:** Cache for 5 minutes (low churn)
 - **Usage stats:** Cache for 1 hour (hourly updates)
 - **Billing data:** Cache for 5 minutes
+- **On auth state change:** Invalidate all auth-scoped queries
 
 ---
 
@@ -1525,14 +2044,14 @@ if (import.meta.env.DEV) {
 
 2. **User Settings Page**
    - Email notifications?
-   - API keys for programmatic access?
-   - Team/organization management?
+   - Team/organization management (wallet linking, roles)?
    - Recommendation: Add later (not MVP)
 
-3. **Tier Pricing Details**
-   - Need to define exact costs for Starter/Pro/Business
-   - Need to define req/sec limits for each tier
-   - Will be added to pricing constants later
+3. **Usage-Based Spending Cap (Off-Chain)**
+   - Additional protection: Max $X per month for metered usage (requests/bandwidth)
+   - Example: Monthly usage cap of $500 (separate from base service fees)
+   - Would prevent runaway usage charges from API misuse or traffic spikes
+   - Recommendation: Add as future enhancement after MVP
 
 4. **Discord Invite Link**
    - Need to create Discord server and get invite link
@@ -1546,20 +2065,15 @@ if (import.meta.env.DEV) {
    - Discounts for enabling multiple services?
    - Recommendation: Handle in pricing logic later
 
-7. **Key Management Details**
-   - What happens when revoking a key? (immediate vs. grace period)
-   - Key rotation strategy/recommendations
-   - Key permissions/scopes (if applicable)
-
-8. **Usage Alerts**
+7. **Usage Alerts**
    - Email/push when approaching bandwidth limit?
    - Recommendation: Add after MVP (notifications system)
 
-9. **Invoice Generation**
+8. **Invoice Generation**
    - PDF download for invoices?
    - Recommendation: Add later (nice-to-have)
 
-10. **API Documentation**
+9. **API Documentation**
    - Separate docs site (docs.suiftly.io)?
    - Or inline docs in app?
    - Recommendation: Separate docs site (not part of app)
@@ -1597,7 +2111,7 @@ Once this UI design is approved:
 - ✅ **Selection indicators:** Border highlight (3px orange) + "SELECTED" badge (top-right)
 - ✅ **Per-region and global capacity:** Each tier shows req/s per region + global (~3x)
 - ✅ Tier-based pricing with live "Total Monthly Fee" calculator
-- ✅ All services use same config options (global, no region selection)
+- ✅ Seal service fully configured; gRPC/GraphQL show "coming soon" pages
 - ✅ Tooltip (?) on each config field for explanations
 - ✅ Keys tab for managing API keys, Seal keys, and packages
 - ✅ Usage fees enumerated (metered separately from monthly fee)
@@ -1623,3 +2137,50 @@ Once this UI design is approved:
 - 3-region deployment (US-East, US-West, EU-Frankfurt)
 
 **Ready to scaffold!** 🚀
+
+---
+
+## Acceptance Test Checklist (High-Risk Flows)
+
+Minimal set of critical tests to validate before production:
+
+1. **Wallet Auth & Session**
+   - [ ] User can connect wallet, sign challenge, receive JWT in httpOnly cookie
+   - [ ] Session expires after 4 hours (or prompts re-sign at 30 min remaining)
+   - [ ] Disconnecting wallet clears session and returns to demo mode
+
+2. **Service Enable with Billing**
+   - [ ] Enabling service checks sufficient balance before charging
+   - [ ] Charge is applied only after backend confirms (no optimistic billing)
+   - [ ] Activity log shows charge with correct amount and timestamp
+
+3. **Top-Up (Deposit) Reconciliation**
+   - [ ] Blockchain TX submitted → shows "Pending confirmation (1/3, 2/3, 3/3)"
+   - [ ] Balance updates only after 3 confirmations (~3-5 sec on Sui)
+   - [ ] Failed TX shows error, balance NOT credited
+   - [ ] TX hash links to blockchain explorer
+
+4. **Rate Oracle & Conversion**
+   - [ ] Median rate from ≥2 sources displayed with timestamp
+   - [ ] Stale rates (>5 min) rejected
+   - [ ] Slippage warning shown if sources differ >5%
+
+5. **Key Revocation & Billing**
+   - [ ] Revoke key → immediate 401 on requests using that key
+   - [ ] Pro-rated credit applied to balance
+   - [ ] Audit log entry created with key ID (last 4 chars) and timestamp
+
+6. **Rate Limiting & Abuse Prevention**
+   - [ ] Cannot revoke key within 5 min of creation
+   - [ ] Exceeding rate limits (5 API key ops/hr) shows throttle warning
+   - [ ] Rapid create/revoke cycles trigger temporary account lock
+
+7. **Insufficient Balance & Service Pause**
+   - [ ] Balance below 1-month estimate → shows low balance warning toast
+   - [ ] Balance reaches $0 → service paused with 7-day grace period banner
+   - [ ] Top-up during grace period resumes service immediately
+
+8. **Error Handling (Critical Paths)**
+   - [ ] Network error during wallet connect → shows retry with fallback to demo mode
+   - [ ] Insufficient balance on enable → shows error modal with "Top Up" button
+   - [ ] JWT expired (401) → clears auth, redirects to home, shows "Session expired" toast
