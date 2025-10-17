@@ -15,10 +15,35 @@ MCP servers extend Claude Code's capabilities by providing:
 
 - Claude Code installed
 - Node.js 18+ installed
+- Python 3.10+ installed
 - Git configured
 - PostgreSQL running locally (for postgres MCP)
 
 ## Installation Steps
+
+### 0. Install uv (Python Package Manager)
+
+**Required for**: Serena and Git MCP servers (both are Python packages)
+
+**Install:**
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+**Add to PATH:**
+```bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+**Verify:**
+```bash
+uvx --version
+```
+
+Expected output: `uvx 0.9.3` (or newer)
+
+---
 
 ### 1. Context7 (Essential - Prevents API Hallucinations)
 
@@ -104,10 +129,12 @@ claude mcp add filesystem -- npx -y @modelcontextprotocol/server-filesystem /hom
 
 **Install:**
 ```bash
-claude mcp add git -- npx -y @modelcontextprotocol/server-git --repository /home/olet/suiftly-co
+claude mcp add git -- uvx mcp-server-git --repository /home/olet/suiftly-co
 ```
 
-**Note**: Replace path with your project directory
+**Note**:
+- Replace path with your project directory
+- This is a Python package (not npm), requires `uvx` from step 0
 
 ---
 
@@ -219,8 +246,10 @@ use serena to find all tRPC routes in the codebase
 - Verify: `curl https://mcp.context7.com/sse`
 
 ### Serena: "uvx command not found"
-- Install uv: `curl -LsSf https://astral.sh/uv/install.sh | sh`
+- Install uv (see step 0): `curl -LsSf https://astral.sh/uv/install.sh | sh`
+- Add to PATH: `echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc`
 - Requires Python 3.10+
+- Verify: `uvx --version`
 
 ### Postgres MCP: "Connection refused"
 - Verify PostgreSQL is running: `sudo service postgresql status`
@@ -229,6 +258,12 @@ use serena to find all tRPC routes in the codebase
 ### Drizzle MCP: "Config not found"
 - This is expected before scaffolding
 - Create project structure first (see ARCHITECTURE.md "Next Steps")
+
+### Git MCP: "Failed to connect"
+- Make sure `uvx` is installed (see step 0)
+- Verify PATH includes `~/.local/bin`: `echo $PATH`
+- Test manually: `uvx mcp-server-git --help`
+- Git MCP is a Python package, not npm
 
 ### GitHub MCP: "Authentication failed"
 - Check token: `echo $GITHUB_PERSONAL_ACCESS_TOKEN`
