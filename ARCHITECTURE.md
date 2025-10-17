@@ -679,15 +679,45 @@ process.on('SIGTERM', async () => {
 
 ## MCP Servers
 
-**Essential:**
-1. @modelcontextprotocol/server-postgres
-2. @modelcontextprotocol/server-filesystem
-3. @modelcontextprotocol/server-github
+**Essential MCP servers for optimal Claude Code development with this stack.**
 
-**Custom (later):**
-4. Sui Blockchain MCP (query network, balances, transactions)
-5. HAProxy Logs MCP (parse logs, generate reports)
-6. Billing Analytics MCP (usage queries, revenue reports)
+**Why MCPs matter for Suiftly:**
+- **Context7**: Prevents hallucinations on bleeding-edge APIs (React 19, Vite 7, tRPC v11, Drizzle)
+- **Serena**: Semantic code search in monorepo (find tRPC route usage, Drizzle schema references)
+- **Others**: Database inspection, Git workflows, ORM integration
+
+**Installation:** See [.claude/mcp-setup.md](.claude/mcp-setup.md) for step-by-step setup guide.
+
+**Essential (Install Before Implementation):**
+1. **context7** - Live documentation for third-party packages (prevents outdated API suggestions)
+2. **serena** - Semantic code search via Language Server Protocol (better than grep)
+3. **@modelcontextprotocol/server-postgres** - Database schema inspection and read-only queries
+4. **@modelcontextprotocol/server-filesystem** - Secure file operations within project directory
+5. **@modelcontextprotocol/server-git** - Local Git operations (status, diff, commit, log)
+6. **@modelcontextprotocol/server-github** - GitHub API (PRs, issues, CI/CD status)
+7. **drizzle-mcp** - Drizzle ORM integration (migration generation, schema introspection)
+
+**Add During Testing Phase:**
+8. **@playwright/mcp** - Browser automation for E2E tests (wallet authentication flows)
+
+**Custom (Post-Launch):**
+9. Sui Blockchain MCP - Query network, balances, transactions (production monitoring)
+10. HAProxy Analytics MCP - Parse logs, generate reports (operational analytics)
+
+**Recommended Workflow:**
+
+Use the `/g` custom command for every feature:
+```
+/g add tRPC route for fetching usage metrics
+```
+
+This automatically:
+- ✅ Enables Context7 (live docs)
+- ✅ Enables Serena (semantic search)
+- ✅ Reads CLAUDE.md and ARCHITECTURE.md
+- ✅ Uses TodoWrite for multi-step tasks
+
+See [.claude/commands/g.md](.claude/commands/g.md) for command definition.
 
 ---
 
