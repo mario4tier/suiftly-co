@@ -48,12 +48,19 @@ Infrastructure (HAProxy, Seal servers, control plane) handled by **walrus** proj
 
 ### Database
 
-**DB:** PostgreSQL 16 (mature, supported until Nov 2028) or PostgreSQL 17 (latest)
-**Extension:** TimescaleDB 2.17+ (PG 17 compatible, avoid PG 17.1)
+**DB:** PostgreSQL 17.6+ (avoid 17.1 due to ABI break)
+**Extension:** TimescaleDB 2.17+ (fully PG 17 compatible)
 **ORM:** Drizzle ORM (TypeScript-first, identity columns, SQL-like)
 **Migrations:** Drizzle Kit
 
-**Note:** TimescaleDB 2.17+ required for PostgreSQL 17. Use PG 17.2+ (not 17.1 due to ABI break).
+**Why PostgreSQL 17:**
+- 30% better throughput vs PG 16 (1,575 vs 1,238 RPS)
+- Improved vacuum memory management (critical for HAProxy log ingestion)
+- 2x write throughput for high concurrency workloads
+- Longer support timeline (EOL Sep 2029 vs PG 16 EOL Nov 2028)
+- TimescaleDB 2.17+ fully supports PG 15, 16, and 17
+
+**Note:** Avoid PostgreSQL 17.1 specifically due to ABI break that affected TimescaleDB. Use 17.2+ (fixed Nov 2024).
 
 ### Global Manager
 
