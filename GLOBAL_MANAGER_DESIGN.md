@@ -667,20 +667,21 @@ ssh db1.suiftly.io '
 
 Simple HTML dashboard for debugging and monitoring. Designed for both human operators and AI agents (via WebFetch).
 
-**Route:** `GET /admin/global-manager`
+**Port:** Dedicated admin port (e.g., 3001)
+**Route:** `GET /`
 
 **Implementation:**
 
 ```typescript
-// apps/api/src/routes/admin.ts
+// services/global-manager/src/admin-server.ts
 
-import { FastifyInstance } from 'fastify'
+import Fastify from 'fastify'
 import { db, eq, desc } from '@suiftly/database'
 import { execSync } from 'child_process'
 
-export async function adminRoutes(fastify: FastifyInstance) {
+const fastify = Fastify({ logger: true })
 
-  fastify.get('/admin/global-manager', async (req, reply) => {
+fastify.get('/', async (req, reply) => {
     // Fetch health data
     const lastRuns = await db.query.worker_runs.findMany({
       where: eq(worker_runs.worker_type, 'global-manager'),
@@ -751,8 +752,7 @@ export async function adminRoutes(fastify: FastifyInstance) {
 </body>
 </html>
     `)
-  })
-}
+})
 
 function checkServiceStatus(): boolean {
   try {
@@ -769,6 +769,15 @@ function formatTime(date: Date): string {
   if (ago < 3600) return `${Math.floor(ago / 60)}m ago`
   return `${Math.floor(ago / 3600)}h ago`
 }
+
+// Start admin server on dedicated port
+fastify.listen({ port: 3001, host: '127.0.0.1' }, (err) => {
+  if (err) {
+    fastify.log.error(err)
+    process.exit(1)
+  }
+  fastify.log.info('Admin dashboard listening on http://localhost:3001')
+})
 ```
 
 **Features:**
@@ -780,9 +789,9 @@ function formatTime(date: Date): string {
 - Auto-refresh every 30 seconds
 
 **Usage:**
-- Humans: Browse to http://localhost:3000/admin/global-manager
+- Humans: Browse to http://localhost:3001/
 - AI agents: Use WebFetch tool to read and interpret status
-- No authentication needed (internal admin route)
+- No authentication needed (dedicated admin port, internal only)
 
 **Design Philosophy:**
 - Minimal HTML/CSS (evolves based on debugging needs)
