@@ -92,6 +92,7 @@ Infrastructure (HAProxy, Seal servers, control plane) handled by **walrus** proj
 - Resumable (picks up unbilled logs on next cycle)
 - Graceful shutdown (handles SIGTERM/SIGINT)
 - PostgreSQL is source of truth (no job queue needed)
+- Admin dashboard (port 3001) for debugging and monitoring
 
 **For detailed design, see [GLOBAL_MANAGER_DESIGN.md](GLOBAL_MANAGER_DESIGN.md)**
 
@@ -201,6 +202,13 @@ suiftly-co/
 │
 ├─ services/
 │  └─ global-manager/           # Centralized worker (metering, billing, vault generation)
+│     ├─ src/
+│     │  ├─ index.ts            # Main daemon (scheduler loop)
+│     │  ├─ admin-server.ts     # Admin dashboard (port 3001)
+│     │  ├─ admin/              # HTML templates (TypeScript functions)
+│     │  ├─ tasks/              # Worker tasks (aggregate, bill, vault, cleanup)
+│     │  └─ lib/                # Utilities (lock, db)
+│     └─ package.json
 │
 └─ scripts/                     # Idempotent deployment scripts (Python)
    ├─ provision-server.py       # New server setup (PostgreSQL, Node.js, PM2)

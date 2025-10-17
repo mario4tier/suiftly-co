@@ -667,16 +667,15 @@ ssh db1.suiftly.io '
 
 Simple HTML dashboard for debugging and monitoring. Designed for both human operators and AI agents (via WebFetch).
 
-**Architecture:** Server-side rendered HTML (multi-page, NOT SPA)
-**Port:** Dedicated admin port (3001, localhost only)
-**Route:** `GET /` (root path)
+**Architecture:** Server-side rendered HTML (multi-page)
+- Templates are TypeScript functions returning HTML strings
+- Zero build step for instant iteration
+- Evolves as debugging needs change
 
-**Why server-side HTML:**
-- Zero build step (instant iteration)
-- Edit template, refresh browser (< 1 second)
-- No frontend tooling complexity
-- Easy to add pages as debugging needs evolve
-- Perfect for rapid debugging UI iteration
+**Server:**
+- Port: 3001 (localhost only)
+- Route: `GET /` for main dashboard
+- Additional routes added as needed (`/logs`, `/tasks/:id`, etc.)
 
 **Project Structure:**
 
@@ -685,11 +684,10 @@ services/global-manager/
 ├─ src/
 │  ├─ index.ts              # Main daemon (scheduler loop)
 │  ├─ admin-server.ts       # Admin HTTP server (port 3001)
-│  ├─ admin/                # Admin templates (TypeScript functions)
+│  ├─ admin/                # HTML templates (TypeScript functions)
 │  │  ├─ layout.ts          # Shared HTML layout
 │  │  ├─ dashboard.ts       # Main dashboard view
-│  │  ├─ logs.ts            # Log viewer (add as needed)
-│  │  └─ tasks.ts           # Task details (add as needed)
+│  │  └─ (add views as needed)
 │  ├─ tasks/                # Worker tasks
 │  └─ lib/                  # Utilities
 ```
