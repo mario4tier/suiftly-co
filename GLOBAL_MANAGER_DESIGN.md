@@ -667,8 +667,32 @@ ssh db1.suiftly.io '
 
 Simple HTML dashboard for debugging and monitoring. Designed for both human operators and AI agents (via WebFetch).
 
-**Port:** Dedicated admin port (e.g., 3001)
-**Route:** `GET /`
+**Architecture:** Server-side rendered HTML (multi-page, NOT SPA)
+**Port:** Dedicated admin port (3001, localhost only)
+**Route:** `GET /` (root path)
+
+**Why server-side HTML:**
+- Zero build step (instant iteration)
+- Edit template, refresh browser (< 1 second)
+- No frontend tooling complexity
+- Easy to add pages as debugging needs evolve
+- Perfect for rapid debugging UI iteration
+
+**Project Structure:**
+
+```
+services/global-manager/
+├─ src/
+│  ├─ index.ts              # Main daemon (scheduler loop)
+│  ├─ admin-server.ts       # Admin HTTP server (port 3001)
+│  ├─ admin/                # Admin templates (TypeScript functions)
+│  │  ├─ layout.ts          # Shared HTML layout
+│  │  ├─ dashboard.ts       # Main dashboard view
+│  │  ├─ logs.ts            # Log viewer (add as needed)
+│  │  └─ tasks.ts           # Task details (add as needed)
+│  ├─ tasks/                # Worker tasks
+│  └─ lib/                  # Utilities
+```
 
 **Implementation:**
 
@@ -678,11 +702,13 @@ Simple HTML dashboard for debugging and monitoring. Designed for both human oper
 import Fastify from 'fastify'
 import { db, eq, desc } from '@suiftly/database'
 import { execSync } from 'child_process'
+import { dashboardView } from './admin/dashboard'
 
 const fastify = Fastify({ logger: true })
 
+// Main dashboard
 fastify.get('/', async (req, reply) => {
-    // Fetch health data
+  // Fetch health data
     const lastRuns = await db.query.worker_runs.findMany({
       where: eq(worker_runs.worker_type, 'global-manager'),
       orderBy: desc(worker_runs.executed_at),
@@ -778,6 +804,49 @@ fastify.listen({ port: 3001, host: '127.0.0.1' }, (err) => {
   }
   fastify.log.info('Admin dashboard listening on http://localhost:3001')
 })
+```
+
+**Example Template (TypeScript function returning HTML):**
+
+```typescript
+// services/global-manager/src/admin/dashboard.ts
+
+export function dashboardView(data: {
+  isRunning: boolean
+  lastSuccess?: any
+  recentFailures: any[]
+  lastRuns: any[]
+}): string {
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Global Manager - Dashboard</title>
+  <style>
+    body { font-family: monospace; margin: 2rem; background: #1e1e1e; color: #d4d4d4; }
+    .ok { color: #4caf50; }
+    .error { color: #f44336; }
+    table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+    th, td { padding: 0.5rem; text-align: left; border: 1px solid #3e3e3e; }
+  </style>
+</head>
+<body>
+  <h1>Global Manager Health</h1>
+  <h2 class="${data.isRunning ? 'ok' : 'error'}">
+    ${data.isRunning ? '✓ Running' : '✗ Stopped'}
+  </h2>
+  ${data.lastSuccess ? `
+    <p>Last success: ${formatTime(data.lastSuccess.executed_at)}
+       (${data.lastSuccess.duration_ms}ms)</p>
+  ` : '<p class="error">No successful runs</p>'}
+
+  <!-- Add more sections as debugging needs evolve -->
+
+  <script>setTimeout(() => location.reload(), 30000)</script>
+</body>
+</html>
+  `
+}
 ```
 
 **Features:**
