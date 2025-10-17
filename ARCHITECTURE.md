@@ -210,16 +210,7 @@ suiftly-co/
 │     │  └─ lib/                # Utilities (lock, db)
 │     └─ package.json
 │
-└─ scripts/                     # Idempotent deployment scripts (Python)
-   ├─ provision-server.py       # New server setup (PostgreSQL, Node.js, PM2)
-   ├─ deploy.py                 # Application deployment (rolling updates)
-   ├─ backup.py                 # Database backup to R2
-   ├─ restore.py                # Restore from backup
-   └─ lib/
-      ├─ server.py              # SSH, rsync, apt utilities
-      ├─ postgres.py            # PostgreSQL management helpers
-      ├─ healthcheck.py         # Health check polling
-      └─ r2.py                  # Cloudflare R2 operations
+└─ scripts/                     # Idempotent deployment scripts (see Deployment section)
 ```
 
 **Monorepo:** Turborepo + npm workspaces
