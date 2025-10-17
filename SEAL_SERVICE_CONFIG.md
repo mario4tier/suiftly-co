@@ -8,14 +8,14 @@ This document defines the tier structure, rate limiting, and configuration for t
 
 ### Tier Structure
 
-| Tier | Guaranteed req/s per region | Burst Available | Usage Pricing (all tiers) |
-|------|----------------------------|-----------------|---------------------------|
-| **Starter** | 100 | ❌ No | $1.00 per 10K requests |
-| **Pro** | 1,000 | ✅ Yes (2x) | $1.00 per 10K requests |
-| **Enterprise** | Custom | ✅ Yes (Custom) | Custom pricing |
+| Tier | Guaranteed req/s per region | Burst Available |
+|------|----------------------------|-----------------|
+| **Starter** | 100 | ❌ No |
+| **Pro** | 1,000 | ✅ Yes (2x) |
+| **Enterprise** | Custom | ✅ Yes (Custom) |
 
 **Key Points:**
-- Usage pricing is **$1.00 per 10,000 requests** for all tiers (Starter, Pro)
+- **Usage pricing**: $1.00 per 10,000 requests (same for all tiers)
 - Tiers determine **guaranteed bandwidth** (req/s per region), not usage pricing
 - Monthly base fees and add-on pricing listed in Pricing Model section below
 
