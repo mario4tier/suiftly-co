@@ -663,12 +663,140 @@ ssh db1.suiftly.io '
 
 ## Monitoring & Health Checks
 
-### API Endpoints
+### Admin Dashboard
+
+Simple HTML dashboard for debugging and monitoring. Designed for both human operators and AI agents (via WebFetch).
+
+**Route:** `GET /admin/global-manager`
+
+**Implementation:**
+
+```typescript
+// apps/api/src/routes/admin.ts
+
+import { FastifyInstance } from 'fastify'
+import { db, eq, desc } from '@suiftly/database'
+import { execSync } from 'child_process'
+
+export async function adminRoutes(fastify: FastifyInstance) {
+
+  fastify.get('/admin/global-manager', async (req, reply) => {
+    // Fetch health data
+    const lastRuns = await db.query.worker_runs.findMany({
+      where: eq(worker_runs.worker_type, 'global-manager'),
+      orderBy: desc(worker_runs.executed_at),
+      limit: 20
+    })
+
+    const isRunning = await checkServiceStatus()
+    const lastSuccess = lastRuns.find(r => r.status === 'success')
+    const recentFailures = lastRuns.filter(r => r.status === 'failed')
+    const slowTasks = lastRuns.filter(r => r.duration_ms > 10000)
+
+    // Return simple HTML (no fancy UI, evolves as needed)
+    return reply.type('text/html').send(`
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Global Manager Health</title>
+  <style>
+    body { font-family: monospace; margin: 2rem; }
+    .ok { color: green; }
+    .warn { color: orange; }
+    .error { color: red; }
+    table { border-collapse: collapse; margin-top: 1rem; }
+    th, td { padding: 0.5rem; text-align: left; border: 1px solid #ccc; }
+  </style>
+</head>
+<body>
+  <h1>Global Manager Health</h1>
+
+  <h2 class="${isRunning ? 'ok' : 'error'}">
+    ${isRunning ? '✓ Running' : '✗ Stopped'}
+  </h2>
+
+  ${lastSuccess ? `
+    <p>Last success: ${formatTime(lastSuccess.executed_at)} (${lastSuccess.duration_ms}ms)</p>
+  ` : '<p class="error">No successful runs</p>'}
+
+  ${recentFailures.length > 0 ? `
+    <h3 class="error">Recent Failures (${recentFailures.length})</h3>
+    <ul>
+      ${recentFailures.map(f => `<li>${f.task_name}: ${f.error_message}</li>`).join('')}
+    </ul>
+  ` : ''}
+
+  ${slowTasks.length > 0 ? `
+    <h3 class="warn">Slow Tasks (> 10s)</h3>
+    <ul>
+      ${slowTasks.map(t => `<li>${t.task_name}: ${t.duration_ms}ms</li>`).join('')}
+    </ul>
+  ` : ''}
+
+  <h3>Recent Runs</h3>
+  <table>
+    <tr><th>Time</th><th>Task</th><th>Status</th><th>Duration</th><th>Error</th></tr>
+    ${lastRuns.map(r => `
+      <tr>
+        <td>${formatTime(r.executed_at)}</td>
+        <td>${r.task_name}</td>
+        <td class="${r.status === 'success' ? 'ok' : 'error'}">${r.status}</td>
+        <td>${r.duration_ms || '-'}ms</td>
+        <td>${r.error_message || '-'}</td>
+      </tr>
+    `).join('')}
+  </table>
+
+  <script>setTimeout(() => location.reload(), 30000)</script>
+</body>
+</html>
+    `)
+  })
+}
+
+function checkServiceStatus(): boolean {
+  try {
+    execSync('systemctl is-active suiftly-global-manager.service')
+    return true
+  } catch {
+    return false
+  }
+}
+
+function formatTime(date: Date): string {
+  const ago = Math.floor((Date.now() - date.getTime()) / 1000)
+  if (ago < 60) return `${ago}s ago`
+  if (ago < 3600) return `${Math.floor(ago / 60)}m ago`
+  return `${Math.floor(ago / 3600)}h ago`
+}
+```
+
+**Features:**
+- Service status (running/stopped via systemd)
+- Last successful run time and duration
+- Recent failures with error messages
+- Slow tasks (> 10s threshold)
+- Last 20 runs with details
+- Auto-refresh every 30 seconds
+
+**Usage:**
+- Humans: Browse to http://localhost:3000/admin/global-manager
+- AI agents: Use WebFetch tool to read and interpret status
+- No authentication needed (internal admin route)
+
+**Design Philosophy:**
+- Minimal HTML/CSS (evolves based on debugging needs)
+- Optimized for readability (humans + AI agents)
+- No API needed (HTML provides all context)
+
+### Health Check Endpoints
+
+Lightweight JSON endpoints for external monitoring tools:
 
 ```typescript
 // apps/api/src/routes/health.ts
 
-// Check global manager health
+// Quick health check (for uptime monitoring)
 router.get('/health/global-manager', async (req, res) => {
   const lastRun = await db.query.worker_runs.findFirst({
     where: and(
@@ -688,28 +816,6 @@ router.get('/health/global-manager', async (req, res) => {
   }
 
   return res.send({ status: 'healthy', last_run: lastRun.executed_at })
-})
-
-// Check MA_VAULT generation
-router.get('/health/ma-vault', async (req, res) => {
-  const lastVersion = await db.query.vault_versions.findFirst({
-    orderBy: desc(vault_versions.created_at)
-  })
-
-  const minutesSinceGeneration = (Date.now() - lastVersion?.created_at.getTime() || 0) / 60000
-
-  if (minutesSinceGeneration > 15) {
-    return res.status(503).send({
-      status: 'unhealthy',
-      message: `MA_VAULT hasn't been generated in ${minutesSinceGeneration} minutes`
-    })
-  }
-
-  return res.send({
-    status: 'healthy',
-    last_generated: lastVersion.created_at,
-    customer_count: lastVersion.customer_count
-  })
 })
 ```
 
