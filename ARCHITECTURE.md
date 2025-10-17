@@ -291,7 +291,7 @@ SELECT add_retention_policy('haproxy_logs', INTERVAL '90 days');
 SELECT add_compression_policy('haproxy_logs', INTERVAL '7 days');
 ```
 
-**Tiers:** Starter, Pro, Business, Enterprise (see [SEAL_SERVICE_CONFIG.md](SEAL_SERVICE_CONFIG.md) for rate limits and pricing)
+**Tiers:** Starter, Pro, Enterprise (see [SEAL_SERVICE_CONFIG.md](SEAL_SERVICE_CONFIG.md) for rate limits and pricing)
 
 ---
 
@@ -450,29 +450,6 @@ git commit -m "Migration: add feature"
 - `npm run db:studio` - Visual DB editor
 
 **Strategy:** Push freely in dev (separate DB), generate once for prod. Final migration = working solution only.
-
----
-
-## Key Dependencies
-
-**Frontend:**
-- react@19, @tanstack/react-router@^1, @tanstack/react-query@^5
-- @trpc/client@^11, @trpc/react-query@^11
-- zustand, react-hook-form, zod
-- @mysten/sui.js, @mysten/dapp-kit
-- tailwindcss, vite@^7
-
-**Backend:**
-- fastify@^5, @fastify/jwt, @fastify/cors, @fastify/rate-limit
-- @trpc/server@^11, drizzle-orm, postgres
-- zod, jose, pino
-- typescript@^5.9
-
-**Worker:**
-- drizzle-orm, postgres
-
-**Dev Tools:**
-- vitest, playwright, drizzle-kit
 
 ---
 
