@@ -8,8 +8,6 @@ This document defines the tier structure, rate limiting, and configuration for t
 
 ### Tier Structure
 
-**NOTE:** See [UI_DESIGN.md](UI_DESIGN.md) for the complete tier pricing and monthly fees. This document focuses on rate limiting configuration.
-
 | Tier | Guaranteed req/s per region | Burst Available | Usage Pricing (all tiers) |
 |------|----------------------------|-----------------|---------------------------|
 | **Starter** | 100 | ❌ No | $1.00 per 10K requests |
@@ -19,7 +17,7 @@ This document defines the tier structure, rate limiting, and configuration for t
 **Key Points:**
 - Usage pricing is **$1.00 per 10,000 requests** for all tiers (Starter, Pro)
 - Tiers determine **guaranteed bandwidth** (req/s per region), not usage pricing
-- Monthly base fees vary by tier (see [UI_DESIGN.md](UI_DESIGN.md#pricing-model))
+- Monthly base fees and add-on pricing listed in Pricing Model section below
 
 ### Rate Limiting Model
 
@@ -99,6 +97,29 @@ Generated from MA_VAULT by Local Manager:
 
 ## Pricing Model
 
+### Monthly Base Fees
+
+| Tier | Monthly Base Fee | Description |
+|------|-----------------|-------------|
+| **Starter** | $20/month | 100 req/s per region, no burst |
+| **Pro** | $40/month | 1,000 req/s per region, burst available |
+| **Enterprise** | Custom | Custom capacity and pricing |
+
+### Add-On Pricing
+
+| Feature | Cost | Notes |
+|---------|------|-------|
+| **Burst Capability** | +$10/month | Pro/Enterprise only, allows 2x capacity for 10s |
+| **Additional Seal Keys** | +$5/month each | 1 included, additional keys for isolation |
+| **Additional Packages** | +$1/month each per seal key | 3 included per seal key |
+| **Additional API Keys** | +$1/month each | 1 included, additional for key rotation |
+
+**Pricing Rules:**
+- **Seal Keys**: `max(0, totalSealKeys - 1) × $5/month`
+- **Packages**: `sum(max(0, packagesPerKey - 3) × $1/month)` for each seal key
+- **API Keys**: `max(0, totalApiKeys - 1) × $1/month`
+- **Burst**: `$10/month` if enabled (Pro/Enterprise only)
+
 ### Usage-Based Billing
 
 - **Billing metric**: Per 10,000 successful requests (2xx/3xx responses)
@@ -107,10 +128,33 @@ Generated from MA_VAULT by Local Manager:
 - **Billing cycle**: Monthly billing at end of month
 - **Minimum charge**: $0.01 (rounded up to nearest cent)
 
-**Monthly Base Fees** (see [UI_DESIGN.md](UI_DESIGN.md) for complete pricing):
-- Starter: $20/month base + usage fees
-- Pro: $40/month base + usage fees
-- Business: $80/month base + usage fees
+### Example Pricing Calculations
+
+**Example 1: Starter Tier (Basic)**
+- Tier: Starter ($20/month)
+- Seal Keys: 1 (included)
+- Packages: 3 (included)
+- API Keys: 1 (included)
+- **Total Monthly Fee**: $20/month
+- **Usage**: Metered separately at $1/10K requests
+
+**Example 2: Pro Tier (Moderate)**
+- Tier: Pro ($40/month)
+- Burst: Enabled (+$10/month)
+- Seal Keys: 2 (1 included, 1 × $5 = $5/month)
+- Packages per key: 5 (3 included, 2 additional × $1 × 2 keys = $4/month)
+- API Keys: 2 (1 included, 1 × $1 = $1/month)
+- **Total Monthly Fee**: $60/month
+- **Usage**: Metered separately at $1/10K requests
+
+**Example 3: Pro Tier (Heavy)**
+- Tier: Pro ($40/month)
+- Burst: Enabled (+$10/month)
+- Seal Keys: 3 (1 included, 2 × $5 = $10/month)
+- Packages per key: 5 each (3 included, 2 additional × $1 × 3 keys = $6/month)
+- API Keys: 4 (1 included, 3 × $1 = $3/month)
+- **Total Monthly Fee**: $69/month
+- **Usage**: Metered separately at $1/10K requests
 
 ### Tier Selection Guidelines
 

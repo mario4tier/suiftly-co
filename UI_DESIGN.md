@@ -1539,14 +1539,7 @@ function calculateMonthlyFee(config: ServiceConfig): number {
 }
 ```
 
-**Note:** Pricing values above are finalized:
-- Starter: $20/mo, 100 req/s per region (~300 req/s globally)
-- Pro: $40/mo, 500 req/s per region (~1,500 req/s globally)
-- Business: $80/mo, 2,000 req/s per region (~6,000 req/s globally)
-- Burst: +$10/mo (Pro/Business only)
-- Packages per Seal key: $1/mo each (after 3)
-- Additional API keys: $1/mo each (after 1)
-- Additional Seal keys: $5/mo each (after 1)
+**Note:** Pricing values in the code above are examples. Actual pricing defined in [SEAL_SERVICE_CONFIG.md](SEAL_SERVICE_CONFIG.md#pricing-model). The implementation should import pricing constants from a shared configuration file.
 
 ---
 
@@ -2094,15 +2087,10 @@ Once this UI design is approved:
 - ✅ Persistent wallet widget in header (shows connection state)
 - ✅ Mock wallet for development (no real Web3 needed initially)
 
-**Configuration Pricing Model:**
-- **Guaranteed Bandwidth Tiers:**
-  - Starter: $20/mo → 100 req/s per region (~300 req/s globally)
-  - Pro: $40/mo → 500 req/s per region (~1,500 req/s globally)
-  - Business: $80/mo → 2,000 req/s per region (~6,000 req/s globally)
-- **Burst:** +$10/month (available for Pro/Business only)
-- **Packages Per Seal Key:** $1/month each (comes with 3)
-- **Additional API Keys:** $1/month each (comes with 1)
-- **Additional Seal Keys:** $5/month each (comes with 1)
+**Pricing Model:**
+- See [SEAL_SERVICE_CONFIG.md](SEAL_SERVICE_CONFIG.md#pricing-model) for complete pricing details
+- Tier base fees, add-on pricing, usage fees, and calculation examples documented there
+- UI implements live pricing calculator based on SEAL_SERVICE_CONFIG.md pricing rules
 
 **Always Included (All Tiers):**
 - Global geo-steering and failover (closest key-server automatically selected)
