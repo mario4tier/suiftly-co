@@ -5,6 +5,7 @@
 Customer-facing platform for Suiftly infrastructure services with a Cloudflare-inspired UX.
 
 **Related Documents:**
+- **[AUTHENTICATION_DESIGN.md](AUTHENTICATION_DESIGN.md)** - Complete authentication architecture, wallet signature flow, and JWT session management
 - **[ESCROW_DESIGN.md](ESCROW_DESIGN.md)** - Complete escrow account architecture, smart contract interface, and financial flows
 
 **Design Principles:**
@@ -103,49 +104,24 @@ Customer-facing platform for Suiftly infrastructure services with a Cloudflare-i
 
 ## Authentication & Session Flow
 
-**No traditional login page - wallet-based authentication only.**
+**Wallet-based authentication with JWT sessions.**
 
-**Key principle:** Users can explore the entire dashboard WITHOUT connecting wallet (Cloudflare-style). Wallet connection only required when enabling services or viewing existing configs.
+See **[AUTHENTICATION_DESIGN.md](AUTHENTICATION_DESIGN.md)** for complete architecture, implementation details, and security considerations.
 
-### Auth State Machine & JWT Issuance
+### Summary
 
-**Connection & JWT Issuance Flow**:
-1. User clicks "Connect Wallet"
-2. Wallet extension prompts for approval
-3. App generates ephemeral nonce (UUID v4)
-4. User signs challenge message: `"Sign in to Suiftly\nNonce: {nonce}\nTimestamp: {ISO8601}"`
-5. Frontend sends `{walletAddress, signature, nonce, timestamp}` to `POST /api/auth/verify`
-6. Backend verifies:
-   - Signature matches wallet address
-   - Nonce hasn't been used (stored in Redis/DB with 5-min TTL)
-   - Timestamp within 5 minutes of server time
-7. Backend issues JWT with:
-   - `exp`: 4 hours (short-lived for security)
-   - `iat`: now
-   - `sub`: wallet address
-   - `nonce`: original nonce (prevents replay)
-8. Backend sets **httpOnly cookie** with JWT (preferred method - XSS-resistant)
-   - Cookie name: `suiftly_session`
-   - Flags: `HttpOnly`, `Secure`, `SameSite=Strict`
-   - Max-Age: 4 hours
-   - Fallback for dev: If cookies unavailable, store in `sessionStorage` (NOT localStorage) with explicit XSS warning in console
-9. All API calls automatically include cookie (no manual header needed)
+**Authentication Method:**
+- Wallet connection via `@mysten/dapp-kit` (auto-reconnects on return visits)
+- Challenge-response signature proves wallet ownership
+- JWT stored in httpOnly cookie for session management (4-hour expiry)
 
-**Session Refresh (Silent Re-sign)**:
-- When JWT expiry approaches (<30 min remaining), app prompts silent re-sign
-- Show subtle toast: "Session expiring soon. Please sign to continue."
-- User signs new challenge → new JWT issued → cookie updated
-- If user ignores, session expires and requires full reconnect
+**User Experience:**
+- **First access:** Connect wallet → Sign once → Authenticated for 4 hours
+- **Subsequent requests:** No signatures needed (JWT handles authorization)
+- **Transactions:** Wallet signature required (blockchain operations only)
+- **Session expiry:** Sign again after 4 hours or on expiration warning
 
-**Session Invalidation**:
-- Disconnect wallet: Backend clears cookie, redirect to home
-- JWT expiry: API returns 401 → app clears cookie → shows "Session expired, reconnect wallet" toast
-- No refresh tokens (user must sign new challenge for session extension)
-
-**Authorization Model (MVP)**:
-- Single-user per wallet address (no teams/orgs in v1)
-- All API keys, services, and billing tied to wallet address
-- Future: Organization linking (wallet signs to create/join org, roles managed separately)
+**Key Principle:** Users can explore the entire dashboard WITHOUT connecting wallet (Cloudflare-style). Wallet connection only required when enabling services or accessing protected data (API keys, billing).
 
 ### First-Time User Flow (No Wallet Connection)
 
@@ -208,14 +184,14 @@ Customer-facing platform for Suiftly infrastructure services with a Cloudflare-i
 **Not Connected (Default for new visitors):**
 ```
 ┌────────────────────────────────────────┐
-│ [Logo] Suiftly     [Connect Wallet] 󰅂 │
+│ [Logo] Suiftly     [Connect Wallet]  󰅂 │
 └────────────────────────────────────────┘
 ```
 
 **Connected:**
 ```
 ┌─────────────────────────────────────────────┐
-│ [Logo] Suiftly  [󰇃 $127.50 ▼]  [0x1a2...] │
+│ [Logo] Suiftly  [󰇃 $127.50 ▼]  [0x1a2...]   │
 └─────────────────────────────────────────────┘
 ```
 
@@ -502,8 +478,7 @@ Each service page has **two states:**
 │  └──────────────────────────────────────────┘        │
 │                                                       │
 │  Usage Fees (metered, billed separately):            │
-│  • Requests: $0.XX per 1M requests                   │
-│  • Bandwidth: $0.XX per GB (beyond guaranteed)       │
+│  • Requests: $1.00 per 10,000 requests (all tiers)  │
 │                                                       │
 │  Enable Service                         [OFF] ⟳ ON   │
 │                                                       │
@@ -594,8 +569,7 @@ Each service page has **two states:**
 **Pricing Display:**
 - **Total Monthly Fee:** Total recurring monthly charge (all config options summed)
 - **Usage Fees:** Bulleted list (metered separately, not included in monthly fee)
-  - Requests (per million)
-  - Bandwidth overages (beyond guaranteed)
+  - Requests: $1.00 per 10,000 requests (all tiers)
 
 **Pricing Example (Business tier, burst enabled, 5 packages per key, 2 total seal keys, 2 total API keys):**
 ```
@@ -648,8 +622,7 @@ Total Monthly Fee: $100/month
 │  └──────────────────────────────────────────┘        │
 │                                                       │
 │  Current Month Usage:                                 │
-│  • Requests: 12.5M ($1.25)                           │
-│  • Bandwidth: 450 GB ($0.00 - within guaranteed)     │
+│  • Requests: 125,000 ($12.50)                        │
 │                                                       │
 │  Enable Service                         OFF ⟳ [ON]   │
 │                                                       │
@@ -754,7 +727,7 @@ Total Monthly Fee: $100/month
 **Key Creation:**
 - New keys generated server-side (secure random)
 - Shown once in modal: "Copy this key now - it won't be shown again"
-- Stored hashed in database
+- **Security:** Raw key never stored - only bcrypt hash stored in database
 - Billing adjustment applied immediately (pro-rated for current month)
 - Logged in activity feed with timestamp
 
@@ -1013,11 +986,11 @@ Total Monthly Fee: $100/month
 │                                                       │
 │  Usage Details (Current Month)                        │
 │  ┌────────────────────────────────────────┐          │
-│  │  Service    │ Requests  │ Bandwidth    │          │
+│  │  Service    │ Requests  │ Cost         │          │
 │  ├────────────────────────────────────────┤          │
-│  │  Seal       │ 12.5M     │ 450 GB       │          │
-│  │  gRPC       │ 3.2M      │ 120 GB       │          │
-│  │  GraphQL    │ 1.8M      │ 80 GB        │          │
+│  │  Seal       │ 125,000   │ $12.50       │          │
+│  │  gRPC       │ 32,000    │ $3.20        │          │
+│  │  GraphQL    │ 18,000    │ $1.80        │          │
 │  └────────────────────────────────────────┘          │
 │                                                       │
 │  Billing History                                      │
@@ -1154,15 +1127,15 @@ Click balance to expand:
 - **Connect Wallet:** Opens wallet connection modal (Sui wallet)
 - **Top Up:** Opens deposit modal (Web3 transaction) [requires connected wallet]
 - **Withdraw:** Opens withdrawal modal (Web3 transaction) [requires connected wallet]
-- **Disconnect Wallet:** Clears JWT from localStorage, clears auth state, header returns to "Connect Wallet" button
+- **Disconnect Wallet:** Calls logout endpoint (clears httpOnly cookie), clears auth state, header returns to "Connect Wallet" button
 - **Recent Activity:** Last 5 transactions (link to full billing page)
 
 **Disconnect Behavior:**
 1. User clicks "Disconnect Wallet" in dropdown
 2. Confirmation prompt: "Disconnect wallet? You'll need to reconnect to manage services."
 3. If confirmed:
-   - Clear JWT from localStorage
-   - Clear Zustand auth store (wallet address, balance, etc.)
+   - Call `/api/auth/logout` (clears httpOnly cookie)
+   - Clear client-side auth state (wallet address, balance, etc.)
    - Header shows "Connect Wallet" button again
    - Service pages remain accessible (exploration mode)
    - Configured services show in read-only mode (can't edit without reconnecting)

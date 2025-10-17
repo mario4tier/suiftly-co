@@ -579,25 +579,22 @@ public fun can_charge(account: &EscrowAccount, amount_usd_cents: u64, clock: &Cl
 
 ## Backend Database Schema
 
-### Tables
+**For the complete database schema including all tables, see [CUSTOMER_SERVICE_SCHEMA.md](CUSTOMER_SERVICE_SCHEMA.md#database-schema-summary).**
 
-**users**
-```sql
-CREATE TABLE users (
-  id UUID PRIMARY KEY,
-  wallet_address VARCHAR(66) UNIQUE NOT NULL,  -- Sui address (0x...)
-  balance_usd_cents BIGINT NOT NULL DEFAULT 0,  -- USD balance (cents)
-  monthly_limit_usd_cents BIGINT NOT NULL DEFAULT 200000,  -- $2,000 default
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-```
+This section describes the escrow-specific tables and their usage:
 
-**ledger_entries** (all deposits, withdrawals, charges, credits)
+### Key Tables for Escrow Operations
+
+**customers** (canonical schema in CUSTOMER_SERVICE_SCHEMA.md)
+- Stores wallet_address, balance_usd_cents, monthly_limit_usd_cents
+- customer_id is a random 32-bit integer (1 to 4,294,967,295)
+- See [CUSTOMER_SERVICE_SCHEMA.md](CUSTOMER_SERVICE_SCHEMA.md#complete-schema) for complete table definition
+
+**ledger_entries** - All financial transactions
 ```sql
 CREATE TABLE ledger_entries (
   id UUID PRIMARY KEY,
-  user_id UUID NOT NULL REFERENCES users(id),
+  customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
   type VARCHAR(20) NOT NULL,  -- 'deposit', 'withdrawal', 'charge', 'credit'
   amount_usd_cents BIGINT NOT NULL,  -- USD amount (signed: + for deposit/credit, - for charge/withdrawal)
   amount_sui_mist BIGINT,  -- SUI amount in mist (1 SUI = 10^9 mist), null for charges/credits
@@ -608,20 +605,20 @@ CREATE TABLE ledger_entries (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_ledger_user_created ON ledger_entries(user_id, created_at DESC);
+CREATE INDEX idx_ledger_customer_created ON ledger_entries(customer_id, created_at DESC);
 CREATE INDEX idx_ledger_tx_hash ON ledger_entries(tx_hash) WHERE tx_hash IS NOT NULL;
 ```
 
-**spending_window** (30-day rolling charges for monthly limit tracking)
+**spending_window** - 30-day rolling charges for monthly limit tracking
 ```sql
 CREATE TABLE spending_window (
   id UUID PRIMARY KEY,
-  user_id UUID NOT NULL REFERENCES users(id),
+  customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
   charge_usd_cents BIGINT NOT NULL,
   charged_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_spending_window_user_time ON spending_window(user_id, charged_at DESC);
+CREATE INDEX idx_spending_window_customer_time ON spending_window(customer_id, charged_at DESC);
 
 -- Cleanup old entries (>30 days) via cron job
 -- DELETE FROM spending_window WHERE charged_at < NOW() - INTERVAL '30 days';
@@ -720,20 +717,41 @@ function calculateMaxAffordable(
 
 ### Backend Security
 
-1. **Balance Validation**
+1. **Idempotency for Financial Operations**
+   - All mutating billing endpoints (deposit, charge, credit, withdrawal) require `idempotency_key` header
+   - Backend stores idempotency keys with their responses in database
+   - Duplicate requests with same key return original response (prevents double-charges)
+   - Keys expire after 24 hours
+   - Frontend generates: `crypto.randomUUID()` for each operation
+
+   ```typescript
+   // ledger_idempotency table
+   CREATE TABLE ledger_idempotency (
+     idempotency_key UUID PRIMARY KEY,
+     customer_id INTEGER NOT NULL,
+     response_json JSONB NOT NULL,
+     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+   );
+
+   // Cleanup old keys daily
+   DELETE FROM ledger_idempotency WHERE created_at < NOW() - INTERVAL '24 hours';
+   ```
+
+2. **Balance Validation**
    - Always check balance BEFORE applying charge
    - Use database transactions (BEGIN/COMMIT) for balance updates
    - Prevent negative balances (constraint: balance_usd_cents >= 0)
 
-2. **Rate Limiting**
+3. **Rate Limiting**
    - Limit deposit/withdrawal requests (5 per hour per user)
    - Limit config changes (2 per hour per user)
+   - Prevent rapid create/revoke cycles (fraud detection)
 
-3. **Audit Logging**
+4. **Audit Logging**
    - All ledger entries immutable (INSERT only, no UPDATE/DELETE)
-   - Log includes: User ID, action, amount, timestamp, TX hash
+   - Log includes: User ID, action, amount, timestamp, TX hash, idempotency key
 
-4. **Capability Protection**
+5. **Capability Protection**
    - Suiftly admin capability stored in backend secrets (env var)
    - Never exposed to frontend or API responses
    - Rotate periodically (90 days)

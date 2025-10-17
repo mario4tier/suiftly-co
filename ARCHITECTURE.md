@@ -98,6 +98,55 @@ Origin Servers (Self-Hosted)
 
 ---
 
+## Caching Strategy
+
+**Application-Level Caching (No Redis)**
+
+For simplicity and reduced operational overhead, the platform uses **application-level caching** instead of external cache services like Redis.
+
+**Cache Layers:**
+1. **PostgreSQL Built-in** - Automatic query result caching in shared_buffers
+2. **Materialized Views** - Pre-computed aggregates refreshed every 30 seconds
+3. **Application Memory** - In-memory LRU cache with TTL for frequently accessed data
+4. **HTTP Cache Headers** - CDN/browser caching for public endpoints
+
+**Implementation:**
+```typescript
+// Application-level cache for API responses
+class AppCache {
+  private cache = new LRU<string, any>({
+    max: 10000,      // Max entries
+    ttl: 30 * 1000   // 30 second TTL
+  });
+
+  async get(key: string, fetcher: () => Promise<any>) {
+    const cached = this.cache.get(key);
+    if (cached) return cached;
+
+    const fresh = await fetcher();
+    this.cache.set(key, fresh);
+    return fresh;
+  }
+}
+```
+
+**Benefits:**
+- No external dependencies to maintain or secure
+- Simpler disaster recovery (no Redis to restore)
+- Sufficient performance for dashboard operations
+- Each API server maintains its own cache (acceptable redundancy)
+
+**Trade-offs:**
+- Cache not shared across API servers (acceptable for 1-3 servers)
+- Cache lost on server restart (rebuilds quickly from DB)
+
+**Security: Per-User Cache Keys**
+- Protected endpoints MUST use per-user cache keys: `cache.get(\`user:\${userId}:api-keys\`)`
+- Public endpoints can use global keys: `cache.get('public:service-list')`
+- Never cache sensitive data globally (prevents data leakage across users)
+
+---
+
 ## Project Structure
 
 ```
@@ -198,18 +247,25 @@ suiftly-co/
 
 ## Database Schema
 
-**customers** - id, email, name, subscription_tier, wallet_address
-**service_configs** - id, customer_id, service_type, config_json
-**haproxy_logs** (TimescaleDB) - timestamp, customer_id, method, path, status, bytes_sent
-**usage_metrics** - customer_id, period, total_requests, total_bandwidth, amount_charged
-**billing_transactions** - customer_id, amount, status, transaction_hash
+**For complete database schema with all tables, see [CUSTOMER_SERVICE_SCHEMA.md](CUSTOMER_SERVICE_SCHEMA.md#database-schema-summary).**
 
-**TimescaleDB:**
+**Key tables used by this architecture:**
+
+- **customers** - customer_id (random 32-bit), wallet_address, escrow_contract_id, balance, monthly limits
+- **service_instances** - instance_id, customer_id, service_type, tier, is_enabled, config (JSONB)
+- **api_keys** - api_key_id, customer_id, service_type, derivation, is_active
+- **haproxy_logs** (TimescaleDB hypertable) - timestamp, customer_id, service_type, method, status_code, bytes_out
+- **usage_records** - customer_id, service_type, request_count, window_start, window_end, charged_amount
+- **escrow_transactions** - customer_id, tx_digest, tx_type, amount, timestamp
+
+**TimescaleDB Configuration:**
 ```sql
-SELECT create_hypertable('haproxy_logs', 'timestamp');
+SELECT create_hypertable('haproxy_logs', 'timestamp', chunk_time_interval => INTERVAL '7 days');
 SELECT add_retention_policy('haproxy_logs', INTERVAL '90 days');
 SELECT add_compression_policy('haproxy_logs', INTERVAL '7 days');
 ```
+
+**Tiers:** Starter, Pro, Business, Enterprise (see [SEAL_SERVICE_CONFIG.md](SEAL_SERVICE_CONFIG.md) for rate limits and pricing)
 
 ---
 
