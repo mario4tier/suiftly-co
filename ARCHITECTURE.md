@@ -316,12 +316,12 @@ appRouter = {
 
 Both development and production use **native PostgreSQL** (no Docker). This ensures identical behavior, performance, and troubleshooting.
 
-**Ubuntu/Debian (WSL2 or Linux):**
+**Development Environment:** Ubuntu 22.04 LTS (native or WSL2)
+
 ```bash
-# Install PostgreSQL 16 + TimescaleDB 2.17+
-# (PG 16 recommended for maturity, PG 17 for latest features)
+# Install PostgreSQL 17 + TimescaleDB 2.17+
 sudo apt update
-sudo apt install postgresql-16 postgresql-16-timescaledb
+sudo apt install postgresql-17 postgresql-17-timescaledb
 
 # Start PostgreSQL service
 sudo service postgresql start
@@ -337,31 +337,6 @@ CREATE EXTENSION timescaledb;
 SQL
 
 # Configure connection (create .env file)
-cat > .env <<EOF
-DATABASE_URL=postgresql://postgres@localhost/suiftly_dev
-TEST_DATABASE_URL=postgresql://postgres@localhost/suiftly_test
-EOF
-```
-
-**macOS:**
-```bash
-# Install PostgreSQL 16 + TimescaleDB
-brew install postgresql@16 timescaledb
-
-# Start PostgreSQL
-brew services start postgresql@16
-
-# Create databases (same commands as above)
-psql postgres <<SQL
-CREATE DATABASE suiftly_dev;
-CREATE DATABASE suiftly_test;
-\c suiftly_dev
-CREATE EXTENSION timescaledb;
-\c suiftly_test
-CREATE EXTENSION timescaledb;
-SQL
-
-# Configure connection
 cat > .env <<EOF
 DATABASE_URL=postgresql://postgres@localhost/suiftly_dev
 TEST_DATABASE_URL=postgresql://postgres@localhost/suiftly_test
