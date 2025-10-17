@@ -616,7 +616,7 @@ CREATE TABLE billing_records (
 -- Customer limits (see SEAL_SERVICE_CONFIG.md for tier definitions)
 CREATE TABLE customer_limits (
   customer_id INTEGER PRIMARY KEY REFERENCES customers(customer_id),
-  tier TEXT NOT NULL DEFAULT 'starter',  -- starter, pro, business, enterprise
+  tier TEXT NOT NULL DEFAULT 'starter',  -- starter, pro, enterprise
   rate_limits JSONB DEFAULT '{}',      -- {guaranteed_rps, burst_rps, burst_duration_sec}
   quotas JSONB DEFAULT '{}',
   status TEXT DEFAULT 'active',

@@ -526,8 +526,8 @@ Each service page has **two states:**
 
    **Tier Details:**
    - **Starter:** 100 req/s per region, ~300 req/s globally, $20/mo
-   - **Pro:** 500 req/s per region, ~1,500 req/s globally, $40/mo
-   - **Business:** 2,000 req/s per region, ~6,000 req/s globally, $80/mo
+   - **Pro:** 1,000 req/s per region, ~3,000 req/s globally, $40/mo
+   - **Enterprise:** Custom capacity, contact sales
 
    **Responsive:**
    - Desktop: Full-width cards, 3px padding between cards
@@ -535,7 +535,7 @@ Each service page has **two states:**
 
 2. **Burst (?)**
    - Type: Checkbox
-   - Enabled only for Pro and Business tiers (disabled for Starter)
+   - Enabled only for Pro and Enterprise tiers (disabled for Starter)
    - Tooltip: "Allow temporary traffic bursts beyond guaranteed bandwidth. Additional charges apply for burst usage."
    - Pricing: +$10/month (only if enabled)
 
@@ -571,9 +571,9 @@ Each service page has **two states:**
 - **Usage Fees:** Bulleted list (metered separately, not included in monthly fee)
   - Requests: $1.00 per 10,000 requests (all tiers)
 
-**Pricing Example (Business tier, burst enabled, 5 packages per key, 2 total seal keys, 2 total API keys):**
+**Pricing Example (Pro tier, burst enabled, 5 packages per key, 2 total seal keys, 2 total API keys):**
 ```
-Business tier: $80/month
+Pro tier: $40/month
 Burst enabled: $10/month
 Total Seal Keys: 2 (1 included, 1 additional × $5) = $5/month
 Packages per Seal key: 5 (3 included per key, 2 additional per key × $1)
@@ -582,7 +582,7 @@ Packages per Seal key: 5 (3 included per key, 2 additional per key × $1)
   - Total: $4/month
 Total API keys: 2 (1 included, 1 additional × $1) = $1/month
 ────────────────────────────────
-Total Monthly Fee: $100/month
+Total Monthly Fee: $60/month
 ```
 
 **Note:** When gRPC and GraphQL are implemented in the future, they will use the same configuration form and pricing model as Seal.
@@ -1213,7 +1213,7 @@ Click balance to expand:
    ↓
 2. Configuration form visible (all fields interactive)
    ↓
-3. Select tier: Business
+3. Select tier: Pro
    ↓
 4. Enable burst: checked
    ↓
@@ -1263,9 +1263,9 @@ Click balance to expand:
    ↓
 3. Modal opens with current config pre-filled
    ↓
-4. Change tier: Pro ($40) → Business ($80)
+4. Change tier: Starter ($20) → Pro ($40)
    ↓
-5. See new Monthly Estimate: $80.00
+5. See new Monthly Estimate: $40.00
    ↓
 6. See note: "You'll be charged $X.XX (pro-rated) immediately from your escrow balance"
    ↓
@@ -1281,16 +1281,16 @@ Click balance to expand:
     ↓
 12. Config updated → Modal closes
     ↓
-13. Balance decremented: $127.50 → $107.50 (example: $20 pro-rated charge)
+13. Balance decremented: $127.50 → $117.50 (example: $10 pro-rated charge)
     ↓
-14. Logs tab shows new entry: "Configuration updated - Business tier enabled - Charged $20.00 (pro-rated)"
+14. Logs tab shows new entry: "Configuration updated - Pro tier enabled - Charged $10.00 (pro-rated)"
     ↓
-15. Toast: "Configuration updated. $20.00 charged from escrow balance."
+15. Toast: "Configuration updated. $10.00 charged from escrow balance."
 ```
 
 **Downgrade Example (Credit Applied):**
 ```
-User changes tier: Business ($80) → Pro ($40)
+User changes tier: Pro ($40) → Starter ($20)
 Pro-rated credit: +$X.XX added to escrow balance
 Toast: "Configuration updated. $X.XX credit applied to your balance."
 Balance shown increases immediately
@@ -1498,7 +1498,7 @@ const serviceConfigSchema = z.object({
   }
   return true
 }, {
-  message: "Burst is only available for Pro and Business tiers",
+  message: "Burst is only available for Pro and Enterprise tiers",
   path: ["burstEnabled"]
 })
 ```
@@ -1850,7 +1850,7 @@ boxShadow: {
 - Inline form errors (Zod schema validation)
 - Highlight invalid fields in red
 - Show specific error message below field
-- Example: "Burst is only available for Pro and Business tiers"
+- Example: "Burst is only available for Pro and Enterprise tiers"
 
 **Backend Error (500, timeout):**
 - Toast: "An error occurred. Please try again."
@@ -2080,7 +2080,7 @@ Once this UI design is approved:
 - ✅ Cloudflare-inspired sidebar navigation (Seal, gRPC, GraphQL, Billing, Support)
 - ✅ Service pages: Onboarding form → Tab-based view (Config/Keys/Stats/Logs)
 - ✅ **Always-included features banner:** Shows geo-steering and auto-failover (top of config)
-- ✅ **Horizontal tier cards:** Starter/Pro/Business shown as full-width stacked cards (not radio buttons)
+- ✅ **Horizontal tier cards:** Starter/Pro/Enterprise shown as full-width stacked cards (not radio buttons)
 - ✅ **Selection indicators:** Border highlight (3px orange) + "SELECTED" badge (top-right)
 - ✅ **Per-region and global capacity:** Each tier shows req/s per region + global (~3x)
 - ✅ Tier-based pricing with live "Total Monthly Fee" calculator

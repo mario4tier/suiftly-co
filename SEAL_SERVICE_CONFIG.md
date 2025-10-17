@@ -13,12 +13,11 @@ This document defines the tier structure, rate limiting, and configuration for t
 | Tier | Guaranteed req/s per region | Burst Available | Usage Pricing (all tiers) |
 |------|----------------------------|-----------------|---------------------------|
 | **Starter** | 100 | ❌ No | $1.00 per 10K requests |
-| **Pro** | 500 | ✅ Yes (2x) | $1.00 per 10K requests |
-| **Business** | 2000 | ✅ Yes (1.5x) | $1.00 per 10K requests |
+| **Pro** | 1,000 | ✅ Yes (2x) | $1.00 per 10K requests |
 | **Enterprise** | Custom | ✅ Yes (Custom) | Custom pricing |
 
 **Key Points:**
-- Usage pricing is **$1.00 per 10,000 requests** for all tiers (Starter, Pro, Business)
+- Usage pricing is **$1.00 per 10,000 requests** for all tiers (Starter, Pro)
 - Tiers determine **guaranteed bandwidth** (req/s per region), not usage pricing
 - Monthly base fees vary by tier (see [UI_DESIGN.md](UI_DESIGN.md#pricing-model))
 
@@ -26,14 +25,14 @@ This document defines the tier structure, rate limiting, and configuration for t
 
 **Key Principles:**
 - **Guaranteed req/s**: Hard limit per region - customer always gets this capacity
-- **Burst capability**: Available only for Pro and Business tiers
+- **Burst capability**: Available only for Pro and Enterprise tiers
 - **No RPM limits**: No per-minute restrictions (only per-second)
 - **No connection limits**: No concurrent connection restrictions
 
-**Burst Behavior (Pro/Business only):**
+**Burst Behavior (Pro/Enterprise only):**
 - Allows temporary spikes above guaranteed rate
-- Pro: Up to 2x guaranteed rate (200 req/s) for 10 seconds
-- Business: Up to 1.5x guaranteed rate (1500 req/s) for 30 seconds
+- Pro: Up to 2x guaranteed rate (2,000 req/s) for 10 seconds
+- Enterprise: Custom burst configuration
 - Burst tokens regenerate at guaranteed rate when below limit
 
 ## MA_VAULT Configuration
@@ -48,9 +47,9 @@ The MA_VAULT stores customer API keys and rate limits for HAProxy enforcement.
     "api_keys": ["<hashed_key1>", "<hashed_key2>"],
     "tier": "pro",
     "limits": {
-      "guaranteed_rps": 500,
-      "burst_rps": 1000,        // Only for pro/business
-      "burst_duration_sec": 10 // Only for pro/business
+      "guaranteed_rps": 1000,
+      "burst_rps": 2000,        // Only for pro/enterprise
+      "burst_duration_sec": 10 // Only for pro/enterprise
     },
     "seal_keys": {
       "count": 2,
@@ -81,7 +80,7 @@ stick-table type string len 64 size 100k expire 60s \
 # Apply guaranteed rate limit
 http-request deny if { sc_http_req_rate(0) gt var(txn.guaranteed_rps) }
 
-# Burst handling (Pro/Business only) - managed by separate burst table
+# Burst handling (Pro/Enterprise only) - managed by separate burst table
 stick-table type string len 64 size 100k expire 60s \
             store gpc0_rate(10s)  # Burst token bucket
 ```
@@ -93,9 +92,9 @@ Generated from MA_VAULT by Local Manager:
 ```
 # api_limits.map
 # Format: api_key customer_id,tier,guaranteed_rps,burst_rps,status
-<api_key_hash> customer123,pro,500,1000,active
+<api_key_hash> customer123,pro,1000,2000,active
 <api_key_hash> customer456,starter,100,0,active
-<api_key_hash> customer789,business,2000,3000,throttled
+<api_key_hash> customer789,enterprise,10000,15000,active
 ```
 
 ## Pricing Model

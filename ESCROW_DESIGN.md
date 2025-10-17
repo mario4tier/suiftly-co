@@ -278,13 +278,13 @@ Active service: Seal (Pro tier, $40/month)
    ↓
 2. Modal opens with current config
    ↓
-3. User changes tier: Pro → Business (+$40 pro-rated charge)
+3. User changes tier: Starter → Pro (+$20 pro-rated charge)
    ↓
-4. Live pricing updates: "New monthly: $80" | "Charge now: +$25 (pro-rated)"
+4. Live pricing updates: "New monthly: $40" | "Charge now: +$15 (pro-rated)"
    ↓
 5. Frontend validates as user changes:
-   - Balance check: $15 < $25 ❌
-   - Monthly limit check: $50 + $25 = $75 < $2,000 ✓
+   - Balance check: $10 < $15 ❌
+   - Monthly limit check: $50 + $15 = $65 < $2,000 ✓
    ↓
 6. "Save Changes" button becomes DISABLED
    ↓
