@@ -39,7 +39,7 @@ Infrastructure (HAProxy, Seal servers, control plane) handled by **walrus** proj
 
 ### Backend (API)
 
-**Runtime:** Node.js 22 LTS (Active LTS until Oct 2025) with TypeScript 5.9
+**Runtime:** Node.js 22 LTS with TypeScript 5.9
 **Framework:** Fastify 5 (v4 EOL June 2025)
 **API:** tRPC v11 (end-to-end type safety, SSE subscriptions)
 **Validation:** Zod (shared schemas with frontend)
@@ -57,10 +57,10 @@ Infrastructure (HAProxy, Seal servers, control plane) handled by **walrus** proj
 
 ### Global Manager
 
-**Type:** Centralized worker process (singleton, idempotent periodic operations)
+**Type:** Long-lived daemon process (managed by systemd)
 **Runtime:** Node.js 22 LTS with TypeScript
 **Location:** Co-located with PostgreSQL (primary database server)
-**Schedule:** Runs every 5 minutes (configurable via systemd timer)
+**Schedule:** Internal setInterval loop (every 5 minutes, configurable)
 
 **Responsibilities:**
 1. **Metering** - Aggregate HAProxy logs into usage metrics
@@ -68,19 +68,22 @@ Infrastructure (HAProxy, Seal servers, control plane) handled by **walrus** proj
 3. **Vault Generation** - Generate MA_VAULT (customer API keys, rate limits, status)
 4. **Data Cleanup** - Remove old logs and maintain database health
 
-**Process:**
+**Process (each cycle):**
 1. Acquire PostgreSQL advisory lock (prevent concurrent runs)
 2. Aggregate unbilled HAProxy logs into usage metrics
 3. Calculate charges and insert billing records (atomic transaction)
 4. Generate MA_VAULT with customer configurations
 5. Clean up old data
-6. Release lock and exit (wait for next run)
+6. Release lock and wait for next cycle
 
 **Design:**
-- Idempotent (safe to run multiple times)
+- Long-lived daemon (systemd keeps process running)
+- Internal scheduling (setInterval loop, zero dependencies)
 - Single-instance guarantee (PG advisory locks)
+- Idempotent cycles (safe to run multiple times)
 - Crash-safe (database transactions)
-- Resumable (picks up unbilled logs on next run)
+- Resumable (picks up unbilled logs on next cycle)
+- Graceful shutdown (handles SIGTERM/SIGINT)
 - PostgreSQL is source of truth (no job queue needed)
 
 **For detailed design, see [GLOBAL_MANAGER_DESIGN.md](GLOBAL_MANAGER_DESIGN.md)**
@@ -94,7 +97,7 @@ Origin Servers (Self-Hosted)
 ├─ HAProxy → static SPA (dist/) + /api proxy
 ├─ API servers → Fastify + tRPC
 ├─ PostgreSQL + TimescaleDB
-└─ Global Manager (systemd timer, co-located with PostgreSQL)
+└─ Global Manager (daemon service, co-located with PostgreSQL)
 ```
 
 **Deployment:**
@@ -370,7 +373,7 @@ cd apps/api && npm run dev
 # Terminal 2: WebApp
 cd apps/webapp && npm run dev
 
-# Terminal 3: Global Manager (optional, typically runs via systemd timer)
+# Terminal 3: Global Manager (optional, typically runs as systemd daemon)
 cd services/global-manager && npm run dev
 
 # Run tests (uses suiftly_test database)
@@ -476,7 +479,7 @@ git commit -m "Migration: add feature"
 - typescript@^5.9
 
 **Worker:**
-- node-cron, drizzle-orm, postgres
+- drizzle-orm, postgres
 
 **Dev Tools:**
 - vitest, playwright, drizzle-kit
