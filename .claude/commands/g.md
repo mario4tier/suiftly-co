@@ -1,6 +1,6 @@
 ---
-argument-hint: <feature description>
-description: Start feature development with optimal MCP usage
+argument-hint: <task description>
+description: Development task with optimal MCP usage
 ---
 
 **Always use:**
