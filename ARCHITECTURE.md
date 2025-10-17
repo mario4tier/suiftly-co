@@ -45,6 +45,9 @@ Infrastructure (HAProxy, Seal servers, control plane) handled by **walrus** proj
 **Validation:** Zod (shared schemas with frontend)
 **Auth:** Wallet-based authentication (sign-in with Sui) → JWT via jose
 **Rate Limit:** @fastify/rate-limit
+**Logging:** pino (structured JSON logs)
+**Caching:** lru-cache (application-level LRU cache)
+**Process Manager:** PM2 (production process management)
 
 ### Database
 
@@ -132,8 +135,11 @@ For simplicity and reduced operational overhead, the platform uses **application
 **Implementation:**
 ```typescript
 // Application-level cache for API responses
+// Using lru-cache package: npm install lru-cache
+import { LRUCache } from 'lru-cache'
+
 class AppCache {
-  private cache = new LRU<string, any>({
+  private cache = new LRUCache<string, any>({
     max: 10000,      // Max entries
     ttl: 30 * 1000   // 30 second TTL
   });
@@ -378,7 +384,7 @@ jobs:
   test:
     services:
       postgres:
-        image: timescale/timescaledb:latest-pg15
+        image: timescale/timescaledb:latest-pg17
         env:
           POSTGRES_DB: suiftly_test
     steps:
@@ -446,7 +452,7 @@ git commit -m "Migration: add feature"
 
 ## Deployment (Zero-Downtime)
 
-**Philosophy:** All deployment and server provisioning uses **idempotent Python scripts**. Scripts check current state and only perform necessary actions. Safe to run repeatedly. Critical for disaster recovery and spinning up new servers quickly.
+**Philosophy:** All deployment and server provisioning uses **idempotent Python scripts** (Python 3.10+). Scripts check current state and only perform necessary actions. Safe to run repeatedly. Critical for disaster recovery and spinning up new servers quickly.
 
 **Deployment Scripts Structure:**
 ```
@@ -491,10 +497,10 @@ def main():
 
     ssh = SSH(args.host)
 
-    # Install PostgreSQL 16 + TimescaleDB 2.17+ (idempotent)
+    # Install PostgreSQL 17 + TimescaleDB 2.17+ (idempotent)
     if args.role == 'db':
-        if not ssh.check_installed('postgresql-16'):
-            ssh.apt_install(['postgresql-16', 'postgresql-16-timescaledb'])
+        if not ssh.check_installed('postgresql-17'):
+            ssh.apt_install(['postgresql-17', 'postgresql-17-timescaledb'])
             ssh.systemctl('enable', 'postgresql')
             ssh.systemctl('start', 'postgresql')
 
@@ -518,7 +524,7 @@ def main():
             ssh.run('pm2 startup systemd -u deploy --hp /home/deploy')
 
     # Create directory structure (idempotent)
-    ssh.run('mkdir -p /var/www/{api,billing,webapp}')
+    ssh.run('mkdir -p /var/www/{api,global-manager,webapp}')
     ssh.run('chown -R deploy:deploy /var/www')
 
     print(f"✓ Server {args.host} provisioned successfully")
@@ -838,7 +844,7 @@ jobs:
   test:
     services:
       postgres:
-        image: timescale/timescaledb:latest-pg15
+        image: timescale/timescaledb:latest-pg17
         env:
           POSTGRES_DB: suiftly_test
           POSTGRES_USER: test
