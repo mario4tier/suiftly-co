@@ -29,10 +29,9 @@ This document defines the tier structure, rate limiting, and configuration for t
 
 **Burst Behavior (Pro/Enterprise only):**
 - Best-effort queuing at lower priority than all customers' guaranteed rates
-- Requests above guaranteed rate queued with 5-second timeout
+- Requests above guaranteed rate queued with timeout (configured in HAProxy)
 - Burst capacity = whatever infrastructure can deliver (not guaranteed)
-- Pro: Burst enabled with standard 5s timeout
-- Enterprise: Custom burst timeout configuration available
+- Timeout and queuing behavior managed by walrus project (HAProxy config)
 
 ## MA_VAULT Configuration
 
@@ -47,8 +46,7 @@ The MA_VAULT stores customer API keys and rate limits for HAProxy enforcement.
     "tier": "pro",
     "limits": {
       "guaranteed_rps": 1000,
-      "burst_enabled": true,      // Pro/Enterprise only
-      "burst_timeout_sec": 5      // 5s default, configurable for Enterprise
+      "burst_enabled": true      // Pro/Enterprise only
     },
     "seal_keys": {
       "count": 2,
@@ -58,6 +56,8 @@ The MA_VAULT stores customer API keys and rate limits for HAProxy enforcement.
   }
 }
 ```
+
+**Note**: Burst timeout (5s) is configured in HAProxy (walrus project), not in MA_VAULT.
 
 ### Status Values
 
@@ -80,12 +80,10 @@ stick-table type string len 64 size 100k expire 60s \
 http-request deny if { sc_http_req_rate(0) gt var(txn.guaranteed_rps) }
 
 # Burst handling (Pro/Enterprise only):
-# Requests above guaranteed rate enter best-effort queue
-# - Lower priority than all guaranteed-rate traffic
-# - 5-second timeout (configurable for Enterprise)
-# - No guaranteed capacity (uses available infrastructure)
+# Requests above guaranteed rate tagged for best-effort processing
+# Actual queuing/timeout behavior configured in walrus project
 http-request set-var(txn.is_burst) int(1) if { sc_http_req_rate(0) gt var(txn.guaranteed_rps) }
-http-request set-header X-Priority low if { var(txn.is_burst) eq 1 }
+http-request set-header X-Burst-Request true if { var(txn.is_burst) eq 1 }
 ```
 
 ### Map File Format
@@ -94,11 +92,13 @@ Generated from MA_VAULT by Global Manager:
 
 ```
 # api_limits.map
-# Format: api_key customer_id,tier,guaranteed_rps,burst_enabled,burst_timeout,status
-<api_key_hash> customer123,pro,1000,true,5,active
-<api_key_hash> customer456,starter,100,false,0,active
-<api_key_hash> customer789,enterprise,10000,true,10,active
+# Format: api_key customer_id,tier,guaranteed_rps,burst_enabled,status
+<api_key_hash> customer123,pro,1000,true,active
+<api_key_hash> customer456,starter,100,false,active
+<api_key_hash> customer789,enterprise,10000,true,active
 ```
+
+**Note**: HAProxy (walrus project) handles burst timeout configuration, not specified in this map file.
 
 ## Pricing Model
 
