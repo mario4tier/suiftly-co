@@ -28,10 +28,11 @@ This document defines the tier structure, rate limiting, and configuration for t
 - **No connection limits**: No concurrent connection restrictions
 
 **Burst Behavior (Pro/Enterprise only):**
-- Allows temporary spikes above guaranteed rate
-- Pro: Up to 2x guaranteed rate (2,000 req/s) for 10 seconds
-- Enterprise: Custom burst configuration
-- Burst tokens regenerate at guaranteed rate when below limit
+- Best-effort queuing at lower priority than all customers' guaranteed rates
+- Requests above guaranteed rate queued with 5-second timeout
+- Burst capacity = whatever infrastructure can deliver (not guaranteed)
+- Pro: Burst enabled with standard 5s timeout
+- Enterprise: Custom burst timeout configuration available
 
 ## MA_VAULT Configuration
 
@@ -46,8 +47,8 @@ The MA_VAULT stores customer API keys and rate limits for HAProxy enforcement.
     "tier": "pro",
     "limits": {
       "guaranteed_rps": 1000,
-      "burst_rps": 2000,        // Only for pro/enterprise
-      "burst_duration_sec": 10 // Only for pro/enterprise
+      "burst_enabled": true,      // Pro/Enterprise only
+      "burst_timeout_sec": 5      // 5s default, configurable for Enterprise
     },
     "seal_keys": {
       "count": 2,
@@ -75,24 +76,28 @@ HAProxy enforces rate limits using stick tables based on MA_VAULT data:
 stick-table type string len 64 size 100k expire 60s \
             store http_req_rate(1s)
 
-# Apply guaranteed rate limit
+# Guaranteed rate: Immediate deny if exceeded
 http-request deny if { sc_http_req_rate(0) gt var(txn.guaranteed_rps) }
 
-# Burst handling (Pro/Enterprise only) - managed by separate burst table
-stick-table type string len 64 size 100k expire 60s \
-            store gpc0_rate(10s)  # Burst token bucket
+# Burst handling (Pro/Enterprise only):
+# Requests above guaranteed rate enter best-effort queue
+# - Lower priority than all guaranteed-rate traffic
+# - 5-second timeout (configurable for Enterprise)
+# - No guaranteed capacity (uses available infrastructure)
+http-request set-var(txn.is_burst) int(1) if { sc_http_req_rate(0) gt var(txn.guaranteed_rps) }
+http-request set-header X-Priority low if { var(txn.is_burst) eq 1 }
 ```
 
 ### Map File Format
 
-Generated from MA_VAULT by Local Manager:
+Generated from MA_VAULT by Global Manager:
 
 ```
 # api_limits.map
-# Format: api_key customer_id,tier,guaranteed_rps,burst_rps,status
-<api_key_hash> customer123,pro,1000,2000,active
-<api_key_hash> customer456,starter,100,0,active
-<api_key_hash> customer789,enterprise,10000,15000,active
+# Format: api_key customer_id,tier,guaranteed_rps,burst_enabled,burst_timeout,status
+<api_key_hash> customer123,pro,1000,true,5,active
+<api_key_hash> customer456,starter,100,false,0,active
+<api_key_hash> customer789,enterprise,10000,true,10,active
 ```
 
 ## Pricing Model
@@ -186,16 +191,16 @@ Generated from MA_VAULT by Local Manager:
 Each region maintains independent rate limits:
 - Customer gets full tier capacity in each region
 - No cross-region rate limit sharing
-- Burst tokens are region-specific
+- Burst queuing is region-specific
 
 ### Example Multi-Region Setup
 
-Pro tier customer (500 req/s guaranteed per region):
-- US-East: 500 req/s + burst capability (up to 1000 req/s)
-- EU-West: 500 req/s + burst capability (up to 1000 req/s)
-- Asia-Pacific: 500 req/s + burst capability (up to 1000 req/s)
+Pro tier customer (1,000 req/s guaranteed per region):
+- US-East: 1,000 req/s guaranteed + best-effort burst
+- EU-West: 1,000 req/s guaranteed + best-effort burst
+- Asia-Pacific: 1,000 req/s guaranteed + best-effort burst
 
-Total potential: 1,500 req/s globally (3,000 req/s with burst)
+Total guaranteed: 3,000 req/s globally (burst is best-effort, not guaranteed)
 
 ## Monitoring & Alerting
 
@@ -203,7 +208,7 @@ Total potential: 1,500 req/s globally (3,000 req/s with burst)
 
 Available in dashboard:
 - Current req/s usage per region
-- Burst token availability (Pro/Business)
+- Burst requests queued/succeeded/timeout count (Pro/Enterprise)
 - Daily/Monthly request totals
 - Rate limit violations count
 
