@@ -679,30 +679,24 @@ process.on('SIGTERM', async () => {
 
 ## MCP Servers
 
-**Essential MCP servers for optimal Claude Code development with this stack.**
+**Minimal, high-value MCP servers for optimal Claude Code development.**
 
-**Why MCPs matter for Suiftly:**
-- **Context7**: Prevents hallucinations on bleeding-edge APIs (React 19, Vite 7, tRPC v11, Drizzle)
-- **Serena**: Semantic code search in monorepo (find tRPC route usage, Drizzle schema references)
-- **Others**: Database inspection, Git workflows, ORM integration
+**Philosophy:** Only install MCPs that add UNIQUE value over built-in tools (Read, Write, Edit, Bash, Glob, Grep).
 
 **Installation:** See [.claude/mcp-setup.md](.claude/mcp-setup.md) for step-by-step setup guide.
 
-**Essential (Install Before Implementation):**
-1. **context7** - Live documentation for third-party packages (prevents outdated API suggestions)
-2. **serena** - Semantic code search via Language Server Protocol (better than grep)
-3. **@modelcontextprotocol/server-postgres** - Database schema inspection and read-only queries
-4. **@modelcontextprotocol/server-filesystem** - Secure file operations within project directory
-5. **@modelcontextprotocol/server-git** - Local Git operations (status, diff, commit, log)
-6. **@modelcontextprotocol/server-github** - GitHub API (PRs, issues, CI/CD status)
-7. **drizzle-mcp** - Drizzle ORM integration (migration generation, schema introspection)
+**Essential MCPs (Installed):**
+1. **context7** - Live documentation for third-party packages (prevents outdated API suggestions for React 19, Vite 7, tRPC v11, Drizzle, @mysten/sui.js)
+2. **serena** - Semantic code search via Language Server Protocol (finds symbol references, better than grep)
 
-**Add During Testing Phase:**
-8. **@playwright/mcp** - Browser automation for E2E tests (wallet authentication flows)
+**Optional MCPs (Add When Needed):**
+3. **@modelcontextprotocol/server-postgres** - Database schema inspection (add when database exists)
+4. **drizzle-mcp** - Drizzle ORM integration (add after scaffolding drizzle.config.ts)
 
-**Custom (Post-Launch):**
-9. Sui Blockchain MCP - Query network, balances, transactions (production monitoring)
-10. HAProxy Analytics MCP - Parse logs, generate reports (operational analytics)
+**Not Installed (Built-in Tools Sufficient):**
+- ❌ Filesystem MCP - Use Read, Write, Edit, Bash tools instead
+- ❌ Git MCP - Use Bash + git commands instead
+- ❌ GitHub MCP - Use Bash + gh CLI instead
 
 **Recommended Workflow:**
 

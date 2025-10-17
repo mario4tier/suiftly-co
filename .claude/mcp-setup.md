@@ -2,22 +2,27 @@
 
 This guide walks you through setting up Model Context Protocol (MCP) servers for optimal Claude Code development with the Suiftly stack.
 
-## What are MCP Servers?
+## Philosophy: Minimal, High-Value MCPs Only
 
-MCP servers extend Claude Code's capabilities by providing:
-- **Context7**: Live documentation for bleeding-edge packages (React 19, Vite 7, tRPC v11, etc.)
-- **Serena**: Semantic code search (find symbols, not just text)
-- **Postgres**: Direct database schema inspection
-- **Git/GitHub**: Version control integration
-- **Drizzle**: ORM-specific tooling
+**We only install MCPs that add UNIQUE value over built-in tools.**
+
+**Installed:**
+- ✅ **Context7** - Live documentation (irreplaceable - prevents API hallucinations)
+- ✅ **Serena** - Semantic code search (irreplaceable - finds symbol references)
+
+**Not Installed (Built-in tools work fine):**
+- ❌ Filesystem MCP - Use Read/Write/Edit/Bash tools instead
+- ❌ Git MCP - Use Bash + git commands instead
+- ❌ GitHub MCP - Use Bash + gh CLI instead
+
+**Add Later (When Needed):**
+- ⏳ Postgres MCP - When database exists
+- ⏳ Drizzle MCP - When drizzle.config.ts exists
 
 ## Prerequisites
 
 - Claude Code installed
-- Node.js 18+ installed
-- Python 3.10+ installed
-- Git configured
-- PostgreSQL running locally (for postgres MCP)
+- Python 3.10+ installed (for uv/uvx)
 
 ## Installation Steps
 
@@ -89,7 +94,9 @@ claude mcp add serena -- uvx --from git+https://github.com/oraios/serena serena 
 
 ---
 
-### 3. PostgreSQL MCP
+## Optional MCPs (Add Later When Needed)
+
+### 3. PostgreSQL MCP (When Database Exists)
 
 **What it does**: Inspect database schema and run read-only queries
 
@@ -110,70 +117,7 @@ psql postgresql://postgres@localhost/suiftly_dev -c "SELECT version();"
 
 ---
 
-### 4. Filesystem MCP
-
-**What it does**: Secure file operations within allowed directories
-
-**Install:**
-```bash
-claude mcp add filesystem -- npx -y @modelcontextprotocol/server-filesystem /home/olet/suiftly-co
-```
-
-**Note**: Replace `/home/olet/suiftly-co` with your actual project path
-
----
-
-### 5. Git MCP
-
-**What it does**: Local Git operations (status, diff, log, commit)
-
-**Install:**
-```bash
-claude mcp add git -- uvx mcp-server-git --repository /home/olet/suiftly-co
-```
-
-**Note**:
-- Replace path with your project directory
-- This is a Python package (not npm), requires `uvx` from step 0
-
----
-
-### 6. GitHub MCP
-
-**What it does**: GitHub API operations (create PRs, manage issues, check CI)
-
-**Setup GitHub Token:**
-
-1. Go to https://github.com/settings/tokens
-2. Click "Generate new token (classic)"
-3. Select scopes:
-   - ✅ `repo` (full control of private repositories)
-   - ✅ `workflow` (if you want to trigger GitHub Actions)
-4. Copy the token
-
-**Set environment variable:**
-```bash
-# Add to ~/.bashrc or ~/.zshrc
-export GITHUB_PERSONAL_ACCESS_TOKEN="ghp_your_token_here"
-
-# Reload shell
-source ~/.bashrc
-```
-
-**Install:**
-```bash
-claude mcp add github -- npx -y @modelcontextprotocol/server-github
-```
-
-**Verification:**
-```bash
-# Test (should show your GitHub username)
-echo $GITHUB_PERSONAL_ACCESS_TOKEN | head -c 10
-```
-
----
-
-### 7. Drizzle MCP
+### 4. Drizzle MCP (After Scaffolding Project)
 
 **What it does**: Drizzle ORM integration (migrations, schema introspection)
 
@@ -186,7 +130,7 @@ claude mcp add drizzle -- npx github:defrex/drizzle-mcp ./packages/database/driz
 - `packages/database/drizzle.config.ts` must exist
 - Will be available after scaffolding project structure
 
-**Note**: This will error until you create the Turborepo structure. Skip for now, add after scaffolding.
+**Note**: This will error until you create the Turborepo structure. Add after scaffolding.
 
 ---
 
@@ -197,15 +141,16 @@ claude mcp add drizzle -- npx github:defrex/drizzle-mcp ./packages/database/driz
 claude mcp list
 ```
 
-**Expected output:**
+**Expected output (minimal setup):**
 ```
-context7 (sse)
-serena (stdio)
-postgres (stdio)
-filesystem (stdio)
-git (stdio)
-github (stdio)
-drizzle (stdio) [may not appear until drizzle.config.ts exists]
+context7 (sse) - ✓ Connected
+serena (stdio) - ✓ Connected
+```
+
+**If you added optional MCPs:**
+```
+postgres (stdio) - ✓ Connected
+drizzle (stdio) - ✓ Connected
 ```
 
 ---
@@ -226,7 +171,7 @@ This expands to:
 - ✅ Read CLAUDE.md and ARCHITECTURE.md first
 - ✅ Break down task with TodoWrite
 
-See `.claude/commands/g.md` for details.
+See [.claude/commands/g.md](.claude/commands/g.md) for details.
 
 ### Manual Usage
 
@@ -235,6 +180,21 @@ You can also invoke MCPs directly in prompts:
 ```
 use context7 to check the latest tRPC v11 syntax for subscriptions
 use serena to find all tRPC routes in the codebase
+```
+
+### Built-in Tools (No MCP Needed)
+
+For file operations, Git, and GitHub, use built-in tools:
+
+```
+# File operations
+Read, Write, Edit, Glob, Grep tools
+
+# Git operations
+Bash: git status, git commit, git diff, etc.
+
+# GitHub operations
+Bash: gh pr create, gh issue list, etc.
 ```
 
 ---
@@ -251,39 +211,13 @@ use serena to find all tRPC routes in the codebase
 - Requires Python 3.10+
 - Verify: `uvx --version`
 
-### Postgres MCP: "Connection refused"
+### Postgres MCP: "Connection refused" (Optional)
 - Verify PostgreSQL is running: `sudo service postgresql status`
 - Check connection string: `psql postgresql://postgres@localhost/suiftly_dev`
 
-### Drizzle MCP: "Config not found"
+### Drizzle MCP: "Config not found" (Optional)
 - This is expected before scaffolding
 - Create project structure first (see ARCHITECTURE.md "Next Steps")
-
-### Git MCP: "Failed to connect"
-- Make sure `uvx` is installed (see step 0)
-- Verify PATH includes `~/.local/bin`: `echo $PATH`
-- Test manually: `uvx mcp-server-git --help`
-- Git MCP is a Python package, not npm
-
-### GitHub MCP: "Authentication failed"
-- Check token: `echo $GITHUB_PERSONAL_ACCESS_TOKEN`
-- Verify scopes: Token needs `repo` access
-- Test with: `gh auth status` (if GitHub CLI installed)
-
----
-
-## Optional: Add Later
-
-### Playwright MCP (E2E Testing Phase)
-
-**When**: During E2E testing implementation
-
-**Install:**
-```bash
-claude mcp add playwright -- npx -y @playwright/mcp
-```
-
-**Use for**: Writing browser automation tests for wallet authentication flows
 
 ---
 
@@ -293,7 +227,7 @@ MCPs are configured in:
 - **Linux/WSL**: `~/.config/claude/config.json`
 - **Verify location**: `claude mcp list` shows config path
 
-**Manual editing** (if needed):
+**Minimal setup configuration:**
 ```json
 {
   "mcpServers": {
@@ -305,7 +239,6 @@ MCPs are configured in:
       "command": "uvx",
       "args": ["--from", "git+https://github.com/oraios/serena", "serena", "start-mcp-server"]
     }
-    // ... other servers
   }
 }
 ```
