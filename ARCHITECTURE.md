@@ -7,9 +7,9 @@ Customer-facing platform for Suiftly services:
 - Web3 wallet widget (fund management)
 - API backend (api.suiftly.io)
 - PostgreSQL database (customer data, configs, HAProxy logs)
-- Billing worker (log analysis, usage charging)
+- Global Manager (centralized worker: billing, metering, vault generation)
 
-Infrastructure (HAProxy, Seal servers, control plane) handled by **walrus** project.
+Infrastructure (HAProxy, Seal servers, control plane) handled by **walrus** project (local repos always at ~/walrus)
 
 ## Principles
 
@@ -55,19 +55,25 @@ Infrastructure (HAProxy, Seal servers, control plane) handled by **walrus** proj
 
 **Note:** TimescaleDB 2.17+ required for PostgreSQL 17. Use PG 17.2+ (not 17.1 due to ABI break).
 
-### Billing Worker
+### Global Manager
 
-**Type:** Periodic cron job (idempotent)
-**Runtime:** Node.js 22 LTS (or Bun for performance)
-**Schedule:** Runs hourly (configurable)
-**Tasks:** Log aggregation, usage calculation, billing
+**Type:** Centralized worker process (singleton, idempotent periodic operations)
+**Runtime:** Node.js 22 LTS with TypeScript
+**Location:** Co-located with PostgreSQL (primary database server)
+**Schedule:** Runs every 5 minutes (configurable via systemd timer)
+
+**Responsibilities:**
+1. **Metering** - Aggregate HAProxy logs into usage metrics
+2. **Billing** - Calculate customer charges from usage data
+3. **Vault Generation** - Generate MA_VAULT (customer API keys, rate limits, status)
+4. **Data Cleanup** - Remove old logs and maintain database health
 
 **Process:**
 1. Acquire PostgreSQL advisory lock (prevent concurrent runs)
-2. Query unbilled HAProxy logs from PostgreSQL
-3. Group by customer, calculate charges
-4. Insert billing records (atomic transaction)
-5. Mark logs as billed
+2. Aggregate unbilled HAProxy logs into usage metrics
+3. Calculate charges and insert billing records (atomic transaction)
+4. Generate MA_VAULT with customer configurations
+5. Clean up old data
 6. Release lock and exit (wait for next run)
 
 **Design:**
@@ -76,6 +82,8 @@ Infrastructure (HAProxy, Seal servers, control plane) handled by **walrus** proj
 - Crash-safe (database transactions)
 - Resumable (picks up unbilled logs on next run)
 - PostgreSQL is source of truth (no job queue needed)
+
+**For detailed design, see [GLOBAL_MANAGER_DESIGN.md](GLOBAL_MANAGER_DESIGN.md)**
 
 ---
 
@@ -86,7 +94,7 @@ Origin Servers (Self-Hosted)
 ├─ HAProxy → static SPA (dist/) + /api proxy
 ├─ API servers → Fastify + tRPC
 ├─ PostgreSQL + TimescaleDB
-└─ Billing Worker (cron job)
+└─ Global Manager (systemd timer, co-located with PostgreSQL)
 ```
 
 **Deployment:**
@@ -182,7 +190,7 @@ suiftly-co/
 │  └─ shared/                   # Shared types, Zod schemas, utils
 │
 ├─ services/
-│  └─ billing-worker/           # Cron-based billing processor
+│  └─ global-manager/           # Centralized worker (metering, billing, vault generation)
 │
 └─ scripts/                     # Idempotent deployment scripts (Python)
    ├─ provision-server.py       # New server setup (PostgreSQL, Node.js, PM2)
@@ -362,8 +370,8 @@ cd apps/api && npm run dev
 # Terminal 2: WebApp
 cd apps/webapp && npm run dev
 
-# Terminal 3: Worker (optional)
-cd services/billing-worker && npm run dev
+# Terminal 3: Global Manager (optional, typically runs via systemd timer)
+cd services/global-manager && npm run dev
 
 # Run tests (uses suiftly_test database)
 npm run test
@@ -498,7 +506,7 @@ scripts/
 npm run build  # Turborepo builds all apps
 # → apps/webapp/dist/
 # → apps/api/dist/
-# → services/billing-worker/dist/
+# → services/global-manager/dist/
 ```
 
 **Provision New Server (Idempotent):**
@@ -605,12 +613,12 @@ def deploy():
     print("→ Deploying webapp...")
     rsync('apps/webapp/dist/', 'origin.suiftly.io:/var/www/webapp/')
 
-    # 4. Deploy billing worker (idempotent)
-    print("→ Deploying billing worker...")
-    primary_api = SERVERS['api'][0]
-    ssh = SSH(primary_api)
-    rsync('services/billing-worker/dist/', f'{primary_api}:/var/www/billing/')
-    ssh.run('pm2 reload suiftly-billing || pm2 start /var/www/billing/worker.js --name suiftly-billing --cron "0 * * * *"')
+    # 4. Deploy global manager (idempotent)
+    print("→ Deploying global manager...")
+    db_server = SERVERS['db']
+    ssh = SSH(db_server)
+    rsync('services/global-manager/dist/', f'{db_server}:/var/www/global-manager/')
+    ssh.run('systemctl restart suiftly-global-manager.service')
 
     print("✓ Deployment complete!")
 
@@ -731,13 +739,13 @@ process.on('SIGTERM', async () => {
 
 **Metrics (future):**
 - API latency, error rates
-- Billing worker runs, failures
+- Global Manager runs, task success/failure
 - Database connection pool stats
 
 **Monitoring (future):**
 - Health check endpoints
 - Error tracking (Sentry or similar)
-- Alert on billing worker failures
+- Alert on Global Manager failures
 
 ---
 
