@@ -92,7 +92,7 @@ Combined string: [26 Base32 chars] + [4 hex chars] = 30 chars total
 Swap operations (reversible):
   Position 1  ↔ Position 26  (2nd payload char ↔ 1st HMAC char)
   Position 6  ↔ Position 29  (7th payload char ↔ 4th HMAC char)
-  Position 9  ↔ Position 27  (10th payload char ↔ 2nd HMAC char)
+  Position 20 ↔ Position 27  (21st payload char ↔ 2nd HMAC char)
   Position 13 ↔ Position 28  (14th payload char ↔ 3rd HMAC char)
 ```
 
@@ -102,11 +102,11 @@ Before interleaving:
   Payload: ABCDEFGHIJKLMNOPQRSTUVWXYZ  (26 chars, Base32)
   HMAC:    1234                        (4 chars, hex)
 
-After interleaving (positions 1, 6, 9, 13 swapped with 26, 29, 27, 28):
-  A1CDEFGHIJKLMNOP3RSTUVWXY2Z4
+After interleaving (positions 1, 6, 20, 13 swapped with 26, 29, 27, 28):
+  A1CDEF4HIJKLM3OPQRST2VWXYZBURG
 
-Result: Hex digits (1,2,3,4) now appear scattered in positions 1, 6, 9, 13
-        Original chars (B, G, J, N) moved to end positions 26, 27, 28, 29
+Result: Hex digits (1,2,3,4) now appear scattered in positions 1, 6, 13, 20
+        Original chars (B, G, N, U) moved to end positions 26, 29, 28, 27
 ```
 
 **Security Note:**
@@ -203,12 +203,12 @@ function interleaveHmacTag(payload: string, tag: string): string {
   // Swap pattern (0-based indexing):
   // Position 1 (2nd char of payload) ↔ Position 26 (1st char of HMAC - tag[0])
   // Position 6 (7th char of payload) ↔ Position 29 (4th char of HMAC - tag[3])
-  // Position 9 (10th char of payload) ↔ Position 27 (2nd char of HMAC - tag[1])
+  // Position 20 (21st char of payload) ↔ Position 27 (2nd char of HMAC - tag[1])
   // Position 13 (14th char of payload) ↔ Position 28 (3rd char of HMAC - tag[2])
 
   [chars[1], chars[26]] = [chars[26], chars[1]];   // Swap payload[1] ↔ tag[0]
   [chars[6], chars[29]] = [chars[29], chars[6]];   // Swap payload[6] ↔ tag[3]
-  [chars[9], chars[27]] = [chars[27], chars[9]];   // Swap payload[9] ↔ tag[1]
+  [chars[20], chars[27]] = [chars[27], chars[20]]; // Swap payload[20] ↔ tag[1]
   [chars[13], chars[28]] = [chars[28], chars[13]]; // Swap payload[13] ↔ tag[2]
 
   return chars.join('');  // Return 30 chars
@@ -520,7 +520,7 @@ function interleave_hmac_tag(payload, tag)
   -- Perform swaps (Lua is 1-based, so add 1 to indices)
   chars[2], chars[27] = chars[27], chars[2]    -- pos 1 ↔ pos 26
   chars[7], chars[30] = chars[30], chars[7]    -- pos 6 ↔ pos 29
-  chars[10], chars[28] = chars[28], chars[10]  -- pos 9 ↔ pos 27
+  chars[21], chars[28] = chars[28], chars[21]  -- pos 20 ↔ pos 27
   chars[14], chars[29] = chars[29], chars[14]  -- pos 13 ↔ pos 28
 
   return table.concat(chars)
