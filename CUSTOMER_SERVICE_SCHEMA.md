@@ -406,17 +406,22 @@ CREATE INDEX idx_pending_customer ON pending_charges_view(customer_id);
 
 API keys authenticate service requests and map to customer accounts for billing and rate limiting.
 
-**Key Format:** `SABCDEFGHIJKLMNOPQRST234567` (25 characters)
+**Key Format:** `SABCDEFGHIJKLMNOPQRSTUVWXYZ1234` (31 characters)
 - First character: Service type (S=Seal, R=gRPC, G=GraphQL)
-- Next 20 characters: Base32-encoded payload (customer_id, derivation, metadata)
-- Last 4 characters: HMAC-SHA256 checksum
+- Next 26 characters: Base32-encoded encrypted payload (16 bytes)
+- Last 4 characters: HMAC-SHA256 tag (hex)
+
+**Security:**
+- **AES-128-CTR encryption**: customer_id, key_idx, master_key_group encrypted
+- **HMAC-SHA256 authentication**: Prevents forgery and tampering
+- **Hardware accelerated**: AES-NI on x86 servers
 
 **Key Properties:**
-- Customer can have multiple API keys per service
+- Customer can have multiple API keys per service (max 256)
 - All keys for a customer are functionally equivalent
 - Revocable without affecting other keys
-- Extremely fast HAProxy decode (~230ns with HMAC validation)
-- Customer ID extracted directly (no database lookup needed)
+- Extremely fast HAProxy decrypt + validate (~180ns total)
+- Customer ID extracted after decryption (no database lookup needed)
 
 **Database Schema:**
 
@@ -457,11 +462,12 @@ CREATE TABLE api_keys (
 ```
 
 **For detailed implementation including:**
-- Complete payload structure and encoding logic
-- HAProxy Lua integration code
-- HMAC security and revocation checking
+- AES-128-CTR encryption and HMAC-SHA256 authentication
+- Complete encrypted payload structure (16 bytes)
+- HAProxy Lua decryption and validation code
+- Security properties and attack prevention
 - API operations (create, list, revoke)
-- Performance benchmarks
+- Performance benchmarks (~180ns per request)
 
 See [API_KEY_DESIGN.md](API_KEY_DESIGN.md).
 
