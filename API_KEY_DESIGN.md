@@ -103,7 +103,7 @@ Before interleaving:
   HMAC:    1234                        (4 chars, hex)
 
 After interleaving (positions 1, 6, 20, 13 swapped with 26, 29, 27, 28):
-  A1CDEF4HIJKLM3OPQRST2VWXYZBURG
+  A1CDEF4HIJKLM3OPQRST2VWXYZBUNG
 
 Result: Hex digits (1,2,3,4) now appear scattered in positions 1, 6, 13, 20
         Original chars (B, G, N, U) moved to end positions 26, 29, 28, 27
