@@ -443,19 +443,16 @@ CREATE TABLE api_keys (
   api_key_id VARCHAR(100) PRIMARY KEY,     -- The full API key string
   customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
   service_type VARCHAR(20) NOT NULL,       -- 'seal', 'grpc', 'graphql'
-  seal_key_id UUID REFERENCES seal_keys(seal_key_id), -- For Seal service: which Seal Key this API key uses
   key_version SMALLINT NOT NULL,           -- Extracted from metadata byte (bits 7-6)
-  is_imported BOOLEAN NOT NULL,            -- Extracted from metadata byte (bit 5)
-  master_key_group SMALLINT NOT NULL,      -- Extracted from metadata byte (bits 4-0)
-  derivation INTEGER,                      -- 3-byte index (0-16M), scope: per master_key_group
+  master_key_group SMALLINT NOT NULL,      -- Extracted from metadata byte (bits 5-1)
+  key_idx SMALLINT NOT NULL,               -- Extracted from byte 1 (0-255), for metering/logging
   is_active BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMP NOT NULL,
   revoked_at TIMESTAMP NULL,
 
   INDEX idx_customer_service (customer_id, service_type, is_active),
-  INDEX idx_seal_key (seal_key_id, is_active),
-  INDEX idx_group_derivation (master_key_group, derivation),
-  CHECK (service_type != 'seal' OR seal_key_id IS NOT NULL) -- Seal service requires seal_key_id
+  INDEX idx_customer_key_idx (customer_id, key_idx),  -- Lookup for metering/logging
+  UNIQUE (customer_id, key_idx)  -- Ensure key_idx is unique per customer
 );
 ```
 
@@ -677,19 +674,16 @@ CREATE TABLE api_keys (
   api_key_id VARCHAR(100) PRIMARY KEY,     -- Full API key string
   customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
   service_type VARCHAR(20) NOT NULL,       -- 'seal', 'grpc', 'graphql'
-  seal_key_id UUID REFERENCES seal_keys(seal_key_id), -- For Seal service: which Seal Key this API key uses
   key_version SMALLINT NOT NULL,           -- Extracted from metadata byte (bits 7-6)
-  is_imported BOOLEAN NOT NULL,            -- Extracted from metadata byte (bit 5)
-  master_key_group SMALLINT NOT NULL,      -- Extracted from metadata byte (bits 4-0)
-  derivation INTEGER,                      -- 3-byte index (0-16M), scope: per master_key_group
+  master_key_group SMALLINT NOT NULL,      -- Extracted from metadata byte (bits 5-1)
+  key_idx SMALLINT NOT NULL,               -- Extracted from byte 1 (0-255), for metering/logging
   is_active BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMP NOT NULL,
   revoked_at TIMESTAMP NULL,
 
   INDEX idx_customer_service (customer_id, service_type, is_active),
-  INDEX idx_seal_key (seal_key_id, is_active),
-  INDEX idx_group_derivation (master_key_group, derivation),
-  CHECK (service_type != 'seal' OR seal_key_id IS NOT NULL) -- Seal service requires seal_key_id
+  INDEX idx_customer_key_idx (customer_id, key_idx),  -- Lookup for metering/logging
+  UNIQUE (customer_id, key_idx)  -- Ensure key_idx is unique per customer
 );
 
 -- Seal keys (Seal service specific)

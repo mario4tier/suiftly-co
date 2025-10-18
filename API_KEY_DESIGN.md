@@ -50,38 +50,38 @@ Total Length: 25 characters (fixed)
 
 ```
 Seal Service Payload Structure (12 bytes):
-  ┌──────────────┬────────────┬─────────────┬──────────┐
-  │ key_metadata │ derivation │ customer_id │ reserved │
-  │ 1 byte       │ 3 bytes    │ 4 bytes     │ 4 bytes  │
-  └──────────────┴────────────┴─────────────┴──────────┘
+  ┌──────────────┬─────────┬─────────────┬─────────┐
+  │ key_metadata │ key_idx │ customer_id │ unused  │
+  │ 1 byte       │ 1 byte  │ 4 bytes     │ 6 bytes │
+  └──────────────┴─────────┴─────────────┴─────────┘
 
 Key Metadata Byte (8 bits) - FIRST BYTE:
-  ┌────────┬──────────┬─────────────────────┐
-  │ version│ imported │ master_key_group    │
-  │ 2 bits │ 1 bit    │ 5 bits              │
-  └────────┴──────────┴─────────────────────┘
+  ┌────────┬──────────────────┬────────┐
+  │ version│ master_key_group │ unused │
+  │ 2 bits │ 5 bits           │ 1 bit  │
+  └────────┴──────────────────┴────────┘
 
   - Version: 00 (current), supports up to 4 versions
-  - Imported: 0=derived key, 1=imported from external system
-  - Master Key Group: 1 (default), supports up to 32 groups
+  - Master Key Group: 0-31 (5 bits) - Groups API keys by master key identity
+  - Unused: Set to 0 (1 bit, LSB)
 
-Derivation (3 bytes):
-  - 24-bit index (16M+ keys per master_key_group)
-  - Scope: per master_key_group (NOT per customer)
-  - Only used if imported=0 (derived key)
-  - Set to 0 if imported=1
+Key Index (1 byte):
+  - 8-bit index (0-255 API keys per customer)
+  - Makes API key unique for given customer_id
+  - Used for metering and logging (distinguishes different API keys)
+  - NOT related to Seal key selection (package_id in PTB selects Seal key)
+  - Sequentially assigned: 0, 1, 2, ... when creating new API keys
 
 Customer ID (4 bytes):
   - 32-bit random integer (1 to 4,294,967,295)
   - Cryptographically random (prevents enumeration attacks)
-  - Value 0 is reserved/invalid
+  - Value 0 is invalid
   - Collision probability negligible (< 0.023% with 1M customers)
 
-Reserved (4 bytes):
-  - Currently set to zero
+Unused (6 bytes):
+  - Set to zero
   - Available for future protocol extensions
-  - Maintains consistent key length
-  - Could be used for: timestamps, additional metadata, or sharding hints
+  - Maintains consistent 12-byte payload for Base32 encoding
 ```
 
 ## Implementation
@@ -90,25 +90,23 @@ Reserved (4 bytes):
 
 ```typescript
 interface KeyMetadata {
-  version: number;        // 0-3 (2 bits) - currently 0
-  isImported: boolean;    // 1 bit - false for derived, true for imported
-  masterKeyGroup: number; // 0-31 (5 bits) - currently 1
+  version: number;         // 0-3 (2 bits) - currently 0
+  masterKeyGroup: number;  // 0-31 (5 bits) - groups API keys by master key
+  // 1 bit unused (LSB)
 }
 
 interface ApiKeyPayload {
   metadata: KeyMetadata;  // 1 byte (offset 0)
-  derivation: number;     // 3 bytes (offset 1-3, 0 if imported)
-  customerId: number;     // 4 bytes (offset 4-7)
-  reserved: Buffer;       // 4 bytes (offset 8-11, zeros)
+  keyIdx: number;         // 1 byte (offset 1, 0-255)
+  customerId: number;     // 4 bytes (offset 2-5)
+  unused: Buffer;         // 6 bytes (offset 6-11, zeros)
 }
 
 // Encode metadata byte
 function encodeMetadata(meta: KeyMetadata): number {
-  return (
-    (meta.version & 0b11) << 6 |           // bits 7-6: version
-    (meta.isImported ? 1 : 0) << 5 |       // bit 5: imported flag
-    (meta.masterKeyGroup & 0b11111)        // bits 4-0: master key group
-  );
+  return ((meta.version & 0b11) << 6) |          // bits 7-6: version
+         ((meta.masterKeyGroup & 0b11111) << 1); // bits 5-1: master_key_group
+                                                  // bit 0: unused (set to 0)
 }
 
 // Generate API key
@@ -116,32 +114,27 @@ function generateApiKey(
   customerId: number,
   serviceType: string,
   options: {
-    isImported?: boolean;
-    derivation?: number;
+    keyIdx?: number;
     masterKeyGroup?: number;
   } = {}
 ): string {
   const payload = Buffer.alloc(12);
 
-  // 1. Key metadata (1 byte) - FIRST BYTE (offset 0)
+  // 1. Key metadata (1 byte) - offset 0
   const metadata = encodeMetadata({
     version: 0,
-    isImported: options.isImported ?? false,
-    masterKeyGroup: options.masterKeyGroup ?? 1,
+    masterKeyGroup: options.masterKeyGroup ?? 0
   });
   payload[0] = metadata;
 
-  // 2. Derivation (3 bytes) - offset 1-3
-  if (!options.isImported && options.derivation !== undefined) {
-    payload.writeUIntBE(options.derivation, 1, 3);
-  }
-  // bytes 1-3: derivation or zeros
+  // 2. Key Index (1 byte) - offset 1
+  payload[1] = options.keyIdx ?? 0;  // 0-255, for metering/logging
 
-  // 3. Customer ID (4 bytes) - offset 4-7
-  payload.writeUInt32BE(customerId, 4);
+  // 3. Customer ID (4 bytes) - offset 2-5
+  payload.writeUInt32BE(customerId, 2);
 
-  // 4. Reserved (4 bytes) - offset 8-11, always zero for now
-  // bytes 8-11: zeros (already initialized)
+  // 4. Unused (6 bytes) - offset 6-11, set to zero
+  // bytes 6-11: zeros (already initialized)
 
   // 5. Encode to Base32 (always 20 characters for 12 bytes)
   const base32Payload = base32Encode(payload);
@@ -172,12 +165,21 @@ function charToServiceType(char: string): string {
 ### Key Decoding
 
 ```typescript
+// Decode metadata byte
+function decodeMetadata(byte: number): KeyMetadata {
+  return {
+    version: (byte >> 6) & 0b11,              // bits 7-6
+    masterKeyGroup: (byte >> 1) & 0b11111,    // bits 5-1
+    // bit 0: unused
+  };
+}
+
 // Decode API key
 function decodeApiKey(apiKey: string): {
   customerId: number;
   serviceType: string;
   metadata: KeyMetadata;
-  derivation?: number;
+  keyIdx: number;
 } {
   // Extract service char (first character)
   const serviceChar = apiKey[0];
@@ -203,22 +205,19 @@ function decodeApiKey(apiKey: string): {
   // 1. Extract metadata (offset 0, 1 byte)
   const metadata = decodeMetadata(payload[0]);
 
-  // 2. Extract derivation if derived key (offset 1-3, 3 bytes)
-  let derivation: number | undefined;
-  if (!metadata.isImported) {
-    derivation = payload.readUIntBE(1, 3);
-  }
+  // 2. Extract key_idx (offset 1, 1 byte)
+  const keyIdx = payload[1];
 
-  // 3. Extract customer ID (offset 4-7, 4 bytes)
-  const customerId = payload.readUInt32BE(4);
+  // 3. Extract customer ID (offset 2-5, 4 bytes)
+  const customerId = payload.readUInt32BE(2);
 
-  // 4. Reserved bytes ignored (offset 8-11, future use)
+  // 4. Unused bytes ignored (offset 6-11)
 
   return {
     customerId,
     serviceType,
     metadata,
-    derivation,
+    keyIdx,
   };
 }
 ```
@@ -239,23 +238,6 @@ function decodeApiKey(apiKey: string): {
 - **Fast validation**: Immediate failure detection with simple string comparison
 - **Efficient**: No padding overhead unlike Base32 (which would need 4 chars for 2 bytes)
 - **Clear separation**: Hex chars (0-9, A-F) are distinct from Base32 alphabet (A-Z, 2-7)
-
-### Encoding Comparison
-
-| Component | Encoding | Size | Bits/char | Efficiency |
-|-----------|----------|------|-----------|------------|
-| Service | Single char | 1 byte | N/A | Perfect |
-| **Payload** | **Base32** | **12 bytes → 20 chars** | **5** | ✓ **Optimal** |
-| **Checksum** | **Hex** | **2 bytes → 4 chars** | **4** | ✓ **Perfect fit** |
-
-### Format Benefits
-
-- **10x faster decode** than Base58 (~20ns vs ~200ns)
-- **Fixed length**: Always exactly 25 characters (no variation)
-- **Efficient checksum**: Hex encoding avoids Base32 padding waste
-- **Fast failure**: Invalid checksums detected immediately
-- Single character service identifier
-- All uppercase (consistent, professional appearance)
 
 ## Customer Mapping
 
@@ -293,20 +275,6 @@ async function generateCustomerId(): Promise<number> {
 }
 ```
 
-### Why Random IDs?
-
-- **Security**: Prevents attacker from enumerating all customer IDs
-- **Privacy**: Hides customer count and growth rate
-- **Attack prevention**: Even with decoded API keys, can't guess other customer IDs
-- **Same size**: Still 4 bytes (no payload increase)
-
-### Collision Probability
-
-- With 1M customers: ~0.023% chance of collision
-- With 10M customers: ~2.3% chance of collision
-- Retry loop handles collisions automatically
-- Expected retries: < 1 per 1000 customer creations
-
 ## HAProxy Integration
 
 ### Fast Lookup Mechanism
@@ -316,30 +284,83 @@ async function generateCustomerId(): Promise<number> {
 **Solution**: Decode customer_id directly from the API key (no database lookup needed)
 
 ```
-Sticky Table Key = customer_id (or customer_id + service_byte for multi-service)
+Sticky Table Key = customer_id
 
 Properties:
-  - Same for all API keys belonging to one customer+service
+  - Same for all API keys belonging to one customer
   - Extracted directly from API key payload (no DB query)
   - Extremely fast (~20ns for Base32 decode)
   - Stable (doesn't change when keys are rotated)
   - Compact (32-bit integer)
+  - Multi-service: Use separate sticky tables per service type (not combined keys)
 ```
 
 ### HAProxy Integration Flow
 
 1. Request arrives with `Authorization: Bearer <api_key>`
-2. HAProxy extracts API key, calls Lua script to decode it
-3. Lua script decodes Base32 payload:
-   - Extract metadata byte (byte 0)
-   - Skip derivation (bytes 1-3)
-   - Extract customer_id (bytes 4-7, 32-bit integer)
-   - Extract service_type from key prefix
-   - Verify HMAC-SHA256 signature
-   - Return customer_id as sticky key
-4. HAProxy stores customer_id in sticky table for rate limiting
+2. HAProxy extracts API key, calls Lua script to validate and decode it
+3. Lua script validates API key (fail fast):
+   - Extract service_type from first character (S, R, or G)
+   - Extract Base32 payload (chars 2-21, 20 characters)
+   - Extract hex checksum (chars 22-25, 4 characters)
+   - Decode Base32 payload → 12 bytes
+   - Verify HMAC-SHA256 checksum (using SECRET_KEY)
+   - **If checksum invalid → reject immediately (authentication failed)**
+4. Lua script extracts fields from validated payload:
+   - Extract metadata byte (byte 0) - version and master_key_group
+   - Extract key_idx (byte 1, 8-bit index)
+   - Extract customer_id (bytes 2-5, 32-bit integer)
+5. HAProxy adds custom headers:
+   - `X-Suiftly-Customer-ID: <customer_id>` - For sticky table (rate limiting)
+   - `X-Suiftly-Key-Idx: <key_idx>` - For metering/logging
+   - `X-Suiftly-Master-Key-Group: <master_key_group>` - For grouping by master key
+6. HAProxy forwards request to Seal key server backend
+7. Seal key server processes standard `/v1/fetch_key` request:
+   - **Customer provides PTB (Programmable Transaction Block)** calling `seal_approve*` function
+   - **PTB specifies `package_id`** of the Move package (customer's application)
+   - Seal server extracts `package_id` from PTB
+   - **In permissioned mode:** Looks up `package_id` in `pkg_id_to_key` map → selects master key
+   - Validates `package_id` access, evaluates `seal_approve*` policy (dry run)
+   - Returns derived key using the selected `client_master_key`
 
-**No database lookup required!**
+**Simplified Flow:**
+```
+1. HAProxy validates API key (HMAC check)
+2. HAProxy extracts customer_id, key_idx, master_key_group from API key payload
+3. HAProxy adds headers: X-Suiftly-Customer-ID, X-Suiftly-Key-Idx, X-Suiftly-Master-Key-Group
+4. HAProxy routes to Seal key server
+5. Seal server extracts package_id from customer's PTB
+6. Seal server looks up: pkg_id_to_key[package_id] → master_key
+7. Seal server validates access policy (dry_run seal_approve* function)
+8. Seal server returns derived key
+```
+
+**How MM_VAULT Config Works (key-server-config.yaml):**
+```yaml
+server_mode: !Permissioned
+  client_configs:
+    - name: "customer_12345_seal_key_1"
+      client_master_key: !Derived
+        derivation_index: 1001           # Unique per customer Seal key
+      key_server_object_id: "0xabc..."   # On-chain registration
+      package_ids:
+        - "0x123..."                     # Customer's Move package ID(s)
+
+    - name: "customer_99999_seal_key_1"
+      client_master_key: !Imported
+        env_var: "CUSTOMER_99999_KEY"
+      key_server_object_id: "0xdef..."
+      package_ids:
+        - "0x456..."
+```
+
+**Key Selection Mechanism:**
+- Customer provides `package_id` in their PTB (identifies their application)
+- Seal server maps: `pkg_id_to_key[package_id]` → master_key
+- Each customer's `package_id`(s) map to their Seal key master key
+- API key's `key_idx` is for metering/logging only (not key selection)
+
+**No database lookup required for authentication!** Key selection via `package_id` in customer's PTB.
 
 ### HAProxy Lua Implementation
 
@@ -373,17 +394,24 @@ function validate_and_decode_api_key(api_key)
     return nil, "invalid_signature"
   end
 
-  -- Skip metadata byte (byte 0) and derivation (bytes 1-3)
-  -- Extract customer ID (bytes 4-7)
-  local customer_id = bytes_to_uint32(payload:sub(5, 8))
+  -- Extract metadata byte (byte 0, offset 1 in Lua 1-based indexing)
+  local metadata_byte = payload:byte(1)
+  local version = bit32.rshift(metadata_byte, 6)  -- bits 7-6
+  local master_key_group = bit32.band(bit32.rshift(metadata_byte, 1), 0x1F)  -- bits 5-1
+
+  -- Extract key_idx (byte 1, offset 2 in Lua)
+  local key_idx = payload:byte(2)
+
+  -- Extract customer ID (bytes 2-5, offset 3-6 in Lua 1-based indexing)
+  local customer_id = bytes_to_uint32(payload:sub(3, 6))
 
   -- Validate customer_id is not 0 (reserved value)
   if customer_id == 0 then
     return nil, "invalid_customer_id"
   end
 
-  -- Return customer_id as string for sticky table
-  return tostring(customer_id)
+  -- Return extracted fields
+  return tostring(customer_id), tostring(key_idx), tostring(master_key_group)
 end
 ```
 
@@ -522,27 +550,24 @@ CREATE TABLE api_keys (
   api_key_id VARCHAR(100) PRIMARY KEY,     -- The full API key string
   customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
   service_type VARCHAR(20) NOT NULL,       -- 'seal', 'grpc', 'graphql'
-  seal_key_id UUID REFERENCES seal_keys(seal_key_id), -- For Seal service: which Seal Key this API key uses
   key_version SMALLINT NOT NULL,           -- Extracted from metadata byte (bits 7-6)
-  is_imported BOOLEAN NOT NULL,            -- Extracted from metadata byte (bit 5)
-  master_key_group SMALLINT NOT NULL,      -- Extracted from metadata byte (bits 4-0)
-  derivation INTEGER,                      -- 3-byte index (0-16M), scope: per master_key_group
+  master_key_group SMALLINT NOT NULL,      -- Extracted from metadata byte (bits 5-1)
+  key_idx SMALLINT NOT NULL,               -- Extracted from byte 1 (0-255), for metering/logging
   is_active BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMP NOT NULL,
   revoked_at TIMESTAMP NULL,
 
   INDEX idx_customer_service (customer_id, service_type, is_active),
-  INDEX idx_seal_key (seal_key_id, is_active),
-  INDEX idx_group_derivation (master_key_group, derivation),
-  CHECK (service_type != 'seal' OR seal_key_id IS NOT NULL) -- Seal service requires seal_key_id
+  INDEX idx_customer_key_idx (customer_id, key_idx),  -- Lookup for metering/logging
+  UNIQUE (customer_id, key_idx)  -- Ensure key_idx is unique per customer
 );
 ```
 
-**Relationship:**
-- For **Seal service**: Each API key MUST reference a `seal_key_id` (identifies which Seal Key to use for signing)
-- For **other services** (gRPC, GraphQL): `seal_key_id` is NULL (not applicable)
-- A customer with 2 Seal Keys will have separate API keys for each Seal Key
-- Multiple API keys can reference the same `seal_key_id` (for rotation/redundancy)
+**Key Points:**
+- `key_idx` makes each API key unique for a given customer (for metering/logging purposes)
+- `master_key_group` groups API keys by master key identity (5 bits = 0-31 groups)
+- For **Seal service**: Key selection is determined by `package_id` in customer's PTB (not by API key)
+- `key_idx` is sequentially assigned: 0, 1, 2, ... when creating new API keys for a customer
 
 ## API Operations
 
@@ -553,28 +578,23 @@ POST /api/v1/services/{service_type}/keys
 Authorization: Bearer <jwt_token>
 
 // Rate limits:
-// - Max 10 keys per seal key (for Seal service)
+// - Max 256 keys per customer (0-255 key_idx range)
 // - Max 5 key creations per hour per customer
-// - Max derivation index: 1000 per customer (prevents exhaustion attacks)
 
 Request:
 {
-  "seal_key_id": "uuid-here",  // REQUIRED for Seal service, identifies which Seal Key to use
-  "is_imported": false,        // optional, default: false
-  "master_key_group": 1        // optional, default: 1
+  "master_key_group": 0        // optional, default: 0 (0-31 valid range)
 }
 
 Response:
 {
   "api_key": "SABCDEFGHIJKLMNOPQRST234567",
-  "seal_key_id": "uuid-here",
-  "derivation": 0,
+  "key_idx": 0,                // Auto-assigned index (0-255)
   "created_at": "2025-01-15T10:30:00Z",
   "service_type": "seal",
   "metadata": {
     "version": 0,
-    "is_imported": false,
-    "master_key_group": 1
+    "master_key_group": 0
   }
 }
 
@@ -592,27 +612,20 @@ Response:
 GET /api/v1/services/{service_type}/keys
 Authorization: Bearer <jwt_token>
 
-// Optional query parameter for Seal service:
-// ?seal_key_id=uuid-here  (filter by specific Seal Key)
-
 Response:
 {
   "keys": [
     {
       "key_prefix": "SABCD...234567",
-      "seal_key_id": "uuid-1",
-      "derivation": 0,
-      "is_imported": false,
-      "master_key_group": 1,
+      "key_idx": 0,
+      "master_key_group": 0,
       "created_at": "2025-01-15T10:30:00Z",
       "is_active": true
     },
     {
       "key_prefix": "SEFGH...567234",
-      "seal_key_id": "uuid-1",  // Same Seal Key, different API key
-      "derivation": 1,
-      "is_imported": false,
-      "master_key_group": 1,
+      "key_idx": 1,
+      "master_key_group": 0,
       "created_at": "2025-01-16T14:22:00Z",
       "is_active": true
     }
@@ -623,7 +636,7 @@ Response:
 ### Revoke Key
 
 ```typescript
-DELETE /api/v1/services/{service_type}/keys/{derivation}
+DELETE /api/v1/services/{service_type}/keys/{api_key_id}
 Authorization: Bearer <jwt_token>
 
 Response:
@@ -652,27 +665,37 @@ Each service type has separate:
   - Sticky table keys
 ```
 
-### Customer Sticky Key Generation
+### Rate Limiting Strategy
 
+**Per-Service Sticky Tables:**
+
+Each service type uses its own HAProxy sticky table for rate limiting:
+
+```
+# HAProxy configuration (conceptual)
+
+# Seal service sticky table
+stick-table type string len 16 size 100k expire 1h store http_req_rate(10s)
+
+# gRPC service sticky table (future)
+stick-table type string len 16 size 100k expire 1h store http_req_rate(10s)
+
+# GraphQL service sticky table (future)
+stick-table type string len 16 size 100k expire 1h store http_req_rate(10s)
+```
+
+**Sticky Key per Service:**
 ```typescript
-// For single service (current): use customer_id directly
+// Extract customer_id from API key
+const customerId = decodeApiKey(apiKey).customerId;
+
+// Use customer_id as sticky key (simple, clean)
 const stickyKey = customerId.toString();
 
-// For multi-service (future): append service byte
-const SERVICE_BYTES = {
-  seal: 0x01,
-  grpc: 0x02,
-  graphql: 0x03
-};
-
-const sealStickyKey = customerId + ":" + SERVICE_BYTES.seal;
-const grpcStickyKey = customerId + ":" + SERVICE_BYTES.grpc;
-const graphqlStickyKey = customerId + ":" + SERVICE_BYTES.graphql;
-
 // Examples:
-// "42:1" → Customer 42, Seal service
-// "42:2" → Customer 42, gRPC service
-// "99:1" → Customer 99, Seal service
+// Seal request from customer 42 → sticky key "42" in seal_sticky_table
+// gRPC request from customer 42 → sticky key "42" in grpc_sticky_table
+// Different tables = independent rate limits per service
 ```
 
 ### Benefits of Service Isolation
