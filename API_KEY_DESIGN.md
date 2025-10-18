@@ -22,19 +22,20 @@ This document defines the API key architecture for authenticating service reques
 
 ```
 API Key Structure:
-  <service><base32_ciphertext><hmac_tag>
+  <service><interleaved_payload_and_hmac>
 
 Example:
   SABCDEFGHIJKLMNOPQRSTUVWXYZ1234
-  │└──────────┬────────────┘└┬─┘
-  │           │              │
-  1 char    26 chars       4 chars
-  Service   Ciphertext     HMAC
+  │└─────────── 30 chars ───────────┘
+  │         (payload + HMAC interleaved)
+  Service type
 
 Components:
   - Service: Single uppercase character (S=Seal, R=gRPC, G=GraphQL)
-  - Ciphertext: Base32-encoded encrypted payload (16 bytes → 26 chars, fixed length)
-  - HMAC Tag: HMAC-SHA256 signature (2 bytes → 4 chars hex, uppercase)
+  - Interleaved: 30 characters with Base32 ciphertext and hex HMAC tag mixed
+    * Base32 ciphertext: 26 chars (encrypted 16-byte payload)
+    * HMAC tag: 4 chars hex (2-byte authentication tag)
+    * Interleaved using reversible swap pattern (obfuscation)
 
 Service Type Identifiers:
   - S → Seal service
@@ -42,6 +43,9 @@ Service Type Identifiers:
   - G → GraphQL service (future)
 
 Total Length: 31 characters (fixed)
+
+Note: The HMAC tag is interleaved into specific positions within the Base32
+ciphertext to obscure the structure and make reverse engineering slower.
 ```
 
 ### Encryption Design
@@ -70,6 +74,43 @@ Total Length: 31 characters (fixed)
 - Safe for CTR mode: Each payload is unique (customer_id + key_idx combination)
 - No nonce reuse risk: Unique plaintexts produce unique ciphertexts
 - No storage overhead: Nonce not included in API key
+
+### HMAC Interleaving (Obfuscation)
+
+To make the API key structure less obvious and slow down reverse engineering, the 4-character HMAC tag is interleaved into the 26-character Base32 ciphertext using a reversible swap pattern.
+
+**Purpose:**
+- Eliminate obvious hex vs Base32 boundary
+- Mix hex characters (0-9, A-F) into Base32 characters (A-Z, 2-7)
+- Make automatic pattern detection harder
+- Slow down casual reverse engineering attempts
+
+**Interleaving Pattern (0-based indexing):**
+```
+Combined string: [26 Base32 chars] + [4 hex chars] = 30 chars total
+
+Swap operations (reversible):
+  Position 1  ↔ Position 26  (2nd payload char ↔ 1st HMAC char)
+  Position 6  ↔ Position 29  (7th payload char ↔ 4th HMAC char)
+  Position 9  ↔ Position 27  (10th payload char ↔ 2nd HMAC char)
+  Position 13 ↔ Position 28  (14th payload char ↔ 3rd HMAC char)
+```
+
+**Example:**
+```
+Before interleaving:
+  Payload: ABCDEFGHIJKLMNOPQRSTUVWXYZ  (26 chars, Base32)
+  HMAC:    1234                        (4 chars, hex)
+
+After interleaving (positions 1, 6, 9, 13 swapped with 26, 29, 27, 28):
+  A1CDEFGHIJKLMNOP3RSTUVWXY2Z4
+
+Result: Hex digits (1,2,3,4) now appear scattered in positions 1, 6, 9, 13
+        Original chars (B, G, J, N) moved to end positions 26, 27, 28, 29
+```
+
+**Security Note:**
+This is **obfuscation, not security**. The actual security comes from AES encryption and HMAC authentication. The interleaving simply makes the format less obvious to casual inspection and automated scanners. A determined attacker can reverse-engineer the pattern with multiple samples.
 
 ### Plaintext Payload Structure (16 bytes, before encryption)
 
@@ -148,6 +189,31 @@ function getFixedNonce(): Buffer {
   return FIXED_NONCE;
 }
 
+// Interleave HMAC tag into Base32 payload (reversible swap for obfuscation)
+// This makes the structure less obvious by mixing hex chars into Base32 chars
+function interleaveHmacTag(payload: string, tag: string): string {
+  // payload: 26 chars Base32 (A-Z, 2-7)
+  // tag: 4 chars hex (0-9, A-F)
+  // Returns: 30 chars with HMAC interleaved
+
+  // Combine into single string, then swap specific positions
+  const combined = payload + tag;  // 30 chars total
+  const chars = combined.split('');
+
+  // Swap pattern (0-based indexing):
+  // Position 1 (2nd char of payload) ↔ Position 26 (1st char of HMAC - tag[0])
+  // Position 6 (7th char of payload) ↔ Position 29 (4th char of HMAC - tag[3])
+  // Position 9 (10th char of payload) ↔ Position 27 (2nd char of HMAC - tag[1])
+  // Position 13 (14th char of payload) ↔ Position 28 (3rd char of HMAC - tag[2])
+
+  [chars[1], chars[26]] = [chars[26], chars[1]];   // Swap payload[1] ↔ tag[0]
+  [chars[6], chars[29]] = [chars[29], chars[6]];   // Swap payload[6] ↔ tag[3]
+  [chars[9], chars[27]] = [chars[27], chars[9]];   // Swap payload[9] ↔ tag[1]
+  [chars[13], chars[28]] = [chars[28], chars[13]]; // Swap payload[13] ↔ tag[2]
+
+  return chars.join('');  // Return 30 chars
+}
+
 // Generate API key
 function generateApiKey(
   customerId: number,
@@ -187,9 +253,12 @@ function generateApiKey(
   const base32Ciphertext = base32Encode(ciphertext);  // 26 chars
   const hexTag = tag.toString('hex').toUpperCase();   // 4 chars
 
-  // 5. Format: <service><ciphertext><tag>
+  // 5. Interleave HMAC tag into payload (obfuscation)
+  const interleaved = interleaveHmacTag(base32Ciphertext, hexTag);  // 30 chars
+
+  // 6. Format: <service><interleaved>
   const serviceChar = serviceTypeToChar(serviceType);
-  return `${serviceChar}${base32Ciphertext}${hexTag}`;  // 31 chars total
+  return `${serviceChar}${interleaved}`;  // 31 chars total
 }
 
 // Service type mapping
@@ -227,14 +296,22 @@ function decodeApiKey(apiKey: string): {
   const serviceChar = apiKey[0];
   const serviceType = charToServiceType(serviceChar);
 
-  // 2. Extract ciphertext and HMAC tag
-  const base32Ciphertext = apiKey.slice(1, 27);  // Characters 1-26 (26 chars)
-  const tagHex = apiKey.slice(27, 31);           // Last 4 chars (hex)
+  // 2. Extract interleaved string (30 chars)
+  const interleaved = apiKey.slice(1);  // Characters 1-30
 
-  // 3. Decode Base32 ciphertext
+  // 3. De-interleave to separate payload and HMAC tag
+  // (Same function works for both directions - it's a reversible swap)
+  const deinterleaved = interleaveHmacTag(
+    interleaved.slice(0, 26),
+    interleaved.slice(26)
+  );
+  const base32Ciphertext = deinterleaved.slice(0, 26);  // Base32 payload
+  const tagHex = deinterleaved.slice(26);                // 4 hex chars
+
+  // 4. Decode Base32 ciphertext
   const ciphertext = base32Decode(base32Ciphertext);  // 16 bytes
 
-  // 4. Verify HMAC-SHA256 authentication tag (Encrypt-then-MAC)
+  // 5. Verify HMAC-SHA256 authentication tag (Encrypt-then-MAC)
   const hmac = crypto.createHmac('sha256', SECRET_KEY);
   hmac.update(ciphertext);
   const expectedTag = hmac.digest().slice(0, 2);
@@ -244,7 +321,7 @@ function decodeApiKey(apiKey: string): {
     throw new Error('Invalid API key - authentication failed');
   }
 
-  // 5. Decrypt with AES-128-CTR
+  // 6. Decrypt with AES-128-CTR
   const nonce = getFixedNonce();
   const decipher = crypto.createDecipheriv(
     'aes-128-ctr',
@@ -253,7 +330,7 @@ function decodeApiKey(apiKey: string): {
   );
   const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);  // 16 bytes
 
-  // 6. Extract fields from plaintext
+  // 7. Extract fields from plaintext
   const metadata = decodeMetadata(plaintext[0]);     // offset 0
   const keyIdx = plaintext[1];                        // offset 1
   const customerId = plaintext.readUInt32BE(2);      // offset 2-5
@@ -429,15 +506,40 @@ function get_fixed_nonce()
   return FIXED_NONCE
 end
 
+-- Interleave/de-interleave HMAC tag (reversible swap for obfuscation)
+function interleave_hmac_tag(payload, tag)
+  -- payload: 26 chars, tag: 4 chars → returns 30 chars
+  -- Swap pattern: positions 1↔26, 6↔29, 9↔27, 13↔28 (0-based)
+
+  local chars = {}
+  local combined = payload .. tag
+  for i = 1, #combined do
+    chars[i] = combined:sub(i, i)
+  end
+
+  -- Perform swaps (Lua is 1-based, so add 1 to indices)
+  chars[2], chars[27] = chars[27], chars[2]    -- pos 1 ↔ pos 26
+  chars[7], chars[30] = chars[30], chars[7]    -- pos 6 ↔ pos 29
+  chars[10], chars[28] = chars[28], chars[10]  -- pos 9 ↔ pos 27
+  chars[14], chars[29] = chars[29], chars[14]  -- pos 13 ↔ pos 28
+
+  return table.concat(chars)
+end
+
 function validate_and_decode_api_key(api_key)
   -- 1. Extract service type (first character)
   local service_char = api_key:sub(1, 1)  -- S, R, or G
 
-  -- 2. Extract ciphertext (characters 2-27, always 26 chars)
-  local ciphertext_b32 = api_key:sub(2, 27)
+  -- 2. Extract interleaved string (characters 2-31, 30 chars)
+  local interleaved = api_key:sub(2, 31)
 
-  -- 3. Extract HMAC tag (characters 28-31, 4 hex chars)
-  local tag_hex = api_key:sub(28, 31):upper()
+  -- 3. De-interleave to separate payload and HMAC tag
+  local deinterleaved = interleave_hmac_tag(
+    interleaved:sub(1, 26),
+    interleaved:sub(27, 30)
+  )
+  local ciphertext_b32 = deinterleaved:sub(1, 26)  -- Base32 payload
+  local tag_hex = deinterleaved:sub(27, 30):upper()  -- 4 hex chars
 
   -- 4. Decode Base32 ciphertext (~20ns)
   local ciphertext = base32_decode(ciphertext_b32)  -- 16 bytes
