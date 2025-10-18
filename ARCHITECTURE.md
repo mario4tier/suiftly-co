@@ -272,11 +272,13 @@ suiftly-co/
 
 **For complete database schema with all tables, see [CUSTOMER_SERVICE_SCHEMA.md](CUSTOMER_SERVICE_SCHEMA.md#database-schema-summary).**
 
+**For API key format and implementation, see [API_KEY_DESIGN.md](API_KEY_DESIGN.md).**
+
 **Key tables used by this architecture:**
 
 - **customers** - customer_id (random 32-bit), wallet_address, escrow_contract_id, balance, monthly limits
 - **service_instances** - instance_id, customer_id, service_type, tier, is_enabled, config (JSONB)
-- **api_keys** - api_key_id, customer_id, service_type, derivation, is_active
+- **api_keys** - api_key_id, customer_id, service_type, derivation, is_active (see [API_KEY_DESIGN.md](API_KEY_DESIGN.md))
 - **haproxy_logs** (TimescaleDB hypertable) - timestamp, customer_id, service_type, method, status_code, bytes_out
 - **usage_records** - customer_id, service_type, request_count, window_start, window_end, charged_amount
 - **escrow_transactions** - customer_id, tx_digest, tx_type, amount, timestamp
