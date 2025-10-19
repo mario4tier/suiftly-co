@@ -109,45 +109,65 @@ Result: Hex digits (1,2,3,4) now appear scattered in positions 1, 6, 13, 20
         Original chars (B, G, N, U) moved to end positions 26, 29, 28, 27
 ```
 
-**Security Note:**
-This is **obfuscation, not security**. The actual security comes from AES encryption and HMAC authentication. The interleaving simply makes the format less obvious to casual inspection and automated scanners. A determined attacker can reverse-engineer the pattern with multiple samples.
-
 ### Plaintext Payload Structure (16 bytes, before encryption)
 
 **Note:** This payload structure is defined for the **Seal service**. Future services (gRPC, GraphQL) may use different payload structures while maintaining the same overall API key format (service prefix + 26-char encrypted payload + 4-char HMAC tag).
 
 ```
 Seal Service Plaintext Payload (16 bytes):
-  ┌──────────────┬─────────┬─────────────┬──────────┐
-  │ key_metadata │ key_idx │ customer_id │  unused  │
-  │ 1 byte       │ 1 byte  │ 4 bytes     │ 10 bytes │
-  └──────────────┴─────────┴─────────────┴──────────┘
+  ┌──────────────┬─────────┬─────────────┬─────────┐
+  │ key_metadata │ key_idx │ customer_id │  unused │
+  │ 2 bytes      │ 2 bytes │ 4 bytes     │ 8 bytes │
+  └──────────────┴─────────┴─────────────┴─────────┘
 
-Key Metadata Byte (8 bits) - FIRST BYTE:
-  ┌────────┬──────────────────┬────────┐
-  │ version│ master_key_group │ unused │
-  │ 2 bits │ 5 bits           │ 1 bit  │
-  └────────┴──────────────────┴────────┘
+Key Metadata (2 bytes, 16 bits) - BYTES 0-1:
+  ┌────────┬───────────┬──────────────────┬────────┐
+  │ version│ seal_type │ master_key_group │ unused │
+  │ 2 bits │ 3 bits    │ 3 bits           │ 8 bits │
+  └────────┴───────────┴──────────────────┴────────┘
 
   - Version: 00 (current), supports up to 4 versions
-  - Master Key Group: 0-31 (5 bits) - Groups API keys by master key identity
-  - Unused: Set to 0 (1 bit, LSB)
+  - Seal Type: 3 bits (abc) - Seal key configuration:
+    * a (bit 12): Network - 1=mainnet, 0=testnet
+    * b (bit 11): Access - 1=permission, 0=open
+    * c (bit 10): Source (when permission) - 1=imported, 0=derived
+                  (unused when open)
 
-Key Index (1 byte):
-  - 8-bit index (0-255 API keys per customer)
+    All 8 possible seal_type values:
+    ┌─────┬─────────┬────────────┬──────────┬────────────────────────────────┐
+    │ abc │ Network │ Access     │ Source   │ Status                         │
+    ├─────┼─────────┼────────────┼──────────┼────────────────────────────────┤
+    │ 000 │ testnet │ open       │ derived  │ Undefined (reserved)           │
+    │ 001 │ testnet │ open       │ imported │ Valid (testnet/open)           │
+    │ 010 │ testnet │ permission │ derived  │ Valid (testnet/permission/der) │
+    │ 011 │ testnet │ permission │ imported │ Valid (testnet/permission/imp) │
+    │ 100 │ mainnet │ open       │ derived  │ Undefined (reserved)           │
+    │ 101 │ mainnet │ open       │ imported │ Valid (mainnet/open)           │
+    │ 110 │ mainnet │ permission │ derived  │ Valid (mainnet/permission/der) │
+    │ 111 │ mainnet │ permission │ imported │ Valid (mainnet/permission/imp) │
+    └─────┴─────────┴────────────┴──────────┴────────────────────────────────┘
+
+    Note: For open access (b=0), the source bit (c) is ignored in practice.
+          Values 000 and 100 are undefined/reserved for future use.
+  - Master Key Group: 0-7 (3 bits) - Groups API keys by master key identity
+  - Unused: Set to 0 (8 bits reserved for future use)
+
+Key Index (2 bytes, 16 bits) - BYTES 2-3:
+  - 16-bit index (0-65535 API keys per customer)
+  - Allows for index recycling when combined with rate limiting and pruning
   - Makes API key unique for given customer_id
   - Used for metering and logging (distinguishes different API keys)
   - NOT related to Seal key selection (package_id in PTB selects Seal key)
   - Sequentially assigned: 0, 1, 2, ... when creating new API keys
 
-Customer ID (4 bytes):
+Customer ID (4 bytes, 32 bits) - BYTES 4-7:
   - 32-bit random integer (1 to 4,294,967,295)
   - Cryptographically random (prevents enumeration attacks)
   - Value 0 is invalid
   - Collision probability negligible (< 0.023% with 1M customers)
   - **Encrypted** - Not visible to anyone holding the API key
 
-Unused (10 bytes):
+Unused (8 bytes) - BYTES 8-15:
   - Set to zero
   - Available for future protocol extensions
   - Maintains optimal 16-byte payload size (128 bits, 1 AES block)
@@ -158,24 +178,51 @@ Unused (10 bytes):
 ### Key Generation
 
 ```typescript
+interface SealType {
+  network: 'mainnet' | 'testnet';     // bit 12: 1=mainnet, 0=testnet
+  access: 'permission' | 'open';      // bit 11: 1=permission, 0=open
+  source?: 'imported' | 'derived';    // bit 10: 1=imported, 0=derived (only when permission)
+}
+
 interface KeyMetadata {
   version: number;         // 0-3 (2 bits) - currently 0
-  masterKeyGroup: number;  // 0-31 (5 bits) - groups API keys by master key
-  // 1 bit unused (LSB)
+  sealType: SealType;      // 3 bits (abc) - seal key configuration
+  masterKeyGroup: number;  // 0-7 (3 bits) - groups API keys by master key
+  // 8 bits unused (reserved for future use)
 }
 
 interface ApiKeyPayload {
-  metadata: KeyMetadata;  // 1 byte (offset 0)
-  keyIdx: number;         // 1 byte (offset 1, 0-255)
-  customerId: number;     // 4 bytes (offset 2-5)
-  unused: Buffer;         // 10 bytes (offset 6-15, zeros)
+  metadata: KeyMetadata;  // 2 bytes (offset 0-1)
+  keyIdx: number;         // 2 bytes (offset 2-3, 0-65535)
+  customerId: number;     // 4 bytes (offset 4-7)
+  unused: Buffer;         // 8 bytes (offset 8-15, zeros)
 }
 
-// Encode metadata byte
+// Encode seal_type (3 bits)
+function encodeSealType(sealType: SealType): number {
+  const a = sealType.network === 'mainnet' ? 1 : 0;  // bit 12
+  const b = sealType.access === 'permission' ? 1 : 0; // bit 11
+  const c = sealType.access === 'permission' && sealType.source === 'imported' ? 1 : 0; // bit 10
+
+  // Validate unsupported combinations
+  if (a === 1 && b === 0 && c === 1) {
+    throw new Error('Invalid seal_type: 100 is an unsupported configuration');
+  }
+  if (a === 0 && b === 0 && c === 0) {
+    throw new Error('Invalid seal_type: 000 is an unsupported configuration');
+  }
+
+  return (a << 2) | (b << 1) | c;  // 3-bit value
+}
+
+// Encode metadata (2 bytes, big-endian)
 function encodeMetadata(meta: KeyMetadata): number {
-  return ((meta.version & 0b11) << 6) |          // bits 7-6: version
-         ((meta.masterKeyGroup & 0b11111) << 1); // bits 5-1: master_key_group
-                                                  // bit 0: unused (set to 0)
+  const sealTypeBits = encodeSealType(meta.sealType);
+
+  return ((meta.version & 0b11) << 14) |              // bits 15-14: version
+         ((sealTypeBits & 0b111) << 11) |             // bits 13-11: seal_type
+         ((meta.masterKeyGroup & 0b111) << 8);        // bits 10-8: master_key_group
+                                                       // bits 7-0: unused (set to 0)
 }
 
 // Derive fixed nonce from SECRET_KEY (for AES-128-CTR)
@@ -220,6 +267,7 @@ function generateApiKey(
   serviceType: string,
   options: {
     keyIdx?: number;
+    sealType?: SealType;
     masterKeyGroup?: number;
   } = {}
 ): string {
@@ -228,12 +276,13 @@ function generateApiKey(
 
   const metadata = encodeMetadata({
     version: 0,
+    sealType: options.sealType ?? { network: 'testnet', access: 'open' },
     masterKeyGroup: options.masterKeyGroup ?? 0
   });
-  plaintext[0] = metadata;                      // offset 0: metadata
-  plaintext[1] = options.keyIdx ?? 0;           // offset 1: key_idx
-  plaintext.writeUInt32BE(customerId, 2);       // offset 2-5: customer_id
-  // bytes 6-15: unused (zeros)
+  plaintext.writeUInt16BE(metadata, 0);         // offset 0-1: metadata (2 bytes)
+  plaintext.writeUInt16BE(options.keyIdx ?? 0, 2); // offset 2-3: key_idx (2 bytes)
+  plaintext.writeUInt32BE(customerId, 4);       // offset 4-7: customer_id (4 bytes)
+  // bytes 8-15: unused (zeros)
 
   // 2. Encrypt with AES-128-CTR
   const nonce = getFixedNonce();
@@ -276,12 +325,30 @@ function charToServiceType(char: string): string {
 ### Key Decoding
 
 ```typescript
-// Decode metadata byte
-function decodeMetadata(byte: number): KeyMetadata {
+// Decode seal_type (3 bits)
+function decodeSealType(sealTypeBits: number): SealType {
+  const a = (sealTypeBits >> 2) & 1;  // bit 12 (network)
+  const b = (sealTypeBits >> 1) & 1;  // bit 11 (access)
+  const c = sealTypeBits & 1;         // bit 10 (source)
+
+  const network = a === 1 ? 'mainnet' : 'testnet';
+  const access = b === 1 ? 'permission' : 'open';
+  const source = (b === 1 && c === 1) ? 'imported' :
+                 (b === 1 && c === 0) ? 'derived' :
+                 undefined;
+
+  return { network, access, source } as SealType;
+}
+
+// Decode metadata (2 bytes, big-endian)
+function decodeMetadata(value: number): KeyMetadata {
+  const sealTypeBits = (value >> 11) & 0b111;  // bits 13-11
+
   return {
-    version: (byte >> 6) & 0b11,              // bits 7-6
-    masterKeyGroup: (byte >> 1) & 0b11111,    // bits 5-1
-    // bit 0: unused
+    version: (value >> 14) & 0b11,              // bits 15-14
+    sealType: decodeSealType(sealTypeBits),     // bits 13-11
+    masterKeyGroup: (value >> 8) & 0b111,       // bits 10-8
+    // bits 7-0: unused
   };
 }
 
@@ -331,10 +398,10 @@ function decodeApiKey(apiKey: string): {
   const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);  // 16 bytes
 
   // 7. Extract fields from plaintext
-  const metadata = decodeMetadata(plaintext[0]);     // offset 0
-  const keyIdx = plaintext[1];                        // offset 1
-  const customerId = plaintext.readUInt32BE(2);      // offset 2-5
-  // bytes 6-15: unused (ignored)
+  const metadata = decodeMetadata(plaintext.readUInt16BE(0)); // offset 0-1 (2 bytes)
+  const keyIdx = plaintext.readUInt16BE(2);                   // offset 2-3 (2 bytes)
+  const customerId = plaintext.readUInt32BE(4);               // offset 4-7 (4 bytes)
+  // bytes 8-15: unused (ignored)
 
   return {
     customerId,
@@ -431,9 +498,9 @@ Properties:
    - **If HMAC invalid → reject immediately (authentication failed)**
    - Decrypt ciphertext with AES-128-CTR (using SECRET_KEY and fixed nonce)
 4. Lua script extracts fields from decrypted plaintext:
-   - Extract metadata byte (byte 0) - version and master_key_group
-   - Extract key_idx (byte 1, 8-bit index)
-   - Extract customer_id (bytes 2-5, 32-bit integer)
+   - Extract metadata (bytes 0-1, 16 bits) - version, seal_type, and master_key_group
+   - Extract key_idx (bytes 2-3, 16-bit index)
+   - Extract customer_id (bytes 4-7, 32-bit integer)
 5. HAProxy adds custom headers:
    - `X-Suiftly-Customer-ID: <customer_id>` - For sticky table (rate limiting)
    - `X-Suiftly-Key-Idx: <key_idx>` - For metering/logging
@@ -506,10 +573,27 @@ function get_fixed_nonce()
   return FIXED_NONCE
 end
 
+-- Helper: Convert 2 bytes to uint16 (big-endian)
+function bytes_to_uint16(bytes)
+  local b1, b2 = bytes:byte(1, 2)
+  return bit32.bor(bit32.lshift(b1, 8), b2)
+end
+
+-- Helper: Convert 4 bytes to uint32 (big-endian)
+function bytes_to_uint32(bytes)
+  local b1, b2, b3, b4 = bytes:byte(1, 4)
+  return bit32.bor(
+    bit32.lshift(b1, 24),
+    bit32.lshift(b2, 16),
+    bit32.lshift(b3, 8),
+    b4
+  )
+end
+
 -- Interleave/de-interleave HMAC tag (reversible swap for obfuscation)
 function interleave_hmac_tag(payload, tag)
   -- payload: 26 chars, tag: 4 chars → returns 30 chars
-  -- Swap pattern: positions 1↔26, 6↔29, 9↔27, 13↔28 (0-based)
+  -- Swap pattern: positions 1↔26, 6↔29, 20↔27, 13↔28 (0-based)
 
   local chars = {}
   local combined = payload .. tag
@@ -561,13 +645,23 @@ function validate_and_decode_api_key(api_key)
   local plaintext = cipher:update(ciphertext) .. cipher:final()  -- 16 bytes
 
   -- 7. Extract fields from plaintext
-  local metadata_byte = plaintext:byte(1)
-  local version = bit32.rshift(metadata_byte, 6)  -- bits 7-6
-  local master_key_group = bit32.band(bit32.rshift(metadata_byte, 1), 0x1F)  -- bits 5-1
+  -- Metadata: 2 bytes (big-endian) at offset 0-1
+  local metadata = bytes_to_uint16(plaintext:sub(1, 2))
+  local version = bit32.rshift(metadata, 14)  -- bits 15-14
 
-  local key_idx = plaintext:byte(2)  -- offset 1 (0-based) = byte 2 (1-based)
+  -- Seal type: 3 bits (bits 13-11)
+  local seal_type_bits = bit32.band(bit32.rshift(metadata, 11), 0x7)
+  local seal_network = bit32.band(bit32.rshift(seal_type_bits, 2), 1)  -- bit a (mainnet=1, testnet=0)
+  local seal_access = bit32.band(bit32.rshift(seal_type_bits, 1), 1)   -- bit b (permission=1, open=0)
+  local seal_source = bit32.band(seal_type_bits, 1)                    -- bit c (imported=1, derived=0)
 
-  local customer_id = bytes_to_uint32(plaintext:sub(3, 6))  -- offset 2-5 (0-based) = bytes 3-6 (1-based)
+  local master_key_group = bit32.band(bit32.rshift(metadata, 8), 0x7)  -- bits 10-8
+
+  -- Key index: 2 bytes (big-endian) at offset 2-3
+  local key_idx = bytes_to_uint16(plaintext:sub(3, 4))
+
+  -- Customer ID: 4 bytes (big-endian) at offset 4-7
+  local customer_id = bytes_to_uint32(plaintext:sub(5, 8))
 
   -- 8. Validate customer_id is not 0 (reserved value)
   if customer_id == 0 then
@@ -575,7 +669,8 @@ function validate_and_decode_api_key(api_key)
   end
 
   -- Return extracted fields
-  return tostring(customer_id), tostring(key_idx), tostring(master_key_group)
+  return tostring(customer_id), tostring(key_idx), tostring(master_key_group),
+         tostring(seal_network), tostring(seal_access), tostring(seal_source)
 end
 ```
 
@@ -752,9 +847,12 @@ CREATE TABLE api_keys (
   api_key_id VARCHAR(100) PRIMARY KEY,     -- The full API key string
   customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
   service_type VARCHAR(20) NOT NULL,       -- 'seal', 'grpc', 'graphql'
-  key_version SMALLINT NOT NULL,           -- Extracted from metadata byte (bits 7-6)
-  master_key_group SMALLINT NOT NULL,      -- Extracted from metadata byte (bits 5-1)
-  key_idx SMALLINT NOT NULL,               -- Extracted from byte 1 (0-255), for metering/logging
+  key_version SMALLINT NOT NULL,           -- Extracted from metadata (bits 15-14)
+  seal_network SMALLINT NOT NULL,          -- Extracted from seal_type bit a (1=mainnet, 0=testnet)
+  seal_access SMALLINT NOT NULL,           -- Extracted from seal_type bit b (1=permission, 0=open)
+  seal_source SMALLINT,                    -- Extracted from seal_type bit c (1=imported, 0=derived, NULL=open)
+  master_key_group SMALLINT NOT NULL,      -- Extracted from metadata (bits 10-8, 0-7)
+  key_idx INTEGER NOT NULL,                -- Extracted from bytes 2-3 (0-65535), for metering/logging
   is_active BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMP NOT NULL,
   revoked_at TIMESTAMP NULL,
@@ -767,7 +865,8 @@ CREATE TABLE api_keys (
 
 **Key Points:**
 - `key_idx` makes each API key unique for a given customer (for metering/logging purposes)
-- `master_key_group` groups API keys by master key identity (5 bits = 0-31 groups)
+- `seal_network`, `seal_access`, `seal_source` describe the Seal key configuration
+- `master_key_group` groups API keys by master key identity (3 bits = 0-7 groups)
 - For **Seal service**: Key selection is determined by `package_id` in customer's PTB (not by API key)
 - `key_idx` is sequentially assigned: 0, 1, 2, ... when creating new API keys for a customer
 
@@ -780,22 +879,32 @@ POST /api/v1/services/{service_type}/keys
 Authorization: Bearer <jwt_token>
 
 // Rate limits:
-// - Max 256 keys per customer (0-255 key_idx range)
+// - Max 65536 keys per customer (0-65535 key_idx range, allows index recycling)
 // - Max 5 key creations per hour per customer
 
 Request:
 {
-  "master_key_group": 0        // optional, default: 0 (0-31 valid range)
+  "seal_type": {               // optional, default: { network: "testnet", access: "open" }
+    "network": "mainnet",      // "mainnet" or "testnet"
+    "access": "permission",    // "permission" or "open"
+    "source": "derived"        // "imported" or "derived" (only when access="permission")
+  },
+  "master_key_group": 0        // optional, default: 0 (0-7 valid range)
 }
 
 Response:
 {
   "api_key": "SABCDEFGHIJKLMNOPQRST234567",
-  "key_idx": 0,                // Auto-assigned index (0-255)
+  "key_idx": 0,                // Auto-assigned index (0-65535)
   "created_at": "2025-01-15T10:30:00Z",
   "service_type": "seal",
   "metadata": {
     "version": 0,
+    "seal_type": {
+      "network": "mainnet",
+      "access": "permission",
+      "source": "derived"
+    },
     "master_key_group": 0
   }
 }

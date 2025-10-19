@@ -397,15 +397,10 @@ CREATE INDEX idx_pending_customer ON pending_charges_view(customer_id);
 
 ## API Key System
 
+API keys authenticate service requests and map to customer accounts for billing and rate limiting
+
 **For complete API key design, implementation, and security details, see [API_KEY_DESIGN.md](API_KEY_DESIGN.md).**
 
-**Summary:**
-- API keys authenticate service requests and map to customer accounts
-- Format: 31-character string with service prefix (S=Seal, R=gRPC, G=GraphQL)
-- Encrypted payload contains customer_id, key_idx, master_key_group
-- HMAC-authenticated to prevent forgery
-- Customers can have multiple keys per service (max 256)
-- Extremely fast validation in HAProxy (~180ns per request)
 
 ## Seal Service Specifics
 
@@ -579,9 +574,12 @@ CREATE TABLE api_keys (
   api_key_id VARCHAR(100) PRIMARY KEY,     -- Full API key string (encrypted)
   customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
   service_type VARCHAR(20) NOT NULL,       -- 'seal', 'grpc', 'graphql'
-  key_version SMALLINT NOT NULL,           -- Extracted from metadata byte (bits 7-6)
-  master_key_group SMALLINT NOT NULL,      -- Extracted from metadata byte (bits 5-1)
-  key_idx SMALLINT NOT NULL,               -- Extracted from byte 1 (0-255), for metering/logging
+  key_version SMALLINT NOT NULL,           -- Extracted from metadata (bits 15-14)
+  seal_network SMALLINT NOT NULL,          -- Extracted from seal_type bit a (1=mainnet, 0=testnet)
+  seal_access SMALLINT NOT NULL,           -- Extracted from seal_type bit b (1=permission, 0=open)
+  seal_source SMALLINT,                    -- Extracted from seal_type bit c (1=imported, 0=derived, NULL=open)
+  master_key_group SMALLINT NOT NULL,      -- Extracted from metadata (bits 10-8, 0-7)
+  key_idx INTEGER NOT NULL,                -- Extracted from bytes 2-3 (0-65535), for metering/logging
   is_active BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMP NOT NULL,
   revoked_at TIMESTAMP NULL,
