@@ -20,7 +20,7 @@ Infrastructure (HAProxy, Seal servers) lives in separate **walrus** project.
 
 ## Architecture
 
-**Read [ARCHITECTURE.md](ARCHITECTURE.md) for complete details.**
+**Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for complete details.**
 
 **System diagram:** [docs/Suiftly - Seal Ops.png](docs/Suiftly - Seal Ops.png) shows the complete infrastructure (this repo builds the red NetOps components: SPA, API servers, PostgreSQL, Global Manager).
 
@@ -36,7 +36,7 @@ Initial setup phase - no code scaffolded yet.
 
 ## Development Guidelines
 
-- Follow architecture decisions in ARCHITECTURE.md
+- Follow architecture decisions in docs/ARCHITECTURE.md
 - Keep it simple (rapid development principle)
 - TypeScript strict mode
 - Update this file only when adding commands or major patterns

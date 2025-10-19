@@ -107,7 +107,7 @@ claude mcp add postgres -- npx -y @modelcontextprotocol/server-postgres postgres
 
 **Prerequisites:**
 - PostgreSQL 17 running locally
-- `suiftly_dev` database created (see ARCHITECTURE.md)
+- `suiftly_dev` database created (see ../docs/ARCHITECTURE.md)
 
 **Verification:**
 ```bash
@@ -168,7 +168,7 @@ The `/g` custom command automatically enables Context7 + Serena for every featur
 This expands to:
 - ✅ Use serena for semantic code search
 - ✅ Use context7 for live documentation
-- ✅ Read CLAUDE.md and ARCHITECTURE.md first
+- ✅ Read ../CLAUDE.md and ../docs/ARCHITECTURE.md first
 - ✅ Break down task with TodoWrite
 
 See [.claude/commands/g.md](.claude/commands/g.md) for details.
@@ -217,7 +217,7 @@ Bash: gh pr create, gh issue list, etc.
 
 ### Drizzle MCP: "Config not found" (Optional)
 - This is expected before scaffolding
-- Create project structure first (see ARCHITECTURE.md "Next Steps")
+- Create project structure first (see ../docs/ARCHITECTURE.md "Next Steps")
 
 ---
 
@@ -250,7 +250,7 @@ MCPs are configured in:
 1. ✅ Complete this MCP setup
 2. ✅ Test `/g` command: `/g show me the project structure`
 3. ✅ Verify all MCPs work: `claude mcp list`
-4. 🚀 Ready to scaffold project (see ARCHITECTURE.md "Next Steps")
+4. 🚀 Ready to scaffold project (see ../docs/ARCHITECTURE.md "Next Steps")
 
 ---
 

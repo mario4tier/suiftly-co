@@ -579,7 +579,7 @@ public fun can_charge(account: &EscrowAccount, amount_usd_cents: u64, clock: &Cl
 
 ## Backend Database Schema
 
-**For the complete database schema including all tables, see [CUSTOMER_SERVICE_SCHEMA.md](CUSTOMER_SERVICE_SCHEMA.md#database-schema-summary).**
+**For the complete database schema including all tables, see [CUSTOMER_SERVICE_SCHEMA.md](./CUSTOMER_SERVICE_SCHEMA.md#database-schema-summary).**
 
 This section describes the escrow-specific tables and their usage:
 
@@ -588,7 +588,7 @@ This section describes the escrow-specific tables and their usage:
 **customers** (canonical schema in CUSTOMER_SERVICE_SCHEMA.md)
 - Stores wallet_address, balance_usd_cents, monthly_limit_usd_cents
 - customer_id is a random 32-bit integer (1 to 4,294,967,295)
-- See [CUSTOMER_SERVICE_SCHEMA.md](CUSTOMER_SERVICE_SCHEMA.md#complete-schema) for complete table definition
+- See [CUSTOMER_SERVICE_SCHEMA.md](./CUSTOMER_SERVICE_SCHEMA.md#complete-schema) for complete table definition
 
 **ledger_entries** - All financial transactions
 ```sql

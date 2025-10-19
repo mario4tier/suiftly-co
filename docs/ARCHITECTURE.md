@@ -97,7 +97,7 @@ Infrastructure (HAProxy, Seal servers, control plane) handled by **walrus** proj
 - PostgreSQL is source of truth (no job queue needed)
 - Admin dashboard (port 3001) for debugging and monitoring
 
-**For detailed design, see [GLOBAL_MANAGER_DESIGN.md](GLOBAL_MANAGER_DESIGN.md)**
+**For detailed design, see [GLOBAL_MANAGER_DESIGN.md](./GLOBAL_MANAGER_DESIGN.md)**
 
 ---
 
@@ -270,15 +270,15 @@ suiftly-co/
 
 ## Database Schema
 
-**For complete database schema with all tables, see [CUSTOMER_SERVICE_SCHEMA.md](CUSTOMER_SERVICE_SCHEMA.md#database-schema-summary).**
+**For complete database schema with all tables, see [CUSTOMER_SERVICE_SCHEMA.md](./CUSTOMER_SERVICE_SCHEMA.md#database-schema-summary).**
 
-**For API key format and implementation, see [API_KEY_DESIGN.md](API_KEY_DESIGN.md).**
+**For API key format and implementation, see [API_KEY_DESIGN.md](./API_KEY_DESIGN.md).**
 
 **Key tables used by this architecture:**
 
 - **customers** - customer_id (random 32-bit), wallet_address, escrow_contract_id, balance, monthly limits
 - **service_instances** - instance_id, customer_id, service_type, tier, is_enabled, config (JSONB)
-- **api_keys** - api_key_id, customer_id, service_type, derivation, is_active (see [API_KEY_DESIGN.md](API_KEY_DESIGN.md))
+- **api_keys** - api_key_id, customer_id, service_type, derivation, is_active (see [API_KEY_DESIGN.md](./API_KEY_DESIGN.md))
 - **haproxy_logs** (TimescaleDB hypertable) - timestamp, customer_id, service_type, method, status_code, bytes_out
 - **usage_records** - customer_id, service_type, request_count, window_start, window_end, charged_amount
 - **escrow_transactions** - customer_id, tx_digest, tx_type, amount, timestamp
@@ -290,7 +290,7 @@ SELECT add_retention_policy('haproxy_logs', INTERVAL '90 days');
 SELECT add_compression_policy('haproxy_logs', INTERVAL '7 days');
 ```
 
-**Tiers:** Starter, Pro, Enterprise (see [SEAL_SERVICE_CONFIG.md](SEAL_SERVICE_CONFIG.md) for rate limits and pricing)
+**Tiers:** Starter, Pro, Enterprise (see [SEAL_SERVICE_CONFIG.md](./SEAL_SERVICE_CONFIG.md) for rate limits and pricing)
 
 ---
 

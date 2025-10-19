@@ -1027,9 +1027,9 @@ const stickyKey = customerId.toString();
 ---
 
 **Related Documents:**
-- [CUSTOMER_SERVICE_SCHEMA.md](CUSTOMER_SERVICE_SCHEMA.md) - Customer and service schema
-- [SEAL_SERVICE_CONFIG.md](SEAL_SERVICE_CONFIG.md) - Seal service configuration
-- [GLOBAL_MANAGER_DESIGN.md](GLOBAL_MANAGER_DESIGN.md) - MA_VAULT generation
+- [CUSTOMER_SERVICE_SCHEMA.md](./CUSTOMER_SERVICE_SCHEMA.md) - Customer and service schema
+- [SEAL_SERVICE_CONFIG.md](./SEAL_SERVICE_CONFIG.md) - Seal service configuration
+- [GLOBAL_MANAGER_DESIGN.md](./GLOBAL_MANAGER_DESIGN.md) - MA_VAULT generation
 
 **Document Version**: 1.0
 **Last Updated**: 2025-01-17

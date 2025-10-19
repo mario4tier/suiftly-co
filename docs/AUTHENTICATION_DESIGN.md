@@ -897,7 +897,7 @@ JWT_SECRET=<generated-secret-here>
 DB_ENCRYPTION_KEY=<generated-secret-here>
 ```
 
-**Note:** `DB_ENCRYPTION_KEY` is used for application-level encryption of secrets in the database (API keys, Seal keys, refresh tokens). See [ARCHITECTURE.md - Database Security](ARCHITECTURE.md#database-security) for details.
+**Note:** `DB_ENCRYPTION_KEY` is used for application-level encryption of secrets in the database (API keys, Seal keys, refresh tokens). See [ARCHITECTURE.md - Database Security](./ARCHITECTURE.md#database-security) for details.
 
 **Generating Secure Secrets:**
 ```bash
@@ -1043,6 +1043,6 @@ chmod 600 .env
 - ✅ Refresh tokens encrypted with AES-256-GCM before storage
 - ✅ Master key in `~/.env` (separate from database)
 - ✅ DB backups contain only ciphertext (safe from compromise)
-- See [ARCHITECTURE.md - Database Security](ARCHITECTURE.md#database-security) for complete details
+- See [ARCHITECTURE.md - Database Security](./ARCHITECTURE.md#database-security) for complete details
 
 This gives us the best of both worlds: Web3 security (cryptographic proof) + Web2 convenience (minimal signatures, auto-refresh) + defense-in-depth (encrypted secrets).

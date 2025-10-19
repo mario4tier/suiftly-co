@@ -5,8 +5,8 @@
 Customer-facing platform for Suiftly infrastructure services with a Cloudflare-inspired UX.
 
 **Related Documents:**
-- **[AUTHENTICATION_DESIGN.md](AUTHENTICATION_DESIGN.md)** - Complete authentication architecture, wallet signature flow, and JWT session management
-- **[ESCROW_DESIGN.md](ESCROW_DESIGN.md)** - Complete escrow account architecture, smart contract interface, and financial flows
+- **[AUTHENTICATION_DESIGN.md](./AUTHENTICATION_DESIGN.md)** - Complete authentication architecture, wallet signature flow, and JWT session management
+- **[ESCROW_DESIGN.md](./ESCROW_DESIGN.md)** - Complete escrow account architecture, smart contract interface, and financial flows
 
 **Design Principles:**
 - Clean, professional interface (Cloudflare/Vercel-like)
@@ -106,7 +106,7 @@ Customer-facing platform for Suiftly infrastructure services with a Cloudflare-i
 
 **Wallet-based authentication with JWT sessions.**
 
-See **[AUTHENTICATION_DESIGN.md](AUTHENTICATION_DESIGN.md)** for complete architecture, implementation details, and security considerations.
+See **[AUTHENTICATION_DESIGN.md](./AUTHENTICATION_DESIGN.md)** for complete architecture, implementation details, and security considerations.
 
 ### Summary
 
@@ -1031,7 +1031,7 @@ Total Monthly Fee: $60/month
 
 ### Billing & Currency Model
 
-**See [ESCROW_DESIGN.md](ESCROW_DESIGN.md) for complete escrow account architecture, protections, and flows.**
+**See [ESCROW_DESIGN.md](./ESCROW_DESIGN.md) for complete escrow account architecture, protections, and flows.**
 
 **Summary:**
 
@@ -1039,7 +1039,7 @@ Total Monthly Fee: $60/month
 
 All prices displayed in USD, but payments/deposits/withdrawals use SUI tokens on Sui blockchain.
 
-**Key UX Elements (detailed flows in [ESCROW_DESIGN.md](ESCROW_DESIGN.md)):**
+**Key UX Elements (detailed flows in [ESCROW_DESIGN.md](./ESCROW_DESIGN.md)):**
 
 - **Rate Display:** Always show SUI/USD rate with timestamp and source count
   - Example: "1 SUI = $2.45 (updated 47s ago, from 3 sources)"
@@ -1070,7 +1070,7 @@ All prices displayed in USD, but payments/deposits/withdrawals use SUI tokens on
   - Balance < $10: Warning banner on all pages
   - Balance = $0: Service paused, 7-day grace period
 
-**See [ESCROW_DESIGN.md](ESCROW_DESIGN.md) for:**
+**See [ESCROW_DESIGN.md](./ESCROW_DESIGN.md) for:**
 - Complete deposit/withdrawal flows
 - Smart contract interface
 - Database schema
@@ -1539,7 +1539,7 @@ function calculateMonthlyFee(config: ServiceConfig): number {
 }
 ```
 
-**Note:** Pricing values in the code above are examples. Actual pricing defined in [SEAL_SERVICE_CONFIG.md](SEAL_SERVICE_CONFIG.md#pricing-model). The implementation should import pricing constants from a shared configuration file.
+**Note:** Pricing values in the code above are examples. Actual pricing defined in [SEAL_SERVICE_CONFIG.md](./SEAL_SERVICE_CONFIG.md#pricing-model). The implementation should import pricing constants from a shared configuration file.
 
 ---
 
@@ -2088,7 +2088,7 @@ Once this UI design is approved:
 - ✅ Mock wallet for development (no real Web3 needed initially)
 
 **Pricing Model:**
-- See [SEAL_SERVICE_CONFIG.md](SEAL_SERVICE_CONFIG.md#pricing-model) for complete pricing details
+- See [SEAL_SERVICE_CONFIG.md](./SEAL_SERVICE_CONFIG.md#pricing-model) for complete pricing details
 - Tier base fees, add-on pricing, usage fees, and calculation examples documented there
 - UI implements live pricing calculator based on SEAL_SERVICE_CONFIG.md pricing rules
 

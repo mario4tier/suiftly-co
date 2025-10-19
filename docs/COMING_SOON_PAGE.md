@@ -4,7 +4,7 @@
 
 Placeholder page for gRPC and GraphQL services that are not yet ready for configuration.
 
-**IMPORTANT:** This page is ONLY for gRPC and GraphQL. The Seal service uses the full configuration form designed in [UI_DESIGN.md](../UI_DESIGN.md).
+**IMPORTANT:** This page is ONLY for gRPC and GraphQL. The Seal service uses the full configuration form designed in [UI_DESIGN.md](./UI_DESIGN.md).
 
 ## URL Routes
 
@@ -267,7 +267,7 @@ When user clicks gRPC or GraphQL in sidebar:
 2. Add routes for `/services/grpc` and `/services/graphql`
 3. Download and add illustration to `public/images/`
 4. Update sidebar navigation to link to these pages
-5. Style with Cloudflare cf-ui design tokens (see [UI_DESIGN.md](../UI_DESIGN.md))
+5. Style with Cloudflare cf-ui design tokens (see [UI_DESIGN.md](./UI_DESIGN.md))
 
 **Recommended illustration:**
 - **unDraw "Launch day"** illustration
@@ -283,7 +283,7 @@ Follows Cloudflare cf-ui design system: Open Sans typography, Suiftly orange pri
 
 ## Summary
 
-✅ Placeholder for gRPC & GraphQL only (Seal service uses full config form from [UI_DESIGN.md](../UI_DESIGN.md))
+✅ Placeholder for gRPC & GraphQL only (Seal service uses full config form from [UI_DESIGN.md](./UI_DESIGN.md))
 ✅ Friendly illustration with CTA to Seal service
 ✅ One reusable `ComingSoonPage` component
 

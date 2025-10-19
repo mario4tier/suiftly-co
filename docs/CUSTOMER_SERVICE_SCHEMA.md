@@ -47,7 +47,7 @@ Sui-based escrow smart contract that manages customer funds for service usage.
 
 ### Monthly Spending Authorization
 
-**For complete escrow contract specification and authorization flows, see [ESCROW_DESIGN.md](ESCROW_DESIGN.md#on-chain-protections).**
+**For complete escrow contract specification and authorization flows, see [ESCROW_DESIGN.md](./ESCROW_DESIGN.md#on-chain-protections).**
 
 **Key Concepts:**
 
@@ -160,7 +160,7 @@ async function getCustomerBalance(customerId: number): Promise<bigint> {
 
 For off-chain configuration and management operations, we use wallet-based authentication with JWT sessions.
 
-**See [AUTHENTICATION_DESIGN.md](AUTHENTICATION_DESIGN.md) for complete authentication flow and implementation details.**
+**See [AUTHENTICATION_DESIGN.md](./AUTHENTICATION_DESIGN.md) for complete authentication flow and implementation details.**
 
 **Summary:**
 - Challenge-response signature verification (proof of wallet ownership)
@@ -242,11 +242,11 @@ Each service can be configured independently with different tiers:
 | **Pro** | Enhanced limits and features | Small teams, production apps |
 | **Enterprise** | Highest limits, priority support | Enterprise, high-volume apps |
 
-**For complete tier definitions and rate limits, see [SEAL_SERVICE_CONFIG.md](SEAL_SERVICE_CONFIG.md).**
+**For complete tier definitions and rate limits, see [SEAL_SERVICE_CONFIG.md](./SEAL_SERVICE_CONFIG.md).**
 
 ### Service Billing
 - **Primary model**: Usage-based charging (e.g., requests count)
-- **Tier structure**: See [SEAL_SERVICE_CONFIG.md](SEAL_SERVICE_CONFIG.md) for tier definitions and rate limits
+- **Tier structure**: See [SEAL_SERVICE_CONFIG.md](./SEAL_SERVICE_CONFIG.md) for tier definitions and rate limits
 - **Metering**: Real-time usage tracking against rate limits
 - **Billing cycle**: Charges deducted from escrow account from time to time (usually when at least 5$ accumulated)
 - **Monthly limits**: All charges validated against customer's authorized monthly spending cap
@@ -399,7 +399,7 @@ CREATE INDEX idx_pending_customer ON pending_charges_view(customer_id);
 
 API keys authenticate service requests and map to customer accounts for billing and rate limiting
 
-**For complete API key design, implementation, and security details, see [API_KEY_DESIGN.md](API_KEY_DESIGN.md).**
+**For complete API key design, implementation, and security details, see [API_KEY_DESIGN.md](./API_KEY_DESIGN.md).**
 
 
 ## Seal Service Specifics
@@ -478,7 +478,7 @@ CREATE TABLE service_instances (
 
 **Seal Service Configuration:**
 
-For tier-specific limits, pricing, and rate limiting details, see [SEAL_SERVICE_CONFIG.md](SEAL_SERVICE_CONFIG.md).
+For tier-specific limits, pricing, and rate limiting details, see [SEAL_SERVICE_CONFIG.md](./SEAL_SERVICE_CONFIG.md).
 
 ## Rate Limiting
 
@@ -531,7 +531,7 @@ Each service type has its own namespace for API keys (identified by first charac
 - Service-specific rate limits and billing
 - Clear audit trails per service
 
-See [API_KEY_DESIGN.md](API_KEY_DESIGN.md) for implementation details.
+See [API_KEY_DESIGN.md](./API_KEY_DESIGN.md) for implementation details.
 
 ## Database Schema Summary
 
