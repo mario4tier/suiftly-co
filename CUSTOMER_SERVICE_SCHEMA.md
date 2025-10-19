@@ -58,7 +58,7 @@ Customers must explicitly authorize a maximum monthly spending cap (in USD equiv
 - ✅ Protects customers: Prevents unexpected charges
 - ✅ Protects Suiftly: Clear authorization trail
 
-Default limit: $2,000/month (adjustable from $100 to $50,000)
+Default limit: $200/month (adjustable from $20 to "no limit")
 
 **Off-Chain Validation:**
 
@@ -158,18 +158,15 @@ async function getCustomerBalance(customerId: number): Promise<bigint> {
 
 ### JWT-Based Authentication
 
-For off-chain configuration and management operations, we use JWT tokens:
+For off-chain configuration and management operations, we use wallet-based authentication with JWT sessions.
 
-1. **Wallet Connection**: Customer connects wallet to web dashboard
-2. **Challenge-Response**:
-   - Backend generates a unique challenge message
-   - Customer signs the challenge with their wallet
-   - Backend verifies the signature and issues a JWT
-3. **JWT Token**:
-   - Contains wallet address as the primary identifier
-   - Used for all subsequent off-chain API calls
-   - Short-lived with refresh token capability
-   - Enables configuration changes without blockchain transactions
+**See [AUTHENTICATION_DESIGN.md](AUTHENTICATION_DESIGN.md) for complete authentication flow and implementation details.**
+
+**Summary:**
+- Challenge-response signature verification (proof of wallet ownership)
+- Two-token system: 15-min access token + 30-day refresh token
+- Automatic token refresh (transparent to user)
+- Enables configuration changes without blockchain transactions for each API call
 
 ### Off-Chain Operations
 - Service configuration (tier selection, feature flags)
@@ -243,7 +240,7 @@ Each service can be configured independently with different tiers:
 |------|-------------|--------|
 | **Starter** | Entry-level, lower limits | Individual developers, testing |
 | **Pro** | Enhanced limits and features | Small teams, production apps |
-| **Business** | Highest limits, priority support | Enterprise, high-volume apps |
+| **Enterprise** | Highest limits, priority support | Enterprise, high-volume apps |
 
 **For complete tier definitions and rate limits, see [SEAL_SERVICE_CONFIG.md](SEAL_SERVICE_CONFIG.md).**
 
@@ -400,76 +397,15 @@ CREATE INDEX idx_pending_customer ON pending_charges_view(customer_id);
 
 ## API Key System
 
-**For complete API key design specification, see [API_KEY_DESIGN.md](API_KEY_DESIGN.md).**
+**For complete API key design, implementation, and security details, see [API_KEY_DESIGN.md](API_KEY_DESIGN.md).**
 
-### Quick Overview
-
-API keys authenticate service requests and map to customer accounts for billing and rate limiting.
-
-**Key Format:** `SABCDEFGHIJKLMNOPQRSTUVWXYZ1234` (31 characters)
-- First character: Service type (S=Seal, R=gRPC, G=GraphQL)
-- Next 26 characters: Base32-encoded encrypted payload (16 bytes)
-- Last 4 characters: HMAC-SHA256 tag (hex)
-
-**Security:**
-- **AES-128-CTR encryption**: customer_id, key_idx, master_key_group encrypted
-- **HMAC-SHA256 authentication**: Prevents forgery and tampering
-- **Hardware accelerated**: AES-NI on x86 servers
-
-**Key Properties:**
-- Customer can have multiple API keys per service (max 256)
-- All keys for a customer are functionally equivalent
-- Revocable without affecting other keys
-- Extremely fast HAProxy decrypt + validate (~180ns total)
-- Customer ID extracted after decryption (no database lookup needed)
-
-**Database Schema:**
-
-```sql
--- Customers table
-CREATE TABLE customers (
-  customer_id INTEGER PRIMARY KEY,         -- 32-bit random ID (1 to 4,294,967,295, excludes 0)
-  wallet_address VARCHAR(66) NOT NULL UNIQUE, -- Sui wallet address (0x...)
-  escrow_contract_id VARCHAR(66),          -- On-chain escrow object ID
-  max_monthly_usd_cents BIGINT,            -- Maximum authorized monthly spending (USD cents)
-  current_balance_usd_cents BIGINT,        -- Current balance in USD cents (cached from on-chain)
-  current_month_charged_usd_cents BIGINT,  -- Amount charged this month (USD cents)
-  last_month_charged_usd_cents BIGINT,     -- Amount charged last month (USD cents)
-  current_month_start DATE,                -- Start date of current billing month
-  created_at TIMESTAMP NOT NULL,
-  updated_at TIMESTAMP NOT NULL,
-
-  INDEX idx_wallet (wallet_address),
-  CHECK (customer_id > 0)                  -- Ensure customer_id is never 0
-);
-
--- API Keys table
-CREATE TABLE api_keys (
-  api_key_id VARCHAR(100) PRIMARY KEY,     -- The full API key string
-  customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
-  service_type VARCHAR(20) NOT NULL,       -- 'seal', 'grpc', 'graphql'
-  key_version SMALLINT NOT NULL,           -- Extracted from metadata byte (bits 7-6)
-  master_key_group SMALLINT NOT NULL,      -- Extracted from metadata byte (bits 5-1)
-  key_idx SMALLINT NOT NULL,               -- Extracted from byte 1 (0-255), for metering/logging
-  is_active BOOLEAN NOT NULL DEFAULT true,
-  created_at TIMESTAMP NOT NULL,
-  revoked_at TIMESTAMP NULL,
-
-  INDEX idx_customer_service (customer_id, service_type, is_active),
-  INDEX idx_customer_key_idx (customer_id, key_idx),  -- Lookup for metering/logging
-  UNIQUE (customer_id, key_idx)  -- Ensure key_idx is unique per customer
-);
-```
-
-**For detailed implementation including:**
-- AES-128-CTR encryption and HMAC-SHA256 authentication
-- Complete encrypted payload structure (16 bytes)
-- HAProxy Lua decryption and validation code
-- Security properties and attack prevention
-- API operations (create, list, revoke)
-- Performance benchmarks (~180ns per request)
-
-See [API_KEY_DESIGN.md](API_KEY_DESIGN.md).
+**Summary:**
+- API keys authenticate service requests and map to customer accounts
+- Format: 31-character string with service prefix (S=Seal, R=gRPC, G=GraphQL)
+- Encrypted payload contains customer_id, key_idx, master_key_group
+- HMAC-authenticated to prevent forgery
+- Customers can have multiple keys per service (max 256)
+- Extremely fast validation in HAProxy (~180ns per request)
 
 ## Seal Service Specifics
 
@@ -523,9 +459,10 @@ CREATE TABLE seal_keys (
 **Additional Seal Keys:**
 
 - Customers can purchase additional Seal keys beyond the first
-- Each additional key incurs a one-time fee
+- Each additional key incurs a monthly fee
 - All Seal keys for a customer have equal privileges
-- Use cases: Key rotation, separate keys per environment, backup keys
+- Use cases: Separate keys per environment (dev/staging/prod), organizational isolation, disaster recovery backup
+- **Important:** Seal keys are NOT rotated - they must be preserved to decrypt existing data
 
 ### Seal Service Configuration
 
@@ -534,7 +471,7 @@ CREATE TABLE service_instances (
   instance_id UUID PRIMARY KEY,
   customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
   service_type VARCHAR(20) NOT NULL,        -- 'seal'
-  tier VARCHAR(20) NOT NULL,                -- 'basic', 'pro', 'business'
+  tier VARCHAR(20) NOT NULL,                -- 'starter', 'pro', 'enterprise'
   is_enabled BOOLEAN NOT NULL DEFAULT true,
   config JSONB,                             -- Service-specific configuration
   enabled_at TIMESTAMP,
@@ -593,51 +530,13 @@ Request with API Key C (Customer 99, Seal Service)
 
 ## Service-Specific API Keys
 
-### Independence Across Services
-
-Each service type has its own namespace for API keys:
-
-```
-Customer X:
-  - Seal API Keys: SABCDEFGHIJKLMNOPQRST234567, SEFGHIJKLMNOPQRSTUV345678
-  - gRPC API Keys: RIJKLMNOPQRSTUVWXYZ456789, RMNOPQRSTUVWXYZABC567890
-  - GraphQL API Keys: GQRSTUVWXYZABCDEFGH678901
-
-Each service type has separate:
-  - Rate limit buckets
-  - Billing meters
-  - Configuration
-  - Sticky table keys
-```
-
-**Customer Sticky Key Generation:**
-
-```typescript
-// For single service (current): use customer_id directly
-const stickyKey = customerId.toString();
-
-// For multi-service (future): append service byte
-const SERVICE_BYTES = {
-  seal: 0x01,
-  grpc: 0x02,
-  graphql: 0x03
-};
-
-const sealStickyKey = customerId + ":" + SERVICE_BYTES.seal;
-const grpcStickyKey = customerId + ":" + SERVICE_BYTES.grpc;
-const graphqlStickyKey = customerId + ":" + SERVICE_BYTES.graphql;
-
-// Examples:
-// "42:1" → Customer 42, Seal service
-// "42:2" → Customer 42, gRPC service
-// "99:1" → Customer 99, Seal service
-```
-
-**Benefits:**
+Each service type has its own namespace for API keys (identified by first character: S=Seal, R=gRPC, G=GraphQL). This provides:
 - Service isolation (compromise of one doesn't affect others)
 - Independent key rotation per service
 - Service-specific rate limits and billing
 - Clear audit trails per service
+
+See [API_KEY_DESIGN.md](API_KEY_DESIGN.md) for implementation details.
 
 ## Database Schema Summary
 
@@ -675,9 +574,9 @@ CREATE TABLE service_instances (
   UNIQUE (customer_id, service_type)
 );
 
--- API keys for service authentication
+-- API keys for service authentication (see API_KEY_DESIGN.md for format and encryption details)
 CREATE TABLE api_keys (
-  api_key_id VARCHAR(100) PRIMARY KEY,     -- Full API key string
+  api_key_id VARCHAR(100) PRIMARY KEY,     -- Full API key string (encrypted)
   customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
   service_type VARCHAR(20) NOT NULL,       -- 'seal', 'grpc', 'graphql'
   key_version SMALLINT NOT NULL,           -- Extracted from metadata byte (bits 7-6)
@@ -688,8 +587,8 @@ CREATE TABLE api_keys (
   revoked_at TIMESTAMP NULL,
 
   INDEX idx_customer_service (customer_id, service_type, is_active),
-  INDEX idx_customer_key_idx (customer_id, key_idx),  -- Lookup for metering/logging
-  UNIQUE (customer_id, key_idx)  -- Ensure key_idx is unique per customer
+  INDEX idx_customer_key_idx (customer_id, key_idx),
+  UNIQUE (customer_id, key_idx)
 );
 
 -- Seal keys (Seal service specific)

@@ -75,7 +75,7 @@ Infrastructure (HAProxy, Seal servers, control plane) handled by **walrus** proj
 **Responsibilities:**
 1. **Metering** - Aggregate HAProxy logs into usage metrics
 2. **Billing** - Calculate customer charges from usage data
-3. **Vault Generation** - Generate MA_VAULT (customer API keys, rate limits, status)
+3. **Vault Generation** - Generate MA_VAULT (customer API keys, rate limits, tier configs)
 4. **Data Cleanup** - Remove old logs and maintain database health
 
 **Process (each cycle):**
@@ -355,6 +355,24 @@ npm run db:seed
 ```
 
 **Daily Development Workflow:**
+
+**Background Mode (Recommended - Claude Code can observe output):**
+```bash
+# Start dev servers in background (Claude Code observes hot reloads, errors, logs)
+npm run dev --prefix apps/api &
+npm run dev --prefix apps/webapp &
+
+# Optional: Global Manager (typically runs as systemd daemon in production)
+npm run dev --prefix services/global-manager &
+
+# Claude Code can monitor output using BashOutput tool
+# This accelerates development by detecting errors, confirming hot reloads, analyzing logs
+
+# Run tests (uses suiftly_test database)
+npm run test
+```
+
+**Manual Mode (Alternative - direct terminal control):**
 ```bash
 # Terminal 1: API
 cd apps/api && npm run dev
@@ -362,11 +380,8 @@ cd apps/api && npm run dev
 # Terminal 2: WebApp
 cd apps/webapp && npm run dev
 
-# Terminal 3: Global Manager (optional, typically runs as systemd daemon)
+# Terminal 3: Global Manager (optional)
 cd services/global-manager && npm run dev
-
-# Run tests (uses suiftly_test database)
-npm run test
 ```
 
 **Database Management:**
@@ -744,13 +759,256 @@ See [.claude/commands/g.md](.claude/commands/g.md) for command definition.
 
 ## Security
 
-- JWT (15min access, 7d refresh, HttpOnly cookies)
+- JWT (15min access, 30d refresh, HttpOnly cookies)
 - Wallet signature verification (nonce-based challenge)
 - Rate limiting (per-user/IP)
 - Zod validation (all inputs)
 - Drizzle ORM (parameterized queries)
+- Application-level encryption for secrets (see Database Security below)
 - Never store private keys
 - pg_dump backups daily → R2
+
+---
+
+## Database Security
+
+**Threat Model:** If attacker gains access to database backup, they must not be able to extract customer secrets (Seal API keys, generated API keys, refresh tokens).
+
+### Encryption Strategy: Application-Level
+
+**Use AES-256-GCM encryption at application layer** before storing secrets in PostgreSQL.
+
+**Why Application-Level:**
+- ✅ Protects against DB backup compromise (attacker gets ciphertext)
+- ✅ Protects against DB user credential theft
+- ✅ Works with any database (portable)
+- ✅ Selective encryption (only sensitive fields)
+- ✅ Minimal performance overhead (hardware-accelerated)
+
+**What to Encrypt:**
+- ✅ Seal API keys (customer-imported keys)
+- ✅ Generated API keys (for customer services)
+- ✅ Refresh tokens (30-day authentication tokens)
+
+**What NOT to Encrypt:**
+- ❌ Wallet addresses (public blockchain data)
+- ❌ Service configurations (non-sensitive)
+- ❌ Usage metrics and logs (not secret)
+- ❌ Nonces (temporary, 5-minute expiry)
+
+### Implementation
+
+**Master Key Storage:**
+
+Master encryption key stored in `~/.env` alongside JWT_SECRET:
+
+```bash
+# /home/apiservers/.env (production)
+JWT_SECRET=<32-byte-base64-secret>
+DB_ENCRYPTION_KEY=<32-byte-base64-secret>
+```
+
+**Generate master key (one-time setup):**
+```bash
+# As apiservers user
+echo "DB_ENCRYPTION_KEY=$(openssl rand -base64 32)" >> ~/.env
+chmod 600 ~/.env
+```
+
+**Encryption Helper:**
+
+```typescript
+// packages/shared/src/lib/encryption.ts
+import { createCipheriv, createDecipheriv, randomBytes } from 'crypto'
+
+/**
+ * Encrypt secret using AES-256-GCM with random IV.
+ * Returns: "IV:authTag:ciphertext" (all base64-encoded)
+ */
+export function encryptSecret(plaintext: string): string {
+  const key = Buffer.from(process.env.DB_ENCRYPTION_KEY!, 'base64')
+  const iv = randomBytes(16) // Random IV per secret
+  const cipher = createCipheriv('aes-256-gcm', key, iv)
+
+  let encrypted = cipher.update(plaintext, 'utf8', 'base64')
+  encrypted += cipher.final('base64')
+  const authTag = cipher.getAuthTag().toString('base64')
+
+  // Store all three components (needed for decryption)
+  return `${iv.toString('base64')}:${authTag}:${encrypted}`
+}
+
+/**
+ * Decrypt secret encrypted with encryptSecret().
+ */
+export function decryptSecret(ciphertext: string): string {
+  const key = Buffer.from(process.env.DB_ENCRYPTION_KEY!, 'base64')
+  const [ivB64, authTagB64, encryptedB64] = ciphertext.split(':')
+
+  const iv = Buffer.from(ivB64, 'base64')
+  const authTag = Buffer.from(authTagB64, 'base64')
+  const decipher = createDecipheriv('aes-256-gcm', key, iv)
+  decipher.setAuthTag(authTag)
+
+  let decrypted = decipher.update(encryptedB64, 'base64', 'utf8')
+  decrypted += decipher.final('utf8')
+
+  return decrypted
+}
+```
+
+**Usage in API Code:**
+
+```typescript
+// Storing API key (encrypt before insert)
+import { encryptSecret, decryptSecret } from '@suiftly/shared/encryption'
+
+const encryptedKey = encryptSecret(apiKey)
+await db.insert(apiKeys).values({
+  ownerAddress: user.address,
+  keyEncrypted: encryptedKey, // Stored as ciphertext
+})
+
+// Retrieving API key (decrypt after query)
+const record = await db.query.apiKeys.findFirst({
+  where: eq(apiKeys.id, keyId)
+})
+const plainKey = decryptSecret(record.keyEncrypted)
+```
+
+**Database Schema Convention:**
+
+Use `_encrypted` suffix to indicate encrypted columns:
+
+```typescript
+// packages/database/src/schema/api_keys.ts
+export const apiKeys = pgTable('api_keys', {
+  id: serial('id').primaryKey(),
+  ownerAddress: text('owner_address').notNull(),
+  keyEncrypted: text('key_encrypted').notNull(), // Encrypted
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+})
+
+export const sealApiKeys = pgTable('seal_api_keys', {
+  id: serial('id').primaryKey(),
+  ownerAddress: text('owner_address').notNull(),
+  sealKeyEncrypted: text('seal_key_encrypted').notNull(), // Encrypted
+  importedAt: timestamp('imported_at').defaultNow().notNull(),
+})
+
+export const refreshTokens = pgTable('refresh_tokens', {
+  id: serial('id').primaryKey(),
+  address: text('address').notNull(),
+  tokenEncrypted: text('token_encrypted').notNull(), // Encrypted
+  expiresAt: timestamp('expires_at').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+})
+```
+
+### Key Management
+
+**Production Setup:**
+```bash
+# As root or sudo user
+sudo -u apiservers bash
+cd ~
+
+# Generate both secrets
+echo "JWT_SECRET=$(openssl rand -base64 32)" > .env
+echo "DB_ENCRYPTION_KEY=$(openssl rand -base64 32)" >> .env
+chmod 600 .env
+
+# Verify
+cat .env
+exit
+```
+
+**Development Setup:**
+```bash
+# As developer user
+cd ~
+echo "JWT_SECRET=$(openssl rand -base64 32)" > .env
+echo "DB_ENCRYPTION_KEY=$(openssl rand -base64 32)" >> .env
+chmod 600 .env
+```
+
+**Loading in Application:**
+```typescript
+// packages/api/src/config.ts
+import * as dotenv from 'dotenv'
+import * as os from 'os'
+import * as path from 'path'
+
+// Load from home directory
+dotenv.config({ path: path.join(os.homedir(), '.env') })
+
+if (!process.env.JWT_SECRET || !process.env.DB_ENCRYPTION_KEY) {
+  throw new Error('Missing required secrets in ~/.env')
+}
+
+export const config = {
+  jwtSecret: process.env.JWT_SECRET,
+  dbEncryptionKey: process.env.DB_ENCRYPTION_KEY,
+  // ... other config
+}
+```
+
+### Security Properties
+
+**AES-256-GCM Advantages:**
+- ✅ **Authenticated encryption** - Detects tampering (authTag verification)
+- ✅ **Random IV per secret** - Prevents pattern analysis (same plaintext → different ciphertext)
+- ✅ **Hardware acceleration** - AES-NI on modern CPUs (minimal overhead)
+- ✅ **Industry standard** - NIST-recommended, widely audited
+
+**Performance:**
+- Encryption: ~0.1ms per secret (negligible)
+- Decryption: ~0.1ms per secret (negligible)
+- Hardware-accelerated on modern CPUs (AES-NI instruction set)
+- No noticeable impact on API latency
+
+**Threat Protection:**
+
+| Attack Vector | Protected? | Notes |
+|--------------|-----------|-------|
+| DB backup stolen | ✅ Yes | Only ciphertext exposed |
+| DB user credentials leaked | ✅ Yes | Master key separate from DB |
+| Application server compromised | ⚠️ Partial | Attacker needs ~/.env access |
+| SQL injection | ✅ Yes | Drizzle ORM prevents injection |
+| Insider with DB access | ✅ Yes | Cannot decrypt without master key |
+
+**Key Rotation (Future):**
+
+To rotate encryption key without downtime:
+1. Add new key version to `~/.env` (`DB_ENCRYPTION_KEY_V2`)
+2. Prefix ciphertext with version: `v2:IV:authTag:ciphertext`
+3. Decrypt with appropriate key based on version prefix
+4. Re-encrypt old secrets with new key (background job)
+5. Remove old key when migration complete
+
+### Backup Security
+
+**Database backups are safe to store remotely:**
+
+```bash
+# Backup contains only ciphertext
+pg_dump suiftly_prod > backup.sql
+
+# Upload to Cloudflare R2 (safe - attacker gets useless ciphertext)
+rclone copy backup.sql r2:suiftly-backups/
+```
+
+**Master key backed up separately:**
+- ❌ NEVER store master key with database backup
+- ✅ Store in password manager (1Password, Bitwarden)
+- ✅ Store encrypted offline backup (USB drive, safe)
+- ✅ Document key recovery process
+
+**Disaster Recovery:**
+1. Restore database from R2 backup → ciphertext restored
+2. Provision new server with `provision-server.py`
+3. Restore master key to `~/.env` (from password manager)
+4. Start API servers → decryption works normally
 
 ---
 
