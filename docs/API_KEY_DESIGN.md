@@ -122,7 +122,7 @@ Seal Service Plaintext Payload (16 bytes):
 
 Key Metadata (2 bytes, 16 bits) - BYTES 0-1:
   ┌────────┬───────────┬──────────────────┬────────┐
-  │ version│ seal_type │ proc_group │ unused │
+  │ version│ seal_type │ proc_group       │ unused │
   │ 2 bits │ 3 bits    │ 3 bits           │ 8 bits │
   └────────┴───────────┴──────────────────┴────────┘
 
