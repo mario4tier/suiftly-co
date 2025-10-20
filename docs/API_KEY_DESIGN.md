@@ -122,7 +122,7 @@ Seal Service Plaintext Payload (16 bytes):
 
 Key Metadata (2 bytes, 16 bits) - BYTES 0-1:
   ┌────────┬───────────┬──────────────────┬────────┐
-  │ version│ seal_type │ master_key_group │ unused │
+  │ version│ seal_type │ proc_group │ unused │
   │ 2 bits │ 3 bits    │ 3 bits           │ 8 bits │
   └────────┴───────────┴──────────────────┴────────┘
 
@@ -187,7 +187,7 @@ interface SealType {
 interface KeyMetadata {
   version: number;         // 0-3 (2 bits) - currently 0
   sealType: SealType;      // 3 bits (abc) - seal key configuration
-  masterKeyGroup: number;  // 0-7 (3 bits) - groups API keys by master key
+  procGroup: number;       // 0-7 (3 bits) - process group identifier (currently always 1)
   // 8 bits unused (reserved for future use)
 }
 
@@ -221,7 +221,7 @@ function encodeMetadata(meta: KeyMetadata): number {
 
   return ((meta.version & 0b11) << 14) |              // bits 15-14: version
          ((sealTypeBits & 0b111) << 11) |             // bits 13-11: seal_type
-         ((meta.masterKeyGroup & 0b111) << 8);        // bits 10-8: master_key_group
+         ((meta.procGroup & 0b111) << 8);             // bits 10-8: proc_group
                                                        // bits 7-0: unused (set to 0)
 }
 
@@ -268,7 +268,7 @@ function generateApiKey(
   options: {
     keyIdx?: number;
     sealType?: SealType;
-    masterKeyGroup?: number;
+    procGroup?: number;
   } = {}
 ): string {
   // 1. Build 16-byte plaintext payload
@@ -277,7 +277,7 @@ function generateApiKey(
   const metadata = encodeMetadata({
     version: 0,
     sealType: options.sealType ?? { network: 'testnet', access: 'open' },
-    masterKeyGroup: options.masterKeyGroup ?? 0
+    procGroup: options.procGroup ?? 1
   });
   plaintext.writeUInt16BE(metadata, 0);         // offset 0-1: metadata (2 bytes)
   plaintext.writeUInt16BE(options.keyIdx ?? 0, 2); // offset 2-3: key_idx (2 bytes)
@@ -347,7 +347,7 @@ function decodeMetadata(value: number): KeyMetadata {
   return {
     version: (value >> 14) & 0b11,              // bits 15-14
     sealType: decodeSealType(sealTypeBits),     // bits 13-11
-    masterKeyGroup: (value >> 8) & 0b111,       // bits 10-8
+    procGroup: (value >> 8) & 0b111,            // bits 10-8
     // bits 7-0: unused
   };
 }
@@ -498,13 +498,13 @@ Properties:
    - **If HMAC invalid → reject immediately (authentication failed)**
    - Decrypt ciphertext with AES-128-CTR (using SECRET_KEY and fixed nonce)
 4. Lua script extracts fields from decrypted plaintext:
-   - Extract metadata (bytes 0-1, 16 bits) - version, seal_type, and master_key_group
+   - Extract metadata (bytes 0-1, 16 bits) - version, seal_type, and proc_group
    - Extract key_idx (bytes 2-3, 16-bit index)
    - Extract customer_id (bytes 4-7, 32-bit integer)
 5. HAProxy adds custom headers:
    - `X-Suiftly-Customer-ID: <customer_id>` - For sticky table (rate limiting)
    - `X-Suiftly-Key-Idx: <key_idx>` - For metering/logging
-   - `X-Suiftly-Master-Key-Group: <master_key_group>` - For grouping by master key
+   - `X-Suiftly-Proc-Group: <proc_group>` - Process group identifier (for routing to process groups)
 6. HAProxy forwards request to Seal key server backend
 7. Seal key server processes standard `/v1/fetch_key` request:
    - **Customer provides PTB (Programmable Transaction Block)** calling `seal_approve*` function
@@ -517,8 +517,8 @@ Properties:
 **Simplified Flow:**
 ```
 1. HAProxy validates API key (HMAC check + AES-128-CTR decryption)
-2. HAProxy extracts customer_id, key_idx, master_key_group from decrypted plaintext
-3. HAProxy adds headers: X-Suiftly-Customer-ID, X-Suiftly-Key-Idx, X-Suiftly-Master-Key-Group
+2. HAProxy extracts customer_id, key_idx, proc_group from decrypted plaintext
+3. HAProxy adds headers: X-Suiftly-Customer-ID, X-Suiftly-Key-Idx, X-Suiftly-Proc-Group
 4. HAProxy routes to Seal key server
 5. Seal server extracts package_id from customer's PTB
 6. Seal server looks up: pkg_id_to_key[package_id] → master_key
@@ -655,7 +655,7 @@ function validate_and_decode_api_key(api_key)
   local seal_access = bit32.band(bit32.rshift(seal_type_bits, 1), 1)   -- bit b (permission=1, open=0)
   local seal_source = bit32.band(seal_type_bits, 1)                    -- bit c (imported=1, derived=0)
 
-  local master_key_group = bit32.band(bit32.rshift(metadata, 8), 0x7)  -- bits 10-8
+  local proc_group = bit32.band(bit32.rshift(metadata, 8), 0x7)  -- bits 10-8
 
   -- Key index: 2 bytes (big-endian) at offset 2-3
   local key_idx = bytes_to_uint16(plaintext:sub(3, 4))
@@ -669,7 +669,7 @@ function validate_and_decode_api_key(api_key)
   end
 
   -- Return extracted fields
-  return tostring(customer_id), tostring(key_idx), tostring(master_key_group),
+  return tostring(customer_id), tostring(key_idx), tostring(proc_group),
          tostring(seal_network), tostring(seal_access), tostring(seal_source)
 end
 ```
@@ -749,7 +749,7 @@ systemctl reload haproxy
 ### Encryption and Authentication (Defense in Depth)
 
 **AES-128-CTR Encryption:**
-- **Confidentiality**: customer_id, key_idx, and master_key_group are encrypted
+- **Confidentiality**: customer_id, key_idx, and proc_group are encrypted
 - **Cannot read payload without SECRET_KEY**
 - Even if API key is exposed in logs, data remains confidential
 - Hardware-accelerated AES-NI for performance
@@ -835,7 +835,7 @@ systemctl reload haproxy
 - Treat SECRET_KEY as a permanent, immutable secret
 
 **Key Isolation Strategy:**
-- Use `master_key_group` field (0-31) for logical key separation
+- Use `proc_group` field (0-7) for routing to different process groups
 - Different groups for different security domains
 - Does not require SECRET_KEY rotation
 
@@ -851,7 +851,7 @@ CREATE TABLE api_keys (
   seal_network SMALLINT NOT NULL,          -- Extracted from seal_type bit a (1=mainnet, 0=testnet)
   seal_access SMALLINT NOT NULL,           -- Extracted from seal_type bit b (1=permission, 0=open)
   seal_source SMALLINT,                    -- Extracted from seal_type bit c (1=imported, 0=derived, NULL=open)
-  master_key_group SMALLINT NOT NULL,      -- Extracted from metadata (bits 10-8, 0-7)
+  proc_group SMALLINT NOT NULL,            -- Extracted from metadata (bits 10-8, 0-7)
   key_idx INTEGER NOT NULL,                -- Extracted from bytes 2-3 (0-65535), for metering/logging
   is_active BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMP NOT NULL,
@@ -866,7 +866,7 @@ CREATE TABLE api_keys (
 **Key Points:**
 - `key_idx` makes each API key unique for a given customer (for metering/logging purposes)
 - `seal_network`, `seal_access`, `seal_source` describe the Seal key configuration
-- `master_key_group` groups API keys by master key identity (3 bits = 0-7 groups)
+- `proc_group` identifies the process group for routing (3 bits = 0-7 groups, currently always 1)
 - For **Seal service**: Key selection is determined by `package_id` in customer's PTB (not by API key)
 - `key_idx` is sequentially assigned: 0, 1, 2, ... when creating new API keys for a customer
 
@@ -889,7 +889,7 @@ Request:
     "access": "permission",    // "permission" or "open"
     "source": "derived"        // "imported" or "derived" (only when access="permission")
   },
-  "master_key_group": 0        // optional, default: 0 (0-7 valid range)
+  "proc_group": 1              // optional, default: 1 (0-7 valid range, currently always 1)
 }
 
 Response:
@@ -905,7 +905,7 @@ Response:
       "access": "permission",
       "source": "derived"
     },
-    "master_key_group": 0
+    "proc_group": 1
   }
 }
 
@@ -929,14 +929,14 @@ Response:
     {
       "key_prefix": "SABCD...234567",
       "key_idx": 0,
-      "master_key_group": 0,
+      "proc_group": 1,
       "created_at": "2025-01-15T10:30:00Z",
       "is_active": true
     },
     {
       "key_prefix": "SEFGH...567234",
       "key_idx": 1,
-      "master_key_group": 0,
+      "proc_group": 1,
       "created_at": "2025-01-16T14:22:00Z",
       "is_active": true
     }
