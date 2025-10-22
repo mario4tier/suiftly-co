@@ -71,8 +71,8 @@ ciphertext to obscure the structure and make reverse engineering slower.
 
 **Nonce Strategy:** Fixed nonce derived from SECRET_KEY
 - Deterministic: `HMAC-SHA256(SECRET_KEY, "SUIFTLY_API_KEY_NONCE_V1")` → first 16 bytes
-- Safe for CTR mode: Each payload is unique (customer_id + key_idx combination)
-- No nonce reuse risk: Unique plaintexts produce unique ciphertexts
+- Safe for CTR mode: Each API key generates unique ciphertext (with HMAC authentication)
+- No nonce reuse risk: HMAC authentication prevents key reuse attacks
 - No storage overhead: Nonce not included in API key
 
 ### HMAC Interleaving (Obfuscation)
@@ -116,7 +116,7 @@ Result: Hex digits (1,2,3,4) now appear scattered in positions 1, 6, 13, 20
 ```
 Seal Service Plaintext Payload (16 bytes):
   ┌──────────────┬─────────┬─────────────┬─────────┐
-  │ key_metadata │ key_idx │ customer_id │  unused │
+  │ key_metadata │ unused  │ customer_id │  unused │
   │ 2 bytes      │ 2 bytes │ 4 bytes     │ 8 bytes │
   └──────────────┴─────────┴─────────────┴─────────┘
 
@@ -152,13 +152,9 @@ Key Metadata (2 bytes, 16 bits) - BYTES 0-1:
   - Master Key Group: 0-7 (3 bits) - Groups API keys by master key identity
   - Unused: Set to 0 (8 bits reserved for future use)
 
-Key Index (2 bytes, 16 bits) - BYTES 2-3:
-  - 16-bit index (0-65535 API keys per customer)
-  - Allows for index recycling when combined with rate limiting and pruning
-  - Makes API key unique for given customer_id
-  - Used for metering and logging (distinguishes different API keys)
-  - NOT related to Seal key selection (package_id in PTB selects Seal key)
-  - Sequentially assigned: 0, 1, 2, ... when creating new API keys
+Unused (2 bytes) - BYTES 2-3:
+  - Set to zero
+  - Available for future protocol extensions
 
 Customer ID (4 bytes, 32 bits) - BYTES 4-7:
   - 32-bit random integer (1 to 4,294,967,295)
@@ -193,9 +189,8 @@ interface KeyMetadata {
 
 interface ApiKeyPayload {
   metadata: KeyMetadata;  // 2 bytes (offset 0-1)
-  keyIdx: number;         // 2 bytes (offset 2-3, 0-65535)
   customerId: number;     // 4 bytes (offset 4-7)
-  unused: Buffer;         // 8 bytes (offset 8-15, zeros)
+  unused: Buffer;         // 10 bytes (offset 2-3, 8-15, zeros)
 }
 
 // Encode seal_type (3 bits)
@@ -266,7 +261,6 @@ function generateApiKey(
   customerId: number,
   serviceType: string,
   options: {
-    keyIdx?: number;
     sealType?: SealType;
     procGroup?: number;
   } = {}
@@ -280,7 +274,7 @@ function generateApiKey(
     procGroup: options.procGroup ?? 1
   });
   plaintext.writeUInt16BE(metadata, 0);         // offset 0-1: metadata (2 bytes)
-  plaintext.writeUInt16BE(options.keyIdx ?? 0, 2); // offset 2-3: key_idx (2 bytes)
+  // bytes 2-3: unused (zeros)
   plaintext.writeUInt32BE(customerId, 4);       // offset 4-7: customer_id (4 bytes)
   // bytes 8-15: unused (zeros)
 
@@ -357,7 +351,6 @@ function decodeApiKey(apiKey: string): {
   customerId: number;
   serviceType: string;
   metadata: KeyMetadata;
-  keyIdx: number;
 } {
   // 1. Extract service char (first character)
   const serviceChar = apiKey[0];
@@ -399,7 +392,7 @@ function decodeApiKey(apiKey: string): {
 
   // 7. Extract fields from plaintext
   const metadata = decodeMetadata(plaintext.readUInt16BE(0)); // offset 0-1 (2 bytes)
-  const keyIdx = plaintext.readUInt16BE(2);                   // offset 2-3 (2 bytes)
+  // bytes 2-3: unused (ignored)
   const customerId = plaintext.readUInt32BE(4);               // offset 4-7 (4 bytes)
   // bytes 8-15: unused (ignored)
 
@@ -407,7 +400,6 @@ function decodeApiKey(apiKey: string): {
     customerId,
     serviceType,
     metadata,
-    keyIdx,
   };
 }
 ```
@@ -499,11 +491,9 @@ Properties:
    - Decrypt ciphertext with AES-128-CTR (using SECRET_KEY and fixed nonce)
 4. Lua script extracts fields from decrypted plaintext:
    - Extract metadata (bytes 0-1, 16 bits) - version, seal_type, and proc_group
-   - Extract key_idx (bytes 2-3, 16-bit index)
    - Extract customer_id (bytes 4-7, 32-bit integer)
 5. HAProxy adds custom headers:
    - `X-Suiftly-Customer-ID: <customer_id>` - For sticky table (rate limiting)
-   - `X-Suiftly-Key-Idx: <key_idx>` - For metering/logging
    - `X-Suiftly-Proc-Group: <proc_group>` - Process group identifier (for routing to process groups)
 6. HAProxy forwards request to Seal key server backend
 7. Seal key server processes standard `/v1/fetch_key` request:
@@ -517,8 +507,8 @@ Properties:
 **Simplified Flow:**
 ```
 1. HAProxy validates API key (HMAC check + AES-128-CTR decryption)
-2. HAProxy extracts customer_id, key_idx, proc_group from decrypted plaintext
-3. HAProxy adds headers: X-Suiftly-Customer-ID, X-Suiftly-Key-Idx, X-Suiftly-Proc-Group
+2. HAProxy extracts customer_id, proc_group from decrypted plaintext
+3. HAProxy adds headers: X-Suiftly-Customer-ID, X-Suiftly-Proc-Group
 4. HAProxy routes to Seal key server
 5. Seal server extracts package_id from customer's PTB
 6. Seal server looks up: pkg_id_to_key[package_id] → master_key
@@ -549,7 +539,6 @@ server_mode: !Permissioned
 - Customer provides `package_id` in their PTB (identifies their application)
 - Seal server maps: `pkg_id_to_key[package_id]` → master_key
 - Each customer's `package_id`(s) map to their Seal key master key
-- API key's `key_idx` is for metering/logging only (not key selection)
 
 **No database lookup required for authentication!** Key selection via `package_id` in customer's PTB.
 
@@ -657,9 +646,6 @@ function validate_and_decode_api_key(api_key)
 
   local proc_group = bit32.band(bit32.rshift(metadata, 8), 0x7)  -- bits 10-8
 
-  -- Key index: 2 bytes (big-endian) at offset 2-3
-  local key_idx = bytes_to_uint16(plaintext:sub(3, 4))
-
   -- Customer ID: 4 bytes (big-endian) at offset 4-7
   local customer_id = bytes_to_uint32(plaintext:sub(5, 8))
 
@@ -669,7 +655,7 @@ function validate_and_decode_api_key(api_key)
   end
 
   -- Return extracted fields
-  return tostring(customer_id), tostring(key_idx), tostring(proc_group),
+  return tostring(customer_id), tostring(proc_group),
          tostring(seal_network), tostring(seal_access), tostring(seal_source)
 end
 ```
@@ -749,7 +735,7 @@ systemctl reload haproxy
 ### Encryption and Authentication (Defense in Depth)
 
 **AES-128-CTR Encryption:**
-- **Confidentiality**: customer_id, key_idx, and proc_group are encrypted
+- **Confidentiality**: customer_id and proc_group are encrypted
 - **Cannot read payload without SECRET_KEY**
 - Even if API key is exposed in logs, data remains confidential
 - Hardware-accelerated AES-NI for performance
@@ -782,8 +768,8 @@ systemctl reload haproxy
 
 ### Security Properties
 
-1. **Encryption**: Customer data (customer_id, key_idx) is encrypted
-   - **AES-128-CTR** with fixed nonce (safe: unique plaintexts)
+1. **Encryption**: Customer data (customer_id) is encrypted
+   - **AES-128-CTR** with fixed nonce (safe with HMAC authentication)
    - Data confidentiality even if API key is exposed
    - Cannot extract customer_id without SECRET_KEY
 
@@ -797,10 +783,10 @@ systemctl reload haproxy
    - Cannot guess other customer IDs
    - Encrypted in API key (not visible)
 
-4. **Key uniqueness**: Each (customer_id, key_idx) pair is unique
-   - key_idx allows multiple API keys per customer
+4. **Key uniqueness**: Each API key is cryptographically unique
+   - Random generation ensures uniqueness
    - Different keys for same customer have different encrypted payloads
-   - Each produces unique ciphertext (CTR mode with unique plaintext)
+   - Each produces unique ciphertext (CTR mode with HMAC authentication)
 
 5. **Revocation support**:
    - HAProxy shared memory for instant revocation
@@ -852,23 +838,18 @@ CREATE TABLE api_keys (
   seal_access SMALLINT NOT NULL,           -- Extracted from seal_type bit b (1=permission, 0=open)
   seal_source SMALLINT,                    -- Extracted from seal_type bit c (1=imported, 0=derived, NULL=open)
   proc_group SMALLINT NOT NULL,            -- Extracted from metadata (bits 10-8, 0-7)
-  key_idx INTEGER NOT NULL,                -- Extracted from bytes 2-3 (0-65535), for metering/logging
   is_active BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMP NOT NULL,
   revoked_at TIMESTAMP NULL,
 
-  INDEX idx_customer_service (customer_id, service_type, is_active),
-  INDEX idx_customer_key_idx (customer_id, key_idx),  -- Lookup for metering/logging
-  UNIQUE (customer_id, key_idx)  -- Ensure key_idx is unique per customer
+  INDEX idx_customer_service (customer_id, service_type, is_active)
 );
 ```
 
 **Key Points:**
-- `key_idx` makes each API key unique for a given customer (for metering/logging purposes)
 - `seal_network`, `seal_access`, `seal_source` describe the Seal key configuration
 - `proc_group` identifies the process group for routing (3 bits = 0-7 groups, currently always 1)
 - For **Seal service**: Key selection is determined by `package_id` in customer's PTB (not by API key)
-- `key_idx` is sequentially assigned: 0, 1, 2, ... when creating new API keys for a customer
 
 ## API Operations
 
@@ -879,7 +860,6 @@ POST /api/v1/services/{service_type}/keys
 Authorization: Bearer <jwt_token>
 
 // Rate limits:
-// - Max 65536 keys per customer (0-65535 key_idx range, allows index recycling)
 // - Max 5 key creations per hour per customer
 
 Request:
@@ -895,7 +875,6 @@ Request:
 Response:
 {
   "api_key": "SABCDEFGHIJKLMNOPQRST234567",
-  "key_idx": 0,                // Auto-assigned index (0-65535)
   "created_at": "2025-01-15T10:30:00Z",
   "service_type": "seal",
   "metadata": {
@@ -928,14 +907,12 @@ Response:
   "keys": [
     {
       "key_prefix": "SABCD...234567",
-      "key_idx": 0,
       "proc_group": 1,
       "created_at": "2025-01-15T10:30:00Z",
       "is_active": true
     },
     {
       "key_prefix": "SEFGH...567234",
-      "key_idx": 1,
       "proc_group": 1,
       "created_at": "2025-01-16T14:22:00Z",
       "is_active": true
