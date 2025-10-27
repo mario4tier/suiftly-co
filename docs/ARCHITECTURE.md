@@ -710,11 +710,10 @@ process.on('SIGTERM', async () => {
 
 **Essential MCPs (Installed):**
 1. **context7** - Live documentation for third-party packages (prevents outdated API suggestions for React 19, Vite 7, tRPC v11, Drizzle, @mysten/sui.js)
-2. **serena** - Semantic code search via Language Server Protocol (finds symbol references, better than grep)
 
 **Optional MCPs (Add When Needed):**
-3. **@modelcontextprotocol/server-postgres** - Database schema inspection (add when database exists)
-4. **drizzle-mcp** - Drizzle ORM integration (add after scaffolding drizzle.config.ts)
+2. **@modelcontextprotocol/server-postgres** - Database schema inspection (add when database exists)
+3. **drizzle-mcp** - Drizzle ORM integration (add after scaffolding drizzle.config.ts)
 
 **Not Installed (Built-in Tools Sufficient):**
 - ❌ Filesystem MCP - Use Read, Write, Edit, Bash tools instead
@@ -730,7 +729,6 @@ Use the `/g` custom command for every feature:
 
 This automatically:
 - ✅ Enables Context7 (live docs)
-- ✅ Enables Serena (semantic search)
 - ✅ Reads CLAUDE.md and ARCHITECTURE.md
 - ✅ Uses TodoWrite for multi-step tasks
 

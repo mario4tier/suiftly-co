@@ -41,6 +41,7 @@
       "Bash(node:*)",
       "Bash(npm run build:*)",
       "Bash(npx:*)",
+      "Bash(uvx:*)",
       "Bash(pnpm:*)",
       "Bash(prettier:*)",
       "Bash(rm:*)",
