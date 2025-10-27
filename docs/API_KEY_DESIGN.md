@@ -4,6 +4,8 @@
 
 This document defines the API key architecture for authenticating service requests in the Suiftly platform. API keys map to customer accounts for billing and rate limiting while providing fast decode performance for HAProxy integration.
 
+**Note:** The format includes a random IV (Initialization Vector) per key to ensure each API key appears completely unique and cryptographically secure.
+
 ## Requirements
 
 1. **Customer Identification**: API key must quickly resolve to a customer account
@@ -25,15 +27,15 @@ API Key Structure:
   <service><interleaved_payload_and_hmac>
 
 Example:
-  SABCDEFGHIJKLMNOPQRSTUVWXYZ1234
-  │└─────────── 30 chars ───────────┘
-  │         (payload + HMAC interleaved)
+  SABCDEFGHIJKLMNOPQRSTUVWXYZ123456789
+  │└────────── 36 chars ─────────────┘
+  │    (IV + payload + HMAC interleaved)
   Service type
 
 Components:
   - Service: Single uppercase character (S=Seal, R=gRPC, G=GraphQL)
-  - Interleaved: 30 characters with Base32 ciphertext and hex HMAC tag mixed
-    * Base32 ciphertext: 26 chars (encrypted 16-byte payload)
+  - Interleaved: 36 characters with Base32 ciphertext and hex HMAC tag mixed
+    * Base32 ciphertext: 32 chars (4-byte IV + encrypted 16-byte payload)
     * HMAC tag: 4 chars hex (2-byte authentication tag)
     * Interleaved using reversible swap pattern (obfuscation)
 
@@ -42,7 +44,7 @@ Service Type Identifiers:
   - R → gRPC service (future)
   - G → GraphQL service (future)
 
-Total Length: 31 characters (fixed)
+Total Length: 37 characters (fixed)
 
 Note: The HMAC tag is interleaved into specific positions within the Base32
 ciphertext to obscure the structure and make reverse engineering slower.
@@ -52,14 +54,16 @@ ciphertext to obscure the structure and make reverse engineering slower.
 
 **Encryption Algorithm:** AES-128-CTR (Counter Mode)
 **Authentication:** HMAC-SHA256 (Encrypt-then-MAC)
+**IV Size:** 4 bytes (32 bits, random per key)
 **Payload Size:** 16 bytes (128 bits, optimal AES block alignment)
+**Total Data:** 20 bytes (4-byte IV + 16-byte encrypted payload)
 
 **Why AES-128-CTR:**
 - ✅ **Hardware accelerated** - AES-NI on x86 servers (~50ns decrypt)
 - ✅ **Fixed-size output** - Ciphertext = plaintext size (no padding)
 - ✅ **Stream cipher mode** - No block padding overhead
 - ✅ **Fast in HAProxy Lua** - Native OpenSSL support
-- ✅ **16-byte alignment** - Optimal for AES hardware acceleration
+- ✅ **16-byte alignment** - Payload remains 1 AES block for optimal hardware acceleration
 
 **Why HMAC-SHA256 (2-byte tag):**
 - ✅ **Fast authentication** - ~100ns in HAProxy
@@ -67,17 +71,18 @@ ciphertext to obscure the structure and make reverse engineering slower.
 - ✅ **Combined with rate limiting** - Failed attempts logged and blocked
 - ✅ **Encrypt-then-MAC** - Industry-standard secure construction
 
-**Total HAProxy Performance:** ~180ns (Base32 decode + AES decrypt + HMAC verify)
+**Total HAProxy Performance:** ~200ns (Base32 decode + AES decrypt + HMAC verify)
 
-**Nonce Strategy:** Fixed nonce derived from SECRET_KEY
-- Deterministic: `HMAC-SHA256(SECRET_KEY, "SUIFTLY_API_KEY_NONCE_V1")` → first 16 bytes
-- Safe for CTR mode: Each API key generates unique ciphertext (with HMAC authentication)
-- No nonce reuse risk: HMAC authentication prevents key reuse attacks
-- No storage overhead: Nonce not included in API key
+**IV Strategy:** Random 4-byte IV per API key
+- Each API key includes a unique 4-byte random IV (cryptographically secure random)
+- IV is prepended to the encrypted payload before Base32 encoding
+- Full 16-byte CTR nonce created by padding IV with 12 zero bytes
+- Ensures every API key appears completely random and unique
+- IV is included in HMAC calculation for integrity protection
 
 ### HMAC Interleaving (Obfuscation)
 
-To make the API key structure less obvious and slow down reverse engineering, the 4-character HMAC tag is interleaved into the 26-character Base32 ciphertext using a reversible swap pattern.
+To make the API key structure less obvious and slow down reverse engineering, the 4-character HMAC tag is interleaved into the 32-character Base32 ciphertext using a reversible swap pattern.
 
 **Purpose:**
 - Eliminate obvious hex vs Base32 boundary
@@ -87,31 +92,31 @@ To make the API key structure less obvious and slow down reverse engineering, th
 
 **Interleaving Pattern (0-based indexing):**
 ```
-Combined string: [26 Base32 chars] + [4 hex chars] = 30 chars total
+Combined string: [32 Base32 chars] + [4 hex chars] = 36 chars total
 
 Swap operations (reversible):
-  Position 1  ↔ Position 26  (2nd payload char ↔ 1st HMAC char)
-  Position 6  ↔ Position 29  (7th payload char ↔ 4th HMAC char)
-  Position 20 ↔ Position 27  (21st payload char ↔ 2nd HMAC char)
-  Position 13 ↔ Position 28  (14th payload char ↔ 3rd HMAC char)
+  Position 2  ↔ Position 32  (3rd payload char ↔ 1st HMAC char)
+  Position 8  ↔ Position 35  (9th payload char ↔ 4th HMAC char)
+  Position 23 ↔ Position 33  (24th payload char ↔ 2nd HMAC char)
+  Position 15 ↔ Position 34  (16th payload char ↔ 3rd HMAC char)
 ```
 
 **Example:**
 ```
 Before interleaving:
-  Payload: ABCDEFGHIJKLMNOPQRSTUVWXYZ  (26 chars, Base32)
-  HMAC:    1234                        (4 chars, hex)
+  Payload: ABCDEFGHIJKLMNOPQRSTUVWXYZ234567  (32 chars, Base32)
+  HMAC:    89AB                              (4 chars, hex)
 
-After interleaving (positions 1, 6, 20, 13 swapped with 26, 29, 27, 28):
-  A1CDEF4HIJKLM3OPQRST2VWXYZBUNG
+After interleaving (positions 2, 8, 23, 15 swapped with 32, 35, 33, 34):
+  AB8DEFGHBJKLMNOAQRSTUVW9YZ234567CXPI
 
-Result: Hex digits (1,2,3,4) now appear scattered in positions 1, 6, 13, 20
-        Original chars (B, G, N, U) moved to end positions 26, 29, 28, 27
+Result: Hex digits (8,9,A,B) now appear scattered in positions 2, 8, 23, 15
+        Original chars (C, I, X, P) moved to end positions 32, 33, 34, 35
 ```
 
 ### Plaintext Payload Structure (16 bytes, before encryption)
 
-**Note:** This payload structure is defined for the **Seal service**. Future services (gRPC, GraphQL) may use different payload structures while maintaining the same overall API key format (service prefix + 26-char encrypted payload + 4-char HMAC tag).
+**Note:** This payload structure is defined for the **Seal service**. Future services (gRPC, GraphQL) may use different payload structures while maintaining the same overall API key format (service prefix + 32-char Base32 data + 4-char HMAC tag).
 
 ```
 Seal Service Plaintext Payload (16 bytes):
@@ -128,9 +133,9 @@ Key Metadata (2 bytes, 16 bits) - BYTES 0-1:
 
   - Version: 00 (current), supports up to 4 versions
   - Seal Type: 3 bits (abc) - Seal key configuration:
-    * a (bit 12): Network - 1=mainnet, 0=testnet
-    * b (bit 11): Access - 1=permission, 0=open
-    * c (bit 10): Source (when permission) - 1=imported, 0=derived
+    * a (bit 13): Network - 1=mainnet, 0=testnet
+    * b (bit 12): Access - 1=permission, 0=open
+    * c (bit 11): Source (when permission) - 1=imported, 0=derived
                   (unused when open)
 
     All 8 possible seal_type values:
@@ -149,7 +154,7 @@ Key Metadata (2 bytes, 16 bits) - BYTES 0-1:
 
     Note: For open access (b=0), the source bit (c) is ignored in practice.
           Values 000 and 100 are undefined/reserved for future use.
-  - Master Key Group: 0-7 (3 bits) - Groups API keys by master key identity
+  - Process Group (proc_group): 0-7 (3 bits) - Process group identifier for routing
   - Unused: Set to 0 (8 bits reserved for future use)
 
 Unused (2 bytes) - BYTES 2-3:
@@ -195,9 +200,9 @@ interface ApiKeyPayload {
 
 // Encode seal_type (3 bits)
 function encodeSealType(sealType: SealType): number {
-  const a = sealType.network === 'mainnet' ? 1 : 0;  // bit 12
-  const b = sealType.access === 'permission' ? 1 : 0; // bit 11
-  const c = sealType.access === 'permission' && sealType.source === 'imported' ? 1 : 0; // bit 10
+  const a = sealType.network === 'mainnet' ? 1 : 0;  // becomes bit 13 in metadata
+  const b = sealType.access === 'permission' ? 1 : 0; // becomes bit 12 in metadata
+  const c = sealType.access === 'permission' && sealType.source === 'imported' ? 1 : 0; // becomes bit 11 in metadata
 
   // Validate unsupported combinations
   if (a === 1 && b === 0 && c === 1) {
@@ -220,40 +225,31 @@ function encodeMetadata(meta: KeyMetadata): number {
                                                        // bits 7-0: unused (set to 0)
 }
 
-// Derive fixed nonce from SECRET_KEY (for AES-128-CTR)
-let FIXED_NONCE: Buffer | null = null;
-function getFixedNonce(): Buffer {
-  if (!FIXED_NONCE) {
-    const hmac = crypto.createHmac('sha256', SECRET_KEY);
-    hmac.update('SUIFTLY_API_KEY_NONCE_V1');
-    FIXED_NONCE = hmac.digest().slice(0, 16);  // First 16 bytes
-  }
-  return FIXED_NONCE;
-}
+// No longer using fixed nonce - each key gets random IV
 
 // Interleave HMAC tag into Base32 payload (reversible swap for obfuscation)
 // This makes the structure less obvious by mixing hex chars into Base32 chars
 function interleaveHmacTag(payload: string, tag: string): string {
-  // payload: 26 chars Base32 (A-Z, 2-7)
+  // payload: 32 chars Base32 (A-Z, 2-7)
   // tag: 4 chars hex (0-9, A-F)
-  // Returns: 30 chars with HMAC interleaved
+  // Returns: 36 chars with HMAC interleaved
 
   // Combine into single string, then swap specific positions
-  const combined = payload + tag;  // 30 chars total
+  const combined = payload + tag;  // 36 chars total
   const chars = combined.split('');
 
   // Swap pattern (0-based indexing):
-  // Position 1 (2nd char of payload) ↔ Position 26 (1st char of HMAC - tag[0])
-  // Position 6 (7th char of payload) ↔ Position 29 (4th char of HMAC - tag[3])
-  // Position 20 (21st char of payload) ↔ Position 27 (2nd char of HMAC - tag[1])
-  // Position 13 (14th char of payload) ↔ Position 28 (3rd char of HMAC - tag[2])
+  // Position 2 (3rd char of payload) ↔ Position 32 (1st char of HMAC - tag[0])
+  // Position 8 (9th char of payload) ↔ Position 35 (4th char of HMAC - tag[3])
+  // Position 23 (24th char of payload) ↔ Position 33 (2nd char of HMAC - tag[1])
+  // Position 15 (16th char of payload) ↔ Position 34 (3rd char of HMAC - tag[2])
 
-  [chars[1], chars[26]] = [chars[26], chars[1]];   // Swap payload[1] ↔ tag[0]
-  [chars[6], chars[29]] = [chars[29], chars[6]];   // Swap payload[6] ↔ tag[3]
-  [chars[20], chars[27]] = [chars[27], chars[20]]; // Swap payload[20] ↔ tag[1]
-  [chars[13], chars[28]] = [chars[28], chars[13]]; // Swap payload[13] ↔ tag[2]
+  [chars[2], chars[32]] = [chars[32], chars[2]];   // Swap payload[2] ↔ tag[0]
+  [chars[8], chars[35]] = [chars[35], chars[8]];   // Swap payload[8] ↔ tag[3]
+  [chars[23], chars[33]] = [chars[33], chars[23]]; // Swap payload[23] ↔ tag[1]
+  [chars[15], chars[34]] = [chars[34], chars[15]]; // Swap payload[15] ↔ tag[2]
 
-  return chars.join('');  // Return 30 chars
+  return chars.join('');  // Return 36 chars
 }
 
 // Generate API key
@@ -265,7 +261,10 @@ function generateApiKey(
     procGroup?: number;
   } = {}
 ): string {
-  // 1. Build 16-byte plaintext payload
+  // 1. Generate random IV (4 bytes)
+  const iv = crypto.randomBytes(4);
+
+  // 2. Build 16-byte plaintext payload
   const plaintext = Buffer.alloc(16);
 
   const metadata = encodeMetadata({
@@ -278,8 +277,13 @@ function generateApiKey(
   plaintext.writeUInt32BE(customerId, 4);       // offset 4-7: customer_id (4 bytes)
   // bytes 8-15: unused (zeros)
 
-  // 2. Encrypt with AES-128-CTR
-  const nonce = getFixedNonce();
+  // 3. Create full nonce for AES-128-CTR (16 bytes)
+  const nonce = Buffer.concat([
+    iv,                      // 4 bytes random IV
+    Buffer.alloc(12, 0)      // 12 bytes padding (zeros)
+  ]);
+
+  // 4. Encrypt with AES-128-CTR
   const cipher = crypto.createCipheriv(
     'aes-128-ctr',
     SECRET_KEY.slice(0, 16),  // First 16 bytes of SECRET_KEY for AES-128
@@ -287,21 +291,24 @@ function generateApiKey(
   );
   const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);  // 16 bytes
 
-  // 3. Authenticate with HMAC-SHA256 (Encrypt-then-MAC)
+  // 5. Combine IV + ciphertext for storage/encoding
+  const combined = Buffer.concat([iv, ciphertext]);  // 20 bytes total
+
+  // 6. Authenticate with HMAC-SHA256 (Encrypt-then-MAC) over IV + ciphertext
   const hmac = crypto.createHmac('sha256', SECRET_KEY);
-  hmac.update(ciphertext);
+  hmac.update(combined);
   const tag = hmac.digest().slice(0, 2);  // First 2 bytes
 
-  // 4. Encode: Base32(ciphertext) + Hex(tag)
-  const base32Ciphertext = base32Encode(ciphertext);  // 26 chars
+  // 7. Encode: Base32(IV + ciphertext) + Hex(tag)
+  const base32Combined = base32Encode(combined);      // 32 chars
   const hexTag = tag.toString('hex').toUpperCase();   // 4 chars
 
-  // 5. Interleave HMAC tag into payload (obfuscation)
-  const interleaved = interleaveHmacTag(base32Ciphertext, hexTag);  // 30 chars
+  // 8. Interleave HMAC tag into payload (obfuscation)
+  const interleaved = interleaveHmacTag(base32Combined, hexTag);  // 36 chars
 
-  // 6. Format: <service><interleaved>
+  // 9. Format: <service><interleaved>
   const serviceChar = serviceTypeToChar(serviceType);
-  return `${serviceChar}${interleaved}`;  // 31 chars total
+  return `${serviceChar}${interleaved}`;  // 37 chars total
 }
 
 // Service type mapping
@@ -356,24 +363,24 @@ function decodeApiKey(apiKey: string): {
   const serviceChar = apiKey[0];
   const serviceType = charToServiceType(serviceChar);
 
-  // 2. Extract interleaved string (30 chars)
-  const interleaved = apiKey.slice(1);  // Characters 1-30
+  // 2. Extract interleaved string (36 chars)
+  const interleaved = apiKey.slice(1);  // Characters 1-36
 
   // 3. De-interleave to separate payload and HMAC tag
   // (Same function works for both directions - it's a reversible swap)
   const deinterleaved = interleaveHmacTag(
-    interleaved.slice(0, 26),
-    interleaved.slice(26)
+    interleaved.slice(0, 32),
+    interleaved.slice(32)
   );
-  const base32Ciphertext = deinterleaved.slice(0, 26);  // Base32 payload
-  const tagHex = deinterleaved.slice(26);                // 4 hex chars
+  const base32Combined = deinterleaved.slice(0, 32);  // Base32 payload (IV + ciphertext)
+  const tagHex = deinterleaved.slice(32);              // 4 hex chars
 
-  // 4. Decode Base32 ciphertext
-  const ciphertext = base32Decode(base32Ciphertext);  // 16 bytes
+  // 4. Decode Base32 to get IV + ciphertext
+  const combined = base32Decode(base32Combined);  // 20 bytes (4 IV + 16 ciphertext)
 
-  // 5. Verify HMAC-SHA256 authentication tag (Encrypt-then-MAC)
+  // 5. Verify HMAC-SHA256 authentication tag (Encrypt-then-MAC) over IV + ciphertext
   const hmac = crypto.createHmac('sha256', SECRET_KEY);
-  hmac.update(ciphertext);
+  hmac.update(combined);
   const expectedTag = hmac.digest().slice(0, 2);
   const expectedTagHex = expectedTag.toString('hex').toUpperCase();
 
@@ -381,8 +388,17 @@ function decodeApiKey(apiKey: string): {
     throw new Error('Invalid API key - authentication failed');
   }
 
-  // 6. Decrypt with AES-128-CTR
-  const nonce = getFixedNonce();
+  // 6. Extract IV and ciphertext
+  const iv = combined.slice(0, 4);           // First 4 bytes
+  const ciphertext = combined.slice(4);      // Remaining 16 bytes
+
+  // 7. Create full nonce for AES-128-CTR
+  const nonce = Buffer.concat([
+    iv,                      // 4 bytes from API key
+    Buffer.alloc(12, 0)      // 12 bytes padding (zeros)
+  ]);
+
+  // 8. Decrypt with AES-128-CTR
   const decipher = crypto.createDecipheriv(
     'aes-128-ctr',
     SECRET_KEY.slice(0, 16),  // First 16 bytes of SECRET_KEY for AES-128
@@ -390,7 +406,7 @@ function decodeApiKey(apiKey: string): {
   );
   const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);  // 16 bytes
 
-  // 7. Extract fields from plaintext
+  // 9. Extract fields from plaintext
   const metadata = decodeMetadata(plaintext.readUInt16BE(0)); // offset 0-1 (2 bytes)
   // bytes 2-3: unused (ignored)
   const customerId = plaintext.readUInt32BE(4);               // offset 4-7 (4 bytes)
@@ -408,9 +424,9 @@ function decodeApiKey(apiKey: string): {
 
 ### Hybrid Encoding Approach
 
-**Ciphertext (26 chars):** Base32 encoding
+**IV + Ciphertext (32 chars):** Base32 encoding
 - **Fast decode performance**: ~20ns vs Base58's ~200ns
-- **Fixed length encoding**: Always 26 chars for 16 bytes
+- **Fixed length encoding**: Always 32 chars for 20 bytes (4-byte IV + 16-byte ciphertext)
 - **No ambiguous characters**: Uses A-Z, 2-7 only
 - **Case-insensitive**: Easier to read/type
 - **Standard encoding**: RFC 4648 with excellent library support
@@ -471,7 +487,7 @@ Sticky Table Key = customer_id
 Properties:
   - Same for all API keys belonging to one customer
   - Extracted from encrypted API key payload (no DB query)
-  - Extremely fast (~180ns: Base32 decode + AES decrypt + HMAC verify)
+  - Extremely fast (~200ns: Base32 decode + AES decrypt + HMAC verify)
   - Stable (doesn't change when keys are rotated)
   - Compact (32-bit integer)
   - Multi-service: Use separate sticky tables per service type (not combined keys)
@@ -483,12 +499,14 @@ Properties:
 2. HAProxy extracts API key, calls Lua script to decrypt and validate it
 3. Lua script validates and decrypts API key (fail fast):
    - Extract service_type from first character (S, R, or G)
-   - Extract Base32 ciphertext (chars 2-27, 26 characters)
-   - Extract hex HMAC tag (chars 28-31, 4 characters)
-   - Decode Base32 ciphertext → 16 bytes
-   - Verify HMAC-SHA256 tag on ciphertext (using SECRET_KEY)
+   - De-interleave to separate Base32 data and HMAC tag
+   - Extract Base32 data (chars after de-interleaving, 32 characters)
+   - Extract hex HMAC tag (chars after de-interleaving, 4 characters)
+   - Decode Base32 data → 20 bytes (4-byte IV + 16-byte ciphertext)
+   - Verify HMAC-SHA256 tag on IV + ciphertext (using SECRET_KEY)
    - **If HMAC invalid → reject immediately (authentication failed)**
-   - Decrypt ciphertext with AES-128-CTR (using SECRET_KEY and fixed nonce)
+   - Extract IV (first 4 bytes) and ciphertext (remaining 16 bytes)
+   - Decrypt ciphertext with AES-128-CTR (using SECRET_KEY and IV-derived nonce)
 4. Lua script extracts fields from decrypted plaintext:
    - Extract metadata (bytes 0-1, 16 bits) - version, seal_type, and proc_group
    - Extract customer_id (bytes 4-7, 32-bit integer)
@@ -551,17 +569,6 @@ local openssl = require("openssl")
 -- Secret key loaded from HAProxy config
 local SECRET_KEY = core.get_var("txn.api_secret_key")
 
--- Derive fixed nonce from SECRET_KEY (cached globally)
-local FIXED_NONCE = nil
-function get_fixed_nonce()
-  if not FIXED_NONCE then
-    local hmac = openssl.hmac.new(SECRET_KEY, "sha256")
-    hmac:update("SUIFTLY_API_KEY_NONCE_V1")
-    FIXED_NONCE = hmac:final():sub(1, 16)  -- First 16 bytes
-  end
-  return FIXED_NONCE
-end
-
 -- Helper: Convert 2 bytes to uint16 (big-endian)
 function bytes_to_uint16(bytes)
   local b1, b2 = bytes:byte(1, 2)
@@ -581,8 +588,8 @@ end
 
 -- Interleave/de-interleave HMAC tag (reversible swap for obfuscation)
 function interleave_hmac_tag(payload, tag)
-  -- payload: 26 chars, tag: 4 chars → returns 30 chars
-  -- Swap pattern: positions 1↔26, 6↔29, 20↔27, 13↔28 (0-based)
+  -- payload: 32 chars, tag: 4 chars → returns 36 chars
+  -- Swap pattern: positions 2↔32, 8↔35, 23↔33, 15↔34 (0-based)
 
   local chars = {}
   local combined = payload .. tag
@@ -591,10 +598,10 @@ function interleave_hmac_tag(payload, tag)
   end
 
   -- Perform swaps (Lua is 1-based, so add 1 to indices)
-  chars[2], chars[27] = chars[27], chars[2]    -- pos 1 ↔ pos 26
-  chars[7], chars[30] = chars[30], chars[7]    -- pos 6 ↔ pos 29
-  chars[21], chars[28] = chars[28], chars[21]  -- pos 20 ↔ pos 27
-  chars[14], chars[29] = chars[29], chars[14]  -- pos 13 ↔ pos 28
+  chars[3], chars[33] = chars[33], chars[3]    -- pos 2 ↔ pos 32
+  chars[9], chars[36] = chars[36], chars[9]    -- pos 8 ↔ pos 35
+  chars[24], chars[34] = chars[34], chars[24]  -- pos 23 ↔ pos 33
+  chars[16], chars[35] = chars[35], chars[16]  -- pos 15 ↔ pos 34
 
   return table.concat(chars)
 end
@@ -603,23 +610,23 @@ function validate_and_decode_api_key(api_key)
   -- 1. Extract service type (first character)
   local service_char = api_key:sub(1, 1)  -- S, R, or G
 
-  -- 2. Extract interleaved string (characters 2-31, 30 chars)
-  local interleaved = api_key:sub(2, 31)
+  -- 2. Extract interleaved string (characters 2-37, 36 chars)
+  local interleaved = api_key:sub(2, 37)
 
   -- 3. De-interleave to separate payload and HMAC tag
   local deinterleaved = interleave_hmac_tag(
-    interleaved:sub(1, 26),
-    interleaved:sub(27, 30)
+    interleaved:sub(1, 32),
+    interleaved:sub(33, 36)
   )
-  local ciphertext_b32 = deinterleaved:sub(1, 26)  -- Base32 payload
-  local tag_hex = deinterleaved:sub(27, 30):upper()  -- 4 hex chars
+  local combined_b32 = deinterleaved:sub(1, 32)  -- Base32 payload (IV + ciphertext)
+  local tag_hex = deinterleaved:sub(33, 36):upper()  -- 4 hex chars
 
-  -- 4. Decode Base32 ciphertext (~20ns)
-  local ciphertext = base32_decode(ciphertext_b32)  -- 16 bytes
+  -- 4. Decode Base32 to get IV + ciphertext (~20ns)
+  local combined = base32_decode(combined_b32)  -- 20 bytes (4 IV + 16 ciphertext)
 
-  -- 5. Verify HMAC-SHA256 tag on ciphertext (~100ns)
+  -- 5. Verify HMAC-SHA256 tag on IV + ciphertext (~100ns)
   local hmac = openssl.hmac.new(SECRET_KEY, "sha256")
-  hmac:update(ciphertext)
+  hmac:update(combined)
   local expected_tag = hmac:final()
   local expected_hex = expected_tag:sub(1, 2):tohex():upper()  -- First 2 bytes to hex
 
@@ -627,13 +634,19 @@ function validate_and_decode_api_key(api_key)
     return nil, "invalid_authentication_tag"
   end
 
-  -- 6. Decrypt with AES-128-CTR (~50ns)
-  local nonce = get_fixed_nonce()
+  -- 6. Extract IV and ciphertext
+  local iv = combined:sub(1, 4)          -- First 4 bytes
+  local ciphertext = combined:sub(5, 20)  -- Remaining 16 bytes
+
+  -- 7. Create full nonce (16 bytes)
+  local nonce = iv .. string.rep("\0", 12)  -- IV + 12 zero bytes
+
+  -- 8. Decrypt with AES-128-CTR (~50ns)
   local cipher = openssl.cipher.new("aes-128-ctr")
   cipher:decrypt(SECRET_KEY:sub(1, 16), nonce)  -- First 16 bytes of SECRET_KEY
   local plaintext = cipher:update(ciphertext) .. cipher:final()  -- 16 bytes
 
-  -- 7. Extract fields from plaintext
+  -- 9. Extract fields from plaintext
   -- Metadata: 2 bytes (big-endian) at offset 0-1
   local metadata = bytes_to_uint16(plaintext:sub(1, 2))
   local version = bit32.rshift(metadata, 14)  -- bits 15-14
@@ -649,7 +662,7 @@ function validate_and_decode_api_key(api_key)
   -- Customer ID: 4 bytes (big-endian) at offset 4-7
   local customer_id = bytes_to_uint32(plaintext:sub(5, 8))
 
-  -- 8. Validate customer_id is not 0 (reserved value)
+  -- 10. Validate customer_id is not 0 (reserved value)
   if customer_id == 0 then
     return nil, "invalid_customer_id"
   end
@@ -664,11 +677,12 @@ end
 
 ```
 API key decryption and validation in HAProxy Lua:
-  - Base32 decode: ~20ns
+  - Base32 decode: ~25ns (slightly more data: 20 bytes vs 16)
   - HMAC-SHA256 verify: ~100ns
   - AES-128-CTR decrypt: ~50ns (hardware accelerated with AES-NI)
   - Field extraction: ~10ns
-  - Total: ~180ns per request
+  - IV extraction: ~5ns
+  - Total: ~190-200ns per request
 
 No external dependencies:
   - No network calls
@@ -677,9 +691,9 @@ No external dependencies:
   - All processing in HAProxy Lua
 
 Per million requests:
-  - Total processing time: ~180ms (0.18 seconds)
+  - Total processing time: ~200ms (0.2 seconds)
   - Negligible overhead compared to network latency
-  - ~5.5 million requests/sec/core throughput
+  - ~5 million requests/sec/core throughput
 ```
 
 ### Revocation Checking
@@ -734,7 +748,8 @@ systemctl reload haproxy
 
 ### Encryption and Authentication (Defense in Depth)
 
-**AES-128-CTR Encryption:**
+**AES-128-CTR Encryption with Random IV:**
+- **Unique ciphertext**: Each API key has a random 4-byte IV ensuring unique encryption
 - **Confidentiality**: customer_id and proc_group are encrypted
 - **Cannot read payload without SECRET_KEY**
 - Even if API key is exposed in logs, data remains confidential
@@ -769,7 +784,8 @@ systemctl reload haproxy
 ### Security Properties
 
 1. **Encryption**: Customer data (customer_id) is encrypted
-   - **AES-128-CTR** with fixed nonce (safe with HMAC authentication)
+   - **AES-128-CTR** with random IV per key (cryptographically secure)
+   - Each API key appears completely random and unique
    - Data confidentiality even if API key is exposed
    - Cannot extract customer_id without SECRET_KEY
 
@@ -784,9 +800,9 @@ systemctl reload haproxy
    - Encrypted in API key (not visible)
 
 4. **Key uniqueness**: Each API key is cryptographically unique
-   - Random generation ensures uniqueness
-   - Different keys for same customer have different encrypted payloads
-   - Each produces unique ciphertext (CTR mode with HMAC authentication)
+   - Random IV ensures every key looks completely different
+   - Even keys for same customer appear unrelated
+   - No patterns visible between any API keys
 
 5. **Revocation support**:
    - HAProxy shared memory for instant revocation
@@ -874,7 +890,7 @@ Request:
 
 Response:
 {
-  "api_key": "SABCDEFGHIJKLMNOPQRST234567",
+  "api_key": "SABCDEFGHIJKLMNOPQRSTUVWXYZ123456789",
   "created_at": "2025-01-15T10:30:00Z",
   "service_type": "seal",
   "metadata": {
@@ -906,13 +922,13 @@ Response:
 {
   "keys": [
     {
-      "key_prefix": "SABCD...234567",
+      "key_prefix": "SABCD...6789",
       "proc_group": 1,
       "created_at": "2025-01-15T10:30:00Z",
       "is_active": true
     },
     {
-      "key_prefix": "SEFGH...567234",
+      "key_prefix": "SEFGH...3456",
       "proc_group": 1,
       "created_at": "2025-01-16T14:22:00Z",
       "is_active": true
@@ -942,9 +958,9 @@ Each service type has its own namespace for API keys:
 
 ```
 Customer X:
-  - Seal API Keys: SABCDEFGHIJKLMNOPQRST234567, SEFGHIJKLMNOPQRSTUV345678
-  - gRPC API Keys: RIJKLMNOPQRSTUVWXYZ456789, RMNOPQRSTUVWXYZABC567890
-  - GraphQL API Keys: GQRSTUVWXYZABCDEFGH678901
+  - Seal API Keys: SABCDEFGHIJKLMNOPQRSTUVWXYZ123456789, SXYZ789ABCDEF123456GHIJKLMNOPQRSTUV
+  - gRPC API Keys: RIJKLMNOPQRSTUVWXYZABCDEF123456789AB, RMNOPQRSTUVWXYZABCDEFGH234567890IJK
+  - GraphQL API Keys: GQRSTUVWXYZABCDEFGHIJK345678901LMNO
 
 Each service type has separate:
   - Rate limit buckets
@@ -997,9 +1013,10 @@ const stickyKey = customerId.toString();
 
 - **API key lookup**: <1ms (cached), <10ms (DB)
 - **HAProxy sticky table resolution**: <1ms
-- **Base32 decode**: ~20ns
-- **HMAC-SHA256 verification**: ~200ns
-- **Total HAProxy processing**: ~230ns per request
+- **Base32 decode**: ~25ns (20 bytes)
+- **HMAC-SHA256 verification**: ~100ns
+- **AES-128-CTR decryption**: ~50ns
+- **Total HAProxy processing**: ~200ns per request
 
 ---
 

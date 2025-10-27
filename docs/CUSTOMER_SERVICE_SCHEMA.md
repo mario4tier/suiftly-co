@@ -579,14 +579,11 @@ CREATE TABLE api_keys (
   seal_access SMALLINT NOT NULL,           -- Extracted from seal_type bit b (1=permission, 0=open)
   seal_source SMALLINT,                    -- Extracted from seal_type bit c (1=imported, 0=derived, NULL=open)
   proc_group SMALLINT NOT NULL,            -- Extracted from metadata (bits 10-8, 0-7)
-  key_idx INTEGER NOT NULL,                -- Extracted from bytes 2-3 (0-65535), for metering/logging
   is_active BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMP NOT NULL,
   revoked_at TIMESTAMP NULL,
 
-  INDEX idx_customer_service (customer_id, service_type, is_active),
-  INDEX idx_customer_key_idx (customer_id, key_idx),
-  UNIQUE (customer_id, key_idx)
+  INDEX idx_customer_service (customer_id, service_type, is_active)
 );
 
 -- Seal keys (Seal service specific)
