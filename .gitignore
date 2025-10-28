@@ -1,6 +1,12 @@
 # Claude Code repository status
 .claude-repo-status
 
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
 # Dependencies
 node_modules/
 

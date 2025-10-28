@@ -126,11 +126,22 @@ def main():
 - **Python:** psycopg2-binary, python-dotenv, click
 - **User:** deploy user with home directory
 - **Directories:** /var/www/{api,webapp,global-manager}, /var/log/suiftly
-- **Databases:** suiftly_dev, suiftly_prod, suiftly_test (with TimescaleDB enabled)
+- **Databases:** Environment-aware (dev: suiftly_dev + suiftly_test, prod: suiftly_prod only)
+
+**Environment Detection (Single Source of Truth):**
+- **REQUIRES** `/etc/walrus/system.conf` with `DEPLOYMENT_TYPE` set
+- **Production** (DEPLOYMENT_TYPE=production): Creates `suiftly_prod` only
+- **Development** (DEPLOYMENT_TYPE=development): Creates `suiftly_dev` and `suiftly_test`
+- **No defaults**: Script fails if config file or DEPLOYMENT_TYPE missing
+- No fallbacks, no guessing, no assumptions
 
 **Test:**
 ```bash
-# First run - installs everything
+# PREREQUISITE: Create system.conf first
+sudo mkdir -p /etc/walrus
+echo "DEPLOYMENT_TYPE=development" | sudo tee /etc/walrus/system.conf
+
+# First run - installs everything (development mode)
 sudo python3 scripts/rare/setup-netops-server.py
 
 # Second run - all checks pass (idempotent)
@@ -141,7 +152,7 @@ sudo python3 scripts/rare/setup-netops-server.py
 #         ✓ install_npm_global_packages
 #         ✓ install_postgresql
 #         ✓ install_timescaledb
-#         ✓ setup_postgresql_databases
+#         ✓ setup_postgresql_databases (suiftly_dev, suiftly_test)
 #         ✓ install_python_packages
 #         ✓ install_nginx
 #         ✓ install_certbot
