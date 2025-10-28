@@ -426,21 +426,7 @@ These are completely different concepts:
 
 ### Seal Key Management
 
-**Schema:**
-
-```sql
-CREATE TABLE seal_keys (
-  seal_key_id UUID PRIMARY KEY,
-  customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
-  public_key VARCHAR(66) NOT NULL,          -- Sui public key
-  encrypted_private_key TEXT NOT NULL,      -- Encrypted with customer's wallet
-  purchase_tx_digest VARCHAR(64),           -- On-chain purchase transaction
-  is_active BOOLEAN NOT NULL DEFAULT true,
-  created_at TIMESTAMP NOT NULL,
-
-  INDEX idx_customer (customer_id)
-);
-```
+**Schema:** See `seal_keys` table in [Database Schema Summary](#database-schema-summary) below.
 
 **Purchase Flow:**
 
@@ -461,20 +447,7 @@ CREATE TABLE seal_keys (
 
 ### Seal Service Configuration
 
-```sql
-CREATE TABLE service_instances (
-  instance_id UUID PRIMARY KEY,
-  customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
-  service_type VARCHAR(20) NOT NULL,        -- 'seal'
-  tier VARCHAR(20) NOT NULL,                -- 'starter', 'pro', 'enterprise'
-  is_enabled BOOLEAN NOT NULL DEFAULT true,
-  config JSONB,                             -- Service-specific configuration
-  enabled_at TIMESTAMP,
-  disabled_at TIMESTAMP,
-
-  UNIQUE (customer_id, service_type)
-);
-```
+**Schema:** See `service_instances` table in [Database Schema Summary](#database-schema-summary) below.
 
 **Seal Service Configuration:**
 
