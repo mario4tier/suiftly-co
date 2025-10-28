@@ -627,6 +627,64 @@ CREATE TABLE escrow_transactions (
   INDEX idx_customer (customer_id),
   INDEX idx_tx_digest (tx_digest)
 );
+
+-- HAProxy raw logs (TimescaleDB hypertable for usage metering and ops monitoring)
+-- Based on walrus HAPROXY_LOGS.md specification
+-- Ref: ~/walrus/docs/HAPROXY_LOGS.md and haproxy_log_record.py
+CREATE TABLE haproxy_raw_logs (
+  -- Timestamp (TimescaleDB partition key)
+  timestamp TIMESTAMPTZ NOT NULL,
+
+  -- Customer context (NULL if unauthenticated)
+  customer_id INTEGER,                  -- NULL for auth failures, malformed requests
+  path_prefix TEXT,                     -- First 10 chars of URL path without leading "/" (traffic analysis), NULL if missing
+  config_hex BIGINT,                    -- Customer config (64-bit), NULL if denied before lookup
+
+  -- Infrastructure context (decoded from merge_fields_1, all NOT NULL since merge_fields_1 always present)
+  network SMALLINT NOT NULL,            -- Network (0=testnet, 1=mainnet, 2=devnet, 3=localnet)
+  server_id SMALLINT NOT NULL,          -- Encoded: (region_id << 4) | server_num (8-bit)
+  service_type SMALLINT NOT NULL,       -- Service (1=Seal, 2=SSFN, 3=Sealo)
+  api_key_fp INTEGER NOT NULL,          -- API key fingerprint (32-bit), 0 if missing
+  fe_type SMALLINT NOT NULL,            -- Frontend type (1=private, 2=metered, 3=local)
+  traffic_type SMALLINT NOT NULL,       -- Traffic class (0=N/A, 1=guaranteed, 2=burst, 3=denied, 4=dropped, 5=ip_dropped, 6=unavailable)
+  event_type SMALLINT NOT NULL,         -- Event type (0=success, 10-16=auth, 20-21=IP, 30=authz, 50-63=backend)
+  client_ip INET NOT NULL,              -- Real client IP from CF-Connecting-IP (fallback to src)
+
+  -- API key context (decoded from merge_fields_2, NULL if no valid API key)
+  key_metadata SMALLINT,                -- 16-bit key metadata from API key
+
+  -- Response (always present)
+  status_code SMALLINT NOT NULL,        -- HTTP status code
+  bytes_sent BIGINT NOT NULL DEFAULT 0, -- Response body size
+
+  -- Timing (always available from HAProxy)
+  time_total INT NOT NULL,              -- Total time (ms) - always available
+  time_request INT,                     -- Time to receive request (ms), NULL if error before completion
+  time_queue INT,                       -- Time in queue (ms), NULL if no queue wait
+  time_connect INT,                     -- Backend connect time (ms), NULL if no backend connection
+  time_response INT,                    -- Backend response time (ms), NULL if no backend response
+
+  -- Backend routing
+  backend_id SMALLINT DEFAULT 0,        -- Backend server (0=none, 1-9=local, 10-19=backup)
+  termination_state TEXT,               -- HAProxy termination code (e.g., 'SD', 'SH', 'PR')
+
+  -- Indexes (partial where useful to exclude common values)
+  INDEX idx_customer_time (customer_id, timestamp DESC) WHERE customer_id IS NOT NULL,
+  INDEX idx_server_time (server_id, timestamp DESC),
+  INDEX idx_service_network (service_type, network, timestamp DESC),
+  INDEX idx_traffic_type (traffic_type, timestamp DESC),
+  INDEX idx_event_type (event_type, timestamp DESC) WHERE event_type != 0,  -- Exclude successful requests
+  INDEX idx_status_code (status_code, timestamp DESC),
+  INDEX idx_api_key_fp (api_key_fp, timestamp DESC) WHERE api_key_fp != 0   -- Exclude requests without API key
+);
+
+-- TimescaleDB hypertable configuration (applied via migration)
+-- SELECT create_hypertable('haproxy_raw_logs', 'timestamp', chunk_time_interval => INTERVAL '1 hour');
+-- SELECT add_compression_policy('haproxy_raw_logs', INTERVAL '6 hours');
+-- SELECT add_retention_policy('haproxy_raw_logs', INTERVAL '2 days');  -- Aggressive: aggregates preserve historical data
+
+-- Note: Continuous aggregates (metering_by_second, ops_by_minute) are defined separately
+-- for efficient querying of historical data after raw logs are pruned.
 ```
 
 ## Implementation Notes

@@ -286,8 +286,39 @@ export default {
   + INDEX idx_billing (customer_id, service_type, window_start)
 
 // src/schema/logs.ts
-- haproxy_logs (id, timestamp, customer_id, service_type, method, status_code, bytes_out)
+- haproxy_raw_logs (
+    timestamp,                   // TIMESTAMPTZ NOT NULL - partition key
+    customer_id,                 // INTEGER - NULL if unauthenticated
+    path_prefix,                 // TEXT - first 10 chars of URL path (no leading /)
+    config_hex,                  // BIGINT - customer config (64-bit)
+    network,                     // SMALLINT NOT NULL - 0=testnet, 1=mainnet, 2=devnet, 3=localnet
+    server_id,                   // SMALLINT NOT NULL - (region_id << 4) | server_num
+    service_type,                // SMALLINT NOT NULL - 1=Seal, 2=SSFN, 3=Sealo
+    api_key_fp,                  // INTEGER NOT NULL - 32-bit fingerprint (0 if no key)
+    fe_type,                     // SMALLINT NOT NULL - 1=private, 2=metered, 3=local
+    traffic_type,                // SMALLINT NOT NULL - 0=N/A, 1=guaranteed, 2=burst, 3=denied, etc.
+    event_type,                  // SMALLINT NOT NULL - 0=success, 10-255=errors
+    client_ip,                   // INET NOT NULL - real client IP
+    key_metadata,                // SMALLINT - 16-bit key metadata
+    status_code,                 // SMALLINT NOT NULL - HTTP status
+    bytes_sent,                  // BIGINT NOT NULL DEFAULT 0
+    time_total,                  // INT NOT NULL - total time (ms)
+    time_request,                // INT - request receive time (ms)
+    time_queue,                  // INT - queue wait time (ms)
+    time_connect,                // INT - backend connect time (ms)
+    time_response,               // INT - backend response time (ms)
+    backend_id,                  // SMALLINT - backend server ID
+    termination_state            // TEXT - HAProxy termination code
+  )
+  + INDEX idx_customer_time (customer_id, timestamp DESC) WHERE customer_id IS NOT NULL
+  + INDEX idx_server_time (server_id, timestamp DESC)
+  + INDEX idx_service_network (service_type, network, timestamp DESC)
+  + INDEX idx_traffic_type (traffic_type, timestamp DESC)
+  + INDEX idx_event_type (event_type, timestamp DESC) WHERE event_type != 0
+  + INDEX idx_status_code (status_code, timestamp DESC)
+  + INDEX idx_api_key_fp (api_key_fp, timestamp DESC) WHERE api_key_fp != 0
   ** IMPORTANT: Will be converted to TimescaleDB hypertable in next step **
+  ** Retention: 2 days (raw), 90 days (metering aggregate), 30 days (ops aggregate) **
 
 // src/schema/escrow.ts
 - escrow_transactions (tx_id, customer_id, tx_digest, tx_type, amount, asset_type, timestamp)
@@ -300,24 +331,34 @@ export default {
 ```typescript
 // src/timescale-setup.ts
 import { db } from './db'
+import { sql } from 'drizzle-orm'
 
 export async function setupTimescaleDB() {
-  // Convert haproxy_logs to hypertable (run AFTER schema creation)
+  // Convert haproxy_raw_logs to hypertable (run AFTER schema creation)
   await db.execute(sql`
-    SELECT create_hypertable('haproxy_logs', 'timestamp',
-      chunk_time_interval => INTERVAL '7 days',
+    SELECT create_hypertable('haproxy_raw_logs', 'timestamp',
+      chunk_time_interval => INTERVAL '1 hour',
       if_not_exists => TRUE
     );
   `)
 
-  // Add retention policy (auto-delete data older than 90 days)
+  // Enable compression (older than 6 hours - aggressive since aggregates preserve data)
   await db.execute(sql`
-    SELECT add_retention_policy('haproxy_logs', INTERVAL '90 days', if_not_exists => TRUE);
+    ALTER TABLE haproxy_raw_logs SET (
+      timescaledb.compress,
+      timescaledb.compress_segmentby = 'server_id,service_type,network',
+      timescaledb.compress_orderby = 'timestamp DESC'
+    );
   `)
 
-  // Add compression policy (compress chunks older than 7 days)
+  // Add compression policy (compress after 6 hours)
   await db.execute(sql`
-    SELECT add_compression_policy('haproxy_logs', INTERVAL '7 days', if_not_exists => TRUE);
+    SELECT add_compression_policy('haproxy_raw_logs', INTERVAL '6 hours', if_not_exists => TRUE);
+  `)
+
+  // Add retention policy (auto-delete raw data older than 2 days - aggregates preserve historical data)
+  await db.execute(sql`
+    SELECT add_retention_policy('haproxy_raw_logs', INTERVAL '2 days', if_not_exists => TRUE);
   `)
 }
 ```
@@ -357,11 +398,11 @@ npm run db:studio  # Opens Drizzle Studio on localhost:4983
 # Verify all tables exist
 psql suiftly_dev -c "\dt"
 # Should show: customers, service_instances, api_keys, seal_keys, usage_records,
-#              haproxy_logs, escrow_transactions
+#              haproxy_raw_logs, escrow_transactions
 
 # Verify TimescaleDB hypertable
-psql suiftly_dev -c "SELECT * FROM timescaledb_information.hypertables WHERE hypertable_name = 'haproxy_logs';"
-# Should return 1 row (haproxy_logs is configured as hypertable)
+psql suiftly_dev -c "SELECT * FROM timescaledb_information.hypertables WHERE hypertable_name = 'haproxy_raw_logs';"
+# Should return 1 row (haproxy_raw_logs is configured as hypertable)
 ```
 
 ## Phase 3: Shared Types & Validation
