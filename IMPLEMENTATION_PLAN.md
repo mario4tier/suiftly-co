@@ -3,165 +3,42 @@ AI Agent Task Sequence - Keep Token Count Low
 
 **Important:** Only Phase 0 is a scripted setup. Phases 1+ are development tasks done with AI assistance and committed to the repo.
 
-## Phase 0: Server Environment Setup (One-Time Script)
+## Phase 0: Server Environment Setup (One-Time Script) ✅ COMPLETE
 **Prerequisite:** Repository cloned to local machine
 **Goal:** Install ALL system dependencies so developers can work
-**Use cases:**
-- Setting up a new dev machine (repo already has code)
-- Initial server setup for production
-- Disaster recovery / rebuilding a server
+**File:** [scripts/rare/setup-netops-server.py](scripts/rare/setup-netops-server.py)
+**Documentation:** See [scripts/rare/README.md](scripts/rare/README.md) for detailed usage
 
-**File:** scripts/rare/setup-netops-server.py
-**Philosophy:** Only installs tools. Does NOT create application code. Idempotent.
+**What it installs:**
+- System packages (git, curl, build-essential, etc.)
+- Node.js v22.x + PM2
+- PostgreSQL 17 + TimescaleDB 2.17+
+- Nginx + Certbot (unconfigured)
+- Python packages (via apt)
+- deploy system user
+- Directory structure (/var/www, /var/log/suiftly)
+- Databases: Environment-aware (dev: suiftly_dev + suiftly_test, prod: suiftly_prod only)
 
-**Script structure:**
-```python
-#!/usr/bin/env python3
-"""
-Idempotent NetOps server setup.
-Installs ALL dependencies needed for development.
-Run repeatedly until all checks pass.
-"""
+**Prerequisites:**
+1. Ubuntu 22.04 or 24.04
+2. Create `/etc/walrus/system.conf` with `DEPLOYMENT_TYPE=development` or `production`
+   - Use `sudo ~/walrus/scripts/configure-deployment.py` for interactive setup
 
-def check_ubuntu_version():
-    # Must be 22.04 or 24.04
-    # Exit if wrong: "Requires Ubuntu 22.04/24.04. Current: {version}"
-
-def install_system_packages():
-    # Check each, install if missing:
-    # git, curl, build-essential, python3-pip, software-properties-common
-    # Exit on apt failure: "Fix: sudo apt update && sudo apt --fix-broken install"
-
-def install_nodejs():
-    # Check: node --version (must be v22.x)
-    # If missing/wrong: curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-    # Install npm if missing
-    # Exit if old version exists: "Fix: sudo apt purge nodejs npm"
-
-def install_npm_global_packages():
-    # Check: pm2 --version
-    # Install: npm install -g pm2
-    # Verify PM2 startup scripts configured
-
-def install_postgresql():
-    # Check: psql --version (must be 17.x)
-    # Add PostgreSQL APT repository if needed
-    # Install: postgresql-17 postgresql-contrib-17
-    # Exit on fail: "Fix: Check PostgreSQL APT repo configuration"
-
-def install_timescaledb():
-    # Check: SELECT * FROM pg_available_extensions WHERE name='timescaledb';
-    # Add Timescale APT repository if needed
-    # Install: timescaledb-2-postgresql-17 (version 2.17+)
-    # Run: timescaledb-tune --quiet --yes
-    # Restart PostgreSQL
-
-def setup_postgresql_databases():
-    # Create databases if not exist: suiftly_dev, suiftly_prod, suiftly_test
-    # Enable TimescaleDB extension on each:
-    #   CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;
-    # Create deploy user if not exists with appropriate permissions
-    # Exit on permission error: "Fix: Check postgres user sudo access"
-
-def install_python_packages():
-    # System-wide or venv: psycopg2-binary, python-dotenv, click
-    # For database migration scripts
-
-def install_nginx():
-    # Check: nginx -v
-    # Install if missing: nginx
-    # Do NOT configure yet (Phase 19 handles config)
-
-def install_certbot():
-    # Production only (check hostname or env var)
-    # Install: certbot python3-certbot-nginx
-    # Do NOT run yet (Phase 19 handles SSL setup)
-
-def create_deploy_user():
-    # Check: id deploy
-    # Create if missing: useradd -m -s /bin/bash deploy
-    # Add to appropriate groups
-
-def create_directory_structure():
-    # mkdir -p /var/www/{api,webapp,global-manager}
-    # mkdir -p /var/log/suiftly
-    # chown -R deploy:deploy /var/www
-    # chown -R deploy:deploy /var/log/suiftly
-
-def main():
-    steps = [
-        check_ubuntu_version,
-        install_system_packages,
-        install_nodejs,
-        install_npm_global_packages,
-        install_postgresql,
-        install_timescaledb,
-        setup_postgresql_databases,
-        install_python_packages,
-        install_nginx,
-        install_certbot,
-        create_deploy_user,
-        create_directory_structure
-    ]
-
-    for step in steps:
-        try:
-            step()
-            print(f"✓ {step.__name__}")
-        except Exception as e:
-            print(f"✗ {step.__name__}: {e}")
-            sys.exit(1)
-
-    print("\n✅ Server setup complete!")
-    print("Next: Run Phase 1 from project root")
-```
-
-**What this installs:**
-- **System:** git, curl, build-essential, python3-pip, software-properties-common
-- **Node.js:** v22.x LTS from NodeSource repo
-- **NPM Global:** PM2 process manager
-- **Database:** PostgreSQL 17 + TimescaleDB 2.17+
-- **Web Server:** Nginx (unconfigured)
-- **SSL:** Certbot (production only, unconfigured)
-- **Python:** psycopg2-binary, python-dotenv, click
-- **User:** deploy user with home directory
-- **Directories:** /var/www/{api,webapp,global-manager}, /var/log/suiftly
-- **Databases:** Environment-aware (dev: suiftly_dev + suiftly_test, prod: suiftly_prod only)
-
-**Environment Detection (Single Source of Truth):**
-- **REQUIRES** `/etc/walrus/system.conf` with `DEPLOYMENT_TYPE` set
-- **Production** (DEPLOYMENT_TYPE=production): Creates `suiftly_prod` only
-- **Development** (DEPLOYMENT_TYPE=development): Creates `suiftly_dev` and `suiftly_test`
-- **No defaults**: Script fails if config file or DEPLOYMENT_TYPE missing
-- No fallbacks, no guessing, no assumptions
-
-**Test:**
+**Usage:**
 ```bash
-# PREREQUISITE: Create system.conf first
-sudo mkdir -p /etc/walrus
-echo "DEPLOYMENT_TYPE=development" | sudo tee /etc/walrus/system.conf
-
-# First run - installs everything (development mode)
+# Run the setup script
 sudo python3 scripts/rare/setup-netops-server.py
 
-# Second run - all checks pass (idempotent)
-sudo python3 scripts/rare/setup-netops-server.py
-# Output: ✓ check_ubuntu_version
-#         ✓ install_system_packages
-#         ✓ install_nodejs
-#         ✓ install_npm_global_packages
-#         ✓ install_postgresql
-#         ✓ install_timescaledb
-#         ✓ setup_postgresql_databases (suiftly_dev, suiftly_test)
-#         ✓ install_python_packages
-#         ✓ install_nginx
-#         ✓ install_certbot
-#         ✓ create_deploy_user
-#         ✓ create_directory_structure
-#         ✅ Server setup complete!
+# Script is idempotent - safe to re-run
 ```
 
-## Phase 1: Project Scaffolding & Monorepo Setup
+**Environment Detection:**
+- Reads `DEPLOYMENT_TYPE` from `/etc/walrus/system.conf` (single source of truth)
+- Production: Creates `suiftly_prod` only
+- Development: Creates `suiftly_dev` and `suiftly_test`
+- No defaults or fallbacks (fails if not configured)
+
+## Phase 1: Project Scaffolding & Monorepo Setup ✅ COMPLETE
 **Prerequisite:** Phase 0 complete (all dependencies installed)
 **Goal:** Initialize project structure, create all package.json files, install all npm packages
 **Location:** Run from project root directory
@@ -235,7 +112,7 @@ psql --version # Verify PostgreSQL 17
 - packages/shared/{package.json,tsconfig.json}
 - services/global-manager/{package.json,tsconfig.json}
 
-## Phase 2: Database Schema & ORM Setup
+## Phase 2: Database Schema & ORM Setup ✅ COMPLETE
 **Prerequisite:** Phase 0 (databases exist) + Phase 1 (packages/database scaffolded)
 **Goal:** Define complete database schema with Drizzle ORM, setup migrations, configure TimescaleDB
 **Ref:** docs/CUSTOMER_SERVICE_SCHEMA.md#database-schema-summary
