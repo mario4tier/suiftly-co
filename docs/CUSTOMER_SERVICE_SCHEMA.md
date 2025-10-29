@@ -548,14 +548,13 @@ CREATE TABLE service_instances (
 -- API keys for service authentication (see API_KEY_DESIGN.md for format and encryption details)
 CREATE TABLE api_keys (
   api_key_id VARCHAR(100) PRIMARY KEY,     -- Full API key string (encrypted)
-  api_key_fp VARCHAR(64) NOT NULL,         -- API key fingerprint for fast lookups (calculation: see API_KEY_DESIGN.md)
+  api_key_fp VARCHAR(64) NOT NULL,         -- API key fingerprint for fast lookups (first 7 Base32 chars → 32-bit)
   customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
   service_type VARCHAR(20) NOT NULL,       -- 'seal', 'grpc', 'graphql'
-  key_version SMALLINT NOT NULL,           -- Extracted from metadata (bits 15-14)
-  seal_network SMALLINT NOT NULL,          -- Extracted from seal_type bit a (1=mainnet, 0=testnet)
-  seal_access SMALLINT NOT NULL,           -- Extracted from seal_type bit b (1=permission, 0=open)
-  seal_source SMALLINT,                    -- Extracted from seal_type bit c (1=imported, 0=derived, NULL=open)
-  proc_group SMALLINT NOT NULL,            -- Extracted from metadata (bits 10-8, 0-7)
+  metadata JSONB NOT NULL DEFAULT '{}',    -- Service-specific fields (flexible for multi-service)
+                                           -- Seal: {key_version, seal_network, seal_access, seal_source, proc_group}
+                                           -- gRPC: TBD
+                                           -- GraphQL: TBD
   is_active BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMP NOT NULL,
   revoked_at TIMESTAMP NULL,
