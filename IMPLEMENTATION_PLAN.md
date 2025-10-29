@@ -256,6 +256,8 @@ export default {
 ```
 
 2. Define complete schema tables (per CUSTOMER_SERVICE_SCHEMA.md):
+
+**Note:** System constants (monthly limits, statuses, etc.) are defined in [docs/CONSTANTS.md](../docs/CONSTANTS.md) as the single source of truth.
 ```typescript
 // src/schema/customers.ts
 - customers (customer_id, wallet_address, escrow_contract_id, max_monthly_usd_cents,

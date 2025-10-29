@@ -58,7 +58,7 @@ Customers must explicitly authorize a maximum monthly spending cap (in USD equiv
 - ✅ Protects customers: Prevents unexpected charges
 - ✅ Protects Suiftly: Clear authorization trail
 
-Default limit: $200/month (adjustable from $20 to "no limit")
+Default limit: **$500/month** (adjustable from **$20** to **unlimited**) - See [CONSTANTS.md](./CONSTANTS.md) for authoritative values
 
 **Off-Chain Validation:**
 
@@ -516,16 +516,19 @@ CREATE TABLE customers (
   customer_id INTEGER PRIMARY KEY,         -- 32-bit random ID (1 to 4,294,967,295, excludes 0)
   wallet_address VARCHAR(66) NOT NULL UNIQUE, -- Sui wallet address (0x...)
   escrow_contract_id VARCHAR(66),          -- On-chain escrow object ID
-  max_monthly_usd_cents BIGINT,            -- Maximum authorized monthly spending (USD cents)
+  status VARCHAR(20) NOT NULL DEFAULT 'active', -- Customer account status: 'active', 'suspended', 'closed'
+  max_monthly_usd_cents BIGINT,            -- Maximum authorized monthly spending (USD cents, NULL = unlimited)
   current_balance_usd_cents BIGINT,        -- Current balance in USD cents (cached from on-chain)
-  current_month_charged_usd_cents BIGINT,  -- Amount charged this month (USD cents)
-  last_month_charged_usd_cents BIGINT,     -- Amount charged last month (USD cents) - for display
-  current_month_start DATE,                -- Start date of current billing month
+  current_month_charged_usd_cents BIGINT,  -- Amount charged this calendar month (USD cents)
+  last_month_charged_usd_cents BIGINT,     -- Amount charged last calendar month (USD cents) - for display
+  current_month_start DATE,                -- Start date of current billing month (1st of month)
   created_at TIMESTAMP NOT NULL,
   updated_at TIMESTAMP NOT NULL,
 
   INDEX idx_wallet (wallet_address),
-  CHECK (customer_id > 0)                  -- Ensure customer_id is never 0
+  INDEX idx_status (status) WHERE status != 'active',  -- Partial index for non-active customers
+  CHECK (customer_id > 0),                 -- Ensure customer_id is never 0
+  CHECK (status IN ('active', 'suspended', 'closed'))
 );
 
 -- Service instances
@@ -545,6 +548,7 @@ CREATE TABLE service_instances (
 -- API keys for service authentication (see API_KEY_DESIGN.md for format and encryption details)
 CREATE TABLE api_keys (
   api_key_id VARCHAR(100) PRIMARY KEY,     -- Full API key string (encrypted)
+  api_key_fp VARCHAR(64) NOT NULL,         -- API key fingerprint for fast lookups (calculation: see API_KEY_DESIGN.md)
   customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
   service_type VARCHAR(20) NOT NULL,       -- 'seal', 'grpc', 'graphql'
   key_version SMALLINT NOT NULL,           -- Extracted from metadata (bits 15-14)
@@ -556,7 +560,8 @@ CREATE TABLE api_keys (
   created_at TIMESTAMP NOT NULL,
   revoked_at TIMESTAMP NULL,
 
-  INDEX idx_customer_service (customer_id, service_type, is_active)
+  INDEX idx_customer_service (customer_id, service_type, is_active),
+  INDEX idx_api_key_fp (api_key_fp) WHERE is_active = true
 );
 
 -- Seal keys (Seal service specific)

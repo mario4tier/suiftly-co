@@ -335,9 +335,9 @@ if (import.meta.env.DEV) {
 │     excessive charges. Changes require wallet         │
 │     signature to update the smart contract.           │
 │                                                       │
-│  Current Limit: $2,000 per month (30-day window)     │
+│  Current Limit: $500 per month (calendar month)     │
 │                                                       │
-│  [━━━━━━━━━━━━━━━━━━━] $680 / $2,000               │
+│  [━━━━━━━━━━━━━━━━━━━] $85 / $500               │
 │  This month: $680 (34%) - Resets in 12 days          │
 │                                                       │
 │  Recent charges:                                      │
@@ -370,14 +370,14 @@ if (import.meta.env.DEV) {
 │ Change Monthly Spending Limit                        │
 ├──────────────────────────────────────────────────────┤
 │                                                       │
-│  Current limit: $2,000 per month                      │
+│  Current limit: $500 per month                      │
 │  Spent this month: $680                               │
 │                                                       │
-│  New limit: [$ 5000  ]  (min: $100, max: $50,000)    │
+│  New limit: [$ 5000  ]  (min: $20, unlimited)    │
 │                                                       │
 │  Suggested:                                           │
 │  • $500/month  - Single service (Starter/Pro)        │
-│  • $2,000/month - Default (most users)               │
+│  • $500/month - Default (see CONSTANTS.md)               │
 │  • $5,000/month - Heavy usage / multiple services    │
 │                                                       │
 │  ⓘ This change requires a wallet signature to       │
@@ -394,7 +394,7 @@ if (import.meta.env.DEV) {
 - Clicking "Update Limit" triggers wallet signature request
 - On-chain transaction updates escrow contract config
 - Toast: "Monthly spending limit updated: $5,000"
-- Activity log: "Monthly spending limit changed: $2,000 → $5,000"
+- Activity log: "Monthly spending limit changed: $500 → $1,000"
 
 **Tooltip:**
 - **Monthly Limit:** "Maximum Suiftly can charge in any 30-day rolling window. Protects your escrow from excessive billing."
@@ -1050,7 +1050,7 @@ All prices displayed in USD, but payments/deposits/withdrawals use SUI tokens on
   - User can withdraw anytime (minimum $50 if services active)
 
 - **Monthly Spending Limit (On-Chain):**
-  - Default: $2,000/month (user-adjustable: $100-$50,000)
+  - Default: $500/month (user-adjustable: $20-unlimited, see CONSTANTS.md)
   - Enforced by smart contract
   - User sets limit on first deposit
 

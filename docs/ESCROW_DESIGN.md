@@ -106,27 +106,31 @@ Current rate: 1 SUI = $2.45 (updated 47s ago, from 3 sources)
 
 **Smart contract enforces a monthly spending cap to protect users from bugs, exploits, or excessive billing.**
 
-**Default: $2,000 per month**
-- Minimum: $100
-- Maximum: $50,000
+**Values (see [CONSTANTS.md](./CONSTANTS.md) for authoritative source):**
+- Default: **$500 per month**
+- Minimum: **$20**
+- Maximum: **Unlimited** (no cap)
 - User-adjustable via Settings (requires wallet signature)
 - Enforced by smart contract (Suiftly backend cannot override)
 
-**30-Day Rolling Window:**
-- Tracks spending over last 30 days (not calendar month)
-- Example: If user spent $500 on Jan 15, that $500 "expires" from the window on Feb 14
+**Calendar Month Model:**
+- Tracks spending from 1st to last day of each calendar month (UTC)
+- Resets automatically on the 1st of each month
+- Smart contract emits `MonthlyReset` event on rollover
+- Off-chain database field `current_month_start` tracks current billing period
+- Example: Spending in January resets on February 1st (regardless of when service started)
 
 **Behavior When Limit Reached:**
 - Additional charges blocked by smart contract
-- User notified: "Monthly spending limit reached ($2,000). Service changes available in X days, or increase limit in Settings."
+- User notified: "Monthly spending limit reached ($X). Service changes available on [next month date], or increase limit in Settings."
 - Current services continue running (only NEW charges blocked)
 
 **Changing the Limit:**
 - User navigates to Settings → Spending Limit
-- Enters new limit (validated: $100-$50,000)
+- Enters new limit (validated: ≥$20, or "unlimited")
 - Clicks "Update Limit" → Wallet signature requested
 - Blockchain transaction updates escrow contract config
-- Activity log: "Monthly spending limit changed: $2,000 → $5,000"
+- Activity log: "Monthly spending limit changed: $500 → $1,000"
 
 ---
 
@@ -173,10 +177,10 @@ Current rate: 1 SUI = $2.45 (updated 47s ago, from 3 sources)
 
    Suggested:
    • $500/month  - Single service (Starter/Pro)
-   • $2,000/month - Recommended default
+   • $500/month - Default (see CONSTANTS.md)
    • $5,000/month - Heavy usage / multiple services
 
-   ☑ Use $2,000/month (recommended)
+   ☑ Use $500/month (see CONSTANTS.md)
 
    [Set Limit & Continue]
    ↓
@@ -184,7 +188,7 @@ Current rate: 1 SUI = $2.45 (updated 47s ago, from 3 sources)
    ↓
 5. Wallet signature requested (on-chain config)
    ↓
-6. Blockchain TX: Create escrow account with monthly limit = $2,000
+6. Blockchain TX: Create escrow account with monthly limit = $500
    ↓
 7. Modal updates: "Deposit Funds to Escrow"
 
@@ -234,7 +238,7 @@ User on: /services/seal (not configured)
    ↓
 3. Frontend validates continuously:
    - Balance check: $100 > $30 ✓
-   - Monthly limit check: $0 + $30 = $30 < $2,000 ✓
+   - Monthly limit check: $0 + $30 = $30 < $500 ✓
    - Result: "Enable Service" button ENABLED
    ↓
 4. User clicks "Enable Service"
@@ -243,7 +247,7 @@ User on: /services/seal (not configured)
    ↓
 6. Backend validates:
    - Balance: $100 > $30 ✓
-   - Monthly limit: $30 < $2,000 ✓
+   - Monthly limit: $30 < $500 ✓
    - Signature check: JWT valid ✓
    ↓
 7. Backend decrements balance in database: $100 → $70 (NO blockchain TX)
@@ -271,7 +275,7 @@ User on: /services/seal (not configured)
 ```
 User balance: $15
 Monthly spent: $50
-Monthly limit: $2,000
+Monthly limit: $500
 Active service: Seal (Pro tier, $40/month)
 
 1. User clicks [Edit] on service config
@@ -284,7 +288,7 @@ Active service: Seal (Pro tier, $40/month)
    ↓
 5. Frontend validates as user changes:
    - Balance check: $10 < $15 ❌
-   - Monthly limit check: $50 + $15 = $65 < $2,000 ✓
+   - Monthly limit check: $50 + $15 = $65 < $500 ✓
    ↓
 6. "Save Changes" button becomes DISABLED
    ↓
@@ -321,7 +325,7 @@ Active service: Seal (Pro tier, $40/month)
 ```
 User balance: $500
 Monthly spent: $1,950
-Monthly limit: $2,000
+Monthly limit: $500
 
 1. User on Keys tab, clicks "Add Seal Key" 15 times
    ↓
@@ -329,14 +333,14 @@ Monthly limit: $2,000
    ↓
 3. Frontend validates:
    - Balance check: $500 > $75 ✓
-   - Monthly limit check: $1,950 + $75 = $2,025 > $2,000 ❌
+   - Monthly limit check: $1,950 + $75 = $510 > $500 ❌
    ↓
 4. "Save Changes" button DISABLED
    ↓
 5. Error banner:
    "⚠ Cannot save - Would exceed monthly spending limit
 
-   Your monthly limit: $2,000
+   Your monthly limit: $500
    Spent this month: $1,950
    This change: +$75
    Total: $2,025 (exceeds by $25)
@@ -355,7 +359,7 @@ Monthly limit: $2,000
 8. Live pricing: "+$50/month"
    ↓
 9. Frontend validates:
-   - Monthly limit check: $1,950 + $50 = $2,000 ✓ (at limit but not over)
+   - Monthly limit check: $1,950 + $50 = $500 ✓ (at limit but not over)
    ↓
 10. "Save Changes" button ENABLED
     ↓
@@ -542,13 +546,9 @@ struct EscrowAccount has key {
     id: UID,
     owner: address,  // User's wallet address
     balance_sui: Balance<SUI>,  // Actual SUI tokens
-    monthly_limit_usd_cents: u64,  // e.g., 200000 = $2,000
-    spending_window: vector<Charge>,  // Last 30 days of charges
-}
-
-struct Charge has store {
-    timestamp: u64,
-    amount_usd_cents: u64,
+    monthly_limit_usd_cents: u64,  // See CONSTANTS.md (e.g., 50000 = $500 default)
+    current_month_charged_usd_cents: u64,  // Charged this calendar month
+    current_month_start_epoch: u64,  // Epoch timestamp of current month start (1st day, 00:00 UTC)
 }
 ```
 
@@ -556,22 +556,23 @@ struct Charge has store {
 ```move
 // Check if charge would exceed monthly limit
 public fun can_charge(account: &EscrowAccount, amount_usd_cents: u64, clock: &Clock): bool {
-    let now = clock::timestamp_ms(clock);
-    let thirty_days_ago = now - (30 * 24 * 60 * 60 * 1000);
+    // Check if we've rolled over to a new month
+    let now_ms = clock::timestamp_ms(clock);
+    let current_month_start = get_month_start_epoch(now_ms);  // Helper: returns epoch of 1st of current month
 
-    // Sum charges in last 30 days
-    let total_spent = 0u64;
-    let i = 0;
-    while (i < vector::length(&account.spending_window)) {
-        let charge = vector::borrow(&account.spending_window, i);
-        if (charge.timestamp >= thirty_days_ago) {
-            total_spent = total_spent + charge.amount_usd_cents;
-        };
-        i = i + 1;
+    // If new month started, reset counter
+    let charged_this_month = if (current_month_start > account.current_month_start_epoch) {
+        0  // New month, counter resets
+    } else {
+        account.current_month_charged_usd_cents
     };
 
-    // Check if new charge would exceed limit
-    total_spent + amount_usd_cents <= account.monthly_limit_usd_cents
+    // Check if new charge would exceed limit (0 means unlimited)
+    if (account.monthly_limit_usd_cents == 0) {
+        return true;  // Unlimited
+    };
+
+    charged_this_month + amount_usd_cents <= account.monthly_limit_usd_cents
 }
 ```
 
@@ -609,20 +610,7 @@ CREATE INDEX idx_ledger_customer_created ON ledger_entries(customer_id, created_
 CREATE INDEX idx_ledger_tx_hash ON ledger_entries(tx_hash) WHERE tx_hash IS NOT NULL;
 ```
 
-**spending_window** - 30-day rolling charges for monthly limit tracking
-```sql
-CREATE TABLE spending_window (
-  id UUID PRIMARY KEY,
-  customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
-  charge_usd_cents BIGINT NOT NULL,
-  charged_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX idx_spending_window_customer_time ON spending_window(customer_id, charged_at DESC);
-
--- Cleanup old entries (>30 days) via cron job
--- DELETE FROM spending_window WHERE charged_at < NOW() - INTERVAL '30 days';
-```
+**Note:** With calendar month model, we don't need a separate `spending_window` table. The `customers.current_month_charged_usd_cents` field tracks spending, which resets on the 1st of each month via the Global Manager's monthly reset task.
 
 ---
 
@@ -778,7 +766,7 @@ To enable Seal service, you need:
 ```
 Banner: "⚠ Cannot save - Would exceed monthly spending limit"
 
-Your monthly limit: $2,000
+Your monthly limit: $500
 Spent this month: $1,950
 This change: +$75
 Total: $2,025 (exceeds by $25)

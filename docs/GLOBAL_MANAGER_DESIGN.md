@@ -392,12 +392,12 @@ export async function calculateBills() {
 import { execSync } from 'child_process'
 
 export async function generateMAVault() {
-  // Get all active customers with limits
+  // Get all active customers with their services and API keys
   const customers = await db.query.customers.findMany({
     where: eq(customers.status, 'active'),
     with: {
       api_keys: true,
-      limits: true
+      service_instances: true
     }
   })
 
@@ -405,21 +405,31 @@ export async function generateMAVault() {
   const vaultData: Record<string, string> = {}
 
   for (const customer of customers) {
+    // Get tier from service_instances (customers don't have tier directly)
+    const sealService = customer.service_instances.find(s => s.service_type === 'seal')
+    const tier = sealService?.tier || 'starter'
+
     // Store customer config as JSON string value
     // See SEAL_SERVICE_CONFIG.md for tier structure and rate limit definitions
     const customerConfig = {
-      api_keys: customer.api_keys.map(k => k.key_hash),
-      tier: customer.tier || 'starter',
-      limits: {
-        guaranteed_rps: customer.limits?.guaranteed_rps || 100,  // Starter tier default
-        burst_rps: customer.limits?.burst_rps || 0,  // 0 for starter tier (no burst)
-        burst_duration_sec: customer.limits?.burst_duration_sec || 0
-      },
-      status: customer.limits?.status || 'active'
+      api_keys: customer.api_keys.map(k => k.api_key_fp),  // Use fingerprint, not hash
+      tier,  // From service_instances.tier
+      limits: getTierLimits(tier),  // Helper function returns limits per tier
+      status: customer.status  // From customers.status (active/suspended/closed)
     }
 
     // Key format: "customer:{customer_id}"
-    vaultData[`customer:${customer.id}`] = JSON.stringify(customerConfig)
+    vaultData[`customer:${customer.customer_id}`] = JSON.stringify(customerConfig)
+  }
+
+  function getTierLimits(tier: string) {
+    // See SEAL_SERVICE_CONFIG.md for tier-specific limits
+    const tierConfig = {
+      starter: { guaranteed_rps: 100, burst_rps: 0, burst_duration_sec: 0 },
+      pro: { guaranteed_rps: 500, burst_rps: 200, burst_duration_sec: 60 },
+      enterprise: { guaranteed_rps: 2000, burst_rps: 1000, burst_duration_sec: 300 }
+    }
+    return tierConfig[tier] || tierConfig.starter
   }
 
   // Generate content hash for change detection
@@ -1088,7 +1098,7 @@ export async function generateMMVault() {
 -- Customer encryption keys (for MM_VAULT)
 CREATE TABLE customer_encryption_keys (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  customer_id UUID NOT NULL REFERENCES customers(id),
+  customer_id INTEGER NOT NULL REFERENCES customers(customer_id),  -- FIX: Use INTEGER, not UUID
   key_id TEXT NOT NULL,
   key_type TEXT NOT NULL, -- 'aes256', 'rsa4096', etc
   encrypted_key_material TEXT NOT NULL, -- The actual encrypted key
