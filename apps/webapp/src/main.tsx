@@ -1,11 +1,12 @@
 /**
  * Main entry point for React app
- * Phase 6: Vite + React + TanStack Router
+ * Phase 7: With Wallet Provider
  */
 
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { RouterProvider, createRouter } from '@tanstack/react-router';
+import { WalletProvider } from './components/wallet/WalletProvider';
 import { routeTree } from './routeTree.gen';
 import './index.css';
 
@@ -22,6 +23,8 @@ declare module '@tanstack/react-router' {
 // Render app
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <RouterProvider router={router} />
+    <WalletProvider>
+      <RouterProvider router={router} />
+    </WalletProvider>
   </React.StrictMode>
 );
