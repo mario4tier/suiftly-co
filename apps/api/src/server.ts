@@ -1,53 +1,101 @@
 /**
  * Fastify server with tRPC
- * Based on ARCHITECTURE.md backend specification
+ * Phase 5: Complete API server foundation
  */
 
 import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
+import cors from '@fastify/cors';
+import rateLimit from '@fastify/rate-limit';
+import helmet from '@fastify/helmet';
 import { fastifyTRPCPlugin } from '@trpc/server/adapters/fastify';
 import { createContext } from './lib/trpc';
 import { appRouter } from './routes';
-
-const PORT = parseInt(process.env.PORT || '3000');
-const HOST = process.env.HOST || '0.0.0.0';
+import { config, logConfig } from './lib/config';
 
 const server = Fastify({
-  logger: true,
-  maxParamLength: 5000,
+  logger: {
+    level: config.NODE_ENV === 'production' ? 'info' : 'debug',
+  },
 });
 
-// Register cookie plugin (for httpOnly refresh tokens)
+// Security headers (helmet)
+await server.register(helmet, {
+  contentSecurityPolicy: config.NODE_ENV === 'production' ? undefined : false,
+});
+
+// CORS (allow frontend to call API)
+await server.register(cors, {
+  origin: config.CORS_ORIGIN,
+  credentials: true, // Allow cookies
+});
+
+// Rate limiting (prevent abuse)
+await server.register(rateLimit, {
+  max: config.RATE_LIMIT_MAX,
+  timeWindow: '1 minute',
+  errorResponseBuilder: () => ({
+    error: 'Rate limit exceeded',
+    message: `Maximum ${config.RATE_LIMIT_MAX} requests per minute`,
+  }),
+});
+
+// Cookie support (for httpOnly refresh tokens)
 await server.register(cookie, {
-  secret: process.env.COOKIE_SECRET || 'dev-cookie-secret-change-in-production',
+  secret: config.COOKIE_SECRET,
 });
 
-// Register tRPC plugin
+// tRPC API routes
 await server.register(fastifyTRPCPlugin, {
   prefix: '/trpc',
   trpcOptions: {
     router: appRouter,
     createContext,
+    onError({ path, error }) {
+      console.error(`[tRPC Error] ${path}:`, error.message);
+    },
   },
 });
 
-// Health check endpoint
-server.get('/health', async () => {
+// Health check endpoint (no rate limit)
+server.get('/health', {
+  config: { rateLimit: false },
+}, async () => {
   return {
     status: 'ok',
     timestamp: new Date().toISOString(),
-    mockAuth: process.env.MOCK_AUTH === 'true',
+    environment: config.NODE_ENV,
+    mockAuth: config.MOCK_AUTH,
+    version: '0.1.0',
   };
+});
+
+// Graceful shutdown
+process.on('SIGTERM', async () => {
+  console.log('\n📴 SIGTERM received, shutting down gracefully...');
+  await server.close();
+  process.exit(0);
+});
+
+process.on('SIGINT', async () => {
+  console.log('\n📴 SIGINT received, shutting down gracefully...');
+  await server.close();
+  process.exit(0);
 });
 
 // Start server
 async function start() {
   try {
-    await server.listen({ port: PORT, host: HOST });
-    console.log(`\n🚀 API Server running on http://${HOST}:${PORT}`);
-    console.log(`📡 tRPC endpoint: http://${HOST}:${PORT}/trpc`);
-    console.log(`🔧 Health check: http://${HOST}:${PORT}/health`);
-    console.log(`🔐 Mock Auth: ${process.env.MOCK_AUTH === 'true' ? 'ENABLED' : 'DISABLED'}\n`);
+    await server.listen({ port: parseInt(config.PORT), host: config.HOST });
+
+    console.log('\n🚀 Suiftly API Server');
+    console.log('='.repeat(50));
+    logConfig();
+    console.log('Endpoints:');
+    console.log(`  📡 tRPC API: http://${config.HOST}:${config.PORT}/trpc`);
+    console.log(`  🔧 Health: http://${config.HOST}:${config.PORT}/health`);
+    console.log('='.repeat(50));
+    console.log('');
   } catch (err) {
     server.log.error(err);
     process.exit(1);
