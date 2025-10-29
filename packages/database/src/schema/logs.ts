@@ -39,11 +39,11 @@ export const haproxyRawLogs = pgTable('haproxy_raw_logs', {
   backendId: smallint('backend_id').default(0),
   terminationState: text('termination_state'),
 }, (table) => ({
-  idxCustomerTime: index('idx_customer_time').on(table.customerId, table.timestamp.desc()).where(sql`${table.customerId} IS NOT NULL`),
-  idxServerTime: index('idx_server_time').on(table.serverId, table.timestamp.desc()),
-  idxServiceNetwork: index('idx_service_network').on(table.serviceType, table.network, table.timestamp.desc()),
-  idxTrafficType: index('idx_traffic_type').on(table.trafficType, table.timestamp.desc()),
-  idxEventType: index('idx_event_type').on(table.eventType, table.timestamp.desc()).where(sql`${table.eventType} != 0`),
-  idxStatusCode: index('idx_status_code').on(table.statusCode, table.timestamp.desc()),
-  idxApiKeyFp: index('idx_api_key_fp').on(table.apiKeyFp, table.timestamp.desc()).where(sql`${table.apiKeyFp} != 0`),
+  idxLogsCustomerTime: index('idx_logs_customer_time').on(table.customerId, table.timestamp.desc()).where(sql`${table.customerId} IS NOT NULL`),
+  idxLogsServerTime: index('idx_logs_server_time').on(table.serverId, table.timestamp.desc()),
+  idxLogsServiceNetwork: index('idx_logs_service_network').on(table.serviceType, table.network, table.timestamp.desc()),
+  idxLogsTrafficType: index('idx_logs_traffic_type').on(table.trafficType, table.timestamp.desc()),
+  idxLogsEventType: index('idx_logs_event_type').on(table.eventType, table.timestamp.desc()).where(sql`${table.eventType} != 0`),
+  idxLogsStatusCode: index('idx_logs_status_code').on(table.statusCode, table.timestamp.desc()),
+  idxLogsApiKeyFp: index('idx_logs_api_key_fp').on(table.apiKeyFp, table.timestamp.desc()).where(sql`${table.apiKeyFp} != 0`),
 }));

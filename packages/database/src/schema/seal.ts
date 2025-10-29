@@ -10,5 +10,5 @@ export const sealKeys = pgTable('seal_keys', {
   isActive: boolean('is_active').notNull().default(true),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 }, (table) => ({
-  idxCustomer: index('idx_customer').on(table.customerId),
+  idxSealCustomer: index('idx_seal_customer').on(table.customerId),
 }));

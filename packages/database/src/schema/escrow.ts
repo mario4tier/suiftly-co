@@ -11,8 +11,8 @@ export const escrowTransactions = pgTable('escrow_transactions', {
   assetType: varchar('asset_type', { length: 66 }),
   timestamp: timestamp('timestamp').notNull(),
 }, (table) => ({
-  idxCustomer: index('idx_customer').on(table.customerId),
-  idxTxDigest: index('idx_tx_digest').on(table.txDigest),
+  idxEscrowCustomer: index('idx_escrow_customer').on(table.customerId),
+  idxEscrowTxDigest: index('idx_escrow_tx_digest').on(table.txDigest),
 }));
 
 export const ledgerEntries = pgTable('ledger_entries', {
@@ -28,7 +28,7 @@ export const ledgerEntries = pgTable('ledger_entries', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
   idxCustomerCreated: index('idx_customer_created').on(table.customerId, table.createdAt),
-  idxTxHash: index('idx_tx_hash').on(table.txHash).where(sql`${table.txHash} IS NOT NULL`),
+  idxLedgerTxHash: index('idx_ledger_tx_hash').on(table.txHash).where(sql`${table.txHash} IS NOT NULL`),
 }));
 
 export const billingRecords = pgTable('billing_records', {
@@ -43,5 +43,5 @@ export const billingRecords = pgTable('billing_records', {
   createdAt: timestamp('created_at').notNull().defaultNow(),
 }, (table) => ({
   idxCustomerPeriod: index('idx_customer_period').on(table.customerId, table.billingPeriodStart),
-  idxStatus: index('idx_status').on(table.status).where(sql`${table.status} != 'paid'`),
+  idxBillingStatus: index('idx_billing_status').on(table.status).where(sql`${table.status} != 'paid'`),
 }));

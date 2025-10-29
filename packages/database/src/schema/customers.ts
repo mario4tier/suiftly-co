@@ -15,7 +15,7 @@ export const customers = pgTable('customers', {
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
 }, (table) => ({
   idxWallet: index('idx_wallet').on(table.walletAddress),
-  idxStatus: index('idx_status').on(table.status).where(sql`${table.status} != 'active'`),
+  idxCustomerStatus: index('idx_customer_status').on(table.status).where(sql`${table.status} != 'active'`),
   checkCustomerId: check('check_customer_id', sql`${table.customerId} > 0`),
   checkStatus: check('check_status', sql`${table.status} IN ('active', 'suspended', 'closed')`),
 }));

@@ -16,6 +16,6 @@ export const refreshTokens = pgTable('refresh_tokens', {
   expiresAt: timestamp('expires_at').notNull(),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 }, (table) => ({
-  idxCustomer: index('idx_customer').on(table.customerId),
+  idxRefreshCustomer: index('idx_refresh_customer').on(table.customerId),
   idxExpiresAt: index('idx_expires_at').on(table.expiresAt),
 }));

@@ -1,0 +1,13 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1761705219027,
+      "tag": "0000_yielding_psynapse",
+      "breakpoints": true
+    }
+  ]
+}
