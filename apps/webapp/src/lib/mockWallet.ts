@@ -21,15 +21,13 @@ export function getMockWallet(): MockWalletAccount | null {
 }
 
 /**
- * Connect mock wallet (generates random address)
+ * Connect mock wallet (uses consistent test address)
  */
 export function connectMockWallet(): MockWalletAccount {
-  // Generate random Sui address (0x + 64 hex chars)
-  const randomBytes = new Uint8Array(32);
-  crypto.getRandomValues(randomBytes);
-  const address = '0x' + Array.from(randomBytes)
-    .map(b => b.toString(16).padStart(2, '0'))
-    .join('');
+  // Use consistent test address for stable development
+  // This prevents creating new customers on every connect
+  // Different from production wallets (starts with 0xtest...)
+  const address = '0xtestf1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1';
 
   const account: MockWalletAccount = {
     address,
