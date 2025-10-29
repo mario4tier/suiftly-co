@@ -663,6 +663,77 @@ CREATE TABLE haproxy_raw_logs (
 
 -- Note: Continuous aggregates (metering_by_second, ops_by_minute) are defined separately
 -- for efficient querying of historical data after raw logs are pruned.
+
+-- Auth nonces (wallet signature anti-replay protection)
+CREATE TABLE auth_nonces (
+  address VARCHAR(66) PRIMARY KEY,         -- Wallet address
+  nonce VARCHAR(64) NOT NULL,              -- Random challenge string
+  created_at TIMESTAMP NOT NULL,           -- For 5-minute TTL expiry
+
+  INDEX idx_created_at (created_at)        -- Cleanup expired nonces
+);
+
+-- Refresh tokens (JWT session revocation)
+CREATE TABLE refresh_tokens (
+  id SERIAL PRIMARY KEY,
+  customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
+  token_hash VARCHAR(64) NOT NULL UNIQUE,  -- SHA256 hash of refresh token
+  expires_at TIMESTAMP NOT NULL,
+  created_at TIMESTAMP NOT NULL,
+
+  INDEX idx_customer (customer_id),
+  INDEX idx_expires_at (expires_at)        -- Cleanup expired tokens
+);
+
+-- Ledger entries (financial accounting with SUI/USD exchange rates)
+CREATE TABLE ledger_entries (
+  id UUID PRIMARY KEY,
+  customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
+  type VARCHAR(20) NOT NULL,               -- 'deposit', 'withdrawal', 'charge', 'credit'
+  amount_usd_cents BIGINT NOT NULL,        -- USD amount (signed: + for deposit/credit, - for charge/withdrawal)
+  amount_sui_mist BIGINT,                  -- SUI amount in mist (1 SUI = 10^9 mist), NULL for charges/credits
+  sui_usd_rate_cents BIGINT,               -- Rate at transaction time (cents per 1 SUI), e.g., 245 = $2.45
+  tx_hash VARCHAR(66),                     -- On-chain TX hash for deposits/withdrawals, NULL for charges/credits
+  description TEXT,                        -- Human-readable description
+  invoice_id VARCHAR(50),                  -- Optional invoice reference
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+  INDEX idx_customer_created (customer_id, created_at DESC),
+  INDEX idx_tx_hash (tx_hash) WHERE tx_hash IS NOT NULL
+);
+
+-- Billing records (charges and credits applied to accounts)
+CREATE TABLE billing_records (
+  id UUID PRIMARY KEY,
+  customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
+  billing_period_start TIMESTAMP NOT NULL,
+  billing_period_end TIMESTAMP NOT NULL,
+  amount_usd_cents BIGINT NOT NULL,        -- Charged amount (positive) or credit (negative)
+  type VARCHAR(20) NOT NULL,               -- 'charge', 'credit', 'refund'
+  status VARCHAR(20) NOT NULL,             -- 'pending', 'paid', 'failed'
+  tx_digest VARCHAR(64),                   -- Escrow charge transaction (NULL if pending)
+  created_at TIMESTAMP NOT NULL,
+
+  INDEX idx_customer_period (customer_id, billing_period_start),
+  INDEX idx_status (status) WHERE status != 'paid'
+);
+
+-- Processing state (Global Manager resumability)
+CREATE TABLE processing_state (
+  key TEXT PRIMARY KEY,                    -- e.g., 'last_log_timestamp', 'last_billing_run'
+  value TEXT NOT NULL,                     -- Timestamp or other state value
+  updated_at TIMESTAMP NOT NULL
+);
+
+-- System control (singleton table for system-wide state)
+CREATE TABLE system_control (
+  id INTEGER PRIMARY KEY CHECK (id = 1),   -- Singleton: only 1 row allowed
+  ma_vault_version VARCHAR(64),            -- Expected MA_VAULT version deployed to infrastructure
+  mm_vault_version VARCHAR(64),            -- Expected MM_VAULT version (if used)
+  last_monthly_reset DATE,                 -- Last calendar month reset date
+  maintenance_mode BOOLEAN DEFAULT false,  -- Pause new signups during maintenance
+  updated_at TIMESTAMP NOT NULL
+);
 ```
 
 ## Implementation Notes
