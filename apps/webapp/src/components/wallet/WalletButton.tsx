@@ -1,10 +1,11 @@
 /**
  * Wallet connection button
- * Shows connect button or connected wallet address
+ * Supports both mock wallet (dev) and real wallets (production)
  */
 
 import { useCurrentAccount, useConnectWallet, useDisconnectWallet, useWallets } from '@mysten/dapp-kit';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { connectMockWallet, disconnectMockWallet, getMockWallet, isMockMode } from '../../lib/mockWallet';
 
 export function WalletButton() {
   const currentAccount = useCurrentAccount();
@@ -12,18 +13,43 @@ export function WalletButton() {
   const { mutate: connect, error, isPending } = useConnectWallet();
   const { mutate: disconnect } = useDisconnectWallet();
   const [showWalletList, setShowWalletList] = useState(false);
+  const [mockAccount, setMockAccount] = useState(getMockWallet());
 
-  if (currentAccount) {
+  const useMock = isMockMode();
+
+  // Load mock wallet on mount
+  useEffect(() => {
+    if (useMock) {
+      setMockAccount(getMockWallet());
+    }
+  }, [useMock]);
+
+  // Show connected state (mock or real)
+  const connectedAccount = useMock ? mockAccount : currentAccount;
+
+  if (connectedAccount) {
     return (
       <div className="flex items-center gap-3">
         <div className="px-4 py-2 bg-gray-100 rounded-lg">
           <span className="text-sm text-gray-600">Connected:</span>
           <span className="ml-2 font-mono text-sm">
-            {currentAccount.address.slice(0, 6)}...{currentAccount.address.slice(-4)}
+            {connectedAccount.address.slice(0, 6)}...{connectedAccount.address.slice(-4)}
           </span>
+          {useMock && (
+            <span className="ml-2 px-2 py-0.5 bg-yellow-100 text-yellow-800 text-xs rounded">
+              MOCK
+            </span>
+          )}
         </div>
         <button
-          onClick={() => disconnect()}
+          onClick={() => {
+            if (useMock) {
+              disconnectMockWallet();
+              setMockAccount(null);
+            } else {
+              disconnect();
+            }
+          }}
           className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition"
         >
           Disconnect
@@ -32,7 +58,27 @@ export function WalletButton() {
     );
   }
 
-  // Show wallet selection
+  // MOCK MODE: Simple connect button
+  if (useMock) {
+    return (
+      <div className="space-y-2">
+        <button
+          onClick={() => {
+            const account = connectMockWallet();
+            setMockAccount(account);
+          }}
+          className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium"
+        >
+          Connect Wallet (Mock)
+        </button>
+        <p className="text-xs text-gray-500">
+          Development mode - generates random wallet address
+        </p>
+      </div>
+    );
+  }
+
+  // REAL MODE: Show wallet selection
   if (showWalletList) {
     return (
       <div className="bg-white rounded-lg shadow-lg p-6 max-w-md">
