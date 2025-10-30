@@ -123,7 +123,8 @@ def install_system_packages(context: SetupContext):
     """Install base system packages."""
     print_step("Checking system packages...")
 
-    packages = [
+    # Base system packages
+    base_packages = [
         'git',
         'curl',
         'build-essential',
@@ -132,8 +133,23 @@ def install_system_packages(context: SetupContext):
         'apt-transport-https',
         'ca-certificates',
         'gnupg',
-        'lsb-release'
+        'lsb-release',
     ]
+
+    # Playwright E2E testing dependencies
+    # Required for headless browser testing
+    playwright_packages = [
+        'libnspr4',
+        'libnss3',
+    ]
+
+    # Audio library (different package name between Ubuntu versions)
+    # Ubuntu 24.04 uses libasound2t64, Ubuntu 22.04 uses libasound2
+    # Try both, one will install
+    audio_packages = ['libasound2t64', 'libasound2']
+
+    # Combine all packages
+    packages = base_packages + playwright_packages
 
     # Check which packages are missing
     missing = []
@@ -142,7 +158,23 @@ def install_system_packages(context: SetupContext):
         if returncode != 0:
             missing.append(pkg)
 
-    if not missing:
+    # Try to install the correct audio package for this Ubuntu version
+    audio_installed = False
+    for audio_pkg in audio_packages:
+        returncode, stdout, stderr = run_command(['dpkg', '-s', audio_pkg], check=False)
+        if returncode == 0:
+            audio_installed = True
+            break
+
+    if not audio_installed:
+        # Try installing the first audio package (will work on the right Ubuntu version)
+        for audio_pkg in audio_packages:
+            returncode, stdout, stderr = run_command(['apt', 'install', '-y', audio_pkg], check=False)
+            if returncode == 0:
+                audio_installed = True
+                break
+
+    if not missing and audio_installed:
         print_success("install_system_packages (all present)")
         return
 
