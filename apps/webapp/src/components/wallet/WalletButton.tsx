@@ -5,6 +5,7 @@
 
 import { useCurrentAccount, useConnectWallet, useDisconnectWallet, useWallets } from '@mysten/dapp-kit';
 import { useState, useEffect, useRef } from 'react';
+import { useNavigate } from '@tanstack/react-router';
 import { connectMockWallet, disconnectMockWallet } from '../../lib/mockWallet';
 import { useAuth } from '../../lib/auth';
 import {
@@ -19,6 +20,7 @@ import {
 export function WalletButton() {
   const currentAccount = useCurrentAccount();
   const wallets = useWallets();
+  const navigate = useNavigate();
   const { mutate: connect, error, isPending } = useConnectWallet();
   const { mutate: disconnect } = useDisconnectWallet();
   const [showWalletModal, setShowWalletModal] = useState(false);
@@ -69,10 +71,13 @@ export function WalletButton() {
       }
 
       setShowAccountMenu(false);
+
+      // Redirect to login page after disconnect
+      navigate({ to: '/login' });
     };
 
     performDisconnect();
-  }, [triggerDisconnect, isMock, logout, disconnect]);
+  }, [triggerDisconnect, isMock, logout, disconnect, navigate]);
 
   const handleCopyAddress = () => {
     if (user) {

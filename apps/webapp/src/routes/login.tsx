@@ -5,7 +5,7 @@
 
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { useEffect } from 'react';
-import { WalletButton } from '../components/wallet/WalletButton';
+import { ConnectButton } from '../components/wallet/ConnectButton';
 import { useAuth } from '../lib/auth';
 
 export const Route = createFileRoute('/login')({
@@ -36,7 +36,7 @@ function LoginPage() {
         </div>
 
         <div className="flex justify-center mb-6">
-          <WalletButton />
+          <ConnectButton />
         </div>
 
         <div className="text-center text-xs text-gray-500">

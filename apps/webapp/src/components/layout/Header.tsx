@@ -3,7 +3,7 @@
  * Premium design inspired by Cloudflare
  */
 
-import { WalletButton } from '../wallet/WalletButton';
+import { WalletWidget } from '../wallet/WalletWidget';
 import { Globe } from 'lucide-react';
 
 export function Header() {
@@ -24,7 +24,7 @@ export function Header() {
         </span>
       </div>
 
-      <WalletButton />
+      <WalletWidget />
     </header>
   );
 }

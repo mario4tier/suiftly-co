@@ -21,7 +21,7 @@ test.describe('Dashboard Navigation', () => {
     expect(page.url()).toContain('/services/seal');
 
     // Should see Seal Storage heading
-    await expect(page.locator('h2:has-text("Seal Storage")')).toBeVisible();
+    await expect(page.locator('h1:has-text("Seal Storage")')).toBeVisible();
 
     // Should see wallet address in header
     await expect(page.locator('text=0xaaaa')).toBeVisible();
@@ -50,12 +50,12 @@ test.describe('Dashboard Navigation', () => {
     // Navigate to Billing
     await page.click('text=Billing');
     await page.waitForURL('/billing');
-    await expect(page.locator('h2:has-text("Billing")')).toBeVisible();
+    await expect(page.locator('h2:has-text("Billing & Usage")')).toBeVisible();
 
     // Navigate back to Seal
     await page.click('text=Seal');
     await page.waitForURL('/services/seal');
-    await expect(page.locator('h2:has-text("Seal Storage")')).toBeVisible();
+    await expect(page.locator('h1:has-text("Seal Storage")')).toBeVisible();
   });
 
   test('header is visible on all pages', async ({ page }) => {
@@ -77,7 +77,7 @@ test.describe('Dashboard Navigation', () => {
   test('active navigation item is highlighted', async ({ page }) => {
     // On /services/seal, Seal should be highlighted
     const sealLink = page.locator('a:has-text("Seal")');
-    await expect(sealLink).toHaveClass(/bg-primary/);
+    await expect(sealLink).toHaveClass(/bg-blue-50/);
 
     // Navigate to gRPC
     await page.click('text=gRPC');
@@ -85,6 +85,6 @@ test.describe('Dashboard Navigation', () => {
 
     // gRPC should now be highlighted
     const grpcLink = page.locator('a:has-text("gRPC")');
-    await expect(grpcLink).toHaveClass(/bg-primary/);
+    await expect(grpcLink).toHaveClass(/bg-blue-50/);
   });
 });

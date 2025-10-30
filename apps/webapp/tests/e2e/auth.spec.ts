@@ -71,6 +71,10 @@ test.describe('Authentication Flow', () => {
     await page.waitForSelector('text=Disconnect', { timeout: 2000 });
     await page.click('text=Disconnect');
 
+    // Should redirect to /login
+    await page.waitForURL('/login', { timeout: 5000 });
+    expect(page.url()).toContain('/login');
+
     // Should show "Connect Wallet" button again
     await expect(page.locator('button:has-text("Connect Wallet")')).toBeVisible();
 
