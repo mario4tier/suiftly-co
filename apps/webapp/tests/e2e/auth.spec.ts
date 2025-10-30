@@ -56,16 +56,23 @@ test.describe('Authentication Flow', () => {
     await page.goto('/');
     await page.click('text=Connect Wallet');
     await page.click('text=Connect Mock Wallet');
-    await expect(page.locator('text=/0x[a-f0-9]{4}\\.\\.\\./')).toBeVisible({ timeout: 5000 });
 
-    // Click address to open dropdown
-    await page.click('text=/0x[a-f0-9]{4}\\.\\.\\.*/');
+    // Wait for modal to close (authentication succeeds)
+    await page.waitForSelector('text=Connect Wallet', { state: 'hidden', timeout: 10000 });
 
-    // Click disconnect
+    // Wait for address button to appear (authentication complete)
+    const addressButton = page.locator('button', { hasText: /0x[a-f0-9]{4}/ });
+    await expect(addressButton).toBeVisible({ timeout: 5000 });
+
+    // Click address button to open dropdown
+    await addressButton.click();
+
+    // Wait for dropdown menu to appear and click disconnect
+    await page.waitForSelector('text=Disconnect', { timeout: 2000 });
     await page.click('text=Disconnect');
 
     // Should show "Connect Wallet" button again
-    await expect(page.locator('text=Connect Wallet')).toBeVisible();
+    await expect(page.locator('button:has-text("Connect Wallet")')).toBeVisible();
 
     // localStorage should be cleared
     const authState = await page.evaluate(() => localStorage.getItem('suiftly-auth'));

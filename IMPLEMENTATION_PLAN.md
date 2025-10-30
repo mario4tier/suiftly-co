@@ -347,17 +347,47 @@ test('JWT cookie is httpOnly')
 - Auto-reconnect from localStorage
 **Test:** Can connect wallet in mock & real modes
 
-## Phase 8: Authentication Flow Complete
+## Phase 8: Authentication Flow Complete ✅ COMPLETE
 **Goal:** End-to-end auth with session management
-**Files:** 
-- apps/webapp/src/stores/auth.ts (Zustand)
-- apps/webapp/src/lib/trpc.ts (auth headers)
+**Status:** Production-ready, fully tested
+**Files:**
+- apps/webapp/src/lib/auth.ts - Authentication hook with idempotent operations
+- apps/webapp/src/stores/auth.ts - Zustand state management
+- apps/webapp/src/components/wallet/WalletButton.tsx - Web3 modal UI with dropdown menu
+- apps/api/src/routes/auth.ts - Challenge generation, signature verification, JWT issuance
+- apps/api/src/lib/jwt.ts - JWT generation/verification with production safeguards
+- apps/api/src/lib/signature.ts - Ed25519 signature verification
+- apps/webapp/tests/e2e/auth.spec.ts - Playwright E2E tests
+
 **Features:**
-- Challenge-response flow
-- JWT storage in httpOnly cookie
-- Auto-refresh before expiry
-- Protected route guards
-**Test:** E2E test login → protected page → logout
+- ✅ Challenge-response wallet authentication
+- ✅ JWT session management (access 15min + refresh 30day)
+- ✅ Auto-refresh on token expiry (transparent to user)
+- ✅ Protected route guards and endpoints
+- ✅ Web3-standard UI (modal + dropdown menu)
+- ✅ Mock wallet for development and testing
+- ✅ Idempotent operations (React.StrictMode safe)
+- ✅ Customer ID collision retry loop
+- ✅ Nonce reuse (10-minute window)
+- ✅ Production JWT_SECRET validation (reads from /etc/walrus/system.conf)
+- ✅ Customer ID security (never exposed to client)
+
+**Testing:**
+- Manual: Mock and real Sui wallet authentication tested
+- Automated: `npx playwright test` - E2E tests for auth flow
+- API: `./scripts/dev/test-auth.sh` - Backend auth flow via curl
+
+**Autonomous Development:**
+> **MILESTONE:** Playwright E2E testing now enabled! Claude Code can autonomously:
+> - Test React routes and components in headless browser
+> - Verify authentication flows work end-to-end
+> - Debug UI issues by running tests and analyzing failures
+> - Iterate on frontend code with test-driven development
+> - No manual browser interaction needed for testing
+>
+> This enables much faster iteration cycles for future phases.
+
+**Test:** ✅ E2E tests pass (2/2) - auth flow + protected endpoint verification
 
 ## Phase 9: Dashboard Layout
 **Goal:** Main dashboard structure
