@@ -97,11 +97,20 @@ export function WalletButton() {
                   Connected {isMock && '(Mock)'}
                 </div>
 
+                {/* Billing */}
+                <a
+                  href="/billing"
+                  onClick={() => setShowAccountMenu(false)}
+                  className="w-full text-left px-3 py-2 hover:bg-gray-100 rounded text-sm flex items-center gap-2"
+                >
+                  <span>💳</span>
+                  <span>Billing & Balance</span>
+                </a>
+
                 {/* Copy Address */}
                 <button
                   onClick={() => {
                     navigator.clipboard.writeText(user.walletAddress);
-                    console.log('[WALLET] Address copied to clipboard');
                     setShowAccountMenu(false);
                   }}
                   className="w-full text-left px-3 py-2 hover:bg-gray-100 rounded text-sm flex items-center gap-2"

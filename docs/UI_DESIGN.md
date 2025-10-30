@@ -1065,69 +1065,39 @@ All prices displayed in USD, but payments/deposits/withdrawals use SUI tokens on
 
 ## Header Components
 
-### Wallet Widget (Persistent)
+### Simplified Header (No Wallet Widget)
 
-**Always visible in top-right of header.**
-
-**State 1: Not Connected (Default for new users)**
-```
-┌────────────────────────────────────────┐
-│  Logo  Suiftly      [Connect Wallet] 󰅂 │  ← Header
-└────────────────────────────────────────┘
-```
-- Shows: "Connect Wallet" button (prominent, primary style)
-- Click → Opens wallet connection modal
-- No wallet address shown
-
-**State 2: Connected**
+**Header shows:**
 ```
 ┌─────────────────────────────────────────────┐
-│  Logo  Suiftly  [󰇃 $127.50 ▼]  [0x1a2b...] │  ← Header
+│  Logo  Suiftly BETA          [0x1a2b... ▼]  │
 └─────────────────────────────────────────────┘
 ```
-- Shows: Wallet icon + balance + truncated address
-- Dropdown indicator on balance
 
-**Wallet Dropdown (When Connected):**
-Click balance to expand:
+**Components:**
+- Logo: "Suiftly" with BETA badge
+- Wallet address button (right side) - shows dropdown with Copy Address and Disconnect
+
+**Dropdown Menu (Click address):**
 ```
 ┌─────────────────────────────┐
-│ Wallet Balance     $127.50  │
-│ 0x1a2b3c4d5e...             │
-├─────────────────────────────┤
-│  [Top Up]    [Withdraw]     │
-├─────────────────────────────┤
-│  Recent Activity            │
-│  • Jan 9: +$50.00 (deposit) │
-│  • Jan 9: -$45.00 (Seal)    │
-│  • Jan 8: -$12.00 (gRPC)    │
-├─────────────────────────────┤
-│  [Disconnect Wallet]        │
+│  Copy Address               │
+│  Disconnect                 │
 └─────────────────────────────┘
 ```
 
 **Actions:**
-- **Connect Wallet:** Opens wallet connection modal (Sui wallet)
-- **Top Up:** Opens deposit modal (Web3 transaction) [requires connected wallet]
-- **Withdraw:** Opens withdrawal modal (Web3 transaction) [requires connected wallet]
-- **Disconnect Wallet:** Calls logout endpoint (clears httpOnly cookie), clears auth state, header returns to "Connect Wallet" button
-- **Recent Activity:** Last 5 transactions (link to full billing page)
+- **Copy Address:** Copies full wallet address to clipboard
+- **Disconnect:** Logs out and redirects to /login
 
-**Disconnect Behavior:**
-1. User clicks "Disconnect Wallet" in dropdown
-2. Confirmation prompt: "Disconnect wallet? You'll need to reconnect to manage services."
-3. If confirmed:
-   - Call `/api/auth/logout` (clears httpOnly cookie)
-   - Clear client-side auth state (wallet address, balance, etc.)
-   - Header shows "Connect Wallet" button again
-   - Service pages remain accessible (exploration mode)
-   - Configured services show in read-only mode (can't edit without reconnecting)
-4. Toast: "Wallet disconnected"
+**No Balance in Header:**
+- Balance, deposits, withdrawals all managed on `/billing` page
+- Keeps header clean and focused
+- All financial operations in one place
 
 **Development Mock:**
-- Show "Connect Wallet" OR "Use Mock Wallet" button
-- Mock wallet: Hardcoded address (0xMOCK123...), balance: $1000.00
-- Top-up/withdraw shows success toast (no real transaction)
+- Login page shows both "Connect Wallet" and "Connect Mock Wallet" buttons
+- After auth, header shows address (real or mock)
 
 ---
 
@@ -1327,10 +1297,10 @@ User can withdraw credit at any time
 
 | Component | Purpose | Location |
 |-----------|---------|----------|
-| `WalletWidget` | Balance display + dropdown | `components/wallet/` |
-| `DepositModal` | Top-up funds modal | `components/wallet/` |
-| `WithdrawModal` | Withdraw funds modal | `components/wallet/` |
-| `WalletBalance` | Balance display (reusable) | `components/wallet/` |
+| `WalletButton` | Address dropdown (Copy/Disconnect) in header | `components/wallet/` |
+| `DepositModal` | Top-up funds modal (billing page) | `components/billing/` |
+| `WithdrawModal` | Withdraw funds modal (billing page) | `components/billing/` |
+| `TransactionsList` | Recent transactions (billing page) | `components/billing/` |
 
 ### Service Components
 

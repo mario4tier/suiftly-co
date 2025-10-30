@@ -1,6 +1,6 @@
 /**
  * Dashboard Layout
- * Cloudflare-inspired structure using Tailwind CSS
+ * Clean layout structure with Tailwind CSS
  */
 
 import { ReactNode } from 'react';
@@ -13,14 +13,14 @@ interface DashboardLayoutProps {
 
 export function DashboardLayout({ children }: DashboardLayoutProps) {
   return (
-    <div className="min-h-screen flex flex-col bg-moonshine">
+    <div className="min-h-screen bg-muted/20">
       <Header />
 
-      <div className="flex flex-1">
+      <div className="flex">
         <Sidebar />
 
-        <main className="flex-1 overflow-y-auto">
-          <div className="max-w-7xl mx-auto px-8 py-8">
+        <main className="flex-1 p-8">
+          <div className="max-w-7xl mx-auto">
             {children}
           </div>
         </main>
