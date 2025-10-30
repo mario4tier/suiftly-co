@@ -12,18 +12,48 @@ import { createFileRoute } from '@tanstack/react-router'
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as WalletDemoRouteImport } from './routes/wallet-demo'
+import { Route as LoginRouteImport } from './routes/login'
 import { Route as IndexRouteImport } from './routes/index'
 
 const TestLazyRouteImport = createFileRoute('/test')()
+const ServicesLazyRouteImport = createFileRoute('/services')()
+const LogsLazyRouteImport = createFileRoute('/logs')()
+const BillingLazyRouteImport = createFileRoute('/billing')()
+const ApiKeysLazyRouteImport = createFileRoute('/api-keys')()
 
 const TestLazyRoute = TestLazyRouteImport.update({
   id: '/test',
   path: '/test',
   getParentRoute: () => rootRouteImport,
 } as any).lazy(() => import('./routes/test.lazy').then((d) => d.Route))
+const ServicesLazyRoute = ServicesLazyRouteImport.update({
+  id: '/services',
+  path: '/services',
+  getParentRoute: () => rootRouteImport,
+} as any).lazy(() => import('./routes/services.lazy').then((d) => d.Route))
+const LogsLazyRoute = LogsLazyRouteImport.update({
+  id: '/logs',
+  path: '/logs',
+  getParentRoute: () => rootRouteImport,
+} as any).lazy(() => import('./routes/logs.lazy').then((d) => d.Route))
+const BillingLazyRoute = BillingLazyRouteImport.update({
+  id: '/billing',
+  path: '/billing',
+  getParentRoute: () => rootRouteImport,
+} as any).lazy(() => import('./routes/billing.lazy').then((d) => d.Route))
+const ApiKeysLazyRoute = ApiKeysLazyRouteImport.update({
+  id: '/api-keys',
+  path: '/api-keys',
+  getParentRoute: () => rootRouteImport,
+} as any).lazy(() => import('./routes/api-keys.lazy').then((d) => d.Route))
 const WalletDemoRoute = WalletDemoRouteImport.update({
   id: '/wallet-demo',
   path: '/wallet-demo',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LoginRoute = LoginRouteImport.update({
+  id: '/login',
+  path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
 const IndexRoute = IndexRouteImport.update({
@@ -34,31 +64,76 @@ const IndexRoute = IndexRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/login': typeof LoginRoute
   '/wallet-demo': typeof WalletDemoRoute
+  '/api-keys': typeof ApiKeysLazyRoute
+  '/billing': typeof BillingLazyRoute
+  '/logs': typeof LogsLazyRoute
+  '/services': typeof ServicesLazyRoute
   '/test': typeof TestLazyRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/login': typeof LoginRoute
   '/wallet-demo': typeof WalletDemoRoute
+  '/api-keys': typeof ApiKeysLazyRoute
+  '/billing': typeof BillingLazyRoute
+  '/logs': typeof LogsLazyRoute
+  '/services': typeof ServicesLazyRoute
   '/test': typeof TestLazyRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/login': typeof LoginRoute
   '/wallet-demo': typeof WalletDemoRoute
+  '/api-keys': typeof ApiKeysLazyRoute
+  '/billing': typeof BillingLazyRoute
+  '/logs': typeof LogsLazyRoute
+  '/services': typeof ServicesLazyRoute
   '/test': typeof TestLazyRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/wallet-demo' | '/test'
+  fullPaths:
+    | '/'
+    | '/login'
+    | '/wallet-demo'
+    | '/api-keys'
+    | '/billing'
+    | '/logs'
+    | '/services'
+    | '/test'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/wallet-demo' | '/test'
-  id: '__root__' | '/' | '/wallet-demo' | '/test'
+  to:
+    | '/'
+    | '/login'
+    | '/wallet-demo'
+    | '/api-keys'
+    | '/billing'
+    | '/logs'
+    | '/services'
+    | '/test'
+  id:
+    | '__root__'
+    | '/'
+    | '/login'
+    | '/wallet-demo'
+    | '/api-keys'
+    | '/billing'
+    | '/logs'
+    | '/services'
+    | '/test'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  LoginRoute: typeof LoginRoute
   WalletDemoRoute: typeof WalletDemoRoute
+  ApiKeysLazyRoute: typeof ApiKeysLazyRoute
+  BillingLazyRoute: typeof BillingLazyRoute
+  LogsLazyRoute: typeof LogsLazyRoute
+  ServicesLazyRoute: typeof ServicesLazyRoute
   TestLazyRoute: typeof TestLazyRoute
 }
 
@@ -71,11 +146,46 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof TestLazyRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/services': {
+      id: '/services'
+      path: '/services'
+      fullPath: '/services'
+      preLoaderRoute: typeof ServicesLazyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/logs': {
+      id: '/logs'
+      path: '/logs'
+      fullPath: '/logs'
+      preLoaderRoute: typeof LogsLazyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/billing': {
+      id: '/billing'
+      path: '/billing'
+      fullPath: '/billing'
+      preLoaderRoute: typeof BillingLazyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api-keys': {
+      id: '/api-keys'
+      path: '/api-keys'
+      fullPath: '/api-keys'
+      preLoaderRoute: typeof ApiKeysLazyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/wallet-demo': {
       id: '/wallet-demo'
       path: '/wallet-demo'
       fullPath: '/wallet-demo'
       preLoaderRoute: typeof WalletDemoRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/': {
@@ -90,7 +200,12 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  LoginRoute: LoginRoute,
   WalletDemoRoute: WalletDemoRoute,
+  ApiKeysLazyRoute: ApiKeysLazyRoute,
+  BillingLazyRoute: BillingLazyRoute,
+  LogsLazyRoute: LogsLazyRoute,
+  ServicesLazyRoute: ServicesLazyRoute,
   TestLazyRoute: TestLazyRoute,
 }
 export const routeTree = rootRouteImport

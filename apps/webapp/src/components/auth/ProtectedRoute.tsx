@@ -1,12 +1,11 @@
 /**
  * Protected Route Component
- * Redirects to home if not authenticated
+ * Redirects to login if not authenticated
  */
 
 import { useEffect } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useAuthStore } from '../../stores/auth';
-import { toast } from 'sonner';
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
@@ -18,8 +17,7 @@ export function ProtectedRoute({ children }: ProtectedRouteProps) {
 
   useEffect(() => {
     if (!isAuthenticated) {
-      toast.error('Please connect your wallet to access this page');
-      navigate({ to: '/' });
+      navigate({ to: '/login' });
     }
   }, [isAuthenticated, navigate]);
 

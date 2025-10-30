@@ -1,0 +1,63 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e2]:
+  - region "Notifications alt+T":
+    - list:
+      - listitem [ref=e3]:
+        - img [ref=e5]
+        - generic [ref=e8]: Successfully authenticated!
+  - generic [ref=e10]:
+    - complementary [ref=e11]:
+      - navigation [ref=e12]:
+        - generic [ref=e13]:
+          - link "📊 Overview" [ref=e14] [cursor=pointer]:
+            - /url: /dashboard
+            - generic [ref=e15]: 📊
+            - generic [ref=e16]: Overview
+          - link "⚙️ Services" [ref=e17] [cursor=pointer]:
+            - /url: /services
+            - generic [ref=e18]: ⚙️
+            - generic [ref=e19]: Services
+          - link "💳 Billing" [ref=e20] [cursor=pointer]:
+            - /url: /billing
+            - generic [ref=e21]: 💳
+            - generic [ref=e22]: Billing
+          - link "🔑 API Keys" [ref=e23] [cursor=pointer]:
+            - /url: /api-keys
+            - generic [ref=e24]: 🔑
+            - generic [ref=e25]: API Keys
+          - link "📝 Logs" [ref=e26] [cursor=pointer]:
+            - /url: /logs
+            - generic [ref=e27]: 📝
+            - generic [ref=e28]: Logs
+      - link "⚙️ Settings" [ref=e30] [cursor=pointer]:
+        - /url: /settings
+        - generic [ref=e31]: ⚙️
+        - generic [ref=e32]: Settings
+    - generic [ref=e33]:
+      - banner [ref=e34]:
+        - generic [ref=e36]: Suiftly
+        - button "0xaaaa...aaaa" [ref=e39]
+      - main [ref=e40]:
+        - generic [ref=e41]:
+          - heading "Dashboard" [level=1] [ref=e42]
+          - generic [ref=e43]:
+            - heading "Welcome to Suiftly" [level=2] [ref=e44]
+            - paragraph [ref=e45]: "Connected with wallet: 0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          - generic [ref=e46]:
+            - generic [ref=e47]:
+              - generic [ref=e48]: Active Services
+              - generic [ref=e49]: "0"
+            - generic [ref=e50]:
+              - generic [ref=e51]: This Month
+              - generic [ref=e52]: $0.00
+            - generic [ref=e53]:
+              - generic [ref=e54]: API Keys
+              - generic [ref=e55]: "0"
+          - generic [ref=e56]:
+            - heading "Get Started" [level=3] [ref=e57]
+            - paragraph [ref=e58]: Configure your first service to begin using Suiftly infrastructure.
+            - link "Configure Services" [ref=e59] [cursor=pointer]:
+              - /url: /services
+```
