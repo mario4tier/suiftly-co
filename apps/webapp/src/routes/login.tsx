@@ -5,7 +5,7 @@
 
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { useEffect, useState } from 'react';
-import { useCurrentAccount, useConnectWallet, useWallets } from '@mysten/dapp-kit';
+import { useCurrentAccount, useConnectWallet, useDisconnectWallet, useWallets } from '@mysten/dapp-kit';
 import { connectMockWallet } from '../lib/mockWallet';
 import { useAuth } from '../lib/auth';
 import { Wallet, AlertCircle } from 'lucide-react';
@@ -20,6 +20,7 @@ function LoginPage() {
   const currentAccount = useCurrentAccount();
   const wallets = useWallets();
   const { mutate: connect, error, isPending } = useConnectWallet();
+  const { mutate: disconnect } = useDisconnectWallet();
   const [mockAccount, setMockAccount] = useState<{address: string} | null>(null);
   const [pendingAuth, setPendingAuth] = useState(false);
 
@@ -48,8 +49,13 @@ function LoginPage() {
 
   const handleWalletSelect = (wallet: any) => {
     console.log('[LOGIN] Requesting real wallet connection...');
-    connect({ wallet });
-    setPendingAuth(true);
+    // Disconnect any pending/existing connection to close old dialog
+    disconnect();
+    // Open fresh wallet dialog
+    setTimeout(() => {
+      connect({ wallet });
+      setPendingAuth(true);
+    }, 100); // Small delay to ensure disconnect completes
   };
 
   const handleMockConnect = () => {
