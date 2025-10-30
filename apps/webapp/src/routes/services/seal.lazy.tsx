@@ -1,11 +1,11 @@
 /**
  * Seal Service Configuration Page
- * Main service page for Phase 10
+ * Phase 10: Full configuration form with live pricing
  */
 
 import { createLazyFileRoute } from '@tanstack/react-router';
 import { DashboardLayout } from '../../components/layout/DashboardLayout';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { SealConfigForm } from '../../components/services/SealConfigForm';
 
 export const Route = createLazyFileRoute('/services/seal')({
   component: SealServicePage,
@@ -22,19 +22,7 @@ function SealServicePage() {
           </p>
         </div>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Service Configuration</CardTitle>
-            <CardDescription>
-              Configure Seal storage for your applications
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <p className="text-muted-foreground">
-              Service configuration coming in Phase 10...
-            </p>
-          </CardContent>
-        </Card>
+        <SealConfigForm />
       </div>
     </DashboardLayout>
   );

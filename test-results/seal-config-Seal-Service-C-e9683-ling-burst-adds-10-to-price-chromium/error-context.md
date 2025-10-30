@@ -1,0 +1,62 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e2]:
+  - region "Notifications alt+T"
+  - generic [ref=e4]:
+    - banner [ref=e5]:
+      - generic [ref=e6]:
+        - heading "Suiftly" [level=1] [ref=e7]
+        - generic [ref=e8]: BETA
+      - button "0xaaaa...aaaa" [ref=e10]
+    - generic [ref=e11]:
+      - complementary [ref=e12]:
+        - navigation [ref=e13]:
+          - generic [ref=e14]:
+            - paragraph [ref=e16]: Services
+            - generic [ref=e17]:
+              - link "🔷 Seal" [ref=e18] [cursor=pointer]:
+                - /url: /services/seal
+                - generic [ref=e19]: 🔷
+                - generic [ref=e20]: Seal
+              - link "🌐 gRPC" [ref=e21] [cursor=pointer]:
+                - /url: /services/grpc
+                - generic [ref=e22]: 🌐
+                - generic [ref=e23]: gRPC
+              - link "📊 GraphQL" [ref=e24] [cursor=pointer]:
+                - /url: /services/graphql
+                - generic [ref=e25]: 📊
+                - generic [ref=e26]: GraphQL
+          - generic [ref=e29]:
+            - link "💳 Billing" [ref=e30] [cursor=pointer]:
+              - /url: /billing
+              - generic [ref=e31]: 💳
+              - generic [ref=e32]: Billing
+            - link "💬 Support" [ref=e33] [cursor=pointer]:
+              - /url: /support
+              - generic [ref=e34]: 💬
+              - generic [ref=e35]: Support
+      - main [ref=e36]:
+        - generic [ref=e38]:
+          - generic [ref=e39]:
+            - heading "Services" [level=2] [ref=e40]
+            - paragraph [ref=e41]: Configure and manage your infrastructure services
+          - generic [ref=e42]:
+            - link "🔷 Seal Storage Decentralized storage with Walrus protocol Not configured" [ref=e43] [cursor=pointer]:
+              - /url: /services/seal
+              - generic [ref=e45]:
+                - generic [ref=e46]: 🔷
+                - generic [ref=e47]: Seal Storage
+                - generic [ref=e48]: Decentralized storage with Walrus protocol
+                - generic [ref=e50]: Not configured
+            - generic [ref=e52]:
+              - generic [ref=e53]: 🌐
+              - generic [ref=e54]: gRPC
+              - generic [ref=e55]: High-performance RPC endpoints
+              - generic [ref=e57]: Coming Soon
+            - generic [ref=e59]:
+              - generic [ref=e60]: 📊
+              - generic [ref=e61]: GraphQL
+              - generic [ref=e62]: Flexible query language for Sui data
+              - generic [ref=e64]: Coming Soon
+```
