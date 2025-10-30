@@ -47,7 +47,6 @@ function LoginPage() {
   }, [pendingAuth, connectedAccount, isAuthenticated, login]);
 
   const handleWalletSelect = (wallet: any) => {
-    if (isPending) return;
     console.log('[LOGIN] Requesting real wallet connection...');
     connect({ wallet });
     setPendingAuth(true);
