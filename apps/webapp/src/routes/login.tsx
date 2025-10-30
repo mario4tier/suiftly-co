@@ -98,11 +98,11 @@ function LoginPage() {
                 className="w-full px-4 py-3 bg-white hover:bg-gray-50 rounded-lg flex items-center gap-3 transition border border-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {wallet.icon && (
-                  <div className="w-8 h-8 flex items-center justify-center flex-shrink-0">
+                  <div className="flex items-center justify-center flex-shrink-0" style={{ width: '32px', height: '32px' }}>
                     <img
                       src={wallet.icon}
                       alt={wallet.name}
-                      className="w-full h-full object-contain"
+                      style={{ width: '32px', height: '32px', objectFit: 'contain' }}
                     />
                   </div>
                 )}
