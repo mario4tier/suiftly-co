@@ -72,7 +72,7 @@ function LoginPage() {
         </div>
 
         {/* Wallet Options */}
-        <div className="space-y-3 mb-6">
+        <div className="mb-6">
           {wallets.length === 0 ? (
             <div className="text-center py-8 px-4 bg-gray-50 rounded-lg border border-gray-200">
               <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -89,30 +89,33 @@ function LoginPage() {
               </a>
             </div>
           ) : (
-            wallets.map((wallet) => (
-              <button
-                key={wallet.name}
-                onClick={() => handleWalletSelect(wallet)}
-                className="w-full px-4 py-3 bg-white hover:bg-gray-50 rounded-lg flex items-center gap-3 transition border border-gray-200"
-              >
-                {wallet.icon && (
-                  <div className="flex items-center justify-center flex-shrink-0" style={{ width: '32px', height: '32px' }}>
-                    <img
-                      src={wallet.icon}
-                      alt={wallet.name}
-                      style={{ width: '32px', height: '32px', objectFit: 'contain' }}
-                    />
-                  </div>
-                )}
-                <span className="font-medium text-gray-900">{wallet.name}</span>
-              </button>
-            ))
+            <div className="flex flex-wrap gap-3 justify-center">
+              {wallets.map((wallet) => (
+                <button
+                  key={wallet.name}
+                  onClick={() => handleWalletSelect(wallet)}
+                  className="px-4 py-3 bg-white hover:bg-blue-50 hover:border-blue-300 rounded-lg flex flex-col items-center gap-2 transition-all border border-gray-200 active:scale-95 hover:shadow-md"
+                  style={{ width: '140px' }}
+                >
+                  {wallet.icon && (
+                    <div className="flex items-center justify-center flex-shrink-0" style={{ width: '32px', height: '32px' }}>
+                      <img
+                        src={wallet.icon}
+                        alt={wallet.name}
+                        style={{ width: '32px', height: '32px', objectFit: 'contain' }}
+                      />
+                    </div>
+                  )}
+                  <span className="font-medium text-gray-900 text-sm text-center">{wallet.name}</span>
+                </button>
+              ))}
+            </div>
           )}
 
           {/* Mock Wallet Option (Dev) */}
           {import.meta.env.DEV && (
             <>
-              <div className="relative my-4">
+              <div className="relative my-6">
                 <div className="absolute inset-0 flex items-center">
                   <div className="w-full border-t border-gray-200"></div>
                 </div>
@@ -120,12 +123,18 @@ function LoginPage() {
                   <span className="bg-white px-2 text-gray-500 uppercase tracking-wider">Development</span>
                 </div>
               </div>
-              <button
-                onClick={handleMockConnect}
-                className="w-full px-4 py-3 bg-gray-50 hover:bg-gray-100 rounded-lg transition text-sm font-medium text-gray-700 border border-gray-200"
-              >
-                Connect Mock Wallet
-              </button>
+              <div className="flex justify-center">
+                <button
+                  onClick={handleMockConnect}
+                  className="px-4 py-3 bg-gray-50 hover:bg-amber-50 hover:border-amber-300 rounded-lg transition-all text-sm font-medium text-gray-700 border border-gray-200 active:scale-95 hover:shadow-md flex flex-col items-center gap-2"
+                  style={{ width: '140px' }}
+                >
+                  <div className="flex items-center justify-center flex-shrink-0" style={{ width: '32px', height: '32px' }}>
+                    <Wallet className="h-6 w-6 text-gray-600" />
+                  </div>
+                  <span>Mock Wallet</span>
+                </button>
+              </div>
             </>
           )}
         </div>
