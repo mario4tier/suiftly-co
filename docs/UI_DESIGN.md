@@ -9,7 +9,6 @@ Customer-facing platform for Suiftly infrastructure services with a clean, profe
 - **[ESCROW_DESIGN.md](./ESCROW_DESIGN.md)** - Complete escrow account architecture, smart contract interface, and financial flows
 
 **Design Principles:**
-- Clean, professional interface (modern SaaS aesthetic)
 - Self-service configuration (no sales calls needed)
 - Transparent pricing (see costs before enabling)
 - Immediate feedback (real-time price calculations)
