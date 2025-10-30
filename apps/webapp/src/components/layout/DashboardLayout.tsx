@@ -1,6 +1,6 @@
 /**
  * Dashboard Layout
- * Clean layout structure with Tailwind CSS
+ * Premium layout structure
  */
 
 import { ReactNode } from 'react';
@@ -13,14 +13,14 @@ interface DashboardLayoutProps {
 
 export function DashboardLayout({ children }: DashboardLayoutProps) {
   return (
-    <div className="min-h-screen bg-muted/20">
+    <div className="min-h-screen bg-gray-50">
       <Header />
 
       <div className="flex">
         <Sidebar />
 
-        <main className="flex-1 p-8">
-          <div className="max-w-7xl mx-auto">
+        <main className="flex-1 p-6 overflow-auto">
+          <div className="max-w-6xl mx-auto">
             {children}
           </div>
         </main>

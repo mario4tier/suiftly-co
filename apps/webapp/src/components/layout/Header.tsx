@@ -1,17 +1,26 @@
 /**
  * Dashboard Header
- * Clean, modern design with Tailwind CSS
+ * Premium design inspired by Cloudflare
  */
 
 import { WalletButton } from '../wallet/WalletButton';
+import { Globe } from 'lucide-react';
 
 export function Header() {
   return (
-    <header className="bg-white border-b border-border h-16 flex items-center justify-between px-6 sticky top-0 z-50">
-      <div className="flex items-center gap-3">
-        <h1 className="text-2xl font-bold text-foreground">Suiftly</h1>
-        <span className="text-xs px-2 py-1 rounded bg-secondary text-secondary-foreground font-medium">
-          BETA
+    <header className="bg-white border-b border-gray-200 h-14 flex items-center justify-between px-6 sticky top-0 z-50">
+      <div className="flex items-center gap-4">
+        {/* Logo */}
+        <div className="flex items-center gap-2">
+          <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-blue-600 rounded flex items-center justify-center">
+            <Globe className="h-5 w-5 text-white" />
+          </div>
+          <h1 className="text-xl font-semibold text-gray-900">Suiftly</h1>
+        </div>
+
+        {/* Beta Badge */}
+        <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-medium uppercase tracking-wider">
+          Beta
         </span>
       </div>
 

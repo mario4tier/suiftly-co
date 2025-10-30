@@ -1,56 +1,109 @@
 /**
  * Dashboard Sidebar
- * Clean navigation with Tailwind CSS
+ * Premium design with professional icons
  */
 
 import { Link, useRouterState } from '@tanstack/react-router';
+import {
+  HardDrive,
+  Network,
+  Database,
+  CreditCard,
+  MessageSquare,
+  Shield,
+  Activity,
+  Key,
+  Settings
+} from 'lucide-react';
 
 export function Sidebar() {
   const routerState = useRouterState();
   const currentPath = routerState.location.pathname;
 
   const serviceItems = [
-    { path: '/services/seal', label: 'Seal', icon: '🔷' },
-    { path: '/services/grpc', label: 'gRPC', icon: '🌐' },
-    { path: '/services/graphql', label: 'GraphQL', icon: '📊' },
+    { path: '/services/seal', label: 'Seal Storage', icon: HardDrive },
+    { path: '/services/grpc', label: 'gRPC', icon: Network },
+    { path: '/services/graphql', label: 'GraphQL', icon: Database },
   ];
 
-  const accountItems = [
-    { path: '/billing', label: 'Billing', icon: '💳' },
-    { path: '/support', label: 'Support', icon: '💬' },
+  const managementItems = [
+    { path: '/billing', label: 'Billing & Usage', icon: CreditCard },
+    { path: '/api-keys', label: 'API Keys', icon: Key },
+    { path: '/logs', label: 'Analytics & Logs', icon: Activity },
   ];
 
-  const isActive = (path: string, exact?: boolean) => {
-    if (exact) return currentPath === path;
+  const supportItems = [
+    { path: '/support', label: 'Support', icon: MessageSquare },
+    { path: '/settings', label: 'Settings', icon: Settings },
+  ];
+
+  const isActive = (path: string) => {
     return currentPath === path || currentPath.startsWith(path + '/');
   };
 
   return (
-    <aside className="w-64 bg-white border-r border-border h-screen sticky top-0">
-      <nav className="p-4">
+    <aside className="w-56 bg-gray-50 border-r border-gray-200 min-h-screen pt-14">
+      <nav className="p-3">
         {/* Services Section */}
         <div className="mb-6">
           <div className="px-3 mb-2">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-              Services
+            <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
+              Infrastructure
             </p>
           </div>
-          <div className="space-y-1">
+          <div className="space-y-0.5">
             {serviceItems.map((item) => {
               const active = isActive(item.path);
+              const Icon = item.icon;
               return (
                 <Link
                   key={item.path}
                   to={item.path}
                   className={`
-                    flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors no-underline
+                    flex items-center gap-2.5 px-3 py-2 rounded-md text-sm transition-all no-underline
                     ${active
-                      ? 'bg-primary/10 text-primary font-medium'
-                      : 'text-foreground hover:bg-secondary'
+                      ? 'bg-blue-50 text-blue-600 font-medium border-l-2 border-blue-600 pl-2.5'
+                      : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'
                     }
                   `}
                 >
-                  <span className="text-base">{item.icon}</span>
+                  <Icon className={`h-4 w-4 ${active ? 'text-blue-600' : 'text-gray-400'}`} />
+                  <span>{item.label}</span>
+                  {item.path === '/services/seal' && active && (
+                    <span className="ml-auto text-[10px] px-1.5 py-0.5 bg-green-100 text-green-700 rounded font-medium">
+                      Active
+                    </span>
+                  )}
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Management Section */}
+        <div className="mb-6">
+          <div className="px-3 mb-2">
+            <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
+              Management
+            </p>
+          </div>
+          <div className="space-y-0.5">
+            {managementItems.map((item) => {
+              const active = isActive(item.path);
+              const Icon = item.icon;
+              return (
+                <Link
+                  key={item.path}
+                  to={item.path}
+                  className={`
+                    flex items-center gap-2.5 px-3 py-2 rounded-md text-sm transition-all no-underline
+                    ${active
+                      ? 'bg-blue-50 text-blue-600 font-medium border-l-2 border-blue-600 pl-2.5'
+                      : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'
+                    }
+                  `}
+                >
+                  <Icon className={`h-4 w-4 ${active ? 'text-blue-600' : 'text-gray-400'}`} />
                   <span>{item.label}</span>
                 </Link>
               );
@@ -59,26 +112,27 @@ export function Sidebar() {
         </div>
 
         {/* Divider */}
-        <div className="border-t border-border my-4" />
+        <div className="border-t border-gray-200 my-4 mx-3" />
 
-        {/* Account Section */}
+        {/* Support Section */}
         <div>
-          <div className="space-y-1">
-            {accountItems.map((item) => {
+          <div className="space-y-0.5">
+            {supportItems.map((item) => {
               const active = isActive(item.path);
+              const Icon = item.icon;
               return (
                 <Link
                   key={item.path}
                   to={item.path}
                   className={`
-                    flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors no-underline
+                    flex items-center gap-2.5 px-3 py-2 rounded-md text-sm transition-all no-underline
                     ${active
-                      ? 'bg-primary/10 text-primary font-medium'
-                      : 'text-foreground hover:bg-secondary'
+                      ? 'bg-blue-50 text-blue-600 font-medium border-l-2 border-blue-600 pl-2.5'
+                      : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'
                     }
                   `}
                 >
-                  <span className="text-base">{item.icon}</span>
+                  <Icon className={`h-4 w-4 ${active ? 'text-blue-600' : 'text-gray-400'}`} />
                   <span>{item.label}</span>
                 </Link>
               );

@@ -7,12 +7,12 @@ import { test, expect } from '@playwright/test';
 
 test.describe('Seal Service Configuration', () => {
   test.beforeEach(async ({ page }) => {
-    // Authenticate
-    await page.goto('http://localhost:5173/login');
+    // Authenticate (start at root, which redirects to /services/seal after auth)
+    await page.goto('/');
     await page.click('text=Connect Wallet');
     await page.click('text=Connect Mock Wallet');
 
-    // Wait for redirect to /services/seal
+    // Wait for redirect to /services/seal (default home)
     await page.waitForURL('/services/seal', { timeout: 10000 });
   });
 
@@ -20,9 +20,9 @@ test.describe('Seal Service Configuration', () => {
     // Should see page title
     await expect(page.locator('h2:has-text("Seal Storage")')).toBeVisible();
 
-    // Should see tier selection
-    await expect(page.locator('text=STARTER')).toBeVisible();
-    await expect(page.locator('text=PRO')).toBeVisible();
+    // Should see tier selection (use h3 headings inside tier buttons)
+    await expect(page.locator('h3:has-text("STARTER")')).toBeVisible();
+    await expect(page.locator('h3:has-text("PRO")')).toBeVisible();
 
     // Should see STARTER selected by default
     await expect(page.locator('button:has-text("STARTER") >> text=SELECTED')).toBeVisible();
@@ -63,8 +63,8 @@ test.describe('Seal Service Configuration', () => {
 
   test('burst is disabled for STARTER tier', async ({ page }) => {
     // Should be on STARTER by default
-    // Burst checkbox should be disabled
-    const burstCheckbox = page.locator('input[id="burst"]');
+    // Burst checkbox should be disabled (shadcn Checkbox renders as button with role)
+    const burstCheckbox = page.locator('button[id="burst"]');
     await expect(burstCheckbox).toBeDisabled();
 
     console.log('✅ Burst correctly disabled for STARTER tier');
