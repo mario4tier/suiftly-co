@@ -14,7 +14,7 @@ import { randomBytes, createHash } from 'crypto';
 import { TRPCError } from '@trpc/server';
 
 const MOCK_AUTH = process.env.MOCK_AUTH === 'true';
-const NONCE_EXPIRY_MS = 5 * 60 * 1000; // 5 minutes
+const NONCE_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes (user-friendly, still secure)
 
 /**
  * Step 1: Connect wallet - generates nonce challenge
@@ -25,27 +25,64 @@ export const authRouter = router({
     .mutation(async ({ input }) => {
       const { walletAddress } = input;
 
-      // Generate random nonce (32-byte hex)
+      // Check if there's already a valid nonce for this address
+      const existingNonce = await db
+        .select()
+        .from(authNonces)
+        .where(eq(authNonces.address, walletAddress))
+        .limit(1);
+
+      // If valid nonce exists (< 10 min old), reuse it
+      if (existingNonce.length > 0) {
+        const age = Date.now() - existingNonce[0].createdAt.getTime();
+        if (age < NONCE_EXPIRY_MS) {
+          console.log(`[AUTH] Reusing existing nonce for ${walletAddress.slice(0, 10)}... (age: ${Math.floor(age / 1000)}s)`);
+
+          // Build message with existing nonce
+          const message = [
+            'Sign in to Suiftly',
+            '',
+            'This approval is only for authentication.',
+            'No fund transfer.',
+            '',
+            existingNonce[0].nonce,
+          ].join('\n');
+
+          return {
+            nonce: existingNonce[0].nonce,
+            message,
+            expiresAt: new Date(existingNonce[0].createdAt.getTime() + NONCE_EXPIRY_MS).toISOString(),
+          };
+        }
+      }
+
+      // Generate new nonce (32-byte hex)
       const nonce = randomBytes(32).toString('hex');
 
-      // Store nonce in database (5-minute TTL)
+      // Delete any old nonce and insert fresh one
+      await db.delete(authNonces).where(eq(authNonces.address, walletAddress));
       await db.insert(authNonces).values({
         address: walletAddress,
         nonce,
-      })
-      .onConflictDoUpdate({
-        target: authNonces.address,
-        set: {
-          nonce,
-          createdAt: new Date(),
-        },
+        createdAt: new Date(),
       });
 
-      console.log(`[AUTH] Nonce generated for ${walletAddress.slice(0, 10)}...`);
+      console.log(`[AUTH] New nonce generated for ${walletAddress.slice(0, 10)}...`);
+
+      // Clear, reassuring message (nonce embedded but not shown to user)
+      const message = [
+        'Sign in to Suiftly',
+        '',
+        'This approval is only for authentication.',
+        'No fund transfer.',
+        '',
+        // Nonce still needed for cryptographic verification (hidden from display)
+        nonce,
+      ].join('\n');
 
       return {
         nonce,
-        message: `Sign this message to authenticate: ${nonce}`,
+        message,
         expiresAt: new Date(Date.now() + NONCE_EXPIRY_MS).toISOString(),
       };
     }),
@@ -80,15 +117,28 @@ export const authRouter = router({
 
       // Verify signature
       if (MOCK_AUTH) {
-        console.log('[AUTH] MOCK MODE: Accepting signature without verification');
+        // Mock mode: Skip cryptographic verification (development only)
       } else {
-        // TODO: Real Ed25519 signature verification
-        // Will implement with @mysten/sui SDK
-        console.log('[AUTH] Real signature verification not yet implemented');
-        throw new TRPCError({
-          code: 'NOT_IMPLEMENTED',
-          message: 'Real signature verification not yet implemented. Set MOCK_AUTH=true',
-        });
+        // Real Ed25519 signature verification
+        // Reconstruct the exact message that was signed
+        const message = [
+          'Sign in to Suiftly',
+          '',
+          'This approval is only for authentication.',
+          'No fund transfer.',
+          '',
+          nonce,
+        ].join('\n');
+
+        const { verifySuiSignature } = await import('../lib/signature');
+        const isValid = await verifySuiSignature(walletAddress, message, signature);
+
+        if (!isValid) {
+          throw new TRPCError({
+            code: 'UNAUTHORIZED',
+            message: 'Invalid signature',
+          });
+        }
       }
 
       // Delete used nonce (prevent replay)
@@ -104,24 +154,44 @@ export const authRouter = router({
       let customerId: number;
 
       if (customer.length === 0) {
-        // New customer - generate random ID
-        customerId = Math.floor(Math.random() * 2147483647) + 1;
+        // New customer - generate random ID with collision retry
+        const MAX_RETRIES = 10;
+        let inserted = false;
 
-        await db.insert(customers).values({
-          customerId,
-          walletAddress,
-          status: 'active',
-          maxMonthlyUsdCents: 50000, // $500 default from CONSTANTS.md
-          currentBalanceUsdCents: 0,
-          currentMonthChargedUsdCents: 0,
-          lastMonthChargedUsdCents: 0,
-          currentMonthStart: new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0],
-        });
+        for (let attempt = 0; attempt < MAX_RETRIES && !inserted; attempt++) {
+          customerId = Math.floor(Math.random() * 2147483647) + 1;
 
-        console.log(`[AUTH] New customer created: ${customerId}`);
+          try {
+            await db.insert(customers).values({
+              customerId,
+              walletAddress,
+              status: 'active',
+              maxMonthlyUsdCents: 50000, // $500 default from CONSTANTS.md
+              currentBalanceUsdCents: 0,
+              currentMonthChargedUsdCents: 0,
+              lastMonthChargedUsdCents: 0,
+              currentMonthStart: new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0],
+            });
+            inserted = true;
+          } catch (error: any) {
+            // Check if it's a primary key collision
+            if (error.code === '23505' && error.constraint === 'customers_pkey') {
+              // Collision - retry with new ID
+              if (attempt === MAX_RETRIES - 1) {
+                throw new TRPCError({
+                  code: 'INTERNAL_SERVER_ERROR',
+                  message: 'Failed to generate unique customer ID after multiple attempts',
+                });
+              }
+              // Continue to next iteration
+            } else {
+              // Different error - rethrow
+              throw error;
+            }
+          }
+        }
       } else {
         customerId = customer[0].customerId;
-        console.log(`[AUTH] Existing customer: ${customerId}`);
       }
 
       // Generate JWT tokens
@@ -146,13 +216,87 @@ export const authRouter = router({
         path: '/',
       });
 
-      console.log(`[AUTH] Tokens issued for customer ${customerId}`);
-
       return {
-        customerId,
+        // Don't send customer_id to client (internal only)
         walletAddress,
         accessToken,
         // refreshToken is in httpOnly cookie, not returned
       };
     }),
+
+  /**
+   * Step 3: Refresh access token using refresh token cookie
+   */
+  refresh: publicProcedure.mutation(async ({ ctx }) => {
+    const refreshToken = ctx.req.cookies.refreshToken;
+
+    if (!refreshToken) {
+      throw new TRPCError({
+        code: 'UNAUTHORIZED',
+        message: 'No refresh token provided',
+      });
+    }
+
+    try {
+      // Verify refresh token
+      const { verifyRefreshToken } = await import('../lib/jwt');
+      const payload = await verifyRefreshToken(refreshToken);
+
+      // Check if token exists in database (not revoked)
+      const tokenHash = createHash('sha256').update(refreshToken).digest('hex');
+      const storedToken = await db
+        .select()
+        .from(refreshTokens)
+        .where(
+          and(
+            eq(refreshTokens.customerId, payload.customerId),
+            eq(refreshTokens.tokenHash, tokenHash),
+            gt(refreshTokens.expiresAt, new Date())
+          )
+        )
+        .limit(1);
+
+      if (storedToken.length === 0) {
+        throw new TRPCError({
+          code: 'UNAUTHORIZED',
+          message: 'Refresh token revoked or expired',
+        });
+      }
+
+      // Generate new access token
+      const accessToken = await generateAccessToken({
+        customerId: payload.customerId,
+        walletAddress: payload.walletAddress,
+      });
+
+      return {
+        accessToken,
+      };
+    } catch (error) {
+      throw new TRPCError({
+        code: 'UNAUTHORIZED',
+        message: 'Invalid refresh token',
+      });
+    }
+  }),
+
+  /**
+   * Logout: Revoke refresh token
+   */
+  logout: publicProcedure.mutation(async ({ ctx }) => {
+    const refreshToken = ctx.req.cookies.refreshToken;
+
+    if (refreshToken) {
+      // Revoke refresh token in database
+      const tokenHash = createHash('sha256').update(refreshToken).digest('hex');
+      await db.delete(refreshTokens).where(eq(refreshTokens.tokenHash, tokenHash));
+
+      console.log('[AUTH] Refresh token revoked');
+    }
+
+    // Clear cookie
+    ctx.res.clearCookie('refreshToken');
+
+    return { success: true };
+  }),
 });

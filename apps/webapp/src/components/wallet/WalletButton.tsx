@@ -1,162 +1,228 @@
 /**
  * Wallet connection button
- * Supports both mock wallet (dev) and real wallets (production)
+ * Standard Web3 UX: Modal for wallet selection, dropdown menu for connected state
  */
 
 import { useCurrentAccount, useConnectWallet, useDisconnectWallet, useWallets } from '@mysten/dapp-kit';
-import { useState, useEffect } from 'react';
-import { connectMockWallet, disconnectMockWallet, getMockWallet, isMockMode } from '../../lib/mockWallet';
+import { useState, useEffect, useRef } from 'react';
+import { connectMockWallet, disconnectMockWallet } from '../../lib/mockWallet';
+import { useAuth } from '../../lib/auth';
 
 export function WalletButton() {
   const currentAccount = useCurrentAccount();
   const wallets = useWallets();
   const { mutate: connect, error, isPending } = useConnectWallet();
   const { mutate: disconnect } = useDisconnectWallet();
-  const [showWalletList, setShowWalletList] = useState(false);
-  const [mockAccount, setMockAccount] = useState(getMockWallet());
+  const [showWalletModal, setShowWalletModal] = useState(false);
+  const [showAccountMenu, setShowAccountMenu] = useState(false);
+  const [mockAccount, setMockAccount] = useState<{address: string} | null>(null);
 
-  const useMock = isMockMode();
+  // Track if we're waiting for wallet approval to complete
+  const [pendingAuth, setPendingAuth] = useState(false);
 
-  // Load mock wallet on mount
+  // Request flags
+  const disconnectRequestedRef = useRef(false);
+  const [triggerDisconnect, setTriggerDisconnect] = useState(0);
+
+  const { user, isAuthenticated, login, logout } = useAuth();
+
+  const connectedAccount = mockAccount || currentAccount;
+  const isMock = !!mockAccount;
+
+  // Separate useEffect: Trigger login when wallet actually connects (currentAccount populated)
   useEffect(() => {
-    if (useMock) {
-      setMockAccount(getMockWallet());
+    // Only trigger if we're pending auth AND wallet is now connected AND not already authenticated
+    if (pendingAuth && connectedAccount && !isAuthenticated) {
+      console.log('[WALLET] Wallet approved and connected, triggering sign...');
+      setPendingAuth(false); // Clear pending flag
+
+      login().then((success) => {
+        if (success) {
+          setShowWalletModal(false);
+        }
+      });
     }
-  }, [useMock]);
+  }, [pendingAuth, connectedAccount, isAuthenticated, login]);
 
-  // Show connected state (mock or real)
-  const connectedAccount = useMock ? mockAccount : currentAccount;
+  // Handle disconnect
+  useEffect(() => {
+    if (!disconnectRequestedRef.current) return;
+    disconnectRequestedRef.current = false;
 
-  if (connectedAccount) {
+    const performDisconnect = async () => {
+      await logout(); // This now clears mock wallet from localStorage
+
+      // Clear wallet connection (mock or real)
+      if (isMock) {
+        setMockAccount(null); // Clear component state
+      } else {
+        disconnect(); // Disconnect real wallet
+      }
+
+      setShowAccountMenu(false);
+    };
+
+    performDisconnect();
+  }, [triggerDisconnect, isMock, logout, disconnect]);
+
+  // AUTHENTICATED - Show address with dropdown menu
+  if (isAuthenticated && user) {
     return (
-      <div className="flex items-center gap-3">
-        <div className="px-4 py-2 bg-gray-100 rounded-lg">
-          <span className="text-sm text-gray-600">Connected:</span>
-          <span className="ml-2 font-mono text-sm">
-            {connectedAccount.address.slice(0, 6)}...{connectedAccount.address.slice(-4)}
-          </span>
-          {useMock && (
-            <span className="ml-2 px-2 py-0.5 bg-yellow-100 text-yellow-800 text-xs rounded">
-              MOCK
-            </span>
-          )}
-        </div>
+      <div className="relative">
         <button
-          onClick={() => {
-            if (useMock) {
-              disconnectMockWallet();
-              setMockAccount(null);
-            } else {
-              disconnect();
-            }
+          type="button"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setShowAccountMenu(!showAccountMenu);
           }}
-          className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition"
+          className="px-4 py-2 bg-green-100 text-green-800 rounded-lg hover:bg-green-200 transition font-mono text-sm font-medium"
         >
-          Disconnect
+          {user.walletAddress.slice(0, 6)}...{user.walletAddress.slice(-4)}
+          {isMock && <span className="ml-2 text-xs">(MOCK)</span>}
         </button>
-      </div>
-    );
-  }
 
-  // MOCK MODE: Simple connect button
-  if (useMock) {
-    return (
-      <div className="space-y-2">
-        <button
-          onClick={() => {
-            const account = connectMockWallet();
-            setMockAccount(account);
-          }}
-          className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium"
-        >
-          Connect Wallet (Mock)
-        </button>
-        <p className="text-xs text-gray-500">
-          Development mode - generates random wallet address
-        </p>
-      </div>
-    );
-  }
+        {/* Dropdown Menu */}
+        {showAccountMenu && (
+          <>
+            {/* Backdrop to close menu */}
+            <div
+              className="fixed inset-0 z-10"
+              onClick={() => setShowAccountMenu(false)}
+            />
+            {/* Menu */}
+            <div className="absolute right-0 mt-2 w-64 bg-white border border-gray-200 rounded-lg shadow-lg z-20">
+              <div className="p-2">
+                <div className="px-3 py-2 text-xs text-gray-500 border-b border-gray-100 mb-1">
+                  Connected {isMock && '(Mock)'}
+                </div>
 
-  // REAL MODE: Show wallet selection
-  if (showWalletList) {
-    return (
-      <div className="bg-white rounded-lg shadow-lg p-6 max-w-md">
-        <h3 className="text-lg font-semibold mb-4">Select Wallet</h3>
+                {/* Copy Address */}
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(user.walletAddress);
+                    console.log('[WALLET] Address copied to clipboard');
+                    setShowAccountMenu(false);
+                  }}
+                  className="w-full text-left px-3 py-2 hover:bg-gray-100 rounded text-sm flex items-center gap-2"
+                >
+                  <span>📋</span>
+                  <span>Copy Address</span>
+                </button>
 
-        {wallets.length === 0 ? (
-          <div className="text-center py-6">
-            <p className="text-gray-600 mb-4">
-              No Sui wallets detected. Please install one:
-            </p>
-            <div className="space-y-2 text-sm">
-              <a
-                href="https://chrome.google.com/webstore/detail/sui-wallet/opcgpfmipidbgpenhmajoajpbobppdil"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="block px-4 py-2 bg-blue-50 text-blue-700 rounded hover:bg-blue-100 transition"
-              >
-                📥 Install Sui Wallet
-              </a>
-              <a
-                href="https://suiet.app"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="block px-4 py-2 bg-purple-50 text-purple-700 rounded hover:bg-purple-100 transition"
-              >
-                📥 Install Suiet Wallet
-              </a>
+                {/* Disconnect */}
+                <button
+                  onClick={() => {
+                    disconnectRequestedRef.current = true;
+                    setTriggerDisconnect(prev => prev + 1);
+                  }}
+                  className="w-full text-left px-3 py-2 hover:bg-red-50 text-red-600 rounded text-sm flex items-center gap-2 border-t border-gray-100 mt-1 pt-2"
+                >
+                  <span>🚪</span>
+                  <span>Disconnect</span>
+                </button>
+              </div>
             </div>
-            <button
-              onClick={() => setShowWalletList(false)}
-              className="mt-4 px-4 py-2 text-gray-600 hover:text-gray-800"
-            >
-              Cancel
-            </button>
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {wallets.map((wallet) => (
-              <button
-                key={wallet.name}
-                onClick={() => {
-                  connect({ wallet });
-                  setShowWalletList(false);
-                }}
-                disabled={isPending}
-                className="w-full px-4 py-3 bg-gray-50 hover:bg-gray-100 rounded-lg flex items-center gap-3 transition disabled:opacity-50"
-              >
-                {wallet.icon && (
-                  <img src={wallet.icon} alt={wallet.name} className="w-8 h-8" />
-                )}
-                <span className="font-medium">{wallet.name}</span>
-              </button>
-            ))}
-            <button
-              onClick={() => setShowWalletList(false)}
-              className="w-full px-4 py-2 text-gray-600 hover:text-gray-800 mt-2"
-            >
-              Cancel
-            </button>
-          </div>
-        )}
-
-        {error && (
-          <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
-            {error.message}
-          </div>
+          </>
         )}
       </div>
     );
   }
 
+  // NO WALLET or CONNECTING - Show connect button
+  // Button stays visible during connection/authentication (just greyed out if modal open)
   return (
-    <button
-      onClick={() => setShowWalletList(true)}
-      disabled={isPending}
-      className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium disabled:opacity-50"
-    >
-      {isPending ? 'Connecting...' : 'Connect Wallet'}
-    </button>
+    <>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setShowWalletModal(true);
+        }}
+        className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium"
+      >
+        Connect Wallet
+      </button>
+
+      {/* Wallet Selection Modal */}
+      {showWalletModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-30"
+          onClick={() => setShowWalletModal(false)}
+        >
+          {/* Modal Content - white box */}
+          <div
+            className="bg-white rounded-xl shadow-2xl p-6 max-w-md w-full mx-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-xl font-semibold">Connect Wallet</h3>
+                <button
+                  onClick={() => setShowWalletModal(false)}
+                  className="text-gray-400 hover:text-gray-600 text-2xl leading-none"
+                >
+                  ×
+                </button>
+              </div>
+
+
+              {wallets.length === 0 ? (
+                <div className="text-center py-8">
+                  <p className="text-gray-600 mb-4">No Sui wallets detected.</p>
+                  <a
+                    href="https://chrome.google.com/webstore/detail/sui-wallet/opcgpfmipidbgpenhmajoajpbobppdil"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-block px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition"
+                  >
+                    Install Sui Wallet
+                  </a>
+                </div>
+              ) : (
+                <div className="space-y-2 mb-4">
+                  {wallets.map((wallet) => (
+                    <button
+                      key={wallet.name}
+                      onClick={() => {
+                        if (isPending) return; // Prevent double-click, but don't disable button
+                        console.log('[WALLET] Requesting real wallet connection...');
+                        connect({ wallet });
+                        setPendingAuth(true);
+                      }}
+                      className="w-full px-4 py-3 bg-gray-50 hover:bg-gray-100 rounded-lg flex items-center gap-3 transition border border-gray-200"
+                    >
+                      {wallet.icon && <img src={wallet.icon} alt={wallet.name} className="w-8 h-8" />}
+                      <span className="font-medium">{wallet.name}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* Mock Wallet Option (Dev) */}
+              <div className="border-t border-gray-200 pt-4 mt-4">
+                <p className="text-xs text-gray-500 mb-2">Development Mode:</p>
+                <button
+                  onClick={() => {
+                    console.log('[WALLET] Connecting mock wallet...');
+                    const account = connectMockWallet();
+                    setMockAccount(account);
+                    setPendingAuth(true); // Mark as pending - will trigger immediately since mockAccount is sync
+                  }}
+                  className="w-full px-4 py-3 bg-gray-100 hover:bg-gray-200 rounded-lg transition text-sm font-medium border border-gray-300"
+                >
+                  Connect Mock Wallet
+                </button>
+              </div>
+
+            {error && (
+              <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+                {error.message}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </>
   );
 }

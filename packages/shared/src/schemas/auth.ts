@@ -33,9 +33,9 @@ export const jwtPayloadSchema = z.object({
 
 // Auth response (after successful verification)
 export const authResponseSchema = z.object({
-  customerId: z.number().int().positive(),
   walletAddress: z.string(),
   accessToken: z.string(), // 15-minute token
+  // customerId is internal only (in JWT payload, not sent to client)
   // refreshToken is httpOnly cookie, not returned in JSON
 });
 

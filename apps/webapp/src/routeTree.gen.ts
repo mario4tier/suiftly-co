@@ -8,10 +8,19 @@
 // You should NOT make any changes in this file as it will be overwritten.
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
+import { createFileRoute } from '@tanstack/react-router'
+
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as WalletDemoRouteImport } from './routes/wallet-demo'
 import { Route as IndexRouteImport } from './routes/index'
 
+const TestLazyRouteImport = createFileRoute('/test')()
+
+const TestLazyRoute = TestLazyRouteImport.update({
+  id: '/test',
+  path: '/test',
+  getParentRoute: () => rootRouteImport,
+} as any).lazy(() => import('./routes/test.lazy').then((d) => d.Route))
 const WalletDemoRoute = WalletDemoRouteImport.update({
   id: '/wallet-demo',
   path: '/wallet-demo',
@@ -26,31 +35,42 @@ const IndexRoute = IndexRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/wallet-demo': typeof WalletDemoRoute
+  '/test': typeof TestLazyRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/wallet-demo': typeof WalletDemoRoute
+  '/test': typeof TestLazyRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/wallet-demo': typeof WalletDemoRoute
+  '/test': typeof TestLazyRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/wallet-demo'
+  fullPaths: '/' | '/wallet-demo' | '/test'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/wallet-demo'
-  id: '__root__' | '/' | '/wallet-demo'
+  to: '/' | '/wallet-demo' | '/test'
+  id: '__root__' | '/' | '/wallet-demo' | '/test'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   WalletDemoRoute: typeof WalletDemoRoute
+  TestLazyRoute: typeof TestLazyRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/test': {
+      id: '/test'
+      path: '/test'
+      fullPath: '/test'
+      preLoaderRoute: typeof TestLazyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/wallet-demo': {
       id: '/wallet-demo'
       path: '/wallet-demo'
@@ -71,6 +91,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   WalletDemoRoute: WalletDemoRoute,
+  TestLazyRoute: TestLazyRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

@@ -8,6 +8,7 @@ import ReactDOM from 'react-dom/client';
 import { RouterProvider, createRouter } from '@tanstack/react-router';
 import { WalletProvider } from './components/wallet/WalletProvider';
 import { routeTree } from './routeTree.gen';
+import { Toaster } from 'sonner';
 import './index.css';
 
 // Create router instance
@@ -24,6 +25,7 @@ declare module '@tanstack/react-router' {
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <WalletProvider>
+      <Toaster position="top-right" />
       <RouterProvider router={router} />
     </WalletProvider>
   </React.StrictMode>

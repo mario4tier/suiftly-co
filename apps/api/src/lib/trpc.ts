@@ -34,6 +34,42 @@ export const publicProcedure = t.procedure;
 
 /**
  * Protected procedure (requires authentication)
- * Will be implemented in Phase 8 (auth flow complete)
+ * Validates JWT access token from Authorization header
  */
-export const protectedProcedure = t.procedure; // TODO: Add auth middleware
+export const protectedProcedure = t.procedure.use(async ({ ctx, next }) => {
+  // Import here to avoid circular dependency
+  const { verifyAccessToken } = await import('./jwt');
+  const { TRPCError } = await import('@trpc/server');
+
+  // Get token from Authorization header
+  const authHeader = ctx.req.headers.authorization;
+  const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
+
+  if (!token) {
+    throw new TRPCError({
+      code: 'UNAUTHORIZED',
+      message: 'No access token provided',
+    });
+  }
+
+  try {
+    // Verify JWT
+    const payload = await verifyAccessToken(token);
+
+    // Add user to context
+    return next({
+      ctx: {
+        ...ctx,
+        user: {
+          customerId: payload.customerId,
+          walletAddress: payload.walletAddress,
+        },
+      },
+    });
+  } catch (error) {
+    throw new TRPCError({
+      code: 'UNAUTHORIZED',
+      message: 'Invalid or expired access token',
+    });
+  }
+});

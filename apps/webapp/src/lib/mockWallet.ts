@@ -26,8 +26,8 @@ export function getMockWallet(): MockWalletAccount | null {
 export function connectMockWallet(): MockWalletAccount {
   // Use consistent test address for stable development
   // This prevents creating new customers on every connect
-  // Different from production wallets (starts with 0xtest...)
-  const address = '0xtestf1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1';
+  // Valid Sui address format (0x + 64 hex chars)
+  const address = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 
   const account: MockWalletAccount = {
     address,
@@ -49,5 +49,18 @@ export function disconnectMockWallet(): void {
  * Check if we're in mock mode
  */
 export function isMockMode(): boolean {
-  return import.meta.env.VITE_MOCK_WALLET === 'true' || import.meta.env.DEV;
+  return import.meta.env.VITE_MOCK_WALLET === 'true';
+}
+
+/**
+ * Mock sign message function
+ * Generates fake signature for development (backend with MOCK_AUTH=true accepts any signature)
+ */
+export function mockSignMessage(message: Uint8Array): { signature: string } {
+  const messageStr = new TextDecoder().decode(message);
+  const fakeSignature = btoa(`mock_signature_for_${messageStr.slice(0, 20)}`);
+
+  return {
+    signature: fakeSignature,
+  };
 }
