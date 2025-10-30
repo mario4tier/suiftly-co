@@ -97,7 +97,11 @@ function LoginPage() {
                 disabled={isPending}
                 className="w-full px-4 py-3 bg-white hover:bg-gray-50 rounded-lg flex items-center gap-3 transition border border-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {wallet.icon && <img src={wallet.icon} alt={wallet.name} className="w-8 h-8" />}
+                {wallet.icon && (
+                  <div className="w-6 h-6 flex items-center justify-center flex-shrink-0">
+                    <img src={wallet.icon} alt={wallet.name} className="max-w-full max-h-full object-contain" />
+                  </div>
+                )}
                 <span className="font-medium text-gray-900">{wallet.name}</span>
               </button>
             ))
