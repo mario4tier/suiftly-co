@@ -10,10 +10,7 @@ test.describe('Authentication Flow', () => {
     // Go to home page
     await page.goto('/');
 
-    // Click "Connect Wallet" button
-    await page.click('text=Connect Wallet');
-
-    // Modal should open - click "Connect Mock Wallet"
+    // Click "Connect Mock Wallet" button directly on login page
     await page.click('text=Connect Mock Wallet');
 
     // Should authenticate and show address button (wait for auth to complete)
@@ -54,11 +51,7 @@ test.describe('Authentication Flow', () => {
   test('logout works and clears session', async ({ page }) => {
     // Authenticate first
     await page.goto('/');
-    await page.click('text=Connect Wallet');
     await page.click('text=Connect Mock Wallet');
-
-    // Wait for modal to close (authentication succeeds)
-    await page.waitForSelector('text=Connect Wallet', { state: 'hidden', timeout: 10000 });
 
     // Wait for address button to appear (authentication complete)
     const addressButton = page.locator('button', { hasText: /0x[a-f0-9]{4}/ });
@@ -75,8 +68,8 @@ test.describe('Authentication Flow', () => {
     await page.waitForURL('/login', { timeout: 5000 });
     expect(page.url()).toContain('/login');
 
-    // Should show "Connect Wallet" button again
-    await expect(page.locator('button:has-text("Connect Wallet")')).toBeVisible();
+    // Should show "Connect Mock Wallet" button again
+    await expect(page.locator('button:has-text("Connect Mock Wallet")')).toBeVisible();
 
     // localStorage should be cleared
     const authState = await page.evaluate(() => localStorage.getItem('suiftly-auth'));

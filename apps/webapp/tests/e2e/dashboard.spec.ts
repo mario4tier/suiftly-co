@@ -9,7 +9,6 @@ test.describe('Dashboard Navigation', () => {
   test.beforeEach(async ({ page }) => {
     // Authenticate with mock wallet before each test
     await page.goto('/');
-    await page.click('text=Connect Wallet');
     await page.click('text=Connect Mock Wallet');
 
     // Wait for authentication and redirect to /services/seal (default home)
