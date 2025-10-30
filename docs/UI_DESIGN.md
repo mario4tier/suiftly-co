@@ -196,75 +196,6 @@ if (import.meta.env.DEV) {
 
 ---
 
-## Demo Mode Banner
-
-**Purpose:** Indicates to users that they're exploring without a connected wallet.
-
-**Appearance:**
-```
-┌──────────────────────────────────────────────────────┐
-│ ⓘ Demo Mode - Connect wallet to enable services  [✕] │
-└──────────────────────────────────────────────────────┘
-```
-
-**Design:**
-- **Background:** Light info color (rgba(47, 123, 191, 0.1) - Cloudflare Marine tint)
-- **Border:** 1px solid info color (#2F7BBF - Cloudflare Marine)
-- **Text:** "Demo Mode - Connect wallet to enable services"
-- **Icon:** Info icon (ⓘ) on left
-- **Dismiss button:** [✕] on right
-- **Position:** Top of content area (below header, above main content)
-- **Width:** Full width of content area
-- **Padding:** 12px vertical, 16px horizontal
-
-**Behavior:**
-- Appears on ALL pages and tabs when wallet is NOT connected
-- Dismissible via [✕] button
-- Dismissed state stored in sessionStorage (persists only during current browser session)
-- On page reload: banner reappears if wallet still not connected (sessionStorage cleared on tab close)
-- On wallet connect: banner disappears permanently (until disconnect)
-- Does not appear when wallet is connected
-- Clicking anywhere on banner (except [✕]) can optionally trigger "Connect Wallet" modal
-
-**Pages/Tabs where banner appears:**
-- Seal service configuration form and all tabs (Configuration, Keys, Stats, Logs)
-- Coming soon pages (gRPC, GraphQL) - optional, may not be needed for placeholder pages
-- Billing page
-- Support page (optional - could skip here)
-
-**CSS Example:**
-```css
-.demo-mode-banner {
-  background: rgba(47, 123, 191, 0.1);
-  border: 1px solid #2F7BBF;
-  border-radius: 3px;
-  padding: 12px 16px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 24px;
-  font-size: 0.86667rem; /* Cloudflare sm */
-  color: #2F7BBF;
-}
-
-.demo-mode-banner__content {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.demo-mode-banner__dismiss {
-  cursor: pointer;
-  padding: 4px;
-  opacity: 0.7;
-}
-
-.demo-mode-banner__dismiss:hover {
-  opacity: 1;
-}
-```
-
----
 
 ## Sidebar Navigation
 
@@ -310,7 +241,6 @@ if (import.meta.env.DEV) {
 ```
 ┌──────────────────────────────────────────────────────┐
 │ Settings → Spending Limit                            │
-├──────────────────────────────────────────────────────┤
 │                                                       │
 │  Monthly Spending Limit (On-Chain Protection)        │
 │                                                       │
@@ -351,7 +281,6 @@ if (import.meta.env.DEV) {
 ```
 ┌──────────────────────────────────────────────────────┐
 │ Change Monthly Spending Limit                        │
-├──────────────────────────────────────────────────────┤
 │                                                       │
 │  Current limit: $500 per month                      │
 │  Spent this month: $680                               │
@@ -403,16 +332,14 @@ Each service page has **two states:**
 **Full-page configuration form with live pricing.**
 
 **When wallet NOT connected:**
-- Shows "Demo Mode" banner at top with "Connect wallet to enable services" message
+- 
 - All tabs visible (Config, Keys, Stats, Logs) with placeholder data
 - Enable Service toggle disabled until wallet connects
 
 ```
 ┌──────────────────────────────────────────────────────┐
 │ Seal Configuration                                    │
-├──────────────────────────────────────────────────────┤
-│ ⓘ Demo Mode - Connect wallet to enable services  [✕] │
-├──────────────────────────────────────────────────────┤
+
 │                                                       │
 │  ✓ Always Included:                                  │
 │    • Global geo-steering and failover (closest       │
@@ -577,7 +504,7 @@ Total Monthly Fee: $60/month
 **Tab-based layout with read-only config.**
 
 **When wallet disconnected:**
-- Shows "Demo Mode" banner at top
+- 
 - Config displayed as read-only (Edit button disabled)
 - Enable Service toggle disabled
 - Reconnect wallet to manage service
@@ -585,9 +512,7 @@ Total Monthly Fee: $60/month
 ```
 ┌──────────────────────────────────────────────────────┐
 │ Seal Service                     [Status: Active 🟢] │
-├──────────────────────────────────────────────────────┤
-│ ⓘ Demo Mode - Connect wallet to enable services  [✕] │
-├──────────────────────────────────────────────────────┤
+
 │                                                       │
 │  [ Configuration ]  [ Keys ]  [ Stats ]  [ Logs ]    │  ← Tabs
 │  ────────────────                                     │
@@ -659,9 +584,7 @@ Total Monthly Fee: $60/month
 ```
 ┌──────────────────────────────────────────────────────┐
 │  Keys & Packages                                      │
-├──────────────────────────────────────────────────────┤
-│ ⓘ Demo Mode - Connect wallet to enable services  [✕] │
-├──────────────────────────────────────────────────────┤
+
 │                                                       │
 │  ⓘ After enabling this service, you'll be able to:  │
 │                                                       │
@@ -767,9 +690,7 @@ Total Monthly Fee: $60/month
 ```
 ┌──────────────────────────────────────────────────────┐
 │  Stats                                                │
-├──────────────────────────────────────────────────────┤
-│ ⓘ Demo Mode - Connect wallet to enable services  [✕] │
-├──────────────────────────────────────────────────────┤
+
 │                                                       │
 │  ⓘ Stats are updated hourly. Data appears after     │
 │     24 hours of service activity.                    │
@@ -813,9 +734,7 @@ Total Monthly Fee: $60/month
 ```
 ┌──────────────────────────────────────────────────────┐
 │  Activity Log                                         │
-├──────────────────────────────────────────────────────┤
-│ ⓘ Demo Mode - Connect wallet to enable services  [✕] │
-├──────────────────────────────────────────────────────┤
+
 │                                                       │
 │  ┌────────────────────────────────────────┐          │
 │  │ Jan 9, 2025 14:23                      │          │
@@ -860,7 +779,6 @@ Total Monthly Fee: $60/month
 ```
 ┌──────────────────────────────────────────────────────┐
 │ Support                                               │
-├──────────────────────────────────────────────────────┤
 │                                                       │
 │  Contact Us                                           │
 │  ┌────────────────────────────────────────┐          │
@@ -926,9 +844,7 @@ Total Monthly Fee: $60/month
 ```
 ┌──────────────────────────────────────────────────────┐
 │ Billing & Usage                                       │
-├──────────────────────────────────────────────────────┤
-│ ⓘ Demo Mode - Connect wallet to enable services  [✕] │
-├──────────────────────────────────────────────────────┤
+
 │                                                       │
 │  ⓘ Connect your wallet to view billing information  │
 │                                                       │
@@ -951,7 +867,6 @@ Total Monthly Fee: $60/month
 ```
 ┌──────────────────────────────────────────────────────┐
 │ Billing & Usage                                       │
-├──────────────────────────────────────────────────────┤
 │                                                       │
 │  Wallet Balance                      $127.50         │
 │  ┌────────────────────────────────────────┐          │
@@ -2031,7 +1946,7 @@ Minimal set of critical tests to validate before production:
 1. **Wallet Auth & Session**
    - [ ] User can connect wallet, sign challenge, receive JWT in httpOnly cookie
    - [ ] Session expires after 4 hours (or prompts re-sign at 30 min remaining)
-   - [ ] Disconnecting wallet clears session and returns to demo mode
+   - [ ] Disconnecting wallet clears session and 
 
 2. **Service Enable with Billing**
    - [ ] Enabling service checks sufficient balance before charging
@@ -2065,6 +1980,6 @@ Minimal set of critical tests to validate before production:
    - [ ] Top-up during grace period resumes service immediately
 
 8. **Error Handling (Critical Paths)**
-   - [ ] Network error during wallet connect → shows retry with fallback to demo mode
+   - [ ] Network error during wallet connect → shows retry with 
    - [ ] Insufficient balance on enable → shows error modal with "Top Up" button
    - [ ] JWT expired (401) → clears auth, redirects to home, shows "Session expired" toast
