@@ -94,8 +94,7 @@ function LoginPage() {
               <button
                 key={wallet.name}
                 onClick={() => handleWalletSelect(wallet)}
-                disabled={isPending}
-                className="w-full px-4 py-3 bg-white hover:bg-gray-50 rounded-lg flex items-center gap-3 transition border border-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full px-4 py-3 bg-white hover:bg-gray-50 rounded-lg flex items-center gap-3 transition border border-gray-200"
               >
                 {wallet.icon && (
                   <div className="flex items-center justify-center flex-shrink-0" style={{ width: '32px', height: '32px' }}>
@@ -124,8 +123,7 @@ function LoginPage() {
               </div>
               <button
                 onClick={handleMockConnect}
-                disabled={isPending}
-                className="w-full px-4 py-3 bg-gray-50 hover:bg-gray-100 rounded-lg transition text-sm font-medium text-gray-700 border border-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full px-4 py-3 bg-gray-50 hover:bg-gray-100 rounded-lg transition text-sm font-medium text-gray-700 border border-gray-200"
               >
                 Connect Mock Wallet
               </button>
