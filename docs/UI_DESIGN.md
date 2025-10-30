@@ -1382,15 +1382,12 @@ User can withdraw credit at any time
 /login                         → Login page (only public route - wallet connection)
 
 Protected routes (require authentication):
-/                              → Dashboard home (overview page with stats)
-/services                      → Services list/overview
+/                              → Redirects to /services/seal
 /services/seal                 → Seal service configuration
-/services/grpc                 → gRPC service (coming soon)
-/services/graphql              → GraphQL service (coming soon)
-/billing                       → Billing and usage
-/api-keys                      → API key management
-/logs                          → Activity logs
-/settings                      → Account settings
+/services/grpc                 → gRPC service (coming soon placeholder)
+/services/graphql              → GraphQL service (coming soon placeholder)
+/billing                       → Billing, balance, deposits, withdrawals, spending limits
+/support                       → Support and help resources
 ```
 
 **Route Protection:**
