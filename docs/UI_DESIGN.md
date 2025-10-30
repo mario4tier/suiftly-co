@@ -2,14 +2,14 @@
 
 ## Overview
 
-Customer-facing platform for Suiftly infrastructure services with a Cloudflare-inspired UX.
+Customer-facing platform for Suiftly infrastructure services with a clean, professional interface.
 
 **Related Documents:**
 - **[AUTHENTICATION_DESIGN.md](./AUTHENTICATION_DESIGN.md)** - Complete authentication architecture, wallet signature flow, and JWT session management
 - **[ESCROW_DESIGN.md](./ESCROW_DESIGN.md)** - Complete escrow account architecture, smart contract interface, and financial flows
 
 **Design Principles:**
-- Clean, professional interface (Cloudflare/Vercel-like)
+- Clean, professional interface (modern SaaS aesthetic)
 - Self-service configuration (no sales calls needed)
 - Transparent pricing (see costs before enabling)
 - Immediate feedback (real-time price calculations)
@@ -28,14 +28,18 @@ Customer-facing platform for Suiftly infrastructure services with a Cloudflare-i
 
 **Landing Site: `https://suiftly.io`**
 - Static marketing site (SEO-optimized)
-- Technologies: Plain HTML/CSS or Astro (keep it simple)
-- Purpose: Explain services, pricing, drive signups
+- Technologies: Plain HTML/CSS, Astro, or Next.js (keep it simple)
+- Purpose: Explain services, pricing, documentation, drive signups
 - CTA: "Launch App" button → redirects to `app.suiftly.io`
+- Content: Hero section, service overview, pricing table, footer
+- **Note:** Separate repository or simple static pages (not part of this monorepo)
 
 **Dashboard App: `https://app.suiftly.io`**
 - React SPA (Vite + React 19)
-- Authenticated only (wallet-based)
-- Purpose: Service configuration, monitoring, billing
+- **Fully protected - ALL routes require wallet authentication**
+- Purpose: Service configuration, monitoring, billing, API key management
+- First visit: Redirects to `/login` (wallet connection page)
+- After auth: Dashboard at `/` (home route)
 
 ---
 
@@ -104,7 +108,7 @@ Customer-facing platform for Suiftly infrastructure services with a Cloudflare-i
 
 ## Authentication & Session Flow
 
-**Wallet-based authentication with JWT sessions.**
+**Wallet-based authentication with JWT sessions - ALL routes protected.**
 
 See **[AUTHENTICATION_DESIGN.md](./AUTHENTICATION_DESIGN.md)** for complete architecture, implementation details, and security considerations.
 
@@ -113,87 +117,59 @@ See **[AUTHENTICATION_DESIGN.md](./AUTHENTICATION_DESIGN.md)** for complete arch
 **Authentication Method:**
 - Wallet connection via `@mysten/dapp-kit` (auto-reconnects on return visits)
 - Challenge-response signature proves wallet ownership
-- JWT stored in httpOnly cookie for session management (4-hour expiry)
+- JWT stored in httpOnly cookie + localStorage for session management (15min access, 30day refresh)
 
 **User Experience:**
-- **First access:** Connect wallet → Sign once → Authenticated for 4 hours
-- **Subsequent requests:** No signatures needed (JWT handles authorization)
-- **Transactions:** Wallet signature required (blockchain operations only)
-- **Session expiry:** Sign again after 4 hours or on expiration warning
+- **First visit:** Redirected to `/login` → Connect wallet → Sign → Dashboard loads
+- **Subsequent visits:** Auto-authenticated (JWT in localStorage) → Dashboard loads immediately
+- **Session expiry:** Access token refreshes automatically every 15 minutes (transparent)
+- **After 30 days:** Must sign again
 
-**Key Principle:** Users can explore the entire dashboard WITHOUT connecting wallet (Cloudflare-style). Wallet connection only required when enabling services or accessing protected data (API keys, billing).
+**Simplified Architecture:**
+- **ALL routes protected** - No public dashboard exploration
+- **Traditional auth wall** - Must connect wallet to access any dashboard page
+- **Faster development** - No hybrid public/protected state complexity
+- **Clear security boundary** - Protected data only shown after authentication
 
-### First-Time User Flow (No Wallet Connection)
+### First-Time User Flow
 
-1. User visits `app.suiftly.io`
-2. **Immediately sees dashboard** (no auth wall)
-   - Full sidebar navigation visible
-   - All service pages accessible
-   - Pricing calculator works
-   - Stats/Logs tabs show placeholder states
-   - **"Demo Mode" banner appears at top of every page/tab** (dismissible, reappears on page reload)
-3. Header shows: **[Connect Wallet]** button (top-right, prominent)
-4. User can explore freely:
-   - Navigate to Seal/gRPC/GraphQL pages
-   - Adjust config options and see live pricing
-   - Read tooltips and help text
-   - View Support page, FAQ
-   - All pages/tabs show "Demo Mode" banner
-   - Everything works EXCEPT "Enable Service" toggle (requires wallet - see toggle behavior below)
+1. User visits `app.suiftly.io` (any route)
+2. **Not authenticated** → Redirected to `/login`
+3. `/login` shows:
+   - Clean login page with "Connect Wallet" button
+   - Brief explanation: "Sign in with your Sui wallet to access the dashboard"
+4. User clicks "Connect Wallet" → Modal opens → Select wallet
+5. Approve connection → Sign challenge message
+6. Backend verifies signature → Issues JWT
+7. Redirected to `/` (dashboard home)
+8. Header shows wallet address with dropdown menu
 
-### Wallet Connection Trigger
-
-**Wallet connection required when:**
-- User toggles "Enable Service" switch (first attempt to activate)
-- User tries to view existing service config (if they have one)
-- User clicks wallet balance/deposit/withdraw
-- User clicks "Add New API Key"
-- User clicks "Add New Seal Key"
-- User clicks "Add Package to this Seal Key"
-- User attempts to edit/delete keys or packages
-
-**Connection Flow:**
-1. User toggles "Enable Service" switch (without wallet connected)
-2. Modal appears:
-   ```
-   ┌──────────────────────────────────────┐
-   │  Connect Wallet Required             │
-   │                                      │
-   │  To enable services, please connect  │
-   │  your Sui wallet.                    │
-   │                                      │
-   │  [Connect Wallet]  [Cancel]          │
-   └──────────────────────────────────────┘
-   ```
-3. Click "Connect Wallet" → Sui wallet popup (or dev mock)
-4. User approves connection + signs challenge message
-5. Backend verifies signature → issues JWT
-6. Modal closes → "Enable Service" toggle completes automatically (switches to ON)
-7. Header updates: Shows wallet address + balance
-
-### Returning User (With Wallet)
+### Returning User (With Valid Session)
 
 1. User visits `app.suiftly.io`
-2. If valid JWT in localStorage → auto-connect wallet
-3. Header shows wallet address + balance (connected state)
-4. Service pages show actual configs (if any exist)
-5. If expired JWT → Shows as disconnected, can reconnect anytime
+2. JWT in localStorage → Auto-authenticated
+3. Dashboard loads immediately (no login page shown)
+4. Header shows wallet address
+5. User navigates freely within dashboard
 
-### Header States
+### Session Expiry
 
-**Not Connected (Default for new visitors):**
-```
-┌────────────────────────────────────────┐
-│ [Logo] Suiftly     [Connect Wallet]  󰅂 │
-└────────────────────────────────────────┘
-```
+1. Access token expires (15 minutes) → Auto-refresh via refresh token
+2. Refresh token expires (30 days) → Redirected to `/login`
+3. Toast: "Session expired. Please sign in again."
 
-**Connected:**
+### Header (Dashboard Only - Always Authenticated)
+
+**Header shows:**
 ```
 ┌─────────────────────────────────────────────┐
-│ [Logo] Suiftly  [󰇃 $127.50 ▼]  [0x1a2...]   │
+│ [Logo] Suiftly BETA          [0x1a2... ▼]   │
 └─────────────────────────────────────────────┘
 ```
+
+- Logo on left
+- BETA badge next to logo
+- Wallet address button on right (shows dropdown with Copy Address and Disconnect)
 
 ### Development Mock
 
@@ -1150,59 +1126,41 @@ Click balance to expand:
 
 ## Key User Flows
 
-### Flow 1: Onboarding (First-Time User - No Wallet)
+### Flow 1: First-Time User (Traditional Auth)
 
 ```
 1. Visit app.suiftly.io
    ↓
-2. Dashboard loads immediately (no auth wall)
+2. Not authenticated → Redirected to /login
    ↓
-3. Header shows: [Connect Wallet] button (top-right)
+3. Login page shows:
+   - Suiftly logo
+   - "Sign in with your Sui wallet to access the dashboard"
+   - [Connect Wallet] button (opens modal)
    ↓
-4. User sees sidebar: Seal, gRPC, GraphQL, Billing, Support
+4. Click "Connect Wallet" → Select wallet type (Sui Wallet or Mock Wallet)
    ↓
-5. Navigate to /services/seal (default or via sidebar)
+5. Wallet popup → Approve connection
    ↓
-6. See configuration form (onboarding state)
+6. Wallet prompts to sign authentication message
    ↓
-7. User adjusts options (tier, burst, keys) → sees live pricing
+7. Backend verifies signature → Issues JWT
    ↓
-8. Click tooltips (?) to learn about each field
+8. Redirected to / (dashboard home)
    ↓
-9. User explores other services (gRPC, GraphQL) → same experience
+9. Dashboard loads with:
+   - Header: Logo + Wallet address dropdown
+   - Sidebar: Services, Billing, API Keys, Logs, Settings
+   - Main content: Overview page with stats cards
    ↓
-10. User decides to enable Seal service
-    ↓
-11. Click "Enable Service"
-    ↓
-12. Modal appears: "Connect Wallet Required"
-    ↓
-13. Click "Connect Wallet" in modal
-    ↓
-14. Wallet popup → Approve + Sign
-    ↓
-15. Wallet connected → Header updates (shows address + balance)
-    ↓
-16. Modal closes → Service enabled automatically
-    ↓
-17. Service page transitions to tab view (Config/Keys/Stats/Logs)
-    ↓
-18. Sidebar shows Seal with 🟢 green dot
-    ↓
-19. Toast: "Seal service enabled! $XX.XX charged."
+10. User navigates to /services to configure first service
 ```
 
-**Exploration Mode (No Wallet):**
-- All pages accessible
-- Pricing calculator works
-- Tooltips functional
-- Stats/Logs show empty states
-- "Enable Service" button visible but requires wallet connection
-
-**Onboarding Tips:**
-- Optional tooltip tour on first visit
-- After enabling first service, show toast: "Service enabled! Configure more services or view your billing."
-- Gentle reminder: "Connect wallet to enable services" (dismissible banner, top of page)
+**No Exploration Mode:**
+- All routes require authentication
+- Users must connect wallet before seeing any dashboard content
+- Simpler implementation - no hybrid public/protected states
+- Clearer security boundary
 
 ---
 
@@ -1441,36 +1399,27 @@ User can withdraw credit at any time
 
 ### Routes (TanStack Router)
 
+**All routes protected - require wallet authentication**
+
 ```
-/                              → Redirect to /services/seal (always, no auth required)
+/login                         → Login page (only public route - wallet connection)
 
-/services/seal                 → Seal service page (accessible without wallet)
-/services/grpc                 → gRPC service page (accessible without wallet)
-/services/graphql              → GraphQL service page (accessible without wallet)
-
-/billing                       → Billing overview (shows $0 if no wallet connected)
-/billing/invoices/:id          → Detailed invoice view (requires wallet)
-
-/support                       → Support page (public, no wallet needed)
-
-/settings                      → User settings (requires wallet)
-/settings/spending-limits      → Configure on-chain spending caps
+Protected routes (require authentication):
+/                              → Dashboard home (overview page with stats)
+/services                      → Services list/overview
+/services/seal                 → Seal service configuration
+/services/grpc                 → gRPC service (coming soon)
+/services/graphql              → GraphQL service (coming soon)
+/billing                       → Billing and usage
+/api-keys                      → API key management
+/logs                          → Activity logs
+/settings                      → Account settings
 ```
 
-**Route Access:**
-- **Public Routes (No wallet needed):**
-  - All service pages (exploration mode)
-  - Billing overview page (shows empty state)
-  - Support page
-
-- **Wallet-Required Actions:**
-  - Enable/disable services
-  - Edit service configs
-  - Add/revoke keys
-  - View invoice details
-  - Top-up/withdraw wallet
-
-- **No route-level authentication:** All pages load without wallet. Actions prompt connection when needed.
+**Route Protection:**
+- **Public route:** `/login` only
+- **Protected routes:** All dashboard routes
+- **Redirect behavior:** Not authenticated → `/login`, Authenticated on `/login` → `/`
 
 **Route State:**
 - Service page state (configured vs. not configured) determined by API data
