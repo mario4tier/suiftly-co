@@ -43,7 +43,7 @@ After analyzing leading Sui DeFi protocols (Scallop, Navi, Suilend), we determin
 │   (SPA)  │                │ Backend  │              │          │
 └────┬─────┘                └────┬─────┘              └────┬─────┘
      │                           │                         │
-     │ 1. User clicks "Connect Wallet"                    │
+     │ 1. User visits /login and clicks wallet option     │
      ├────────────────────────────────────────────────────>│
      │                           │                         │
      │ 2. Wallet prompts: "Connect to app.suiftly.io?"    │
@@ -134,6 +134,99 @@ After analyzing leading Sui DeFi protocols (Scallop, Navi, Suilend), we determin
 ---
 
 ## Implementation Details
+
+### Frontend Components
+
+**Login Page (`/login`):**
+
+The login page displays wallet connection options directly - no modal required:
+
+```typescript
+// apps/webapp/src/routes/login.tsx
+function LoginPage() {
+  const wallets = useWallets()
+  const { connect } = useConnectWallet()
+  const [mockAccount, setMockAccount] = useState(null)
+
+  const handleWalletSelect = (wallet) => {
+    connect({ wallet })
+    setPendingAuth(true)
+  }
+
+  const handleMockConnect = () => {
+    const account = connectMockWallet()
+    setMockAccount(account)
+    setPendingAuth(true)
+  }
+
+  return (
+    <div className="login-container">
+      {/* Wallet Options - displayed directly */}
+      {wallets.map(wallet => (
+        <button onClick={() => handleWalletSelect(wallet)}>
+          {wallet.name}
+        </button>
+      ))}
+
+      {/* Mock Wallet (DEV only) */}
+      {import.meta.env.DEV && (
+        <button onClick={handleMockConnect}>
+          Connect Mock Wallet
+        </button>
+      )}
+    </div>
+  )
+}
+```
+
+**Key Features:**
+- Wallet options shown directly on page (no modal)
+- Mock wallet only visible in development mode (`import.meta.env.DEV`)
+- Automatic authentication flow after wallet connection
+- Redirects to `/services/seal` after successful auth
+
+**WalletWidget Component:**
+
+Displays connected wallet address and account menu on authenticated pages:
+
+```typescript
+// apps/webapp/src/components/wallet/WalletWidget.tsx
+export function WalletWidget() {
+  const { user, logout } = useAuth()
+  const { disconnect } = useDisconnectWallet()
+  const navigate = useNavigate()
+
+  const handleDisconnect = async () => {
+    await logout()
+    disconnect()
+    navigate({ to: '/login' })
+  }
+
+  return (
+    <div>
+      {/* Wallet Address Button */}
+      <button onClick={() => setShowMenu(true)}>
+        {user.walletAddress.slice(0,6)}...{user.walletAddress.slice(-4)}
+      </button>
+
+      {/* Dropdown Menu */}
+      {showMenu && (
+        <div>
+          <a href="/billing">Billing & Balance</a>
+          <button onClick={handleCopyAddress}>Copy Address</button>
+          <button onClick={handleDisconnect}>Disconnect</button>
+        </div>
+      )}
+    </div>
+  )
+}
+```
+
+**Key Features:**
+- Only rendered on authenticated pages (Header component)
+- Shows truncated wallet address with MOCK badge if applicable
+- Dropdown menu with Billing, Copy Address, and Disconnect options
+- Disconnect redirects to `/login`
 
 ### Frontend (SPA with React)
 
@@ -669,10 +762,11 @@ export const trpc = createTRPCProxyClient<AppRouter>({
 
 *First Visit (New User):*
 ```
-1. Visit app.suiftly.io → Browse freely (no auth wall)
-2. Click "My API Keys" → "Connect Wallet Required" modal
-3. Connect + Sign → Tokens issued (access: 15 min, refresh: 30 days)
-4. Browse dashboard → All API calls work (using access token)
+1. Visit app.suiftly.io → Redirect to /login
+2. Click wallet option (e.g., "Sui Wallet" or "Connect Mock Wallet")
+3. Wallet prompts connection → User approves → Sign challenge
+4. Tokens issued (access: 15 min, refresh: 30 days) → Redirect to /services/seal
+5. Browse dashboard → All API calls work (using access token)
 ```
 
 *Returning User (Within 30 Days):*
@@ -696,16 +790,20 @@ export const trpc = createTRPCProxyClient<AppRouter>({
 
 **Manual Disconnect:**
 ```typescript
-// Frontend
-async function disconnectWallet() {
+// Frontend - WalletWidget component
+async function handleDisconnect() {
   // 1. Call logout endpoint (revokes refresh token)
-  await api.auth.logout.mutate()
+  await logout()
 
   // 2. Wallet kit handles disconnection
-  wallet.disconnect()
+  if (isMock) {
+    disconnectMockWallet()
+  } else {
+    disconnect()
+  }
 
-  // 3. Redirect to home
-  router.push('/')
+  // 3. Redirect to login page
+  navigate({ to: '/login' })
 }
 
 // Backend
@@ -821,14 +919,14 @@ if (import.meta.env.DEV) {
 ## Implementation Checklist
 
 ### Frontend
-- [ ] Install `@mysten/dapp-kit` and configure WalletProvider
-- [ ] Build wallet connection UI (header widget)
-- [ ] Implement challenge-response flow
-- [ ] Implement automatic token refresh on 401 errors
-- [ ] Handle refresh token expiry (redirect + toast: "Session expired")
-- [ ] Remove session expiration warning (no longer needed with auto-refresh)
-- [ ] Build disconnect wallet flow
-- [ ] Mock wallet for development
+- [x] Install `@mysten/dapp-kit` and configure WalletProvider
+- [x] Build login page with wallet options (no modal)
+- [x] Build WalletWidget component for authenticated pages (header)
+- [x] Implement challenge-response flow
+- [x] Implement automatic token refresh on 401 errors
+- [x] Handle refresh token expiry (redirect to /login)
+- [x] Build disconnect wallet flow (redirects to /login)
+- [x] Mock wallet for development (shown on login page in DEV mode)
 
 ### Backend
 - [ ] Install `jsonwebtoken` and Sui signature verification library
@@ -1015,9 +1113,11 @@ chmod 600 .env
 - No backend auth in DeFi (data is public), but required for Suiftly (secrets)
 
 **User Experience:**
-- First access: One signature to authenticate → tokens valid for 30 days
+- Login page: Wallet options displayed directly (no modal)
+- First access: Select wallet → One signature to authenticate → tokens valid for 30 days
 - Subsequent requests: No signatures (access token automatically refreshes)
 - Transactions: Wallet signature required (blockchain)
+- Disconnect: Redirects to `/login`, clears session and tokens
 - Session expires: Sign again after 30 days (or sooner if manually logged out)
 
 **Security:**
