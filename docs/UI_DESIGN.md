@@ -98,7 +98,7 @@ Customer-facing platform for Suiftly infrastructure services with a clean, profe
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│ Header: Logo | [Wallet Widget] | User Menu          │
+│ Header: Logo (left)          [Wallet Widget] (right)│
 ├─────────────┬───────────────────────────────────────┤
 │             │                                       │
 │  Sidebar    │         Main Content Area             │
@@ -114,9 +114,9 @@ Customer-facing platform for Suiftly infrastructure services with a clean, profe
 ```
 
 **Persistent Components:**
-- Header (always visible)
+- Header (always visible) - Logo on left, Wallet Widget on right
 - Sidebar (collapsible on mobile)
-- Wallet Widget (in header, expandable)
+- Wallet Widget (dropdown menu when connected)
 
 ---
 
