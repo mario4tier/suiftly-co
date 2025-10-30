@@ -1,6 +1,6 @@
 /**
  * Dashboard Layout
- * Matches Cloudflare dashboard structure
+ * Cloudflare-inspired structure using Tailwind CSS
  */
 
 import { ReactNode } from 'react';
@@ -13,7 +13,7 @@ interface DashboardLayoutProps {
 
 export function DashboardLayout({ children }: DashboardLayoutProps) {
   return (
-    <div className="min-h-screen flex flex-col" style={{ backgroundColor: '#F7F7F7' }}>
+    <div className="min-h-screen flex flex-col bg-moonshine">
       <Header />
 
       <div className="flex flex-1">

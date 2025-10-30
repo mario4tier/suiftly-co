@@ -1,6 +1,6 @@
 /**
  * Dashboard Sidebar
- * Matches Cloudflare cf-ui navigation design
+ * Cloudflare-inspired navigation using Tailwind CSS
  */
 
 import { Link, useRouterState } from '@tanstack/react-router';
@@ -23,10 +23,7 @@ export function Sidebar() {
   };
 
   return (
-    <aside
-      className="w-56 border-r flex flex-col shrink-0 bg-white"
-      style={{ borderColor: '#ebebeb' }}
-    >
+    <aside className="w-56 border-r border-dust flex flex-col shrink-0 bg-white">
       <nav className="flex-1 pt-6 px-3">
         <div className="space-y-1">
           {navItems.map((item) => {
@@ -36,13 +33,13 @@ export function Sidebar() {
               <Link
                 key={item.path}
                 to={item.path}
-                className="flex items-center gap-3 px-3 py-2 rounded transition-colors"
-                style={{
-                  backgroundColor: active ? 'rgba(47, 123, 191, 0.1)' : 'transparent',
-                  color: active ? '#2F7BBF' : '#333333',
-                  fontWeight: active ? 600 : 400,
-                  fontSize: '0.86667rem', // Cloudflare small
-                }}
+                className={`
+                  flex items-center gap-3 px-3 py-2 rounded-cf transition-colors text-cf-sm
+                  ${active
+                    ? 'bg-marine/10 text-marine font-semibold'
+                    : 'text-charcoal hover:bg-moonshine'
+                  }
+                `}
               >
                 <span className="text-lg">{item.icon}</span>
                 <span>{item.label}</span>

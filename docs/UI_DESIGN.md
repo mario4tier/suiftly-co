@@ -15,6 +15,13 @@ Customer-facing platform for Suiftly infrastructure services with a clean, profe
 - Immediate feedback (real-time price calculations)
 - Data-driven (stats and logs for observability)
 
+**Design References:**
+- **Cloudflare cf-ui Design System:** https://cloudflare.github.io/cf-ui/
+- **Cloudflare Style Guide:** https://developers.cloudflare.com/style-guide
+- **Dashboard Example:** [cloudflare-dashboard-example.png](./cloudflare-dashboard-example.png)
+
+![Cloudflare Dashboard Example](./cloudflare-dashboard-example.png)
+
 **Target Audience:**
 - Web3 developers
 - Blockchain infrastructure operators
