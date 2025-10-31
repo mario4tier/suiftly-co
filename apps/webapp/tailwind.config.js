@@ -25,6 +25,13 @@ export default {
         success: '#9BCA3E',    // Grass
         warning: '#FF7900',    // Tangerine
         danger: '#BD2527',     // Apple
+
+        // Cloudflare-inspired sidebar colors
+        'cf-border': '#e5e7eb',
+        'cf-border-dark': '#374151',
+        'cf-blue': 'rgb(0, 81, 195)',
+        'cf-gray': '#9ca3af',
+        'cf-gray-dark': '#6b7280',
       },
       fontFamily: {
         sans: ['"Open Sans"', 'Helvetica', 'Arial', 'sans-serif'],

@@ -4,6 +4,40 @@
  */
 
 import { z } from 'zod';
+import { readFileSync } from 'fs';
+import { join } from 'path';
+
+// Load .env file if it exists (needed when running with tsx)
+// Look for .env in current dir and parent dirs (monorepo support)
+try {
+  let envPath = join(process.cwd(), '.env');
+  let currentDir = process.cwd();
+
+  // Try finding .env file by walking up the directory tree
+  while (currentDir !== '/' && currentDir.length > 1) {
+    try {
+      envPath = join(currentDir, '.env');
+      const envFile = readFileSync(envPath, 'utf-8');
+
+      envFile.split('\n').forEach(line => {
+        const match = line.match(/^([^=]+)=(.*)$/);
+        if (match) {
+          const key = match[1].trim();
+          const value = match[2].trim();
+          if (!process.env[key]) {
+            process.env[key] = value;
+          }
+        }
+      });
+      break; // Found and loaded .env file
+    } catch {
+      // Try parent directory
+      currentDir = join(currentDir, '..');
+    }
+  }
+} catch (err) {
+  // .env file not found, that's okay
+}
 
 const envSchema = z.object({
   // Server

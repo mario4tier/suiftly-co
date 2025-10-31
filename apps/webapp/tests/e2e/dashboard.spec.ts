@@ -19,8 +19,8 @@ test.describe('Dashboard Navigation', () => {
     // Should be on /services/seal after auth (default home)
     expect(page.url()).toContain('/services/seal');
 
-    // Should see Seal Storage heading
-    await expect(page.locator('h1:has-text("Seal Storage")')).toBeVisible();
+    // Should see Seal heading
+    await expect(page.locator('h1:has-text("Seal")')).toBeVisible();
 
     // Should see wallet address in header
     await expect(page.locator('text=0xaaaa')).toBeVisible();
@@ -54,7 +54,7 @@ test.describe('Dashboard Navigation', () => {
     // Navigate back to Seal
     await page.click('text=Seal');
     await page.waitForURL('/services/seal');
-    await expect(page.locator('h1:has-text("Seal Storage")')).toBeVisible();
+    await expect(page.locator('h1:has-text("Seal")')).toBeVisible();
   });
 
   test('header is visible on all pages', async ({ page }) => {

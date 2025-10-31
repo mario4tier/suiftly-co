@@ -18,7 +18,7 @@ test.describe('Seal Service Configuration', () => {
 
   test('configuration form is visible with default values', async ({ page }) => {
     // Should see page title
-    await expect(page.locator('h2:has-text("Seal Storage")')).toBeVisible();
+    await expect(page.locator('h1:has-text("Seal")')).toBeVisible();
 
     // Should see tier selection (use h3 headings inside tier buttons)
     await expect(page.locator('h3:has-text("STARTER")')).toBeVisible();

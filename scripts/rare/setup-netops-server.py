@@ -12,7 +12,8 @@ Usage:
 
 Requirements:
     - Must be run with sudo (needs root privileges for apt, user creation, etc.)
-    - Ubuntu 22.04 or 24.04
+    - Ubuntu 24.04 or higher
+    - nvm installed for the user (with Node.js v22)
     - Internet connection for package downloads
 
 Note: Similar utilities exist in ~/walrus/scripts/utilities/common.py
@@ -92,7 +93,7 @@ def run_command(cmd: list[str], check: bool = True) -> Tuple[int, str, str]:
 
 
 def check_ubuntu_version(context: SetupContext):
-    """Check that we're running Ubuntu 22.04 or 24.04."""
+    """Check that we're running Ubuntu 24.04 or higher."""
     print_step("Checking Ubuntu version...")
 
     try:
@@ -109,14 +110,109 @@ def check_ubuntu_version(context: SetupContext):
             raise Exception(f"Requires Ubuntu. Current OS: {os_info.get('ID', 'unknown')}")
 
         version = os_info.get('VERSION_ID', '')
-        if version not in ['22.04', '24.04']:
-            raise Exception(f"Requires Ubuntu 22.04 or 24.04. Current: {version}")
+
+        # Parse version as float (e.g., "24.04" -> 24.04, "25.04" -> 25.04)
+        try:
+            version_float = float(version)
+        except ValueError:
+            raise Exception(f"Could not parse Ubuntu version: {version}")
+
+        if version_float < 24.04:
+            raise Exception(f"Requires Ubuntu 24.04 or higher. Current: {version}")
 
         print_success(f"check_ubuntu_version (Ubuntu {version})")
 
     except Exception as e:
         print_error(f"check_ubuntu_version: {e}")
         sys.exit(1)
+
+
+def check_nvm_installed(context: SetupContext):
+    """Check that nvm is installed for the real user."""
+    print_step("Checking nvm installation...")
+
+    # Get the real user (not root, even when running with sudo)
+    real_user = os.environ.get('SUDO_USER')
+    if not real_user:
+        # Not running with sudo, check current user
+        real_user = os.environ.get('USER')
+
+    if not real_user:
+        print_error("Could not determine real user")
+        sys.exit(1)
+
+    try:
+        user_info = pwd.getpwnam(real_user)
+        home_dir = user_info[5]  # pw_dir is at index 5
+    except KeyError:
+        print_error(f"User not found: {real_user}")
+        sys.exit(1)
+
+    # Check if nvm is installed
+    nvm_dir = os.path.join(home_dir, '.nvm')
+    if not os.path.isdir(nvm_dir):
+        print_error(f"nvm not found in {nvm_dir}")
+        print_error("nvm is required for development.")
+        print_error(f"\nInstall nvm for user '{real_user}':")
+        print_error("  1. Exit sudo and run as your regular user:")
+        print_error("     curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.0/install.sh | bash")
+        print_error("  2. Restart your shell or run:")
+        print_error("     source ~/.bashrc")
+        print_error("  3. Install Node.js v22:")
+        print_error("     nvm install 22")
+        print_error("     nvm use 22")
+        print_error("  4. Then re-run this script")
+        sys.exit(1)
+
+    print_success(f"check_nvm_installed ({nvm_dir})")
+
+
+def check_nvm_node_version(context: SetupContext):
+    """Check that nvm has Node.js v22 installed."""
+    print_step("Checking nvm Node.js version...")
+
+    # Get the real user (not root)
+    real_user = os.environ.get('SUDO_USER') or os.environ.get('USER')
+    if not real_user:
+        print_error("Could not determine real user")
+        sys.exit(1)
+
+    try:
+        user_info = pwd.getpwnam(real_user)
+        home_dir = user_info[5]  # pw_dir is at index 5
+    except KeyError:
+        print_error(f"User not found: {real_user}")
+        sys.exit(1)
+
+    nvm_dir = os.path.join(home_dir, '.nvm')
+
+    # Check for Node v22 in nvm versions directory
+    versions_dir = os.path.join(nvm_dir, 'versions', 'node')
+    if not os.path.isdir(versions_dir):
+        print_error("nvm versions directory not found")
+        print_error(f"Run as user '{real_user}': nvm install 22")
+        sys.exit(1)
+
+    # Look for v22.x.x directories
+    found_v22 = False
+    latest_v22 = None
+    try:
+        for version_dir in os.listdir(versions_dir):
+            if version_dir.startswith('v22.'):
+                found_v22 = True
+                latest_v22 = version_dir
+                break
+    except OSError:
+        pass
+
+    if not found_v22:
+        print_error("Node.js v22 not found in nvm")
+        print_error(f"Run as user '{real_user}':")
+        print_error("  nvm install 22")
+        print_error("  nvm use 22")
+        sys.exit(1)
+
+    print_success(f"check_nvm_node_version ({latest_v22})")
 
 
 def install_system_packages(context: SetupContext):
@@ -208,9 +304,21 @@ def install_nodejs(context: SetupContext):
         return
 
     if returncode == 0:
-        # Wrong version installed
-        print_warning(f"Node.js {stdout.strip()} found, but v22.x required")
-        print_error("Fix: sudo apt purge nodejs npm && rerun this script")
+        # Wrong version installed - check if it's from nvm
+        which_returncode, which_stdout, _ = run_command(['which', 'node'], check=False)
+        node_path = which_stdout.strip() if which_returncode == 0 else "unknown"
+
+        print_warning(f"Node.js {stdout.strip()} found at {node_path}, but v22.x required")
+
+        if '.nvm' in node_path:
+            print_error("Found nvm-managed Node.js in system PATH")
+            print_error("This script requires system-wide Node.js v22 (not nvm)")
+            print_error("\nFix: The node command should NOT resolve to nvm's version when running with sudo")
+            print_error("Your nvm installation is fine for development, but PM2 needs system Node.js")
+        else:
+            print_error("Fix: Remove the wrong Node.js version:")
+            print_error("  sudo apt purge nodejs npm")
+            print_error("  Then re-run this script to install Node.js v22")
         sys.exit(1)
 
     if returncode == 127:
@@ -384,6 +492,14 @@ def install_timescaledb(context: SetupContext):
     returncode, stdout, stderr = run_command(['lsb_release', '-cs'], check=False)
     ubuntu_codename = stdout.strip()
 
+    # TimescaleDB may not have packages for very new Ubuntu versions
+    # Fall back to noble (24.04) for Ubuntu 25.04+
+    supported_codenames = ['noble', 'jammy']  # 24.04, 22.04
+    if ubuntu_codename not in supported_codenames:
+        print_warning(f"Ubuntu {ubuntu_codename} not directly supported by TimescaleDB")
+        print_step("Using Ubuntu 24.04 (noble) packages as fallback...")
+        ubuntu_codename = 'noble'
+
     # Add repository
     with open('/etc/apt/sources.list.d/timescaledb.list', 'w') as f:
         f.write(f"deb [signed-by=/etc/apt/keyrings/timescaledb.asc] "
@@ -401,6 +517,8 @@ def install_timescaledb(context: SetupContext):
     )
     if returncode != 0:
         print_error(f"TimescaleDB installation failed: {stderr}")
+        print_error("Fix: TimescaleDB may not have packages for your Ubuntu version")
+        print_error(f"     Tried repository for: {ubuntu_codename}")
         sys.exit(1)
 
     # Run timescaledb-tune
@@ -537,6 +655,134 @@ def setup_postgresql_databases(context: SetupContext):
     print_success("setup_postgresql_databases")
 
 
+def setup_database_permissions(context: SetupContext):
+    """Grant permissions to deploy user and run migrations."""
+    print_step("Setting up database permissions...")
+
+    # Read deployment type to determine which databases to configure
+    system_conf_path = "/etc/walrus/system.conf"
+    deployment_type = None
+
+    try:
+        with open(system_conf_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith('#') or not line:
+                    continue
+                if line.startswith('DEPLOYMENT_TYPE='):
+                    deployment_type = line.split('=', 1)[1].strip('"\'').lower()
+                    break
+    except (PermissionError, IOError) as e:
+        print_error(f"Could not read {system_conf_path}: {e}")
+        sys.exit(1)
+
+    # Determine databases
+    is_production = deployment_type == 'production'
+    if is_production:
+        databases = ['suiftly_prod']
+    else:
+        databases = ['suiftly_dev', 'suiftly_test']
+
+    # Grant permissions on each database
+    for db in databases:
+        print_step(f"Granting permissions on {db}...")
+
+        # Grant schema permissions
+        returncode, stdout, stderr = run_command(
+            ['sudo', '-u', 'postgres', 'psql', '-d', db, '-c',
+             'GRANT ALL ON SCHEMA public TO deploy;'],
+            check=False
+        )
+        if returncode != 0:
+            print_warning(f"Failed to grant schema permissions on {db}: {stderr}")
+
+        # Grant table permissions
+        returncode, stdout, stderr = run_command(
+            ['sudo', '-u', 'postgres', 'psql', '-d', db, '-c',
+             'GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO deploy;'],
+            check=False
+        )
+        if returncode != 0:
+            print_warning(f"Failed to grant table permissions on {db}: {stderr}")
+
+        # Grant sequence permissions
+        returncode, stdout, stderr = run_command(
+            ['sudo', '-u', 'postgres', 'psql', '-d', db, '-c',
+             'GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO deploy;'],
+            check=False
+        )
+        if returncode != 0:
+            print_warning(f"Failed to grant sequence permissions on {db}: {stderr}")
+
+        # Alter default privileges for tables
+        returncode, stdout, stderr = run_command(
+            ['sudo', '-u', 'postgres', 'psql', '-d', db, '-c',
+             'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO deploy;'],
+            check=False
+        )
+        if returncode != 0:
+            print_warning(f"Failed to alter default table privileges on {db}: {stderr}")
+
+        # Alter default privileges for sequences
+        returncode, stdout, stderr = run_command(
+            ['sudo', '-u', 'postgres', 'psql', '-d', db, '-c',
+             'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO deploy;'],
+            check=False
+        )
+        if returncode != 0:
+            print_warning(f"Failed to alter default sequence privileges on {db}: {stderr}")
+
+    print_success("setup_database_permissions")
+
+
+def run_database_migrations(context: SetupContext):
+    """Run database migrations."""
+    print_step("Running database migrations...")
+
+    # Get the real user (not root)
+    real_user = os.environ.get('SUDO_USER') or os.environ.get('USER')
+    if not real_user:
+        print_error("Could not determine real user")
+        sys.exit(1)
+
+    try:
+        user_info = pwd.getpwnam(real_user)
+        home_dir = user_info[5]  # pw_dir is at index 5
+    except KeyError:
+        print_error(f"User not found: {real_user}")
+        sys.exit(1)
+
+    # Determine the suiftly-co directory
+    suiftly_dir = os.path.join(home_dir, 'suiftly-co')
+
+    if not os.path.isdir(suiftly_dir):
+        print_warning(f"suiftly-co directory not found at {suiftly_dir}")
+        print_warning("Skipping migrations")
+        return
+
+    # Check if packages/database exists
+    db_package_dir = os.path.join(suiftly_dir, 'packages/database')
+    if not os.path.isdir(db_package_dir):
+        print_warning(f"Database package not found at {db_package_dir}")
+        print_warning("Skipping migrations")
+        return
+
+    print_step(f"Running db:push in {db_package_dir} as user {real_user}...")
+
+    # Run database migration as the real user
+    returncode, stdout, stderr = run_command(
+        ['sudo', '-u', real_user, 'bash', '-c', f'cd {db_package_dir} && npm run db:push'],
+        check=False
+    )
+
+    if returncode != 0:
+        print_warning(f"Database migration failed: {stderr}")
+        context.warnings.append("Database migration failed - run 'npm run db:push' manually in packages/database")
+        return
+
+    print_success("run_database_migrations")
+
+
 def install_python_packages(context: SetupContext):
     """Install Python packages for database migration scripts (via apt)."""
     print_step("Checking Python packages...")
@@ -582,11 +828,56 @@ def install_nginx(context: SetupContext):
         print_success(f"install_nginx ({version})")
         return
 
-    # Install Nginx
+    # Install Nginx (without starting it)
     print_step("Installing Nginx...")
+
+    # First, download the package without configuring
+    returncode, stdout, stderr = run_command(
+        ['apt', 'install', '-y', '--no-install-recommends', 'nginx-core', 'nginx-common'],
+        check=False
+    )
+    if returncode != 0:
+        print_error(f"Nginx download failed:")
+        print_error(f"  stdout: {stdout}")
+        print_error(f"  stderr: {stderr}")
+        sys.exit(1)
+
+    # Check if system has IPv6 support
+    print_step("Checking IPv6 support...")
+    ipv6_supported = os.path.exists('/proc/net/if_inet6')
+
+    if not ipv6_supported:
+        print_warning("IPv6 not supported on this system")
+        print_step("Disabling IPv6 in nginx default config...")
+
+        # Disable IPv6 in default site config
+        default_site = '/etc/nginx/sites-available/default'
+        if os.path.exists(default_site):
+            try:
+                with open(default_site, 'r') as f:
+                    config = f.read()
+
+                # Comment out IPv6 listen directives
+                config = config.replace('listen [::]:80', '# listen [::]:80')
+                config = config.replace('listen [::]:443', '# listen [::]:443')
+
+                with open(default_site, 'w') as f:
+                    f.write(config)
+
+                print_step("Disabled IPv6 listeners in default site")
+            except Exception as e:
+                print_warning(f"Could not modify nginx config: {e}")
+
+    # Now install nginx package (which will start the service)
     returncode, stdout, stderr = run_command(['apt', 'install', '-y', 'nginx'], check=False)
     if returncode != 0:
-        print_error(f"Nginx installation failed: {stderr}")
+        print_error(f"Nginx installation failed:")
+        print_error(f"  stdout: {stdout}")
+        print_error(f"  stderr: {stderr}")
+        print_error("\nFix: Try running these commands manually:")
+        print_error("  sudo dpkg --configure -a")
+        print_error("  sudo apt --fix-broken install")
+        print_error("  sudo apt install -y nginx")
         sys.exit(1)
 
     print_success("install_nginx")
@@ -658,19 +949,71 @@ def create_directory_structure(context: SetupContext):
     # Set ownership
     try:
         deploy_user = pwd.getpwnam('deploy')
+        uid = deploy_user[2]  # pw_uid is at index 2
+        gid = deploy_user[3]  # pw_gid is at index 3
         for directory in ['/var/www', '/var/log/suiftly']:
-            os.chown(directory, deploy_user.pw_uid, deploy_user.pw_gid)
+            os.chown(directory, uid, gid)
             # Recursively chown
             for root, dirs, files in os.walk(directory):
                 for d in dirs:
-                    os.chown(os.path.join(root, d), deploy_user.pw_uid, deploy_user.pw_gid)
+                    os.chown(os.path.join(root, d), uid, gid)
                 for f in files:
-                    os.chown(os.path.join(root, f), deploy_user.pw_uid, deploy_user.pw_gid)
+                    os.chown(os.path.join(root, f), uid, gid)
     except Exception as e:
         print_warning(f"Failed to set ownership: {e}")
         context.warnings.append("Directory ownership may need manual adjustment")
 
     print_success("create_directory_structure")
+
+
+def install_npm_dependencies(context: SetupContext):
+    """Install npm dependencies for the monorepo."""
+    print_step("Installing npm dependencies...")
+
+    # Get the real user (not root)
+    real_user = os.environ.get('SUDO_USER') or os.environ.get('USER')
+    if not real_user:
+        print_error("Could not determine real user")
+        sys.exit(1)
+
+    try:
+        user_info = pwd.getpwnam(real_user)
+        home_dir = user_info[5]  # pw_dir is at index 5
+    except KeyError:
+        print_error(f"User not found: {real_user}")
+        sys.exit(1)
+
+    # Determine the suiftly-co directory
+    # Assume it's in the home directory
+    suiftly_dir = os.path.join(home_dir, 'suiftly-co')
+
+    if not os.path.isdir(suiftly_dir):
+        print_warning(f"suiftly-co directory not found at {suiftly_dir}")
+        print_warning("Skipping npm install - run 'npm install' manually in your project directory")
+        return
+
+    # Check if package.json exists
+    package_json = os.path.join(suiftly_dir, 'package.json')
+    if not os.path.isfile(package_json):
+        print_warning(f"package.json not found at {package_json}")
+        print_warning("Skipping npm install")
+        return
+
+    print_step(f"Running npm install in {suiftly_dir} as user {real_user}...")
+
+    # Run npm install as the real user (not root) in the project directory
+    # Use bash -c to handle cd and npm install together
+    returncode, stdout, stderr = run_command(
+        ['sudo', '-u', real_user, 'bash', '-c', f'cd {suiftly_dir} && npm install'],
+        check=False
+    )
+
+    if returncode != 0:
+        print_warning(f"npm install failed: {stderr}")
+        context.warnings.append("npm install failed - run 'npm install' manually")
+        return
+
+    print_success("install_npm_dependencies")
 
 
 def main():
@@ -690,17 +1033,22 @@ def main():
 
     steps = [
         check_ubuntu_version,
+        check_nvm_installed,
+        check_nvm_node_version,
         install_system_packages,
         install_nodejs,
         install_npm_global_packages,
         install_postgresql,
         install_timescaledb,
         setup_postgresql_databases,
+        setup_database_permissions,
         install_python_packages,
         install_nginx,
         install_certbot,
         create_deploy_user,
-        create_directory_structure
+        create_directory_structure,
+        install_npm_dependencies,
+        run_database_migrations
     ]
 
     for step in steps:

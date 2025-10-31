@@ -25,8 +25,20 @@ await server.register(helmet, {
 });
 
 // CORS (allow frontend to call API)
+// Support multiple dev ports (5173, 5174, etc.)
+const allowedOrigins = [
+  config.CORS_ORIGIN,
+  'http://localhost:5174', // Alternative Vite port
+];
 await server.register(cors, {
-  origin: config.CORS_ORIGIN,
+  origin: (origin, callback) => {
+    // Allow requests with no origin (like mobile apps, curl, Postman)
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'), false);
+    }
+  },
   credentials: true, // Allow cookies
 });
 

@@ -1,34 +1,19 @@
 /**
- * Dashboard Home (/)
- * Redirects to /services/seal as per UI_DESIGN.md
+ * Index route (/)
+ * Redirects to dashboard if authenticated, otherwise to login
  */
 
-import { createFileRoute, useNavigate } from '@tanstack/react-router';
-import { useEffect } from 'react';
-import { ProtectedRoute } from '../components/auth/ProtectedRoute';
+import { createFileRoute, redirect } from '@tanstack/react-router';
+import { useAuthStore } from '../stores/auth';
 
 export const Route = createFileRoute('/')({
-  component: DashboardHome,
+  beforeLoad: () => {
+    const { isAuthenticated } = useAuthStore.getState();
+
+    if (isAuthenticated) {
+      throw redirect({ to: '/dashboard' });
+    } else {
+      throw redirect({ to: '/login' });
+    }
+  },
 });
-
-function DashboardHome() {
-  return (
-    <ProtectedRoute>
-      <RedirectToSeal />
-    </ProtectedRoute>
-  );
-}
-
-function RedirectToSeal() {
-  const navigate = useNavigate();
-
-  useEffect(() => {
-    navigate({ to: '/services/seal' });
-  }, [navigate]);
-
-  return (
-    <div className="flex items-center justify-center min-h-screen">
-      <p className="text-muted-foreground">Loading...</p>
-    </div>
-  );
-}
