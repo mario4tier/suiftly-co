@@ -1,5 +1,6 @@
 /** @type {import('tailwindcss').Config} */
 export default {
+  darkMode: 'class', // Enable class-based dark mode (next-themes sets .dark on <html>)
   content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
   theme: {
     extend: {
@@ -46,4 +47,8 @@ export default {
     },
   },
   plugins: [],
+  // Tailwind v4: Explicitly enable default utilities
+  corePlugins: {
+    preflight: true,
+  },
 };

@@ -209,33 +209,58 @@ if (import.meta.env.DEV) {
 ### Structure
 
 ```
-┌─────────────────┐
-│ Services        │
-├─────────────────┤
-│ 󰤄 Seal          │  ← Icon + label
-│ 󰖟 gRPC          │
-│ 󰘦 GraphQL       │
-│                 │
-│ ─────────────   │  ← Divider
-│                 │
-│ 󰵀 Billing       │
-│ 󰋗 Support       │
-└─────────────────┘
+┌─────────────────────┐
+│ 󰕰 Dashboard         │  ← Top-level item
+│                     │
+│ Infrastructure      │  ← Section header
+├─────────────────────┤
+│ 󰤄 Seal           ▼  │  ← Collapsible with chevron
+│   └ Config          │  ← Subitem (indented)
+│   └ Stats           │  ← Subitem (indented)
+│ 󰖟 gRPC              │
+│ 󰘦 GraphQL           │
+│                     │
+│ Management          │  ← Section header
+├─────────────────────┤
+│ 󰵀 Billing & Usage   │
+│ 󰌆 API Keys          │
+│ 󰄷 Analytics & Logs  │
+│                     │
+│ ─────────────────   │  ← Divider
+│                     │
+│ 󰋗 Support           │
+└─────────────────────┘
 ```
 
+**Navigation Types:**
+1. **Top-level items** (no subitems): Dashboard
+2. **Collapsible parent items** (with subitems): Seal
+   - Shows chevron indicator (▶ closed, ▼ open)
+   - Parent highlights when any child is active
+   - Click parent to expand/collapse
+3. **Regular items** (no subitems): gRPC, GraphQL, Billing, API Keys, Analytics & Logs, Support
+
 **Behavior:**
-- Active page highlighted (background color change)
-- Click → navigate to service page
-- Each service shows status indicator (dot):
-  - 🟢 Green = Active (enabled and running)
-  - 🔵 Blue = Configured but disabled
-  - ⚪ Gray = Not configured yet
-- Collapsible on mobile (hamburger menu)
+- **Active highlighting:** Blue background for active item/parent
+- **Collapsible sections:**
+  - Seal starts open by default
+  - Chevron rotates on expand/collapse
+  - Smooth animation transition
+  - Parent stays highlighted when any child is active
+- **Subitems:** Indented under parent, smaller text, selectable
+- **Dark mode:** All styles adapt to dark theme
+
+**Current Implementation:**
+- Dashboard: Top-level route
+- Seal: Collapsible with Config and Stats subitems
+- gRPC/GraphQL: Regular items (no subitems yet)
+- Management section: Regular items (no subitems)
+- Support: Regular item (no subitems)
 
 **Initial State (New User):**
-- All services show gray dot (not configured)
-- Billing shows "—" (no usage yet)
-- Support always visible (no status indicator)
+- Seal section expanded by default
+- All items accessible
+- Active route highlighted automatically
 
 ### Page 4: Settings (Spending Limits)
 
@@ -339,7 +364,7 @@ Each service page has **two states:**
 **Full-page configuration form with live pricing.**
 
 **When wallet NOT connected:**
-- 
+-
 - All tabs visible (Config, Keys, Stats, Logs) with placeholder data
 - Enable Service toggle disabled until wallet connects
 
@@ -511,7 +536,7 @@ Total Monthly Fee: $60/month
 **Tab-based layout with read-only config.**
 
 **When wallet disconnected:**
-- 
+-
 - Config displayed as read-only (Edit button disabled)
 - Enable Service toggle disabled
 - Reconnect wallet to manage service
@@ -1431,6 +1456,18 @@ function calculateMonthlyFee(config: ServiceConfig): number {
 
 Source: [Cloudflare cf-ui Style Guide](https://cloudflare.github.io/cf-ui/)
 
+**Sidebar Design Reference:**
+
+![Cloudflare Sidebar Design](./cloudflare-sidebar-reference.png)
+
+The sidebar follows Cloudflare's navigation patterns:
+- Small icons (~14px / h-3.5)
+- Compact text sizing (~13px)
+- Collapsible sections with chevron on the right
+- Increased indentation for subitems (pl-12)
+- Consistent light grey borders (#e5e7eb)
+- Blue icons and selection indicators
+
 Suiftly adapts Cloudflare's design system with the following changes:
 - **Primary Color:** Suiftly orange (#f38020) instead of Cloudflare's Marine blue
 - **Typography:** Same Open Sans font family
@@ -1647,12 +1684,228 @@ boxShadow: {
 
 ---
 
+## Theme Management
+
+**Dark Mode Support with next-themes**
+
+The application supports light and dark themes with system preference detection and manual toggle.
+
+### Implementation
+
+**Library:** `next-themes` (v0.2.1+)
+- Zero-flicker theme switching
+- Persistent user preference (localStorage)
+- System preference detection and sync
+- SSR-safe hydration
+
+**Theme Provider Setup:**
+```typescript
+// app/providers.tsx
+import { ThemeProvider } from 'next-themes'
+
+export function Providers({ children }: { children: React.ReactNode }) {
+  return (
+    <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+      {children}
+    </ThemeProvider>
+  )
+}
+```
+
+**Root HTML Element:**
+```tsx
+// app/layout.tsx or index.html
+<html lang="en" suppressHydrationWarning>
+  {/* suppressHydrationWarning prevents mismatch during hydration */}
+</html>
+```
+
+**Tailwind Configuration:**
+```javascript
+// tailwind.config.js
+module.exports = {
+  darkMode: 'class', // Use class-based dark mode (next-themes sets .dark on <html>)
+  // ... rest of config
+}
+```
+
+### Theme Toggle Component
+
+**Location:** `components/theme/ThemeToggle.tsx`
+
+**Behavior:**
+- Shows sun icon in light mode, moon icon in dark mode
+- Click to toggle between light/dark
+- Syncs with system preference if user hasn't manually chosen
+- Positioned in header (top-right area, near wallet button)
+
+**Example Implementation:**
+```tsx
+import { useTheme } from 'next-themes'
+import { Moon, Sun } from 'lucide-react'
+
+export function ThemeToggle() {
+  const { theme, setTheme } = useTheme()
+
+  return (
+    <button
+      onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+      className="p-2 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800"
+      aria-label="Toggle theme"
+    >
+      <Sun className="h-5 w-5 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
+      <Moon className="absolute h-5 w-5 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
+    </button>
+  )
+}
+```
+
+### Dark Mode Color Palette
+
+**Based on Cloudflare cf-ui with dark mode variants:**
+
+```javascript
+// Light mode (default)
+colors: {
+  primary: '#f38020',          // Suiftly orange
+  background: '#ffffff',       // White
+  surface: '#F7F7F7',          // Moonshine (light gray)
+  border: '#EBEBEB',           // Dust
+  text: '#333333',             // Charcoal
+  textMuted: '#808285',        // Storm
+}
+
+// Dark mode
+colors: {
+  primary: '#ff9747',          // Lighter orange for contrast
+  background: '#0a0a0a',       // Near black
+  surface: '#1a1a1a',          // Dark surface
+  border: '#333333',           // Dark border
+  text: '#F7F7F7',             // Light text
+  textMuted: '#808285',        // Storm (muted, same as light)
+}
+```
+
+**CSS Variables (Recommended Approach):**
+```css
+/* globals.css */
+:root {
+  --color-primary: #f38020;
+  --color-background: #ffffff;
+  --color-surface: #F7F7F7;
+  --color-border: #EBEBEB;
+  --color-text: #333333;
+  --color-text-muted: #808285;
+}
+
+.dark {
+  --color-primary: #ff9747;
+  --color-background: #0a0a0a;
+  --color-surface: #1a1a1a;
+  --color-border: #333333;
+  --color-text: #F7F7F7;
+  --color-text-muted: #808285;
+}
+```
+
+**Tailwind Usage:**
+```tsx
+<div className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-50">
+  {/* Content adapts to theme */}
+</div>
+```
+
+### Component Dark Mode Styling
+
+**Header:**
+```tsx
+<header className="bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800">
+  {/* Logo, wallet button, theme toggle */}
+</header>
+```
+
+**Sidebar:**
+```tsx
+<aside className="bg-gray-50 dark:bg-gray-900 border-r border-gray-200 dark:border-gray-800">
+  {/* Navigation items */}
+</aside>
+```
+
+**Cards & Surfaces:**
+```tsx
+<div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg">
+  {/* Card content */}
+</div>
+```
+
+**Buttons:**
+```tsx
+<button className="bg-primary hover:bg-primary-hover text-white dark:bg-primary-light dark:hover:bg-primary">
+  {/* Primary button */}
+</button>
+```
+
+**Tier Cards (Selection):**
+```tsx
+<div className="border-2 border-gray-200 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-500">
+  {/* Selected state */}
+  <div className="border-primary dark:border-primary-light bg-primary/5 dark:bg-primary/10">
+    {/* ... */}
+  </div>
+</div>
+```
+
+### Integration Points
+
+**Header Layout:**
+```
+┌─────────────────────────────────────────────────────────────┐
+│ [Logo] Suiftly BETA          [🌙] [0x1a2b... ▼]            │
+└─────────────────────────────────────────────────────────────┘
+```
+- Theme toggle positioned between logo and wallet button
+- Icon changes based on current theme (sun ↔ moon)
+
+**User Preference Persistence:**
+- Stored in localStorage as `theme` key
+- Values: `"light"`, `"dark"`, or `"system"`
+- Survives page refreshes and sessions
+
+**System Preference Sync:**
+- If user hasn't manually chosen theme, follows OS/browser setting
+- Responds to OS theme changes in real-time
+- Media query: `@media (prefers-color-scheme: dark)`
+
+### Accessibility Considerations
+
+- **Color Contrast:** All dark mode colors meet WCAG AA contrast ratios
+- **Focus Indicators:** Visible in both themes (ring-2 ring-offset-2)
+- **ARIA Labels:** Theme toggle has `aria-label="Toggle theme"`
+- **Keyboard Navigation:** Theme toggle accessible via Tab + Enter/Space
+- **Screen Readers:** Announces current theme when toggled
+
+### Testing
+
+**Manual Test Scenarios:**
+1. Toggle theme → verify persistence across page reload
+2. Change OS theme → verify app follows system preference (if no manual selection)
+3. Manually select theme → verify overrides system preference
+4. Test all major pages in both themes (Seal, Billing, Support)
+5. Verify tier card selection states in both themes
+
+**Visual Regression:**
+- Capture screenshots of key pages in light/dark modes
+- Compare borders, backgrounds, text colors
+- Ensure primary orange (#f38020 / #ff9747) visible in both themes
+
+---
+
 ## Accessibility
 
 - **Keyboard navigation:** All interactive elements focusable
 - **ARIA labels:** For icons, dropdowns, modals
-- **Color contrast:** WCAG AA compliant
-- **Focus indicators:** Visible outlines on focus
+- **Color contrast:** WCAG AA compliant (light and dark modes)
+- **Focus indicators:** Visible outlines on focus (both themes)
 - **Screen reader support:** Semantic HTML, proper labels
 
 ---
@@ -1953,7 +2206,7 @@ Minimal set of critical tests to validate before production:
 1. **Wallet Auth & Session**
    - [ ] User can connect wallet, sign challenge, receive JWT in httpOnly cookie
    - [ ] Session expires after 4 hours (or prompts re-sign at 30 min remaining)
-   - [ ] Disconnecting wallet clears session and 
+   - [ ] Disconnecting wallet clears session and
 
 2. **Service Enable with Billing**
    - [ ] Enabling service checks sufficient balance before charging
@@ -1987,6 +2240,6 @@ Minimal set of critical tests to validate before production:
    - [ ] Top-up during grace period resumes service immediately
 
 8. **Error Handling (Critical Paths)**
-   - [ ] Network error during wallet connect → shows retry with 
+   - [ ] Network error during wallet connect → shows retry with
    - [ ] Insufficient balance on enable → shows error modal with "Top Up" button
    - [ ] JWT expired (401) → clears auth, redirects to home, shows "Session expired" toast
