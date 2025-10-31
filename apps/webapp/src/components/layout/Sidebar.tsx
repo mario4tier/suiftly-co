@@ -4,7 +4,7 @@
  */
 
 import { useState } from 'react';
-import { Link, useRouterState } from '@tanstack/react-router';
+import { Link, useNavigate, useRouterState } from '@tanstack/react-router';
 import {
   HardDrive,
   Network,
@@ -14,13 +14,14 @@ import {
   Activity,
   Key,
   Home,
+  type LucideIcon,
 } from 'lucide-react';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 
 interface NavItem {
   path: string;
   label: string;
-  icon: any;
+  icon: LucideIcon;
   children?: { path: string; label: string }[];
 }
 
@@ -43,6 +44,7 @@ function ChevronUp({ className }: { className?: string }) {
 }
 
 export function Sidebar() {
+  const navigate = useNavigate();
   const routerState = useRouterState();
   const currentPath = routerState.location.pathname;
 
@@ -58,9 +60,9 @@ export function Sidebar() {
     }));
   };
 
-  // Check if current path matches or starts with the given path
+  // Check if current path matches exactly
   const isActive = (path: string) => {
-    return currentPath === path || currentPath.startsWith(path + '/');
+    return currentPath === path;
   };
 
   // Check if any child is active
@@ -79,7 +81,7 @@ export function Sidebar() {
       label: 'Seal',
       icon: HardDrive,
       children: [
-        { path: '/services/seal', label: 'Config' },
+        { path: '/services/seal/config', label: 'Config' },
         { path: '/services/seal/stats', label: 'Stats' },
       ],
     },
@@ -105,31 +107,49 @@ export function Sidebar() {
     const isOpen = sectionKey ? openSections[sectionKey] : false;
 
     if (hasChildren) {
+      const handleParentClick = () => {
+        // Open the section if it's not already open
+        if (!isOpen && sectionKey) {
+          toggleSection(sectionKey);
+        }
+        // Navigate to the first child
+        if (item.children && item.children.length > 0) {
+          navigate({ to: item.children[0].path });
+        }
+      };
+
       return (
         <Collapsible
           key={item.path}
           open={isOpen}
           onOpenChange={() => sectionKey && toggleSection(sectionKey)}
         >
-          <CollapsibleTrigger asChild>
+          <div
+            className={`
+              group flex items-center gap-2 px-3 w-[231px] h-[42px] rounded-r-md text-[14px] font-normal transition-all cursor-pointer relative
+              ${anyChildActive
+                ? 'bg-blue-50 dark:bg-blue-900/20 text-[rgb(0,81,195)] dark:text-blue-400 before:absolute before:left-0 before:top-0 before:bottom-0 before:w-1 before:bg-[rgb(0,81,195)] before:rounded-r-full'
+                : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'
+              }
+            `}
+          >
             <div
-              className={`
-                group flex items-center gap-2 px-3 w-[255px] h-[42px] rounded-r-md text-[14px] font-normal transition-all cursor-pointer relative
-                ${anyChildActive
-                  ? 'bg-blue-50 dark:bg-blue-900/20 text-[rgb(0,81,195)] dark:text-blue-400 before:absolute before:left-0 before:top-0 before:bottom-0 before:w-1 before:bg-[rgb(0,81,195)] before:rounded-r-full'
-                  : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'
-                }
-              `}
+              onClick={handleParentClick}
+              className="flex items-center gap-2 flex-1"
             >
               <div className="w-[55px] h-5 flex items-center justify-center flex-shrink-0">
                 <Icon className={`w-5 h-5 ${anyChildActive ? 'text-[rgb(0,81,195)]' : 'text-gray-500 dark:text-gray-400'}`} />
               </div>
               <span className="flex-1">{item.label}</span>
-              <ChevronUp
-                className={`w-[10px] h-[10px] transition-transform fill-[#9ca3af] dark:fill-[#6b7280] ${isOpen ? '' : 'rotate-180'}`}
-              />
             </div>
-          </CollapsibleTrigger>
+            <CollapsibleTrigger asChild>
+              <button className="flex items-center justify-center">
+                <ChevronUp
+                  className={`w-[10px] h-[10px] transition-transform fill-[#9ca3af] dark:fill-[#6b7280] ${isOpen ? '' : 'rotate-180'}`}
+                />
+              </button>
+            </CollapsibleTrigger>
+          </div>
           <CollapsibleContent className="pl-7">
             <div className="space-y-0.5">
               {item.children?.map((child) => {
@@ -139,7 +159,7 @@ export function Sidebar() {
                     key={child.path}
                     to={child.path}
                     className={`
-                      flex items-center px-3 w-[255px] h-[42px] ml-1 rounded-r-md text-[14px] font-normal transition-all no-underline relative
+                      flex items-center px-3 w-[231px] h-[42px] ml-1 rounded-r-md text-[14px] font-normal transition-all no-underline relative
                       ${childActive
                         ? 'bg-blue-50 dark:bg-blue-900/20 text-[rgb(0,81,195)] dark:text-blue-400 before:absolute before:left-0 before:top-0 before:bottom-0 before:w-1 before:bg-[rgb(0,81,195)] before:rounded-r-full'
                         : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'
@@ -162,7 +182,7 @@ export function Sidebar() {
         key={item.path}
         to={item.path}
         className={`
-          flex items-center gap-2 px-3 w-[255px] h-[42px] rounded-r-md text-[14px] font-normal transition-all no-underline relative
+          flex items-center gap-2 px-3 w-[231px] h-[42px] rounded-r-md text-[14px] font-normal transition-all no-underline relative
           ${active
             ? 'bg-blue-50 dark:bg-blue-900/20 text-[rgb(0,81,195)] dark:text-blue-400 before:absolute before:left-0 before:top-0 before:bottom-0 before:w-1 before:bg-[rgb(0,81,195)] before:rounded-r-full'
             : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'
@@ -178,7 +198,7 @@ export function Sidebar() {
   };
 
   return (
-    <aside className="w-56 bg-white dark:bg-gray-900 border-r border-[#e5e7eb] dark:border-[#374151] min-h-screen pt-14">
+    <aside className="w-[255px] bg-white dark:bg-gray-900 border-r border-cf-border dark:border-cf-border-dark min-h-screen pt-1">
       <nav className="p-3 space-y-1">
         {/* Top Items (Dashboard) */}
         <div className="space-y-0.5">
@@ -194,7 +214,7 @@ export function Sidebar() {
           </div>
           <div className="space-y-0.5">
             {serviceItems.map((item) =>
-              renderNavItem(item, item.children ? `seal` : undefined)
+              renderNavItem(item, item.children ? item.label.toLowerCase() : undefined)
             )}
           </div>
         </div>
@@ -212,7 +232,7 @@ export function Sidebar() {
         </div>
 
         {/* Divider */}
-        <div className="border-t border-[#e5e7eb] dark:border-[#374151] my-3" />
+        <div className="border-t border-cf-border dark:border-cf-border-dark my-3" />
 
         {/* Support Section */}
         <div className="space-y-0.5">
