@@ -18,6 +18,7 @@ import { Route as IndexRouteImport } from './routes/index'
 
 const TestLazyRouteImport = createFileRoute('/test')()
 const SupportLazyRouteImport = createFileRoute('/support')()
+const StatusLazyRouteImport = createFileRoute('/status')()
 const ServicesLazyRouteImport = createFileRoute('/services')()
 const LogsLazyRouteImport = createFileRoute('/logs')()
 const BillingLazyRouteImport = createFileRoute('/billing')()
@@ -42,6 +43,11 @@ const SupportLazyRoute = SupportLazyRouteImport.update({
   path: '/support',
   getParentRoute: () => rootRouteImport,
 } as any).lazy(() => import('./routes/support.lazy').then((d) => d.Route))
+const StatusLazyRoute = StatusLazyRouteImport.update({
+  id: '/status',
+  path: '/status',
+  getParentRoute: () => rootRouteImport,
+} as any).lazy(() => import('./routes/status.lazy').then((d) => d.Route))
 const ServicesLazyRoute = ServicesLazyRouteImport.update({
   id: '/services',
   path: '/services',
@@ -125,6 +131,7 @@ export interface FileRoutesByFullPath {
   '/billing': typeof BillingLazyRoute
   '/logs': typeof LogsLazyRoute
   '/services': typeof ServicesLazyRouteWithChildren
+  '/status': typeof StatusLazyRoute
   '/support': typeof SupportLazyRoute
   '/test': typeof TestLazyRoute
   '/services/graphql': typeof ServicesGraphqlLazyRoute
@@ -142,6 +149,7 @@ export interface FileRoutesByTo {
   '/billing': typeof BillingLazyRoute
   '/logs': typeof LogsLazyRoute
   '/services': typeof ServicesLazyRouteWithChildren
+  '/status': typeof StatusLazyRoute
   '/support': typeof SupportLazyRoute
   '/test': typeof TestLazyRoute
   '/services/graphql': typeof ServicesGraphqlLazyRoute
@@ -160,6 +168,7 @@ export interface FileRoutesById {
   '/billing': typeof BillingLazyRoute
   '/logs': typeof LogsLazyRoute
   '/services': typeof ServicesLazyRouteWithChildren
+  '/status': typeof StatusLazyRoute
   '/support': typeof SupportLazyRoute
   '/test': typeof TestLazyRoute
   '/services/graphql': typeof ServicesGraphqlLazyRoute
@@ -179,6 +188,7 @@ export interface FileRouteTypes {
     | '/billing'
     | '/logs'
     | '/services'
+    | '/status'
     | '/support'
     | '/test'
     | '/services/graphql'
@@ -196,6 +206,7 @@ export interface FileRouteTypes {
     | '/billing'
     | '/logs'
     | '/services'
+    | '/status'
     | '/support'
     | '/test'
     | '/services/graphql'
@@ -213,6 +224,7 @@ export interface FileRouteTypes {
     | '/billing'
     | '/logs'
     | '/services'
+    | '/status'
     | '/support'
     | '/test'
     | '/services/graphql'
@@ -231,6 +243,7 @@ export interface RootRouteChildren {
   BillingLazyRoute: typeof BillingLazyRoute
   LogsLazyRoute: typeof LogsLazyRoute
   ServicesLazyRoute: typeof ServicesLazyRouteWithChildren
+  StatusLazyRoute: typeof StatusLazyRoute
   SupportLazyRoute: typeof SupportLazyRoute
   TestLazyRoute: typeof TestLazyRoute
 }
@@ -249,6 +262,13 @@ declare module '@tanstack/react-router' {
       path: '/support'
       fullPath: '/support'
       preLoaderRoute: typeof SupportLazyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/status': {
+      id: '/status'
+      path: '/status'
+      fullPath: '/status'
+      preLoaderRoute: typeof StatusLazyRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/services': {
@@ -374,6 +394,7 @@ const rootRouteChildren: RootRouteChildren = {
   BillingLazyRoute: BillingLazyRoute,
   LogsLazyRoute: LogsLazyRoute,
   ServicesLazyRoute: ServicesLazyRouteWithChildren,
+  StatusLazyRoute: StatusLazyRoute,
   SupportLazyRoute: SupportLazyRoute,
   TestLazyRoute: TestLazyRoute,
 }

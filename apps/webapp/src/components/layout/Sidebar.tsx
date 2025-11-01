@@ -66,12 +66,6 @@ export function Sidebar() {
     return currentPath === path;
   };
 
-  // Check if any child is active
-  const isAnyChildActive = (children?: { path: string; label: string }[]) => {
-    if (!children) return false;
-    return children.some((child) => isActive(child.path));
-  };
-
   const topItems: NavItem[] = [
     { path: '/dashboard', label: 'Dashboard', icon: Home },
   ];
@@ -97,7 +91,7 @@ export function Sidebar() {
   ];
 
   const statusItems: NavItem[] = [
-    { path: '/network-status', label: 'Network Status', icon: Radio },
+    { path: '/status', label: 'Network Status', icon: Radio },
   ];
 
   const supportItems: NavItem[] = [
@@ -107,7 +101,6 @@ export function Sidebar() {
   const renderNavItem = (item: NavItem, sectionKey?: string) => {
     const active = isActive(item.path);
     const hasChildren = item.children && item.children.length > 0;
-    const anyChildActive = isAnyChildActive(item.children);
     const Icon = item.icon;
     const isOpen = sectionKey ? openSections[sectionKey] : false;
 
@@ -130,7 +123,7 @@ export function Sidebar() {
           onOpenChange={() => sectionKey && toggleSection(sectionKey)}
         >
           <div
-            className="group flex items-center gap-2 px-3 w-[231px] h-[42px] rounded-r-md text-[14px] font-normal transition-all cursor-pointer text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800"
+            className="group flex items-center gap-2 px-3 h-[42px] rounded-r-md text-[14px] font-normal transition-all cursor-pointer text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800"
           >
             <div
               onClick={handleParentClick}
@@ -158,9 +151,9 @@ export function Sidebar() {
                     key={child.path}
                     to={child.path}
                     className={`
-                      flex items-center px-3 w-[231px] h-[42px] ml-1 rounded-r-md text-[14px] font-normal transition-all no-underline relative
+                      flex items-center pl-[71px] pr-3 h-[42px] rounded-r-md text-[14px] font-normal transition-all no-underline relative
                       ${childActive
-                        ? 'bg-blue-50 dark:bg-blue-900/20 text-[rgb(0,81,195)] dark:text-blue-400 before:absolute before:left-0 before:top-0 before:bottom-0 before:w-1 before:bg-[rgb(0,81,195)] before:rounded-r-full'
+                        ? 'bg-[#dbeafe] dark:bg-blue-900/20 text-[rgb(0,81,195)] dark:text-blue-400 border border-[#93c5fd] dark:border-blue-700 before:absolute before:left-0 before:top-0 before:bottom-0 before:w-1 before:bg-[rgb(0,81,195)] before:rounded-r-full'
                         : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'
                       }
                     `}
@@ -181,9 +174,9 @@ export function Sidebar() {
         key={item.path}
         to={item.path}
         className={`
-          flex items-center gap-2 px-3 w-[231px] h-[42px] rounded-r-md text-[14px] font-normal transition-all no-underline relative
+          flex items-center gap-2 px-3 h-[42px] rounded-r-md text-[14px] font-normal transition-all no-underline relative
           ${active
-            ? 'bg-blue-50 dark:bg-blue-900/20 text-[rgb(0,81,195)] dark:text-blue-400 before:absolute before:left-0 before:top-0 before:bottom-0 before:w-1 before:bg-[rgb(0,81,195)] before:rounded-r-full'
+            ? 'bg-[#dbeafe] dark:bg-blue-900/20 text-[rgb(0,81,195)] dark:text-blue-400 border border-[#93c5fd] dark:border-blue-700 before:absolute before:left-0 before:top-0 before:bottom-0 before:w-1 before:bg-[rgb(0,81,195)] before:rounded-r-full'
             : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'
           }
         `}
@@ -198,7 +191,7 @@ export function Sidebar() {
 
   return (
     <aside className="w-[255px] bg-white dark:bg-gray-900 border-r border-cf-border dark:border-cf-border-dark min-h-screen pt-1">
-      <nav className="p-3 space-y-1">
+      <nav className="space-y-1">
         {/* Top Items (Dashboard) */}
         <div className="space-y-0.5">
           {topItems.map((item) => renderNavItem(item))}
