@@ -196,12 +196,12 @@ See **[AUTHENTICATION_DESIGN.md](./AUTHENTICATION_DESIGN.md)** for complete tech
 3. **Regular items** (no subitems): gRPC, GraphQL, Billing, API Keys, Analytics & Logs, Support
 
 **Behavior:**
-- **Active highlighting:** Blue background for active item/parent
+- **Active highlighting:** Blue background for active item only (not parent)
+  - Example: If Seal → Config is selected, only "Config" has blue background, not "Seal"
 - **Collapsible sections:**
   - Seal starts open by default
   - Chevron rotates on expand/collapse
   - Smooth animation transition
-  - Parent stays highlighted when any child is active
 - **Subitems:** Indented under parent, smaller text, selectable
 - **Dark mode:** All styles adapt to dark theme
 

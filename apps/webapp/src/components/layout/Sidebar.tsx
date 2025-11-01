@@ -130,20 +130,14 @@ export function Sidebar() {
           onOpenChange={() => sectionKey && toggleSection(sectionKey)}
         >
           <div
-            className={`
-              group flex items-center gap-2 px-3 w-[231px] h-[42px] rounded-r-md text-[14px] font-normal transition-all cursor-pointer relative
-              ${anyChildActive
-                ? 'bg-blue-50 dark:bg-blue-900/20 text-[rgb(0,81,195)] dark:text-blue-400 before:absolute before:left-0 before:top-0 before:bottom-0 before:w-1 before:bg-[rgb(0,81,195)] before:rounded-r-full'
-                : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'
-              }
-            `}
+            className="group flex items-center gap-2 px-3 w-[231px] h-[42px] rounded-r-md text-[14px] font-normal transition-all cursor-pointer text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800"
           >
             <div
               onClick={handleParentClick}
               className="flex items-center gap-2 flex-1"
             >
               <div className="w-[55px] h-5 flex items-center justify-center flex-shrink-0">
-                <Icon className={`w-5 h-5 ${anyChildActive ? 'text-[rgb(0,81,195)]' : 'text-gray-500 dark:text-gray-400'}`} />
+                <Icon className="w-5 h-5 text-gray-500 dark:text-gray-400" />
               </div>
               <span className="flex-1">{item.label}</span>
             </div>
