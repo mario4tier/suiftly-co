@@ -33,3 +33,6 @@ Thumbs.db
 *.log
 npm-debug.log*
 /.serena/
+
+# Test artifacts
+test-results/
