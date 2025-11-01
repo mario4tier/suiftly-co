@@ -67,25 +67,29 @@ export interface JwtPayload {
   [key: string]: unknown; // Index signature for jose compatibility
 }
 
+import { getJWTConfig } from './jwt-config';
+
 /**
- * Generate access token (15 minutes)
+ * Generate access token (configurable expiry - default 15m)
  */
 export async function generateAccessToken(payload: JwtPayload): Promise<string> {
+  const config = getJWTConfig();
   return await new SignJWT(payload as Record<string, unknown>)
     .setProtectedHeader({ alg: 'HS256' })
     .setIssuedAt()
-    .setExpirationTime('15m')
+    .setExpirationTime(config.accessTokenExpiry)
     .sign(secret);
 }
 
 /**
- * Generate refresh token (30 days)
+ * Generate refresh token (configurable expiry - default 30d)
  */
 export async function generateRefreshToken(payload: JwtPayload): Promise<string> {
+  const config = getJWTConfig();
   return await new SignJWT(payload as Record<string, unknown>)
     .setProtectedHeader({ alg: 'HS256' })
     .setIssuedAt()
-    .setExpirationTime('30d')
+    .setExpirationTime(config.refreshTokenExpiry)
     .sign(secret);
 }
 

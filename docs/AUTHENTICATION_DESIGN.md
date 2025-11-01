@@ -43,16 +43,16 @@ After analyzing leading Sui DeFi protocols (Scallop, Navi, Suilend), we determin
 │   (SPA)  │                │ Backend  │              │          │
 └────┬─────┘                └────┬─────┘              └────┬─────┘
      │                           │                         │
-     │ 1. User visits /login and clicks wallet option     │
+     │ 1. User visits /login and clicks wallet option      │
      ├────────────────────────────────────────────────────>│
      │                           │                         │
-     │ 2. Wallet prompts: "Connect to app.suiftly.io?"    │
+     │ 2. Wallet prompts: "Connect to app.suiftly.io?"     │
      │<────────────────────────────────────────────────────┤
      │                           │                         │
      │ 3. User approves connection                         │
      │────────────────────────────────────────────────────>│
      │                           │                         │
-     │ 4. dApp Kit stores "last wallet" in localStorage   │
+     │ 4. dApp Kit stores "last wallet" in localStorage    │
      │    (enables auto-reconnect on future visits)        │
      │                           │                         │
      │ 5. Request auth challenge │                         │
@@ -78,7 +78,7 @@ After analyzing leading Sui DeFi protocols (Scallop, Navi, Suilend), we determin
      │    • Nonce not used       │                         │
      │    • Timestamp recent     │                         │
      │                           │                         │
-     │ 10. Set httpOnly cookie with JWT (4-hour expiry)   │
+     │ 10. Set httpOnly cookie with JWT (4-hour expiry)    │
      │<──────────────────────────┤                         │
      │                           │                         │
      │ [User is authenticated]   │                         │
@@ -87,19 +87,19 @@ After analyzing leading Sui DeFi protocols (Scallop, Navi, Suilend), we determin
 ### Subsequent API Calls (No Wallet Interaction)
 
 ```
-┌──────────┐                ┌──────────┐
-│  Browser │                │   API    │
-│   (SPA)  │                │ Backend  │
-└────┬─────┘                └────┬─────┘
-     │                           │
+┌──────────┐                 ┌──────────┐
+│  Browser │                 │   API    │
+│   (SPA)  │                 │ Backend  │
+└────┬─────┘                 └────┬─────┘
+     │                            │
      │ API call (cookie auto-sent)│
-     ├──────────────────────────>│
-     │                           │
-     │    [Validate JWT]         │
-     │    [Authorize access]     │
-     │                           │
-     │ Return protected data     │
-     │<──────────────────────────┤
+     ├───────────────────────────>│
+     │                            │
+     │     [Validate JWT]         │
+     │     [Authorize access]     │
+     │                            │
+     │  Return protected data     │
+     │<───────────────────────────┤
 ```
 
 ### Blockchain Transactions (Wallet Signature Required)
@@ -118,7 +118,7 @@ After analyzing leading Sui DeFi protocols (Scallop, Navi, Suilend), we determin
      │ Sign transaction          │                         │
      ├────────────────────────────────────────────────────>│
      │                           │                         │
-     │ [Wallet popup: "Deposit 40.82 SUI?" → Approve]     │
+     │  [Wallet popup: "Deposit 40.82 SUI?" → Approve]     │
      │                           │                         │
      │ Return signed tx          │                         │
      │<────────────────────────────────────────────────────┤
@@ -137,162 +137,57 @@ After analyzing leading Sui DeFi protocols (Scallop, Navi, Suilend), we determin
 
 ### Frontend Components
 
-**Login Page (`/login`):**
+**Implementation files:**
+- **Login Page:** [apps/webapp/src/routes/login.tsx](../apps/webapp/src/routes/login.tsx)
+- **Auth Service:** [apps/webapp/src/lib/auth.ts](../apps/webapp/src/lib/auth.ts)
+- **Auth Store:** [apps/webapp/src/stores/auth.ts](../apps/webapp/src/stores/auth.ts)
+- **Wallet Provider:** [apps/webapp/src/components/wallet/WalletProvider.tsx](../apps/webapp/src/components/wallet/WalletProvider.tsx)
+- **Wallet Widget:** [apps/webapp/src/components/wallet/WalletWidget.tsx](../apps/webapp/src/components/wallet/WalletWidget.tsx)
+- **Mock Wallet:** [apps/webapp/src/lib/mockWallet.ts](../apps/webapp/src/lib/mockWallet.ts)
 
-The login page displays wallet connection options directly - no modal required:
-
-```typescript
-// apps/webapp/src/routes/login.tsx
-function LoginPage() {
-  const wallets = useWallets()
-  const { connect } = useConnectWallet()
-  const [mockAccount, setMockAccount] = useState(null)
-
-  const handleWalletSelect = (wallet) => {
-    connect({ wallet })
-    setPendingAuth(true)
-  }
-
-  const handleMockConnect = () => {
-    const account = connectMockWallet()
-    setMockAccount(account)
-    setPendingAuth(true)
-  }
-
-  return (
-    <div className="login-container">
-      {/* Wallet Options - displayed directly */}
-      {wallets.map(wallet => (
-        <button onClick={() => handleWalletSelect(wallet)}>
-          {wallet.name}
-        </button>
-      ))}
-
-      {/* Mock Wallet (DEV only) */}
-      {import.meta.env.DEV && (
-        <button onClick={handleMockConnect}>
-          Connect Mock Wallet
-        </button>
-      )}
-    </div>
-  )
-}
-```
-
-**Key Features:**
-- Wallet options shown directly on page (no modal)
-- Mock wallet only visible in development mode (`import.meta.env.DEV`)
+**Login Page Features:**
+- Displays wallet connection options directly (no modal)
+- Mock wallet only visible in development mode
 - Automatic authentication flow after wallet connection
-- Redirects to `/services/seal` after successful auth
+- Redirects to `/dashboard` after successful auth
 
-**WalletWidget Component:**
+**Auth Service Features:**
+- Idempotent login/logout operations
+- Operation locking (prevents concurrent auth operations)
+- Challenge-response signature flow
+- Supports both real and mock wallets
+- **TODO:** Automatic token refresh (backend ready, frontend not yet implemented)
 
-Displays connected wallet address and account menu on authenticated pages:
+**Wallet Widget Features:**
+- Rendered in header on authenticated pages
+- Shows truncated wallet address with MOCK badge (if applicable)
+- Dropdown menu: Billing, Copy Address, Disconnect
+- Disconnect clears session and redirects to `/login`
 
-```typescript
-// apps/webapp/src/components/wallet/WalletWidget.tsx
-export function WalletWidget() {
-  const { user, logout } = useAuth()
-  const { disconnect } = useDisconnectWallet()
-  const navigate = useNavigate()
+### Frontend Authentication Flow
 
-  const handleDisconnect = async () => {
-    await logout()
-    disconnect()
-    navigate({ to: '/login' })
-  }
+**See [apps/webapp/src/lib/auth.ts](../apps/webapp/src/lib/auth.ts) for complete implementation.**
 
-  return (
-    <div>
-      {/* Wallet Address Button */}
-      <button onClick={() => setShowMenu(true)}>
-        {user.walletAddress.slice(0,6)}...{user.walletAddress.slice(-4)}
-      </button>
+**Challenge-Response Flow:**
+1. Request nonce from backend (`auth.connectWallet`)
+2. Sign challenge message with wallet
+3. Submit signature to backend (`auth.verifySignature`)
+4. Backend issues access token (returned in response) + refresh token (httpOnly cookie)
+5. Frontend stores access token in auth store (localStorage)
+6. **TODO:** Automatic token refresh on 401 errors (not yet implemented)
 
-      {/* Dropdown Menu */}
-      {showMenu && (
-        <div>
-          <a href="/billing">Billing & Balance</a>
-          <button onClick={handleCopyAddress}>Copy Address</button>
-          <button onClick={handleDisconnect}>Disconnect</button>
-        </div>
-      )}
-    </div>
-  )
-}
-```
-
-**Key Features:**
-- Only rendered on authenticated pages (Header component)
-- Shows truncated wallet address with MOCK badge if applicable
-- Dropdown menu with Billing, Copy Address, and Disconnect options
-- Disconnect redirects to `/login`
-
-### Frontend (SPA with React)
-
-**Wallet Connection Setup:**
-
-```typescript
-// app/layout.tsx - Root provider setup
-import { WalletProvider } from '@mysten/dapp-kit'
-
-export default function RootLayout({ children }) {
-  return (
-    <WalletProvider autoConnect={true}>
-      {children}
-    </WalletProvider>
-  )
-}
-```
-
-**Authentication Service:**
-
-```typescript
-// lib/auth.ts
-export async function authenticateWallet(wallet: WalletAccount) {
-  // 1. Request challenge from backend
-  const { nonce, message } = await api.auth.getChallenge.query({
-    address: wallet.address
-  })
-
-  // 2. Sign challenge with wallet
-  const signature = await wallet.signMessage({ message })
-
-  // 3. Submit to backend for JWT
-  const { success } = await api.auth.verify.mutate({
-    address: wallet.address,
-    signature,
-    nonce,
-    timestamp: message.timestamp
-  })
-
-  if (!success) {
-    throw new Error('Authentication failed')
-  }
-
-  // JWT now stored in httpOnly cookie by backend
-  // No need to manually store in localStorage
-}
-```
-
-**Protected API Calls:**
-
-```typescript
-// lib/trpc.ts
-export const trpc = createTRPCProxyClient<AppRouter>({
-  links: [
-    httpBatchLink({
-      url: '/api/trpc',
-      credentials: 'include', // Send cookies automatically
-    }),
-  ],
-})
-
-// Usage (JWT sent automatically)
-const apiKeys = await trpc.user.getAPIKeys.query()
-```
+**Key Implementation Details:**
+- WalletProvider wraps entire app (auto-reconnect on reload)
+- `useAuth()` hook provides `login()` and `logout()` functions
+- tRPC client configured with `credentials: 'include'` (sends refresh token cookie automatically)
+- Mock wallet support for development (no real signatures needed)
+- **Current limitation:** Access token expires after 15 min, no automatic refresh yet (user must re-login)
 
 ### Backend (API with tRPC)
+
+**Implementation:** ✅ **COMPLETE** - See [apps/api/src/routes/auth.ts](../apps/api/src/routes/auth.ts)
+
+**Database schema:** ✅ **IMPLEMENTED** - See [packages/database/src/schema/auth.ts](../packages/database/src/schema/auth.ts)
 
 **Database Storage: PostgreSQL**
 
@@ -302,356 +197,79 @@ Two things must be stored in PostgreSQL to support multiple API servers:
 
 2. **Refresh tokens** (long-lived) - Must be stored to enable revocation (logout, compromised token, etc.). JWTs are stateless and can't be revoked once issued, so we store refresh tokens in the database to control their validity.
 
-Note: **Access tokens are NOT stored** - they're stateless JWTs verified using only the signing key. This is the standard JWT benefit you were thinking of!
+Note: **Access tokens are NOT stored** - they're stateless JWTs verified using only the signing key. This is the standard JWT benefit!
 
 **Database Schema:**
 
-```sql
--- Migration: Create auth_nonces table
-CREATE TABLE auth_nonces (
-  address TEXT NOT NULL,
-  nonce TEXT NOT NULL,
-  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-  PRIMARY KEY (address, nonce)
-);
+Tables to be created via Drizzle migrations:
 
--- Index for cleanup queries
-CREATE INDEX idx_auth_nonces_created_at ON auth_nonces (created_at);
+- **`auth_nonces`** - Temporary challenge nonces
+  - `address` (TEXT, part of composite primary key)
+  - `nonce` (TEXT, part of composite primary key)
+  - `created_at` (TIMESTAMP, indexed for cleanup)
+  - TTL: 5 minutes
 
--- Migration: Create refresh_tokens table
-CREATE TABLE refresh_tokens (
-  id SERIAL PRIMARY KEY,
-  address TEXT NOT NULL,
-  token TEXT NOT NULL,
-  expires_at TIMESTAMP NOT NULL,
-  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-  UNIQUE(token)
-);
+- **`refresh_tokens`** - Long-lived revocable tokens
+  - `id` (SERIAL PRIMARY KEY)
+  - `address` (TEXT, indexed)
+  - `token` (TEXT, unique, encrypted)
+  - `expires_at` (TIMESTAMP, indexed)
+  - `created_at` (TIMESTAMP)
+  - TTL: 30 days
 
--- Indexes for lookups
-CREATE INDEX idx_refresh_tokens_address ON refresh_tokens (address);
-CREATE INDEX idx_refresh_tokens_expires_at ON refresh_tokens (expires_at);
-```
+**Required Backend Endpoints:**
 
-**Background Cleanup:**
+**Background Cleanup Job:**
+- Runs every 5 minutes
+- Deletes nonces older than 5 minutes
+- Deletes refresh tokens past expiry date
 
-Expired nonces and refresh tokens must be periodically removed. Use a background job:
+**Auth Router (`auth.getChallenge`):**
+- Input: `{ address: string }`
+- Generate random nonce (UUID)
+- Generate timestamp (ISO 8601)
+- Store nonce in database with address
+- Return: `{ nonce, message, timestamp }`
+- Message format: `"Sign in to Suiftly\nNonce: {nonce}\nTimestamp: {timestamp}"`
 
-```typescript
-// packages/api/src/workers/cleanup.ts
-import { db } from '../db'
+**Auth Router (`auth.verify`):**
+- Input: `{ address, signature, nonce, timestamp }`
+- Verify nonce exists and not expired (< 5 min)
+- Verify timestamp is recent (< 5 min)
+- Verify Sui signature using `@mysten/sui.js`
+- Delete nonce (one-time use)
+- Generate access token JWT (15 min expiry)
+- Generate refresh token JWT (30 day expiry)
+- Store encrypted refresh token in database
+- Set httpOnly cookies for both tokens
+- Return: `{ success: true }`
 
-// Run every 5 minutes
-setInterval(async () => {
-  // Clean up expired nonces (> 5 minutes old)
-  const deletedNonces = await db.authNonce.deleteMany({
-    where: {
-      createdAt: {
-        lt: new Date(Date.now() - 5 * 60 * 1000)
-      }
-    }
-  })
+**Auth Router (`auth.refresh`):**
+- Extract refresh token from cookie
+- Verify JWT signature
+- Check token exists in database (not revoked)
+- Check token not expired
+- Generate new access token JWT (15 min expiry)
+- Set new access token cookie
+- Return: `{ success: true }`
 
-  // Clean up expired refresh tokens
-  const deletedTokens = await db.refreshToken.deleteMany({
-    where: {
-      expiresAt: {
-        lt: new Date()
-      }
-    }
-  })
-
-  console.log(`Cleaned up ${deletedNonces.count} nonces, ${deletedTokens.count} refresh tokens`)
-}, 5 * 60 * 1000)
-```
-
-**Challenge Generation:**
-
-```typescript
-// api/routers/auth.ts
-export const authRouter = router({
-  getChallenge: publicProcedure
-    .input(z.object({ address: z.string() }))
-    .query(async ({ input, ctx }) => {
-      const nonce = crypto.randomUUID()
-      const timestamp = new Date().toISOString()
-
-      // Store nonce in PostgreSQL
-      await ctx.db.authNonce.create({
-        data: {
-          address: input.address,
-          nonce,
-          createdAt: new Date(),
-        },
-      })
-
-      const message = `Sign in to Suiftly\nNonce: ${nonce}\nTimestamp: ${timestamp}`
-
-      return { nonce, message, timestamp }
-    }),
-})
-```
-
-**Signature Verification:**
-
-```typescript
-export const authRouter = router({
-  verify: publicProcedure
-    .input(z.object({
-      address: z.string(),
-      signature: z.string(),
-      nonce: z.string(),
-      timestamp: z.string(),
-    }))
-    .mutation(async ({ input, ctx }) => {
-      // 1. Verify nonce is valid and not expired
-      const storedNonce = await ctx.db.authNonce.findUnique({
-        where: {
-          address_nonce: {
-            address: input.address,
-            nonce: input.nonce,
-          },
-        },
-      })
-
-      if (!storedNonce) {
-        throw new TRPCError({
-          code: 'UNAUTHORIZED',
-          message: 'Invalid or expired nonce',
-        })
-      }
-
-      // Check nonce age
-      if (Date.now() - storedNonce.createdAt.getTime() > 5 * 60 * 1000) {
-        throw new TRPCError({
-          code: 'UNAUTHORIZED',
-          message: 'Nonce expired',
-        })
-      }
-
-      // 2. Verify timestamp is recent (within 5 minutes)
-      const messageTime = new Date(input.timestamp).getTime()
-      const now = Date.now()
-      if (Math.abs(now - messageTime) > 5 * 60 * 1000) {
-        throw new TRPCError({
-          code: 'UNAUTHORIZED',
-          message: 'Challenge expired',
-        })
-      }
-
-      // 3. Verify signature
-      const message = `Sign in to Suiftly\nNonce: ${input.nonce}\nTimestamp: ${input.timestamp}`
-      const isValid = await verifySuiSignature(
-        input.address,
-        message,
-        input.signature
-      )
-
-      if (!isValid) {
-        throw new TRPCError({
-          code: 'UNAUTHORIZED',
-          message: 'Invalid signature',
-        })
-      }
-
-      // 4. Delete nonce (one-time use)
-      await ctx.db.authNonce.delete({
-        where: {
-          address_nonce: {
-            address: input.address,
-            nonce: input.nonce,
-          },
-        },
-      })
-
-      // 5. Generate access token (short-lived)
-      const accessToken = jsonwebtoken.sign(
-        {
-          address: input.address,
-          type: 'access',
-        },
-        process.env.JWT_SECRET!,
-        {
-          expiresIn: '15m', // 15 minutes
-        }
-      )
-
-      // 6. Generate refresh token (long-lived)
-      const refreshToken = jsonwebtoken.sign(
-        {
-          address: input.address,
-          type: 'refresh',
-        },
-        process.env.JWT_SECRET!,
-        {
-          expiresIn: '30d', // 30 days
-        }
-      )
-
-      // 7. Store refresh token in database
-      await ctx.db.refreshToken.create({
-        data: {
-          address: input.address,
-          token: refreshToken,
-          expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-        },
-      })
-
-      // 8. Set httpOnly cookies
-      ctx.res.cookie('suiftly_access', accessToken, {
-        httpOnly: true,
-        secure: true,
-        sameSite: 'strict',
-        maxAge: 15 * 60 * 1000, // 15 minutes
-      })
-
-      ctx.res.cookie('suiftly_refresh', refreshToken, {
-        httpOnly: true,
-        secure: true,
-        sameSite: 'strict',
-        maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
-      })
-
-      return { success: true }
-    }),
-})
-```
-
-**Refresh Token Endpoint:**
-
-```typescript
-export const authRouter = router({
-  refresh: publicProcedure
-    .mutation(async ({ ctx }) => {
-      const refreshToken = ctx.req.cookies.suiftly_refresh
-
-      if (!refreshToken) {
-        throw new TRPCError({
-          code: 'UNAUTHORIZED',
-          message: 'No refresh token',
-        })
-      }
-
-      // 1. Verify refresh token
-      let decoded: { address: string; type: string }
-      try {
-        decoded = jsonwebtoken.verify(refreshToken, process.env.JWT_SECRET!) as {
-          address: string
-          type: string
-        }
-      } catch (error) {
-        throw new TRPCError({
-          code: 'UNAUTHORIZED',
-          message: 'Invalid refresh token',
-        })
-      }
-
-      // 2. Check if refresh token exists in database (not revoked)
-      const storedToken = await ctx.db.refreshToken.findFirst({
-        where: {
-          address: decoded.address,
-          token: refreshToken,
-          expiresAt: {
-            gt: new Date(),
-          },
-        },
-      })
-
-      if (!storedToken) {
-        throw new TRPCError({
-          code: 'UNAUTHORIZED',
-          message: 'Refresh token revoked or expired',
-        })
-      }
-
-      // 3. Generate new access token
-      const accessToken = jsonwebtoken.sign(
-        {
-          address: decoded.address,
-          type: 'access',
-        },
-        process.env.JWT_SECRET!,
-        {
-          expiresIn: '15m',
-        }
-      )
-
-      // 4. Set new access token cookie
-      ctx.res.cookie('suiftly_access', accessToken, {
-        httpOnly: true,
-        secure: true,
-        sameSite: 'strict',
-        maxAge: 15 * 60 * 1000,
-      })
-
-      return { success: true }
-    }),
-})
-```
+**Auth Router (`auth.logout`):**
+- Extract refresh token from cookie
+- Delete refresh token from database
+- Clear both cookies
+- Return: `{ success: true }`
 
 **Protected Procedure Middleware:**
+- Extract access token from cookie
+- Verify JWT signature
+- Verify token type is "access" (not "refresh")
+- Add `user: { address }` to context
+- Throw 401 if invalid or expired
 
-```typescript
-// api/middleware/auth.ts
-export const protectedProcedure = publicProcedure.use(async ({ ctx, next }) => {
-  const accessToken = ctx.req.cookies.suiftly_access
-
-  if (!accessToken) {
-    throw new TRPCError({
-      code: 'UNAUTHORIZED',
-      message: 'Not authenticated',
-    })
-  }
-
-  try {
-    const decoded = jsonwebtoken.verify(accessToken, process.env.JWT_SECRET!) as {
-      address: string
-      type: string
-    }
-
-    // Verify it's an access token (not refresh)
-    if (decoded.type !== 'access') {
-      throw new TRPCError({
-        code: 'UNAUTHORIZED',
-        message: 'Invalid token type',
-      })
-    }
-
-    // Add user to context
-    return next({
-      ctx: {
-        ...ctx,
-        user: {
-          address: decoded.address,
-        },
-      },
-    })
-  } catch (error) {
-    throw new TRPCError({
-      code: 'UNAUTHORIZED',
-      message: 'Invalid or expired session',
-    })
-  }
-})
-```
-
-**Protected Endpoint Example:**
-
-```typescript
-export const userRouter = router({
-  getAPIKeys: protectedProcedure
-    .query(async ({ ctx }) => {
-      // ctx.user.address is available from middleware
-      const keys = await ctx.db.apiKey.findMany({
-        where: {
-          ownerAddress: ctx.user.address,
-        },
-      })
-
-      return keys
-    }),
-})
-```
+**Protected Endpoints:**
+- Use `protectedProcedure` instead of `publicProcedure`
+- Access `ctx.user.address` for authenticated user
+- Example: `userRouter.getAPIKeys` queries by `ctx.user.address`
 
 ---
 
@@ -765,7 +383,7 @@ export const trpc = createTRPCProxyClient<AppRouter>({
 1. Visit app.suiftly.io → Redirect to /login
 2. Click wallet option (e.g., "Sui Wallet" or "Connect Mock Wallet")
 3. Wallet prompts connection → User approves → Sign challenge
-4. Tokens issued (access: 15 min, refresh: 30 days) → Redirect to /services/seal
+4. Tokens issued (access: 15 min, refresh: 30 days) → Redirect to /dashboard
 5. Browse dashboard → All API calls work (using access token)
 ```
 
@@ -893,56 +511,50 @@ export const authRouter = router({
 
 ## Development Mock
 
-```typescript
-// For development only (no real wallet needed)
-if (import.meta.env.DEV) {
-  // Mock wallet provider
-  const mockWallet = {
-    address: '0xMOCK123...',
-    signMessage: async (msg: string) => {
-      return 'mock_signature_' + msg.slice(0, 10)
-    }
-  }
+**Implementation:** See [apps/webapp/src/lib/mockWallet.ts](../apps/webapp/src/lib/mockWallet.ts)
 
-  // Backend skips signature verification
-  if (input.address.startsWith('0xMOCK')) {
-    // Issue JWT without verifying signature
-    const jwt = generateMockJWT(input.address)
-    ctx.res.cookie('suiftly_session', jwt, { ... })
-    return { success: true }
-  }
-}
-```
+**Frontend:**
+- Mock wallet provider with fake address and signature
+- Enabled only when `import.meta.env.DEV === true`
+- Shown on login page alongside real wallet options
+- Auto-connects as test user (no browser extension needed)
+
+**Backend (when implemented):**
+- Skip signature verification for addresses starting with `0xMOCK` or when `MOCK_AUTH=true` env variable set
+- Issue JWT without cryptographic verification
+- Enables rapid development and testing without real wallets
 
 ---
 
 ## Implementation Checklist
 
-### Frontend
-- [x] Install `@mysten/dapp-kit` and configure WalletProvider
-- [x] Build login page with wallet options (no modal)
-- [x] Build WalletWidget component for authenticated pages (header)
-- [x] Implement challenge-response flow
-- [x] Implement automatic token refresh on 401 errors
-- [x] Handle refresh token expiry (redirect to /login)
-- [x] Build disconnect wallet flow (redirects to /login)
-- [x] Mock wallet for development (shown on login page in DEV mode)
+### Frontend ⚠️ (Mostly Complete - Refresh Logic Missing)
+- [x] Install `@mysten/dapp-kit` and configure WalletProvider → [WalletProvider.tsx](../apps/webapp/src/components/wallet/WalletProvider.tsx)
+- [x] Build login page with wallet options (no modal) → [login.tsx](../apps/webapp/src/routes/login.tsx)
+- [x] Build WalletWidget component for authenticated pages (header) → [WalletWidget.tsx](../apps/webapp/src/components/wallet/WalletWidget.tsx)
+- [x] Implement challenge-response flow → [auth.ts](../apps/webapp/src/lib/auth.ts)
+- [x] Build disconnect wallet flow (redirects to /login) → [auth.ts](../apps/webapp/src/lib/auth.ts)
+- [x] Mock wallet for development (shown on login page in DEV mode) → [mockWallet.ts](../apps/webapp/src/lib/mockWallet.ts)
+- [ ] **TODO:** Implement automatic token refresh on 401 errors (backend `auth.refresh` endpoint exists but frontend doesn't call it yet)
+- [ ] **TODO:** Intercept 401 responses, call `auth.refresh`, retry original request
+- [ ] **TODO:** Access token stored in localStorage (should migrate to memory-only or sessionStorage for better security)
 
-### Backend
-- [ ] Install `jsonwebtoken` and Sui signature verification library
-- [ ] Create database migrations:
-  - [ ] `auth_nonces` table
-  - [ ] `refresh_tokens` table
-- [ ] Create `authRouter` with endpoints:
-  - [ ] `getChallenge` - Generate nonce
-  - [ ] `verify` - Verify signature, issue tokens
-  - [ ] `refresh` - Exchange refresh token for new access token
-  - [ ] `logout` - Revoke refresh token
-- [ ] Implement background cleanup job for expired nonces and tokens
-- [ ] Implement `protectedProcedure` middleware (validates access token)
-- [ ] Configure cookie settings (httpOnly, Secure, SameSite) for both tokens
-- [ ] Rate limit auth attempts (prevent brute force and refresh abuse)
-- [ ] Mock auth bypass for development
+### Backend ✅ (Complete)
+- [x] Install `jsonwebtoken` and Sui signature verification library → [package.json](../apps/api/package.json)
+- [x] Create database migrations → [schema/auth.ts](../packages/database/src/schema/auth.ts):
+  - [x] `auth_nonces` table
+  - [x] `refresh_tokens` table
+- [x] Create `authRouter` with endpoints → [routes/auth.ts](../apps/api/src/routes/auth.ts):
+  - [x] `connectWallet` - Generate nonce (lines 23-88)
+  - [x] `verifySignature` - Verify signature, issue tokens (lines 93-225)
+  - [x] `refresh` - Exchange refresh token for new access token (lines 230-281)
+  - [x] `logout` - Revoke refresh token (lines 286-301)
+- [x] Refresh token stored as SHA-256 hash in database (line 203)
+- [x] Refresh token sent as httpOnly cookie (lines 211-217)
+- [x] Mock auth bypass for development (MOCK_AUTH env variable, line 119)
+- [ ] Implement background cleanup job for expired nonces and tokens (TODO)
+- [ ] Implement `protectedProcedure` middleware (validates access token) (TODO)
+- [ ] Rate limit auth attempts (prevent brute force and refresh abuse) (TODO)
 
 ### Security
 - [ ] Environment variable for JWT_SECRET (see Secret Management below)

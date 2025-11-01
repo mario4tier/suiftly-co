@@ -122,84 +122,36 @@ Customer-facing platform for Suiftly infrastructure services with a clean, profe
 
 ## Authentication & Session Flow
 
-**Wallet-based authentication with JWT sessions - ALL routes protected.**
+**Wallet-based authentication - ALL routes protected.**
 
-See **[AUTHENTICATION_DESIGN.md](./AUTHENTICATION_DESIGN.md)** for complete architecture, implementation details, and security considerations.
+See **[AUTHENTICATION_DESIGN.md](./AUTHENTICATION_DESIGN.md)** for complete technical architecture, token management, security implementation, and backend details.
 
-### Summary
+### User Experience Summary
 
-**Authentication Method:**
-- Wallet connection via `@mysten/dapp-kit` (auto-reconnects on return visits)
-- Challenge-response signature proves wallet ownership
-- JWT stored in httpOnly cookie + localStorage for session management (15min access, 30day refresh)
+**First-Time User:**
+1. Visit app.suiftly.io → Redirected to `/login`
+2. Click "Connect Wallet" → Select wallet (Sui Wallet or Mock Wallet for dev)
+3. Approve wallet connection → Sign authentication message
+4. Authenticated → Redirected to `/dashboard`
 
-**User Experience:**
-- **First visit:** Redirected to `/login` → Connect wallet → Sign → Dashboard loads
-- **Subsequent visits:** Auto-authenticated (JWT in localStorage) → Dashboard loads immediately
-- **Session expiry:** Access token refreshes automatically every 15 minutes (transparent)
-- **After 30 days:** Must sign again
+**Returning User (Within 30 Days):**
+1. Visit app.suiftly.io → Wallet auto-connects
+2. Session still valid → Dashboard loads immediately (no sign-in required)
 
-**Simplified Architecture:**
-- **ALL routes protected** - No public dashboard exploration
-- **Traditional auth wall** - Must connect wallet to access any dashboard page
-- **Faster development** - No hybrid public/protected state complexity
-- **Clear security boundary** - Protected data only shown after authentication
+**After 30 Days:**
+1. Visit app.suiftly.io → Session expired
+2. Toast: "Session expired. Please sign in again."
+3. Redirected to `/login` → Sign to continue
 
-### First-Time User Flow
+**Session Details:**
+- Authentication lasts 30 days (automatic renewal happens transparently)
+- Sign once per month (or less if visiting infrequently)
+- Wallet auto-reconnects on return visits
 
-1. User visits `app.suiftly.io` (any route)
-2. **Not authenticated** → Redirected to `/login`
-3. `/login` shows:
-   - Clean login page with "Connect Wallet" button
-   - Brief explanation: "Sign in with your Sui wallet to access the dashboard"
-4. User clicks "Connect Wallet" → Modal opens → Select wallet
-5. Approve connection → Sign challenge message
-6. Backend verifies signature → Issues JWT
-7. Redirected to `/` (dashboard home)
-8. Header shows wallet address with dropdown menu
-
-### Returning User (With Valid Session)
-
-1. User visits `app.suiftly.io`
-2. JWT in localStorage → Auto-authenticated
-3. Dashboard loads immediately (no login page shown)
-4. Header shows wallet address
-5. User navigates freely within dashboard
-
-### Session Expiry
-
-1. Access token expires (15 minutes) → Auto-refresh via refresh token
-2. Refresh token expires (30 days) → Redirected to `/login`
-3. Toast: "Session expired. Please sign in again."
-
-### Header (Dashboard Only - Always Authenticated)
-
-**Header shows:**
-```
-┌─────────────────────────────────────────────┐
-│ [Logo] Suiftly BETA          [0x1a2... ▼]   │
-└─────────────────────────────────────────────┘
-```
-
-- Logo on left
-- BETA badge next to logo
-- Wallet address button on right (shows dropdown with Copy Address and Disconnect)
-
-### Development Mock
-
-```typescript
-// For development only (no real wallet needed)
-if (import.meta.env.DEV) {
-  // Header shows both options:
-  // [Connect Wallet] or [Use Mock Wallet]
-
-  // Mock wallet:
-  // - Auto-connects as test user (0xtest123...)
-  // - Skips signature verification
-  // - Shows $1000 balance
-  // - "Enable Service" works instantly
-}
-```
+**Security:**
+- ALL routes require authentication (no public dashboard access)
+- Traditional auth wall before accessing any dashboard content
+- See [AUTHENTICATION_DESIGN.md](./AUTHENTICATION_DESIGN.md) for cryptographic proof, token storage, and session management details
 
 ---
 
@@ -1050,7 +1002,7 @@ All prices displayed in USD, but payments/deposits/withdrawals use SUI tokens on
 
 ## Key User Flows
 
-### Flow 1: First-Time User (Traditional Auth)
+### Flow 1: First-Time User
 
 ```
 1. Visit app.suiftly.io
@@ -1060,38 +1012,37 @@ All prices displayed in USD, but payments/deposits/withdrawals use SUI tokens on
 3. Login page shows:
    - Suiftly logo
    - "Sign in with your Sui wallet to access the dashboard"
-   - [Connect Wallet] button (opens modal)
+   - [Connect Wallet] button
    ↓
-4. Click "Connect Wallet" → Select wallet type (Sui Wallet or Mock Wallet)
+4. Click "Connect Wallet" → Select wallet (Sui Wallet or Mock Wallet for dev)
    ↓
 5. Wallet popup → Approve connection
    ↓
 6. Wallet prompts to sign authentication message
    ↓
-7. Backend verifies signature → Issues JWT
+7. Authentication successful
    ↓
-8. Redirected to / (dashboard home)
+8. Redirected to /dashboard
    ↓
 9. Dashboard loads with:
    - Header: Logo + Wallet address dropdown
-   - Sidebar: Services, Billing, API Keys, Logs, Settings
-   - Main content: Overview page with stats cards
+   - Sidebar: Services, Billing, API Keys, Logs, Support
+   - Main content: Overview page
    ↓
-10. User navigates to /services to configure first service
+10. User navigates sidebar to explore or configure services
 ```
 
-**No Exploration Mode:**
-- All routes require authentication
-- Users must connect wallet before seeing any dashboard content
-- Simpler implementation - no hybrid public/protected states
-- Clearer security boundary
+**Authentication Requirements:**
+- All routes require authentication (no public dashboard access)
+- Users must connect wallet before accessing any dashboard content
+- See [AUTHENTICATION_DESIGN.md](./AUTHENTICATION_DESIGN.md) for technical implementation
 
 ---
 
-### Flow 2: Configure First Service (With Wallet Prompt)
+### Flow 2: Configure First Service
 
 ```
-1. User on /services/seal (not configured, wallet not connected)
+1. User navigates to /services/seal (already authenticated)
    ↓
 2. Configuration form visible (all fields interactive)
    ↓
@@ -1107,124 +1058,101 @@ All prices displayed in USD, but payments/deposits/withdrawals use SUI tokens on
    ↓
 8. Review usage fees (listed below)
    ↓
-9. Click "Enable Service"
+9. Click "Enable Service" toggle
    ↓
-10. Modal appears: "Connect Wallet Required"
+10. Service enabling (spinner shown)
     ↓
-11. Click "Connect Wallet" in modal
+11. Configuration validated and saved
     ↓
-12. Sui wallet popup → Approve + Sign
+12. Page updates to show configured state with tabs (Config/Keys/Stats/Logs)
     ↓
-13. Modal shows "Verifying signature..." spinner
+13. Escrow balance charged: $63.00 (pro-rated for current month)
     ↓
-14. Backend verifies signature → JWT issued → Modal updates
-    ↓
-15. Modal shows "Enabling service..." with spinner
-    ↓
-16. Validation (Zod schema)
-    ↓
-17. API call: POST /api/services.updateConfig
-    ↓
-18. Success → Config saved → Modal closes → Tabs appear
-    ↓
-19. Wallet charged: $63.00 (pro-rated for current month)
-    ↓
-20. Toast: "Seal service enabled. $63.00 charged."
-    ↓
-21. Header shows wallet address + balance
+14. Toast: "Seal service enabled. $63.00 charged."
 ```
+
+**Note:** User is already authenticated before reaching this flow. Service configuration does not require additional wallet signatures (charges auto-deducted from escrow balance).
 
 ---
 
 ### Flow 3: Edit Existing Service Configuration
 
 ```
-1. User on /services/seal (configured state)
+1. User on /services/seal (configured state, Config tab active)
    ↓
-2. Click [Edit 󰏫] icon (top-right of config)
+2. Click [Edit 󰏫] icon (top-right of config section)
    ↓
 3. Modal opens with current config pre-filled
    ↓
 4. Change tier: Starter ($20) → Pro ($40)
    ↓
-5. See new Monthly Estimate: $40.00
+5. See new Monthly Estimate: $40.00 (live calculation updates)
    ↓
 6. See note: "You'll be charged $X.XX (pro-rated) immediately from your escrow balance"
    ↓
-7. Check balance sufficient (if not, show error: "Insufficient balance. Top up required.")
+7. Balance validation (if insufficient, error shown: "Insufficient balance. Top up required.")
    ↓
 8. Click "Save Changes"
    ↓
-9. API call: PATCH /api/services.updateConfig
+9. Saving spinner shown
    ↓
-10. Backend validates balance → Calculates pro-rated charge
+10. Configuration updated successfully
     ↓
-11. Success → Charge auto-deducted from escrow balance (no wallet signature needed)
+11. Modal closes
     ↓
-12. Config updated → Modal closes
+12. Balance updates: $127.50 → $117.50 (example: $10 pro-rated charge)
     ↓
-13. Balance decremented: $127.50 → $117.50 (example: $10 pro-rated charge)
+13. Logs tab shows new entry: "Configuration updated - Pro tier enabled - Charged $10.00 (pro-rated)"
     ↓
-14. Logs tab shows new entry: "Configuration updated - Pro tier enabled - Charged $10.00 (pro-rated)"
-    ↓
-15. Toast: "Configuration updated. $10.00 charged from escrow balance."
+14. Toast: "Configuration updated. $10.00 charged from escrow balance."
 ```
 
 **Downgrade Example (Credit Applied):**
 ```
 User changes tier: Pro ($40) → Starter ($20)
-Pro-rated credit: +$X.XX added to escrow balance
-Toast: "Configuration updated. $X.XX credit applied to your balance."
-Balance shown increases immediately
-User can withdraw credit at any time
+→ Pro-rated credit: +$X.XX added to escrow balance
+→ Toast: "Configuration updated. $X.XX credit applied to your balance."
+→ Balance increases immediately
+→ User can withdraw credit at any time
 ```
 
-**Note:** All charges/credits applied immediately via escrow model (no additional wallet signatures needed).
+**Note:** All charges/credits auto-deducted from escrow balance (no wallet signature needed for config changes).
 
 ---
 
-### Flow 4: Top-Up Wallet (Deposit to Escrow)
+### Flow 4: Top-Up Balance (Deposit to Escrow)
 
 ```
-1. User clicks wallet widget in header
+1. Navigate to /billing (or click wallet address dropdown → "Billing & Balance")
    ↓
-2. Dropdown expands
+2. Click "Top Up" button
    ↓
-3. Click "Top Up"
+3. Modal opens: "Deposit Funds to Escrow"
    ↓
-4. Modal opens: "Deposit Funds to Escrow"
+4. Enter amount: $100
    ↓
-5. Enter amount: $100
+5. See conversion: "Deposit ~40.82 SUI to escrow (rate: 1 SUI = $2.45, from 3 sources, updated 23s ago)"
    ↓
-6. Shows conversion: "Deposit ~40.82 SUI to escrow (rate: 1 SUI = $2.45, from 3 sources, updated 23s ago)"
+6. Click "Deposit"
    ↓
-7. Click "Deposit"
+7. Wallet popup → Approve blockchain transaction to Suiftly escrow contract
    ↓
-8. Wallet popup → User approves blockchain transaction to Suiftly escrow contract
+8. Transaction submitted → Modal shows "Pending confirmation... (TX: 0xabc123...)"
    ↓
-9. Transaction submitted → Modal shows "Pending confirmation... (TX: 0xabc123...)"
-   ↓
-10. Backend monitors: 0 → 1 → 2 → 3 confirmations (~3-5 seconds)
+9. Confirmation progress: 0 → 1 → 2 → 3 confirmations (~3-5 seconds)
     ↓
-11. After 3 confirmations → Transaction finalized
+10. Transaction finalized (3 confirmations)
     ↓
-12. Backend credits USD balance in database (SUI now in escrow)
+11. Balance updates: $127.50 → $227.50
     ↓
-13. Balance updates: $127.50 → $227.50
+12. Modal closes
     ↓
-14. Modal closes
+13. Toast: "Deposit successful. +$100.00 added to your escrow balance."
     ↓
-15. Toast: "Deposit successful. +$100.00 added to your escrow balance."
-    ↓
-16. Activity log entry: "Deposit: +$100.00 (40.82 SUI) - TX: 0xabc123..."
+14. Activity log shows: "Deposit: +$100.00 (40.82 SUI) - TX: 0xabc123..."
 ```
 
-**Note:** Once deposited, Suiftly can auto-charge for services without requiring additional wallet signatures. User can withdraw remaining balance at any time.
-
-**Development Mock:**
-- Skip Web3 transaction
-- Instantly update balance (fake)
-- Show success toast
+**Note:** Once deposited, Suiftly can auto-charge for services without additional wallet signatures. User can withdraw remaining balance at any time.
 
 ---
 
@@ -1329,7 +1257,8 @@ User can withdraw credit at any time
 /login                         → Login page (only public route - wallet connection)
 
 Protected routes (require authentication):
-/                              → Redirects to /services/seal
+/                              → Redirects to /dashboard (if authenticated) or /login (if not authenticated)
+/dashboard                     → Dashboard home page
 /services/seal                 → Seal service configuration
 /services/grpc                 → gRPC service (coming soon placeholder)
 /services/graphql              → GraphQL service (coming soon placeholder)
@@ -1996,10 +1925,10 @@ colors: {
 - Toast: "Request timed out. Please try again."
 - Preserve form state
 
-**401 Unauthorized (JWT Expired):**
+**401 Unauthorized (Session Expired):**
 - Clear auth state
-- Redirect to home
-- Toast: "Session expired. Please reconnect your wallet."
+- Redirect to /login
+- Toast: "Session expired. Please sign in again."
 
 **403 Forbidden:**
 - Toast: "You don't have permission to perform this action."
@@ -2102,9 +2031,9 @@ if (import.meta.env.DEV) {
 ## Open Questions / Future Considerations
 
 1. **Dashboard Home Page**
-   - Currently: Redirect to `/services/seal`
-   - Future: Dedicated home with overview cards, recent activity
-   - Recommendation: Skip for MVP, redirect to first service
+   - Currently: '/' redirects to '/dashboard', which displays a basic dashboard page
+   - Future: Enhance dashboard with overview cards, recent activity, usage charts
+   - Recommendation: Keep simple dashboard for MVP, enhance with widgets later
 
 2. **User Settings Page**
    - Email notifications?
@@ -2204,9 +2133,10 @@ Once this UI design is approved:
 Minimal set of critical tests to validate before production:
 
 1. **Wallet Auth & Session**
-   - [ ] User can connect wallet, sign challenge, receive JWT in httpOnly cookie
-   - [ ] Session expires after 4 hours (or prompts re-sign at 30 min remaining)
-   - [ ] Disconnecting wallet clears session and
+   - [ ] User can connect wallet, sign challenge, and authenticate successfully
+   - [ ] Session lasts 30 days (automatic renewal happens transparently)
+   - [ ] Session expiry after 30 days redirects to /login with "Session expired" message
+   - [ ] Disconnecting wallet clears session and redirects to /login
 
 2. **Service Enable with Billing**
    - [ ] Enabling service checks sufficient balance before charging
@@ -2240,6 +2170,6 @@ Minimal set of critical tests to validate before production:
    - [ ] Top-up during grace period resumes service immediately
 
 8. **Error Handling (Critical Paths)**
-   - [ ] Network error during wallet connect → shows retry with
+   - [ ] Network error during wallet connect → shows retry option
    - [ ] Insufficient balance on enable → shows error modal with "Top Up" button
-   - [ ] JWT expired (401) → clears auth, redirects to home, shows "Session expired" toast
+   - [ ] Session expired (401) → clears auth, redirects to /login, shows "Session expired" toast
