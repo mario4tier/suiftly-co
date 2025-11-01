@@ -32,6 +32,14 @@ function parseExpiryToSeconds(expiry: string): number {
 }
 
 /**
+ * Convert expiry string to milliseconds (for database timestamps)
+ * Examples: "2s" -> 2000, "15m" -> 900000, "30d" -> 2592000000
+ */
+export function parseExpiryToMs(expiry: string): number {
+  return parseExpiryToSeconds(expiry) * 1000;
+}
+
+/**
  * Validate that JWT config is safe for production
  * Throws error if expiry times are dangerously short
  */

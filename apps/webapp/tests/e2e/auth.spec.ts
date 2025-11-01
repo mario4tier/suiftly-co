@@ -10,8 +10,8 @@ test.describe('Authentication Flow', () => {
     // Go to home page
     await page.goto('/');
 
-    // Click "Connect Mock Wallet" button directly on login page
-    await page.click('text=Connect Mock Wallet');
+    // Click "Mock Wallet" button directly on login page
+    await page.click('button:has-text("Mock Wallet")');
 
     // Should authenticate and show address button (wait for auth to complete)
     await expect(page.locator('text=/0x[a-f0-9]{4}\\.\\.\\./')).toBeVisible({ timeout: 5000 });
@@ -51,7 +51,7 @@ test.describe('Authentication Flow', () => {
   test('logout works and clears session', async ({ page }) => {
     // Authenticate first
     await page.goto('/');
-    await page.click('text=Connect Mock Wallet');
+    await page.click('button:has-text("Mock Wallet")');
 
     // Wait for address button to appear (authentication complete)
     const addressButton = page.locator('button', { hasText: /0x[a-f0-9]{4}/ });
@@ -68,8 +68,8 @@ test.describe('Authentication Flow', () => {
     await page.waitForURL('/login', { timeout: 5000 });
     expect(page.url()).toContain('/login');
 
-    // Should show "Connect Mock Wallet" button again
-    await expect(page.locator('button:has-text("Connect Mock Wallet")')).toBeVisible();
+    // Should show "Mock Wallet" button again
+    await expect(page.locator('button:has-text("Mock Wallet")')).toBeVisible();
 
     // localStorage should be cleared
     const authState = await page.evaluate(() => localStorage.getItem('suiftly-auth'));

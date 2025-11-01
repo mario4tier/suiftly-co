@@ -84,11 +84,9 @@ test.describe('Token Expiry - Normal Config (15m access, 30d refresh)', () => {
 });
 
 test.describe('Token Refresh - Short Expiry Config (2s access, 10s refresh)', () => {
-  test.skip('access token should auto-refresh after expiry (2s) and request should succeed', async ({ page }) => {
-    // TODO: This test requires backend to be started with:
-    // ENABLE_SHORT_JWT_EXPIRY=true JWT_SECRET=TEST_DEV npm run dev
-    //
-    // Skipping for now - will enable when test environment is configured
+  test('access token should auto-refresh after expiry (2s) and request should succeed', async ({ page }) => {
+    // Backend automatically started with short expiry config via Playwright webServer
+    // ENABLE_SHORT_JWT_EXPIRY=true JWT_SECRET=TEST_DEV MOCK_AUTH=true
 
     // 1. Authenticate with mock wallet
     await page.goto('/');
@@ -115,8 +113,9 @@ test.describe('Token Refresh - Short Expiry Config (2s access, 10s refresh)', ()
     console.log('✅ Access token auto-refreshed after 2s expiry');
   });
 
-  test.skip('should redirect to login when refresh token expires (10s)', async ({ page }) => {
-    // TODO: Requires test environment with short expiry
+  test('should redirect to login when refresh token expires (10s)', async ({ page }) => {
+    // This test simulates the 30-day refresh token lifecycle in just 10 seconds!
+    // Backend automatically started with short expiry config via Playwright webServer
 
     // 1. Authenticate
     await page.goto('/');
@@ -127,10 +126,14 @@ test.describe('Token Refresh - Short Expiry Config (2s access, 10s refresh)', ()
     console.log('[TEST] Waiting 11 seconds for refresh token to expire...');
     await page.waitForTimeout(11000);
 
-    // 3. Try to access protected route (should fail and redirect to login)
+    // 3. Try to access protected route
     await page.goto('/test');
 
-    // 4. Should be redirected to login page
+    // 4. Trigger an API call that will discover tokens are expired
+    //    This will trigger: 401 → refresh attempt → refresh fails → clearAuth → redirect to login
+    await page.click('button:has-text("Test Protected Endpoint")');
+
+    // 5. Should be redirected to login page after failed refresh attempt
     await expect(page).toHaveURL('/login', { timeout: 5000 });
 
     console.log('✅ Redirected to login after refresh token expired');

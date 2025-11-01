@@ -1,64 +1,76 @@
-# Token Refresh Tests - Usage Guide
+# Token Refresh Tests - CI/CD Automated
 
 ## Overview
 
-Tests for JWT token expiry and automatic refresh in two scenarios:
+**Fully automated tests** for JWT token expiry with **zero manual steps**:
 1. **Normal Expiry** (15m access, 30d refresh) - Verifies tokens work correctly over time
-2. **Short Expiry** (2s access, 10s refresh) - Verifies auto-refresh mechanism works
+2. **Short Expiry** (2s access, 10s refresh) - **Tests 30-day lifecycle in 10 seconds!**
+
+## ✅ CI/CD Integration
+
+**Runs automatically on every push/PR** via GitHub Actions:
+- Workflow: `.github/workflows/token-refresh-tests.yml`
+- Two independent jobs (run in parallel)
+- Total time: ~3-4 minutes for both suites
 
 ## Test Files
 
 - **token-refresh.spec.ts** - Main test suite with both scenarios
+- **playwright.config.ts** - Two Playwright projects (normal-expiry, short-expiry)
 
-## Running Tests
+## Running Tests Locally
 
-### 1. Normal Expiry Tests (Always Run - GREEN Phase Verification)
+### Option 1: Run Both Test Suites (Recommended)
 
-These tests verify that with normal 15-minute access tokens:
-- Tokens remain valid after 5 seconds
-- Tokens remain valid through multiple API calls over 10 seconds
-- No unnecessary re-authentication occurs
-
-**Run:**
+**All-in-one command** - runs both normal and short expiry tests:
 ```bash
-# Start servers (if not already running)
-npm run dev  # In one terminal
-
-# Run normal expiry tests
-npx playwright test token-refresh --grep "Normal Config"
+# Playwright automatically starts servers with correct config for each project
+npx playwright test token-refresh
 ```
 
-**Expected Result:** ✅ All tests PASS (GREEN)
+This runs:
+1. **normal-expiry** project: Production config (15m/30d)
+2. **short-expiry** project: Test config (2s/10s) - **tests 30-day lifecycle in 10 seconds!**
+
+**Expected Result:**
+```
+✓ Normal Expiry: 2 tests pass (~15 seconds)
+✓ Short Expiry: 2 tests pass (~15 seconds)
+4 passed total (30 seconds)
+```
 
 ---
 
-### 2. Short Expiry Tests (Optional - Requires Test Environment)
+### Option 2: Run Individual Test Suites
 
-These tests verify auto-refresh logic by using 2-second access tokens:
-- Access token expires after 2s
-- Auto-refresh kicks in automatically
-- Request succeeds without user intervention
-
-**Setup:**
+**Normal expiry only** (fast, always use this for quick verification):
 ```bash
-# 1. Stop normal dev servers
-
-# 2. Start API with test config
-cd apps/api
-ENABLE_SHORT_JWT_EXPIRY=true JWT_SECRET=TEST_DEV MOCK_AUTH=true npm run dev
-
-# 3. Start webapp (normal)
-cd apps/webapp
-npm run dev
+npx playwright test --project=normal-expiry
 ```
 
-**Run:**
+**Short expiry only** (tests 30-day lifecycle):
 ```bash
-# Run short expiry tests
-npx playwright test token-refresh --grep "Short Expiry"
+# Automatically starts servers with short expiry config
+npx playwright test --project=short-expiry
 ```
 
-**Expected Result:** ✅ All tests PASS (auto-refresh working)
+**Single test** (for debugging):
+```bash
+npx playwright test --project=short-expiry -g "should redirect to login when refresh token expires"
+```
+
+---
+
+### No Manual Server Management Required!
+
+Playwright automatically:
+- Starts API server with correct env variables for each project
+- Starts webapp server
+- Waits for both to be ready
+- Runs tests
+- Cleans up servers after tests complete
+
+**Zero manual steps!** Perfect for CI/CD.
 
 ---
 

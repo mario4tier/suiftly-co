@@ -40,3 +40,13 @@ Initial setup phase - no code scaffolded yet.
 - Keep it simple (rapid development principle)
 - TypeScript strict mode
 - Update this file only when adding commands or major patterns
+
+## CRITICAL: Process Management
+
+**NEVER use `killall -9 node` or similar commands!** This kills the AI agent process itself.
+
+When you need to stop development servers:
+- Use `lsof -ti:PORT | xargs kill` to kill specific port processes
+- Use project scripts in `scripts/dev/` if available
+- Use `pkill -f "specific-server-name"` to target specific processes
+- In Playwright tests, set `reuseExistingServer: false` to force fresh server starts

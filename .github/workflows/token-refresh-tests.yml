@@ -1,0 +1,147 @@
+name: Token Refresh Tests
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  # Allow manual workflow dispatch for testing
+  workflow_dispatch:
+
+jobs:
+  # Test 1: Normal Expiry (Fast - 15 seconds)
+  test-normal-expiry:
+    name: Normal Expiry Tests (15m/30d tokens)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+
+      - name: Setup PostgreSQL
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql
+          sudo systemctl start postgresql
+          sudo -u postgres psql -c "CREATE DATABASE suiftly_test;"
+          sudo -u postgres psql -c "CREATE USER deploy WITH PASSWORD 'deploy_password_change_me';"
+          sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE suiftly_test TO deploy;"
+
+      - name: Run database migrations
+        run: |
+          cd packages/database
+          DATABASE_URL="postgresql://deploy:deploy_password_change_me@localhost/suiftly_test" npm run db:push
+        env:
+          DATABASE_URL: postgresql://deploy:deploy_password_change_me@localhost/suiftly_test
+
+      - name: Start API server (production config)
+        run: |
+          cd apps/api
+          MOCK_AUTH=true DATABASE_URL="postgresql://deploy:deploy_password_change_me@localhost/suiftly_test" JWT_SECRET="ci-test-secret-do-not-use-in-prod" npm run dev &
+          sleep 5
+        env:
+          NODE_ENV: test
+          DATABASE_URL: postgresql://deploy:deploy_password_change_me@localhost/suiftly_test
+
+      - name: Start Webapp
+        run: |
+          cd apps/webapp
+          npm run dev &
+          sleep 5
+
+      - name: Run Normal Expiry Tests
+        run: npx playwright test --project=normal-expiry --reporter=list
+        timeout-minutes: 2
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: normal-expiry-test-results
+          path: test-results/
+          retention-days: 7
+
+  # Test 2: Short Expiry (Tests 30-day lifecycle in 15 seconds!)
+  test-short-expiry:
+    name: Short Expiry Tests (2s/10s tokens - simulates 30-day lifecycle)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+
+      - name: Setup PostgreSQL
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql
+          sudo systemctl start postgresql
+          sudo -u postgres psql -c "CREATE DATABASE suiftly_test;"
+          sudo -u postgres psql -c "CREATE USER deploy WITH PASSWORD 'deploy_password_change_me';"
+          sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE suiftly_test TO deploy;"
+
+      - name: Run database migrations
+        run: |
+          cd packages/database
+          DATABASE_URL="postgresql://deploy:deploy_password_change_me@localhost/suiftly_test" npm run db:push
+        env:
+          DATABASE_URL: postgresql://deploy:deploy_password_change_me@localhost/suiftly_test
+
+      - name: Run Short Expiry Tests (Auto-starts servers with test config)
+        run: npx playwright test --project=short-expiry --reporter=list
+        timeout-minutes: 3
+        env:
+          DATABASE_URL: postgresql://deploy:deploy_password_change_me@localhost/suiftly_test
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: short-expiry-test-results
+          path: test-results/
+          retention-days: 7
+
+  # Summary job
+  test-summary:
+    name: Test Summary
+    runs-on: ubuntu-latest
+    needs: [test-normal-expiry, test-short-expiry]
+    if: always()
+
+    steps:
+      - name: Check test results
+        run: |
+          echo "## Token Refresh Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Test Suite | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Normal Expiry (15m/30d) | ${{ needs.test-normal-expiry.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Short Expiry (2s/10s - 30-day lifecycle) | ${{ needs.test-short-expiry.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### What was tested:" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Normal expiry: 15-minute access tokens remain valid over time" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Short expiry: Access token auto-refresh after 2s expiry" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Short expiry: 30-day refresh token lifecycle tested in 10 seconds!" >> $GITHUB_STEP_SUMMARY

@@ -5,6 +5,7 @@
 
 import { createTRPCClient, httpBatchLink, TRPCClientError } from '@trpc/client';
 import type { AppRouter } from '../../../api/src/routes';
+import { useAuthStore } from '../stores/auth';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
@@ -79,6 +80,10 @@ export const trpc = createTRPCClient<AppRouter>({
                   headers: newHeaders,
                 });
               }
+            } else {
+              // Refresh failed (refresh token expired/revoked)
+              console.log('[TRPC] Refresh failed, clearing auth state');
+              useAuthStore.getState().clearAuth();
             }
 
             // IMPORTANT: Never use window.location.href here!
@@ -87,8 +92,9 @@ export const trpc = createTRPCClient<AppRouter>({
             // Violating this principle causes page reloads and loss of user context
           } catch (error) {
             console.error('[TRPC] Refresh error:', error);
-            // Just log error and return response
-            // NEVER reload page or navigate from API layer
+            // Clear auth state when refresh fails (refresh token expired/revoked)
+            // This will trigger redirect to /login via routing guards
+            useAuthStore.getState().clearAuth();
           }
         }
 

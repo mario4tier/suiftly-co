@@ -7,6 +7,7 @@
 import { router, publicProcedure } from '../lib/trpc';
 import { walletConnectSchema, verifySignatureSchema } from '@suiftly/shared/schemas';
 import { generateAccessToken, generateRefreshToken } from '../lib/jwt';
+import { getJWTConfig, parseExpiryToMs } from '../lib/jwt-config';
 import { db } from '@suiftly/database';
 import { customers, authNonces, refreshTokens } from '@suiftly/database/schema';
 import { eq, and, gt } from 'drizzle-orm';
@@ -201,10 +202,16 @@ export const authRouter = router({
 
       // Store refresh token hash in database
       const tokenHash = createHash('sha256').update(refreshToken).digest('hex');
+      const jwtConfig = getJWTConfig();
+      const refreshExpiryMs = parseExpiryToMs(jwtConfig.refreshTokenExpiry);
+
+      // Delete any existing refresh tokens for this customer (prevent token buildup)
+      await db.delete(refreshTokens).where(eq(refreshTokens.customerId, customerId));
+
       await db.insert(refreshTokens).values({
         customerId,
         tokenHash,
-        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
+        expiresAt: new Date(Date.now() + refreshExpiryMs),
       });
 
       // Set httpOnly cookie for refresh token
@@ -212,7 +219,7 @@ export const authRouter = router({
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
         sameSite: 'lax',
-        maxAge: 30 * 24 * 60 * 60, // 30 days in seconds
+        maxAge: Math.floor(refreshExpiryMs / 1000), // Convert ms to seconds
         path: '/',
       });
 
