@@ -16,8 +16,8 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      // Proxy API calls to backend
-      '/trpc': {
+      // Proxy internal endpoints to backend (same-origin)
+      '/i': {
         target: 'http://localhost:3000',
         changeOrigin: true,
       },

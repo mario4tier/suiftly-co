@@ -14,6 +14,7 @@ import {
   Activity,
   Key,
   Home,
+  Radio,
   type LucideIcon,
 } from 'lucide-react';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
@@ -90,9 +91,13 @@ export function Sidebar() {
   ];
 
   const managementItems: NavItem[] = [
-    { path: '/billing', label: 'Billing & Usage', icon: CreditCard },
+    { path: '/billing', label: 'Billing & Payments', icon: CreditCard },
     { path: '/api-keys', label: 'API Keys', icon: Key },
-    { path: '/logs', label: 'Analytics & Logs', icon: Activity },
+    { path: '/logs', label: 'User Logs', icon: Activity },
+  ];
+
+  const statusItems: NavItem[] = [
+    { path: '/network-status', label: 'Network Status', icon: Radio },
   ];
 
   const supportItems: NavItem[] = [
@@ -233,6 +238,11 @@ export function Sidebar() {
 
         {/* Divider */}
         <div className="border-t border-cf-border dark:border-cf-border-dark my-3" />
+
+        {/* Status Section */}
+        <div className="space-y-0.5">
+          {statusItems.map((item) => renderNavItem(item))}
+        </div>
 
         {/* Support Section */}
         <div className="space-y-0.5">

@@ -7,13 +7,16 @@ import { test, expect } from '@playwright/test';
 
 test.describe('Seal Service Configuration', () => {
   test.beforeEach(async ({ page }) => {
-    // Authenticate (start at root, which redirects to /services/seal after auth)
+    // Authenticate with mock wallet
     await page.goto('/');
-    await page.click('text=Connect Wallet');
-    await page.click('text=Connect Mock Wallet');
+    await page.click('button:has-text("Mock Wallet")');
 
-    // Wait for redirect to /services/seal (default home)
-    await page.waitForURL('/services/seal', { timeout: 10000 });
+    // Wait for redirect to /dashboard after auth
+    await page.waitForURL('/dashboard', { timeout: 10000 });
+
+    // Navigate to seal service page (clicking Seal navigates to /services/seal/config)
+    await page.click('text=Seal');
+    await page.waitForURL('/services/seal/config', { timeout: 5000 });
   });
 
   test('configuration form is visible with default values', async ({ page }) => {
@@ -24,8 +27,9 @@ test.describe('Seal Service Configuration', () => {
     await expect(page.locator('h3:has-text("STARTER")')).toBeVisible();
     await expect(page.locator('h3:has-text("PRO")')).toBeVisible();
 
-    // Should see STARTER selected by default
-    await expect(page.locator('button:has-text("STARTER") >> text=SELECTED')).toBeVisible();
+    // Should see STARTER selected by default (check for blue border indicating selection)
+    const starterButton = page.locator('button:has-text("STARTER")');
+    await expect(starterButton).toHaveClass(/border-blue-500/);
 
     // Should see default price ($20 for Starter)
     await expect(page.locator('text=$20.00')).toBeVisible();
@@ -35,11 +39,12 @@ test.describe('Seal Service Configuration', () => {
   });
 
   test('selecting PRO tier updates price correctly', async ({ page }) => {
-    // Click PRO tier
-    await page.click('button:has-text("PRO")');
+    // Click PRO tier (use h3 to be specific)
+    await page.click('h3:has-text("PRO")');
 
-    // PRO should now show SELECTED badge
-    await expect(page.locator('button:has-text("PRO") >> text=SELECTED')).toBeVisible();
+    // PRO button should now have blue border indicating selection
+    const proButton = page.locator('button:has(h3:has-text("PRO"))');
+    await expect(proButton).toHaveClass(/border-blue-500/);
 
     // Price should update to $40
     await expect(page.locator('text=$40.00')).toBeVisible();
@@ -49,7 +54,7 @@ test.describe('Seal Service Configuration', () => {
 
   test('enabling burst adds $10 to price', async ({ page }) => {
     // Select PRO tier first (burst only available for Pro)
-    await page.click('button:has-text("PRO")');
+    await page.click('h3:has-text("PRO")');
     await expect(page.locator('text=$40.00')).toBeVisible();
 
     // Enable burst
@@ -72,7 +77,7 @@ test.describe('Seal Service Configuration', () => {
 
   test('adding seal keys updates price correctly', async ({ page }) => {
     // Select PRO tier ($40 base)
-    await page.click('button:has-text("PRO")');
+    await page.click('h3:has-text("PRO")');
 
     // Find seal keys input
     const sealKeysInput = page.locator('input[id="sealKeys"]');
@@ -88,7 +93,7 @@ test.describe('Seal Service Configuration', () => {
 
   test('adding packages updates price correctly', async ({ page }) => {
     // Select PRO tier ($40 base)
-    await page.click('button:has-text("PRO")');
+    await page.click('h3:has-text("PRO")');
 
     // Find packages input
     const packagesInput = page.locator('input[id="packages"]');
@@ -104,7 +109,7 @@ test.describe('Seal Service Configuration', () => {
 
   test('complex configuration calculates correct total', async ({ page }) => {
     // Select PRO tier ($40)
-    await page.click('button:has-text("PRO")');
+    await page.click('h3:has-text("PRO")');
 
     // Enable burst (+$10)
     await page.click('label:has-text("Enable burst")');

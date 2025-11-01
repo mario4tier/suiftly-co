@@ -1,14 +1,14 @@
 /**
  * Root tRPC router
  * Combines all route modules
+ *
+ * Note: Auth moved to REST at /i/auth/* (see rest-auth.ts)
  */
 
 import { router } from '../lib/trpc';
-import { authRouter } from './auth';
 import { testRouter } from './test';
 
 export const appRouter = router({
-  auth: authRouter,
   test: testRouter,
 });
 

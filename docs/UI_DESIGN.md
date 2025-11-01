@@ -103,7 +103,9 @@ Customer-facing platform for Suiftly infrastructure services with a clean, profe
 │             │                                       │
 │  Sidebar    │         Main Content Area             │
 │             │                                       │
-│  - Seal     │                                       │
+│  Seal     ▼ │                                       │
+│    - Config │                                       │
+│    - Stats  │                                       │
 │  - gRPC     │                                       │
 │  - GraphQL  │                                       │
 │  ─────────  │                                       │
@@ -174,12 +176,13 @@ See **[AUTHENTICATION_DESIGN.md](./AUTHENTICATION_DESIGN.md)** for complete tech
 │                     │
 │ Management          │  ← Section header
 ├─────────────────────┤
-│ 󰵀 Billing & Usage   │
+│ 󰵀 Billing & Payments│
 │ 󰌆 API Keys          │
-│ 󰄷 Analytics & Logs  │
+│ 󰄷 User Logs         │
 │                     │
 │ ─────────────────   │  ← Divider
 │                     │
+│ 󰒋 Network Status    │
 │ 󰋗 Support           │
 └─────────────────────┘
 ```

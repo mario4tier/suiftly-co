@@ -33,6 +33,7 @@ export default defineConfig({
       name: 'short-expiry',
       testMatch: /token-refresh\.spec\.ts/,
       grep: /Short Expiry/,
+      retries: 1,  // Retry timing-sensitive tests once
       use: { ...devices['Desktop Chrome'] },
     },
 

@@ -9,18 +9,16 @@ test.describe('Dashboard Navigation', () => {
   test.beforeEach(async ({ page }) => {
     // Authenticate with mock wallet before each test
     await page.goto('/');
-    await page.click('text=Connect Mock Wallet');
+    // Click the Mock Wallet button (button element with "Mock Wallet" text)
+    await page.click('button:has-text("Mock Wallet")');
 
-    // Wait for authentication and redirect to /services/seal (default home)
-    await page.waitForURL('/services/seal', { timeout: 10000 });
+    // Wait for authentication and redirect to /dashboard
+    await page.waitForURL('/dashboard', { timeout: 10000 });
   });
 
-  test('redirects to seal service after authentication', async ({ page }) => {
-    // Should be on /services/seal after auth (default home)
-    expect(page.url()).toContain('/services/seal');
-
-    // Should see Seal heading
-    await expect(page.locator('h1:has-text("Seal")')).toBeVisible();
+  test('redirects to dashboard after authentication', async ({ page }) => {
+    // Should be on /dashboard after auth
+    expect(page.url()).toContain('/dashboard');
 
     // Should see wallet address in header
     await expect(page.locator('text=0xaaaa')).toBeVisible();
@@ -30,8 +28,9 @@ test.describe('Dashboard Navigation', () => {
     // Sidebar should be visible
     await expect(page.locator('aside')).toBeVisible();
 
-    // Should see service navigation items (use link selector to be specific)
-    await expect(page.locator('aside a:has-text("Seal")')).toBeVisible();
+    // Should see service navigation items
+    // Note: Seal is a collapsible section, so it's not a link itself
+    await expect(page.locator('aside:has-text("Seal")')).toBeVisible();
     await expect(page.locator('aside a:has-text("gRPC")')).toBeVisible();
     await expect(page.locator('aside a:has-text("GraphQL")')).toBeVisible();
 
@@ -49,11 +48,11 @@ test.describe('Dashboard Navigation', () => {
     // Navigate to Billing
     await page.click('text=Billing');
     await page.waitForURL('/billing');
-    await expect(page.locator('h2:has-text("Billing & Usage")')).toBeVisible();
+    await expect(page.locator('h2:has-text("Billing & Payments")')).toBeVisible();
 
-    // Navigate back to Seal
+    // Navigate back to Seal (clicking Seal navigates to first child: /services/seal/config)
     await page.click('text=Seal');
-    await page.waitForURL('/services/seal');
+    await page.waitForURL('/services/seal/config');
     await expect(page.locator('h1:has-text("Seal")')).toBeVisible();
   });
 
@@ -74,16 +73,21 @@ test.describe('Dashboard Navigation', () => {
   });
 
   test('active navigation item is highlighted', async ({ page }) => {
-    // On /services/seal, Seal should be highlighted
-    const sealLink = page.locator('a:has-text("Seal")');
-    await expect(sealLink).toHaveClass(/bg-blue-50/);
+    // Navigate to Seal first
+    await page.click('text=Seal');
+    await page.waitForURL('/services/seal/config');
+
+    // On /services/seal/config, the Seal section should be highlighted
+    // The Seal collapsible wrapper div should have the active class
+    const sealSection = page.locator('aside div.group:has-text("Seal")');
+    await expect(sealSection).toHaveClass(/bg-blue-50/);
 
     // Navigate to gRPC
     await page.click('text=gRPC');
     await page.waitForURL('/services/grpc');
 
     // gRPC should now be highlighted
-    const grpcLink = page.locator('a:has-text("gRPC")');
+    const grpcLink = page.locator('aside a:has-text("gRPC")');
     await expect(grpcLink).toHaveClass(/bg-blue-50/);
   });
 });

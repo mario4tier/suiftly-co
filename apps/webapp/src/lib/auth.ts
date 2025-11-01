@@ -11,7 +11,6 @@
 
 import { useSignPersonalMessage, useCurrentAccount } from '@mysten/dapp-kit';
 import { useAuthStore } from '../stores/auth';
-import { trpc } from './trpc';
 import { toast } from 'sonner';
 import { getMockWallet, mockSignMessage } from './mockWallet';
 import { useCallback } from 'react';
@@ -70,10 +69,18 @@ export function useAuth() {
     const useMock = !!mockAccount;
 
     try {
-      // Step 1: Get challenge nonce
-      const challenge = await trpc.auth.connectWallet.mutate({
-        walletAddress: account.address,
+      // Step 1: Get challenge nonce (REST endpoint)
+      const connectResponse = await fetch('/i/auth/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ walletAddress: account.address }),
       });
+
+      if (!connectResponse.ok) {
+        throw new Error('Failed to connect wallet');
+      }
+
+      const challenge = await connectResponse.json();
 
       // Step 2: Sign message (mock or real wallet)
       let signatureResult;
@@ -85,12 +92,23 @@ export function useAuth() {
         });
       }
 
-      // Step 3: Verify signature and get JWT
-      const result = await trpc.auth.verifySignature.mutate({
-        walletAddress: account.address,
-        signature: signatureResult.signature,
-        nonce: challenge.nonce,
+      // Step 3: Verify signature and get JWT (REST endpoint, sets httpOnly cookie)
+      const verifyResponse = await fetch('/i/auth/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include', // Important: send/receive cookies
+        body: JSON.stringify({
+          walletAddress: account.address,
+          signature: signatureResult.signature,
+          nonce: challenge.nonce,
+        }),
       });
+
+      if (!verifyResponse.ok) {
+        throw new Error('Failed to verify signature');
+      }
+
+      const result = await verifyResponse.json();
 
       // Step 4: Store session
       setUser({ walletAddress: result.walletAddress });
@@ -132,7 +150,11 @@ export function useAuth() {
 
   async function performLogout(): Promise<void> {
     try {
-      await trpc.auth.logout.mutate();
+      // Call REST logout endpoint (clears httpOnly cookie)
+      await fetch('/i/auth/logout', {
+        method: 'POST',
+        credentials: 'include', // Important: send cookies
+      });
     } catch (error) {
       console.error('[AUTH] Logout error:', error);
     }

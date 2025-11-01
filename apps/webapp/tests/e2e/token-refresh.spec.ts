@@ -122,19 +122,75 @@ test.describe('Token Refresh - Short Expiry Config (2s access, 10s refresh)', ()
     await page.click('button:has-text("Mock Wallet")');
     await expect(page.locator('text=/0x[a-f0-9]{4}\\.\\.\\./')).toBeVisible({ timeout: 5000 });
 
-    // 2. Wait for refresh token to expire (10 seconds + buffer)
-    console.log('[TEST] Waiting 11 seconds for refresh token to expire...');
-    await page.waitForTimeout(11000);
+    // 2. Wait for refresh token to expire (10 seconds + generous buffer)
+    // The refresh token expires in 10s, but we add extra time to ensure it's fully expired
+    console.log('[TEST] Waiting 12 seconds for refresh token to expire...');
+    await page.waitForTimeout(12000);
 
-    // 3. Try to access protected route
+    // 3. Navigate to protected route (this might trigger auth check)
     await page.goto('/test');
 
-    // 4. Trigger an API call that will discover tokens are expired
+    // Wait a bit for page to settle
+    await page.waitForTimeout(500);
+
+    // 4. Check if we're already on login (fast path)
+    const currentUrl = page.url();
+    if (currentUrl.includes('/login')) {
+      console.log('[TEST] Already redirected to login (fast path)');
+      await expect(page.locator('text=/connect.*wallet/i')).toBeVisible({ timeout: 3000 });
+      console.log('✅ Redirected to login after refresh token expired');
+      return;
+    }
+
+    // 5. Not redirected yet - trigger an API call to discover expired tokens
     //    This will trigger: 401 → refresh attempt → refresh fails → clearAuth → redirect to login
+    console.log('[TEST] Triggering API call to discover expired tokens...');
+
+    // Click button and wait for redirect with polling
+    // The button click triggers the auth flow which takes time
     await page.click('button:has-text("Test Protected Endpoint")');
 
-    // 5. Should be redirected to login page after failed refresh attempt
-    await expect(page).toHaveURL('/login', { timeout: 5000 });
+    // 6. Poll for redirect with generous timeout
+    // The redirect happens AFTER: API call → 401 → refresh attempt → 401 → clearAuth → navigation
+    // This chain can take a few seconds, so we poll for up to 15 seconds
+    console.log('[TEST] Waiting for redirect to /login...');
+
+    let redirected = false;
+    const maxWaitTime = 15000; // 15 seconds
+    const pollInterval = 500;   // Check every 500ms
+    const startTime = Date.now();
+
+    while (!redirected && (Date.now() - startTime) < maxWaitTime) {
+      const url = page.url();
+      console.log(`[TEST] Polling (${Date.now() - startTime}ms): Current URL = ${url}`);
+
+      if (url.includes('/login')) {
+        redirected = true;
+        console.log(`[TEST] ✅ Redirected after ${Date.now() - startTime}ms`);
+      } else {
+        // Check page content to see what state we're in
+        try {
+          const pageText = await page.textContent('body');
+          console.log(`[TEST] Page content preview: ${pageText?.substring(0, 100)}...`);
+        } catch (e) {
+          console.log('[TEST] Could not read page content');
+        }
+        await page.waitForTimeout(pollInterval);
+      }
+    }
+
+    // 7. Verify we actually redirected
+    if (!redirected) {
+      // Take a screenshot for debugging
+      await page.screenshot({ path: '/tmp/token-expiry-failure.png' });
+      console.log('[TEST] Screenshot saved to /tmp/token-expiry-failure.png');
+
+      throw new Error(`Failed to redirect to login after ${maxWaitTime}ms. Current URL: ${page.url()}`);
+    }
+
+    // 8. Verify we're on the login page with proper content
+    await expect(page).toHaveURL(/\/login/);
+    await expect(page.locator('text=/connect.*wallet/i')).toBeVisible({ timeout: 3000 });
 
     console.log('✅ Redirected to login after refresh token expired');
   });

@@ -30,7 +30,7 @@ function getAccessToken(): string | null {
 export const trpc = createTRPCClient<AppRouter>({
   links: [
     httpBatchLink({
-      url: `${API_URL}/trpc`,
+      url: '/i/api', // Same-origin (dev: proxied, prod: served by Fastify)
       credentials: 'include', // Send cookies (for refresh token)
 
       // Add Authorization header with access token
@@ -48,16 +48,15 @@ export const trpc = createTRPCClient<AppRouter>({
           console.log('[TRPC] Got 401, attempting token refresh...');
 
           try {
-            const refreshResponse = await fetch(`${API_URL}/trpc/auth.refresh`, {
+            // Call REST auth refresh endpoint
+            const refreshResponse = await fetch('/i/auth/refresh', {
               method: 'POST',
-              credentials: 'include',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({}),
+              credentials: 'include', // Send httpOnly cookie
             });
 
             if (refreshResponse.ok) {
               const refreshData = await refreshResponse.json();
-              const newAccessToken = refreshData.result?.data?.accessToken;
+              const newAccessToken = refreshData.accessToken;
 
               if (newAccessToken) {
                 // Update token in localStorage

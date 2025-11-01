@@ -53,7 +53,10 @@ const envSchema = z.object({
   COOKIE_SECRET: z.string().min(32).default('dev-cookie-secret-change-in-production-32-CHARS'),
 
   // Auth
-  MOCK_AUTH: z.string().transform(val => val === 'true').default('false'),
+  // Default to true in development for easier testing
+  MOCK_AUTH: z.string().transform(val => val === 'true').default(
+    process.env.NODE_ENV === 'production' ? 'false' : 'true'
+  ),
 
   // CORS
   CORS_ORIGIN: z.string().default('http://localhost:5173'), // Vite default port

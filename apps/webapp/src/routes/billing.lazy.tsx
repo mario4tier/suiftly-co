@@ -16,7 +16,7 @@ function BillingPage() {
     <DashboardLayout>
       <div className="space-y-6">
         <div>
-          <h2 className="text-3xl font-bold tracking-tight">Billing & Usage</h2>
+          <h2 className="text-3xl font-bold tracking-tight">Billing & Payments</h2>
           <p className="text-muted-foreground mt-2">
             Monitor your spending and usage
           </p>
