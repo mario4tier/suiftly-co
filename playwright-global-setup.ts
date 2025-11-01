@@ -34,6 +34,7 @@ async function globalSetup(config: FullConfig) {
     apiServer = spawn('npx', ['tsx', 'apps/api/src/server.ts'], {
       env: {
         ...process.env,
+        NODE_ENV: 'development', // Required for JWT config to allow short expiry
         ENABLE_SHORT_JWT_EXPIRY: 'true',
         JWT_SECRET: 'TEST_DEV_SECRET_1234567890abcdef',
         MOCK_AUTH: 'true',

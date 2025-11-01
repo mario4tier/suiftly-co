@@ -204,6 +204,7 @@ export const authRouter = router({
       const tokenHash = createHash('sha256').update(refreshToken).digest('hex');
       const jwtConfig = getJWTConfig();
       const refreshExpiryMs = parseExpiryToMs(jwtConfig.refreshTokenExpiry);
+      console.log('[AUTH] Refresh token expiry:', jwtConfig.refreshTokenExpiry, '=', refreshExpiryMs, 'ms =', Math.floor(refreshExpiryMs / 1000), 'seconds');
 
       // Delete any existing refresh tokens for this customer (prevent token buildup)
       await db.delete(refreshTokens).where(eq(refreshTokens.customerId, customerId));

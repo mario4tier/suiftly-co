@@ -7,6 +7,7 @@ cd "$(dirname "$0")/../.."
 
 echo "🧪 Starting API server with TEST config (2s/10s JWT expiry)..."
 
+NODE_ENV=development \
 ENABLE_SHORT_JWT_EXPIRY=true \
 JWT_SECRET=TEST_DEV_SECRET_1234567890abcdef \
 MOCK_AUTH=true \
