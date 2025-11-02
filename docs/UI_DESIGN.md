@@ -97,22 +97,30 @@ Customer-facing platform for Suiftly infrastructure services with a clean, profe
 ### Layout Structure
 
 ```
-┌─────────────────────────────────────────────────────┐
-│ Header: Logo (left)          [Wallet Widget] (right)│
-├─────────────┬───────────────────────────────────────┤
-│             │                                       │
-│  Sidebar    │         Main Content Area             │
-│             │                                       │
-│  Seal     ▼ │                                       │
-│    - Config │                                       │
-│    - Stats  │                                       │
-│  - gRPC     │                                       │
-│  - GraphQL  │                                       │
-│  ─────────  │                                       │
-│  - Billing  │                                       │
-│  - Support  │                                       │
-│             │                                       │
-└─────────────┴───────────────────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│ Header: Logo (left)           [Wallet Widget] (right)│
+├─────────────┬────────────────────────────────────────┤
+│             │                                        │
+│  Sidebar    │         Main Content Area              │
+│             │                                        │
+│  Dashboard  │                                        │
+│             │                                        │
+│  Infrastructure                                      │
+│  Seal     ▼ │                                        │
+│    - Overview                                        │
+│    - Stats  │                                        │
+│  - gRPC     │                                        │
+│  - GraphQL  │                                        │
+│             │                                        │
+│  Management │                                        │
+│  - Billing & Payments                                │
+│  - API Keys │                                        │
+│  - User Logs│                                        │
+│  ─────────  │                                        │
+│  - Network Status                                    │
+│  - Support  │                                        │
+│             │                                        │
+└─────────────┴────────────────────────────────────────┘
 ```
 
 **Persistent Components:**
@@ -169,7 +177,7 @@ See **[AUTHENTICATION_DESIGN.md](./AUTHENTICATION_DESIGN.md)** for complete tech
 │ Infrastructure      │  ← Section header
 ├─────────────────────┤
 │ 󰤄 Seal           ▼  │  ← Collapsible with chevron
-│   └ Config          │  ← Subitem (indented)
+│   └ Overview        │  ← Subitem (indented)
 │   └ Stats           │  ← Subitem (indented)
 │ 󰖟 gRPC              │
 │ 󰘦 GraphQL           │
@@ -207,7 +215,7 @@ See **[AUTHENTICATION_DESIGN.md](./AUTHENTICATION_DESIGN.md)** for complete tech
 
 **Current Implementation:**
 - Dashboard: Top-level route
-- Seal: Collapsible with Config and Stats subitems
+- Seal: Collapsible with Overview and Stats subitems
 - gRPC/GraphQL: Regular items (no subitems yet)
 - Management section: Regular items (no subitems)
 - Support: Regular item (no subitems)
@@ -217,88 +225,340 @@ See **[AUTHENTICATION_DESIGN.md](./AUTHENTICATION_DESIGN.md)** for complete tech
 - All items accessible
 - Active route highlighted automatically
 
-### Page 4: Billing (Spending Limits)
+## Service States
 
-**URL:** `/billing`
+**Service State Machine: 6 Distinct States**
 
-**Note:** Spending limits is part of the main billing page, not a separate route.
+A service (Seal, gRPC, GraphQL) exists in one of six states, controlling subscription status, service availability, and configuration access.
 
-**Purpose:** Manage on-chain escrow spending protections.
+### State Definitions
 
-**Wallet Required:** Yes
+#### **(1) Not Provisioned** (Default)
+
+**Meaning:** No active subscription exists for this service.
+
+**User Experience:**
+- Service page shows onboarding configuration form
+- All configuration fields are interactive
+- "Subscribe to Service" button displayed (replaces old "Enable Service" terminology)
+- No billing charges
+
+**Allowed Actions:**
+- Browse configuration options
+- Calculate pricing estimates
+- Subscribe to service (transitions to State 2)
+
+**UI Indicators:**
+- Page title: "Configure [Service Name]"
+- Prominent "Subscribe to Service" button at bottom of form
+- No status badge in header
+
+---
+
+#### **(2) Provisioning** (Pending Payment)
+
+**Meaning:** User has selected a tier and initiated subscription, payment is pending confirmation.
+
+**User Experience:**
+- Configuration form locked (read-only, fields disabled)
+- Loading spinner or "Processing subscription..." message
+- Cannot modify configuration during payment processing
+- Return to State (1) only if payment is explicitly canceled (admin-only initially)
+
+**Allowed Actions:**
+- View selected configuration (read-only)
+- Wait for payment confirmation
+- Admin: Cancel pending subscription (returns to State 1)
+
+**UI Indicators:**
+- Status badge: "Provisioning" (yellow/orange)
+- Banner: "Subscription pending payment confirmation..."
+- Configuration fields grayed out with lock icon
+
+**Transitions:**
+- **(2) → (3):** Payment confirmed → Service subscribed, defaulting to disabled state
+
+---
+
+#### **(3) Disabled** (Subscribed but Service OFF)
+
+**Meaning:** Active subscription exists, but service is currently disabled by user choice.
+
+**User Experience:**
+- Service page shows tab-based layout (Config / Keys / Stats / Logs)
+- Configuration tab displays current settings (editable)
+- "Enable Service" toggle switch in OFF position
+- All keys (API keys and Seal keys) return `503 Service Unavailable` when called
+- **Billing:** User is charged full base monthly fee (maintaining subscription/capacity reservation)
+
+**Allowed Actions:**
+- Edit configuration (tier, burst, keys, packages)
+- Manage keys (create, revoke, copy) - keys are authenticated but return 503 when called
+- Enable service (toggle switch to ON → transitions to State 4)
+- View historical stats from when service was previously enabled
+- View logs showing state transitions and configuration changes
+- Cancel subscription (admin-only, transitions to State 1)
+
+**UI Indicators:**
+- Status badge: "Disabled" (gray)
+- Toggle switch: [OFF] ⟳ ON
+- Banner: "Service is subscribed but currently disabled. Enable to start serving traffic."
+
+**Transitions:**
+- **(3) → (4):** User toggles service ON (immediate effect)
+- **(3) → (1):** Cancel subscription (admin-only)
+- **(3) → (6):** Admin suspends for non-payment
+
+**Note:** Individual API keys and Seal keys can also be disabled independently. Disabled keys return `503` regardless of service state.
+
+---
+
+#### **(4) Enabled** (Subscribed and Service ON)
+
+**Meaning:** Active subscription with service fully operational and serving traffic.
+
+**User Experience:**
+- Service page shows tab-based layout (Config / Keys / Stats / Logs)
+- Configuration tab displays current settings (editable)
+- "Enable Service" toggle switch in ON position
+- API/Seal keys working, traffic flowing normally
+- Stats show real-time usage data
+- **Billing:** Base monthly fee + usage charges apply
+
+**Allowed Actions:**
+- Edit configuration (tier, burst, keys, packages) - **changes apply immediately without affecting traffic**
+- Disable service (toggle switch to OFF → transitions to State 3)
+- Manage keys (create, revoke, copy, enable/disable individual keys)
+- View stats and logs (live data accumulating)
+
+**UI Indicators:**
+- Status badge: "Active" (green) 🟢
+- Toggle switch: OFF ⟳ [ON]
+- Stats charts show real-time data
+
+**Configuration Change Behavior:**
+- **Tier changes:** Apply immediately, no traffic disruption
+- **Add/remove keys/packages:** Immediate effect, billing adjusted
+- **Burst enable/disable:** Takes effect immediately
+- **Important:** Disabling service (State 4 → 3) is the ONLY action that stops traffic
+
+**Transitions:**
+- **(4) → (3):** User toggles service OFF (immediate effect, all keys return 503)
+- **(4) → (5):** User initiates maintenance suspension (future feature, end-of-cycle transition)
+- **(4) → (6):** Admin suspends for non-payment
+
+---
+
+#### **(5) Suspended - Maintenance** (Future Feature)
+
+**Meaning:** User-initiated long-term suspension to maintain configuration and key ownership at significantly reduced cost.
+
+**User Experience:**
+- Service page shows tab-based layout (Config / Keys / Stats / Logs)
+- Configuration locked (read-only, cannot edit)
+- "Resume Service" button replaces toggle switch
+- All keys (API keys and Seal keys) return `503 Service Unavailable`
+- **Billing:** Flat $2/month (no usage charges)
+- **Important:** Transition to this state happens at end of current payment cycle (non-refundable if re-enabled)
+
+**Allowed Actions:**
+- View configuration (read-only)
+- View keys (read-only, cannot create/revoke)
+- View historical stats and logs
+- Resume service (transitions to State 4 at end of cycle, or immediately with no refund)
+- Cancel subscription (transitions to State 1, admin-only)
+
+**UI Indicators:**
+- Status badge: "Suspended - Maintenance" (yellow)
+- Banner: "Service suspended for maintenance. Configuration and keys preserved at $2/month. Resume anytime."
+- "Resume Service" button (replaces toggle)
+- Info note: "Suspension takes effect at end of current billing cycle (DD/MM/YYYY). Current charges are non-refundable."
+
+**Use Cases:**
+- Planned infrastructure changes (multi-week downtime)
+- Seasonal traffic patterns (pause during off-season)
+- Long-term cost optimization while retaining configuration and key ownership
+
+**Transitions:**
+- **(5) → (4):** User clicks "Resume Service" (takes effect at end of cycle, or immediately with warning)
+- **(5) → (1):** Cancel subscription (admin-only)
+- **(5) → (6):** Admin suspends for non-payment
+
+**Difference from State (3) Disabled:**
+- **State (3):** Quick on/off toggle, full base monthly fee, instant effect, config changes allowed
+- **State (5):** Long-term suspension, $2/month flat rate, end-of-cycle transition, config locked (simpler state management)
+
+**Note:** Not implemented in MVP. Planned for future release.
+
+---
+
+#### **(6) Suspended - No Payment** (Admin-Only)
+
+**Meaning:** Service and configuration locked due to payment failure or insufficient escrow balance.
+
+**User Experience:**
+- Service page shows tab-based layout (read-only mode)
+- Configuration locked (cannot edit)
+- All keys/packages locked (cannot create, revoke, or edit)
+- All keys (API keys and Seal keys) return `503 Service Unavailable` (same as disabled state)
+- Authentication still validates before returning 503 (consistent behavior)
+- Prominent banner with payment action required
+- **Billing:** No new charges (service frozen)
+
+**Allowed Actions:**
+- View configuration (read-only)
+- View keys, stats, logs (read-only)
+- Top up escrow balance (resolves suspension)
+- Contact support
+
+**UI Indicators:**
+- Status badge: "Suspended - Payment Required" (red) 🔴
+- Banner: "Service suspended due to payment issues. Top up your escrow balance to resume. Contact support if you need help."
+- All edit/action buttons disabled
+- Lock icons on configuration fields
+
+**Transitions:**
+- **(6) → (3):** Admin resolves payment issue or user tops up balance → Service restored to disabled state
+
+**Trigger Conditions:**
+- Escrow balance reaches $0 for >7 days (grace period expired)
+- Monthly spending limit exceeded (on-chain protection)
+- Admin manually suspends account
+
+**HTTP Status Code Consistency:**
+- **All suspended/disabled states (3, 5, 6):** Return `503 Service Unavailable`
+- **Authentication:** Always validated first (proper authentication flow)
+- **Authorization:** Independent of enable/disable state
+
+---
+
+### State Transition Diagram
 
 ```
-┌──────────────────────────────────────────────────────┐
-│ Billing → Spending Limit                             │
-│                                                       │
-│  Monthly Spending Limit (On-Chain Protection)        │
-│                                                       │
-│  ⓘ This limit protects your escrow account from     │
-│     excessive charges. Changes require wallet         │
-│     signature to update the smart contract.           │
-│                                                       │
-│  Current Limit: $500 per month (calendar month)     │
-│                                                       │
-│  [━━━━━━━━━━━━━━━━━━━] $85 / $500               │
-│  This month: $680 (34%) - Resets in 12 days          │
-│                                                       │
-│  Recent charges:                                      │
-│  • Jan 9: Service enabled - $60                       │
-│  • Jan 15: Tier upgrade - $20                         │
-│  • Jan 18: Added 10 API keys - $10                    │
-│  • Jan 28: Monthly usage fees - $590                  │
-│                                                       │
-│  [ Change Limit ]                                     │
-│                                                       │
-│  ─────────────────────────────────────                │
-│                                                       │
-│  Withdrawal Protection                                │
-│                                                       │
-│  ⓘ Minimum balance required while services active:  │
-│     $50.00 (prevents accidental service interruption) │
-│                                                       │
-│  Active services: 1 (Seal)                            │
-│  Current balance: $127.50                             │
-│  Available to withdraw: $77.50                        │
-│                                                       │
-│  [ Withdraw Funds ]                                   │
-│                                                       │
-└──────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                   Service State Transitions                  │
+└─────────────────────────────────────────────────────────────┘
+
+    (1) Not Provisioned
+         │
+         │ User clicks "Subscribe to Service"
+         ↓
+    (2) Provisioning (Payment Pending)
+         │
+         │ Payment confirmed
+         ↓
+    (3) Disabled (Subscribed, Service OFF)
+         │                            ↑
+         │ User toggles ON            │ User toggles OFF
+         ↓                            │
+    (4) Enabled (Subscribed, Service ON)
+         │                            │
+         │ User suspends (future)     │
+         ↓                            │
+    (5) Suspended - Maintenance       │
+         │                            │
+         │ User resumes               │
+         └────────────────────────────┘
+
+    Admin Actions (from any state with subscription):
+    (3), (4), (5) ──→ (6) Suspended - No Payment
+    (6) ──────────→ (3) Disabled (after payment resolved)
+    (3), (4), (5) ──→ (1) Not Provisioned (cancel subscription)
 ```
 
-**Change Spending Limit Modal:**
-```
-┌──────────────────────────────────────────────────────┐
-│ Change Monthly Spending Limit                        │
-│                                                       │
-│  Current limit: $500 per month                      │
-│  Spent this month: $680                               │
-│                                                       │
-│  New limit: [$ 5000  ]  (min: $20, unlimited)    │
-│                                                       │
-│  Suggested:                                           │
-│  • $500/month  - Single service (Starter/Pro)        │
-│  • $500/month - Default (see CONSTANTS.md)               │
-│  • $5,000/month - Heavy usage / multiple services    │
-│                                                       │
-│  ⓘ This change requires a wallet signature to       │
-│     update the on-chain escrow contract.              │
-│                                                       │
-│  [ Update Limit ]  [ Cancel ]                         │
-│                                                       │
-└──────────────────────────────────────────────────────┘
-```
+---
 
-**Interactions:**
-- Clicking [Change Limit] opens modal
-- User enters new value (validated: min $100, max $50,000)
-- Clicking "Update Limit" triggers wallet signature request
-- On-chain transaction updates escrow contract config
-- Toast: "Monthly spending limit updated: $5,000"
-- Activity log: "Monthly spending limit changed: $500 → $1,000"
+### Subscription Terminology Clarification
 
-**Tooltip:**
-- **Monthly Limit:** "Maximum Suiftly can charge in any 30-day rolling window. Protects your escrow from excessive billing."
+**"Subscribe to Service"** vs. **"Enable/Disable Service"**:
+
+- **Subscribe:** Create a subscription (State 1 → 2 → 3). This reserves capacity and begins billing.
+- **Enable/Disable:** Toggle service ON/OFF within an active subscription (State 3 ↔ 4). User continues to be billed base monthly fee when disabled.
+
+**Why the distinction?**
+- Avoids confusion: "Enable" used to mean both "subscribe" and "turn on traffic"
+- Clearer intent: Subscribing commits to billing, enabling controls traffic flow
+- Better UX: Users understand they're creating a subscription relationship first
+
+---
+
+### Configuration Changes by State
+
+| State                           | Config Changes Allowed | Notes                                                        |
+| ------------------------------- | ---------------------- | ------------------------------------------------------------ |
+| **(1) Not Provisioned**         | ✅ Yes (form mode)     | No billing impact until subscription                         |
+| **(2) Provisioning**            | ❌ No                  | Locked during payment processing                             |
+| **(3) Disabled**                | ✅ Yes                 | Can prepare changes before enabling                          |
+| **(4) Enabled**                 | ✅ Yes                 | Changes apply immediately **without traffic disruption**     |
+| **(5) Suspended - Maintenance** | ❌ No (view-only)      | Locked during suspension, simpler state management           |
+| **(6) Suspended - No Payment**  | ❌ No                  | Admin-locked until payment resolved                          |
+
+---
+
+### Key/Package Management by State
+
+| State                           | Create/Revoke Keys | Notes                                     |
+| ------------------------------- | ------------------ | ----------------------------------------- |
+| **(1) Not Provisioned**         | ❌ No              | Must subscribe first                      |
+| **(2) Provisioning**            | ❌ No              | Wait for payment confirmation             |
+| **(3) Disabled**                | ✅ Yes             | Keys inactive (return 503) but manageable |
+| **(4) Enabled**                 | ✅ Yes             | Full key management + keys active         |
+| **(5) Suspended - Maintenance** | ❌ No (view-only)  | Cannot modify during maintenance          |
+| **(6) Suspended - No Payment**  | ❌ No (view-only)  | Locked until payment resolved             |
+
+---
+
+### Billing Behavior by State
+
+| State                           | Monthly Base Fee          | Usage Fees | Notes                                                   |
+| ------------------------------- | ------------------------- | ---------- | ------------------------------------------------------- |
+| **(1) Not Provisioned**         | ❌ No                     | ❌ No      | No billing                                              |
+| **(2) Provisioning**            | ❌ No (pending)           | ❌ No      | Charge applied on transition to (3)                     |
+| **(3) Disabled**                | ✅ Yes (full tier fee)    | ❌ No      | Maintains subscription/capacity reservation, no traffic |
+| **(4) Enabled**                 | ✅ Yes (full tier fee)    | ✅ Yes     | Full billing (base + usage), traffic flowing            |
+| **(5) Suspended - Maintenance** | ⚠️ Flat $2/month          | ❌ No      | Long-term suspension, config/keys preserved             |
+| **(6) Suspended - No Payment**  | ❌ No                     | ❌ No      | Billing frozen until payment resolved                   |
+
+---
+
+### Design Decisions - CONFIRMED
+
+Based on requirements clarification, the following design decisions are finalized:
+
+1. **HTTP Status Codes (All States):** ✅ CONFIRMED
+   - **All disabled/suspended states (3, 5, 6):** Return `503 Service Unavailable`
+   - **Authentication:** Always validated before checking service state
+   - **No 401 usage:** Authorization problems are independent of enable/disable state
+
+2. **Billing in State (3) Disabled:** ✅ CONFIRMED
+   - Full base monthly fee charged (maintains subscription and capacity reservation)
+   - Quick on/off toggle for temporary traffic control
+   - No usage fees while disabled
+
+3. **Configuration Changes While Enabled (State 4):** ✅ CONFIRMED
+   - All configuration changes (tier, burst, keys, packages) apply immediately
+   - **Zero traffic disruption:** Changes do not affect serving traffic
+   - Only disabling service (State 4 → 3) stops traffic flow
+
+4. **Key Management in State (3) Disabled:** ✅ CONFIRMED
+   - Keys can be created, revoked, and managed while service is disabled
+   - All keys return `503` when called in disabled state
+   - Individual keys can also be enabled/disabled independently (returns 503 when key is disabled)
+
+5. **State (5) Maintenance Suspension Pricing:** ✅ CONFIRMED
+   - Flat $2/month (regardless of tier)
+   - Transition occurs at end of current payment cycle
+   - Non-refundable if user re-enables before cycle ends
+
+6. **State (2) Cancellation:** ✅ CONFIRMED
+   - Admin-only for MVP
+   - User-facing cancellation deferred to future releases
+
+7. **Stats/Logs in Disabled State:** ✅ CONFIRMED
+   - Historical stats visible from when service was previously enabled
+   - New stats do not accumulate while disabled
+   - Logs preserve all state transitions and configuration changes
+   - Enabling/disabling service creates log entries
 
 ---
 
@@ -820,6 +1080,95 @@ Total Monthly Fee: $60/month
 **Purpose:** Consolidated view of all usage, charges, and wallet balance.
 
 **Two States: Connected vs. Not Connected**
+
+## Billing and Payments Page
+
+**URL:** `/billing`
+
+**Purpose:** Manage on-chain escrow spending protections, view balance, and control spending limits.
+
+**Wallet Required:** Yes
+
+
+### Account Section
+
+### Spending Limits Section
+
+**Note:** Spending limits is part of the main billing page, not a separate route.
+```
+┌──────────────────────────────────────────────────────┐
+│ Billing → Spending Limit                             │
+│                                                       │
+│  Monthly Spending Limit (On-Chain Protection)        │
+│                                                       │
+│  ⓘ This limit protects your escrow account from     │
+│     excessive charges. Changes require wallet         │
+│     signature to update the smart contract.           │
+│                                                       │
+│  Current Limit: $500 per month (calendar month)     │
+│                                                       │
+│  [━━━━━━━━━━━━━━━━━━━] $85 / $500               │
+│  This month: $680 (34%) - Resets in 12 days          │
+│                                                       │
+│  Recent charges:                                      │
+│  • Jan 9: Service enabled - $60                       │
+│  • Jan 15: Tier upgrade - $20                         │
+│  • Jan 18: Added 10 API keys - $10                    │
+│  • Jan 28: Monthly usage fees - $590                  │
+│                                                       │
+│  [ Change Limit ]                                     │
+│                                                       │
+│  ─────────────────────────────────────                │
+│                                                       │
+│  Withdrawal Protection                                │
+│                                                       │
+│  ⓘ Minimum balance required while services active:  │
+│     $50.00 (prevents accidental service interruption) │
+│                                                       │
+│  Active services: 1 (Seal)                            │
+│  Current balance: $127.50                             │
+│  Available to withdraw: $77.50                        │
+│                                                       │
+│  [ Withdraw Funds ]                                   │
+│                                                       │
+└──────────────────────────────────────────────────────┘
+```
+
+**Change Spending Limit Modal:**
+```
+┌──────────────────────────────────────────────────────┐
+│ Change Monthly Spending Limit                        │
+│                                                       │
+│  Current limit: $500 per month                      │
+│  Spent this month: $680                               │
+│                                                       │
+│  New limit: [$ 5000  ]  (min: $20, unlimited)    │
+│                                                       │
+│  Suggested:                                           │
+│  • $500/month  - Single service (Starter/Pro)        │
+│  • $500/month - Default (see CONSTANTS.md)               │
+│  • $5,000/month - Heavy usage / multiple services    │
+│                                                       │
+│  ⓘ This change requires a wallet signature to       │
+│     update the on-chain escrow contract.              │
+│                                                       │
+│  [ Update Limit ]  [ Cancel ]                         │
+│                                                       │
+└──────────────────────────────────────────────────────┘
+```
+
+**Interactions:**
+- Clicking [Change Limit] opens modal
+- User enters new value (validated: min $100, max $50,000)
+- Clicking "Update Limit" triggers wallet signature request
+- On-chain transaction updates escrow contract config
+- Toast: "Monthly spending limit updated: $5,000"
+- Activity log: "Monthly spending limit changed: $500 → $1,000"
+
+**Tooltip:**
+- **Monthly Limit:** "Maximum Suiftly can charge in any 30-day rolling window. Protects your escrow from excessive billing."
+
+---
 
 **State 1: Wallet Not Connected (Demo Mode)**
 ```
