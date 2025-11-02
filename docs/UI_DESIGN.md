@@ -562,98 +562,91 @@ Based on requirements clarification, the following design decisions are finalize
 
 ---
 
-## Page Layouts
+## Main Content Areas
 
-### Page 1: Service Pages (Seal / gRPC / GraphQL)
+### Common Elements
+
+#### Messages Section
+At the top of the main content area. Each message intended to be brief (one liner) with an icon to show severity (info, warning, error). More than one message might be displayed.
+
+The section does not have a title and takes no vertical space when there are no messages to show.
+
+Any messages just push down the rest of the content.
+
+The messages displayed here are relevant only to the service/page content, not the entire app.
+
+#### Toasters
+Middle of the screen, fade out after 3 seconds. Used for non-critical feedback after a user action (e.g. "Configuration saved", "Wallet connected", etc.)
+
+### Service Pages (Seal / gRPC / GraphQL)
 
 **URL Pattern:** `/services/seal`, `/services/grpc`, `/services/graphql`
 
-Each service page has **two states:**
-1. **Not Configured State** (onboarding)
-2. **Configured State** (active service with tabs)
+Each service page has **2 major modes of operation**:
+
+1. **Onboarding Form**. For when the service state are (1) Not Provisioned and (2) Provisioning. Traditional submit pattern after the user select the service tier.
+
+2. **Interactive Form** This is for all other service states (e.g. Disabled, Enabled, Suspended...). Field level actions with immediate effect. No single "submit" button.
 
 **Note:** For MVP, only the Seal service is fully implemented with configuration. gRPC and GraphQL show "coming soon" placeholders (see [docs/COMING_SOON_PAGE.md](../docs/COMING_SOON_PAGE.md)).
 
 ---
 
-#### State 1: Not Configured (Onboarding)
-
-A message "Service Not Configured" is shown until a subscription is active.
-
-**Full-page configuration form with live pricing.**
+#### Seal Onboarding Form
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│ Seal Configuration                                    │
-
-│                                                       │
-│  ✓ Always Included:                                  │
-│    • Global geo-steering and failover (closest       │
-│      key-server automatically selected)              │
-│    • Auto-failover / retry for high-availability     │
-│    • 1x Seal Key                                     │
-│    • 3x packages per key                             │
-│    • 2x IP Whitelisting                              │
-│    • 2x API-Key                                      │
-│                                                       │
-│  ─────────────────────────────────────────           │
-│                                                       │
-│  Guaranteed Bandwidth (?)                             │
-│                                                       │
+│ Seal Configuration                                   │
+│                                                      │
+│  Guaranteed Bandwidth (?)                            │
+│                                                      │
 │  ┌────────────────────────────────────────┐          │
 │  │ STARTER                                │          │
 │  ├────────────────────────────────────────┤          │
-│  │ 100 req/s per region • ~300 req/s globally       │
-│  │ $20/month                              │          │
+│  │ 100 req/s per region • ~300 req/s globally        │
+│  │ $20/month, No burst support            │          │
 │  └────────────────────────────────────────┘          │
-│                                                       │
+│                                                      │
 │  ┌────────────────────────────────────────┐          │
-│  │ PRO                         [SELECTED] │          │ ← Badge
+│  │ PRO                         [SELECTED] │  ← Badge │
 │  ├────────────────────────────────────────┤          │
-│ ┃│ 500 req/s per region • ~1,500 req/s globally    │┃│ ← Thick border
-│ ┃│ $40/month                              │┃│
+│  │ 500 req/s per region • ~1,500 req/s globally      |
+│  │ $40/month  - Burst support             │          │
 │  └────────────────────────────────────────┘          │
-│                                                       │
+│                                                      │
 │  ┌────────────────────────────────────────┐          │
 │  │ BUSINESS                               │          │
 │  ├────────────────────────────────────────┤          │
-│  │ 2,000 req/s per region • ~6,000 req/s globally   │
-│  │ $80/month                              │          │
+│  │ 2,000 req/s per region • ~6,000 req/s globally    │
+│  │ $80/month - Burst support, CIDR Whitelisting      │
 │  └────────────────────────────────────────┘          │
-│                                                       │
-│  Burst (?)                                            │
-│  [ ] Enable burst (available for Pro and Business)   │
-│                                                       │
-│  Packages Per Seal Key (?)                            │
-│  [ 3 ]  (comes with 3, +$1/month per additional)     │
-│                                                       │
-│  Additional API Keys (?)                              │
-│  [ 1 ]  (comes with 1, +$1/month per additional)     │
-│                                                       │
-│  Additional Seal Keys (?)                             │
-│  [ 1 ]  (comes with 1, +$5/month per additional)     │
-│                                                       │
+│                                                      │
+│  ✓ Included with every subscription                  │
+│    • Global geo-steering and failover (i)            │
+│    • 1x Seal Key, 3x packages id                     │
+│    • 2x API-Key                                      │
+│    • 2x IPv4 Whitelisting                            │
+│                                                      │
+│  Pay-As-You-Go (charged separately, no expiration)   |
+│    • $1 per 10,000 requests                          │
+│                                                      │
+│  Optional add-ons are available (i)                  │
+│                                                      │
+│     [ ] Agree to terms of service                    │
+│                                                      │
 │  ┌──────────────────────────────────────────┐        │
-│  │ Total Monthly Fee           $XX.00       │        │
+│  │ Subscribe to Service for $55.00/month    │        │
 │  └──────────────────────────────────────────┘        │
-│                                                       │
-│  Usage Fees (metered, billed separately):            │
-│  • Requests: $1.00 per 10,000 requests (all tiers)  │
-│                                                       │
-│  Enable Service                         [OFF] ⟳ ON   │
-│                                                       │
+│                                                      │
+│                                                      │
 └──────────────────────────────────────────────────────┘
 ```
 
 **Behavior:**
-- **Live price calculation:** As user changes options, "Total Monthly Fee" updates in real-time (using `useMemo()`)
-- **Usage fees:** Listed below monthly fee (metered separately, not included)
-- **Tooltips (?):** Click to show explanation for each field
-- **"Enable Service" toggle switch:**
-  - **No wallet connected:** Triggering toggle prompts "Connect Wallet" modal → After connection, service enables automatically (toggle switches to ON)
-  - **Wallet connected:** Toggle validates form and enables service immediately (switches to ON)
-  - **Service already provisioned:** Form is replaced with server-side state (shows configured view with tabs)
-- **Server state precedence:** If service exists in DB, page shows configured state instead of onboarding form
+- **Tooltips (i):** Click to show explanation
+- **Tier Cards** User can switch between tiers and price on bottom button is updated.
+- **Terms of service** link opens a modal window that can be scrolled down for the TOS, and download as PDF button and "Agree and close" button. The user can also simply click the "Agree" without clicking the link.
+- **DB Driven**: All numbers (pricing, capacities) are DB driven *but can be heavily cached or used to generate static content*.
 
 **Form Fields (All Services):**
 
@@ -930,33 +923,32 @@ Total Monthly Fee: $60/month
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│  Stats                                                │
-
-│                                                       │
+│  Stats                                               │
+│                                                      │
 │  ⓘ Stats are updated hourly. Data appears after     │
 │     24 hours of service activity.                    │
-│                                                       │
+│                                                      │
 │  Requests (Last 7 Days)                              │
 │  ┌────────────────────────────────────────┐          │
 │  │                                        │          │
 │  │     [Empty graph placeholder]          │          │
 │  │                                        │          │
 │  └────────────────────────────────────────┘          │
-│                                                       │
+│                                                      │
 │  Bandwidth Usage (Last 7 Days)                       │
 │  ┌────────────────────────────────────────┐          │
 │  │                                        │          │
 │  │     [Empty graph placeholder]          │          │
 │  │                                        │          │
 │  └────────────────────────────────────────┘          │
-│                                                       │
+│                                                      │
 │  Response Time (p50/p95/p99)                         │
 │  ┌────────────────────────────────────────┐          │
 │  │                                        │          │
 │  │     [Empty graph placeholder]          │          │
 │  │                                        │          │
 │  └────────────────────────────────────────┘          │
-│                                                       │
+│                                                      │
 └──────────────────────────────────────────────────────┘
 ```
 

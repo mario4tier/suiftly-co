@@ -1,11 +1,11 @@
 /**
  * Seal Service Configuration E2E Test
- * Phase 10: Test configuration form and live pricing
+ * Tests the onboarding form for subscribing to Seal service
  */
 
 import { test, expect } from '@playwright/test';
 
-test.describe('Seal Service Configuration', () => {
+test.describe('Seal Service Onboarding Form', () => {
   test.beforeEach(async ({ page }) => {
     // Authenticate with mock wallet
     await page.goto('/');
@@ -14,118 +14,249 @@ test.describe('Seal Service Configuration', () => {
     // Wait for redirect to /dashboard after auth
     await page.waitForURL('/dashboard', { timeout: 10000 });
 
-    // Navigate to seal service page (clicking Seal navigates to /services/seal/config)
+    // Navigate to seal service page (should show onboarding form)
     await page.click('text=Seal');
-    await page.waitForURL('/services/seal/config', { timeout: 5000 });
+    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
   });
 
-  test('configuration form is visible with default values', async ({ page }) => {
-    // Should see page title
-    await expect(page.locator('h1:has-text("Seal")')).toBeVisible();
+  test('onboarding form loads with all required elements', async ({ page }) => {
+    // Should see "Guaranteed Bandwidth" section
+    await expect(page.locator('h3:has-text("Guaranteed Bandwidth")')).toBeVisible();
 
-    // Should see tier selection (use h3 headings inside tier buttons)
-    await expect(page.locator('h3:has-text("STARTER")')).toBeVisible();
-    await expect(page.locator('h3:has-text("PRO")')).toBeVisible();
+    // Should see info tooltip button
+    await expect(page.locator('button').filter({ has: page.locator('svg[class*="lucide-info"]') }).first()).toBeVisible();
 
-    // Should see STARTER selected by default (check for blue border indicating selection)
-    const starterButton = page.locator('button:has-text("STARTER")');
-    await expect(starterButton).toHaveClass(/border-blue-500/);
+    // Should see all three tier cards
+    await expect(page.locator('text=STARTER')).toBeVisible();
+    await expect(page.locator('text=PRO')).toBeVisible();
+    await expect(page.locator('text=BUSINESS')).toBeVisible();
 
-    // Should see default price ($20 for Starter)
-    await expect(page.locator('text=$20.00')).toBeVisible();
+    // Should see "Included with every subscription" section
+    await expect(page.locator('text=Included with every subscription')).toBeVisible();
 
-    // Should see Enable Service button
-    await expect(page.locator('button:has-text("Enable Service")')).toBeVisible();
+    // Should see Pay-As-You-Go section
+    await expect(page.locator('text=Pay-As-You-Go')).toBeVisible();
+
+    // Should see terms checkbox
+    await expect(page.locator('text=Agree to')).toBeVisible();
+
+    // Should see Subscribe button (initially disabled)
+    const subscribeButton = page.locator('button:has-text("Subscribe to Service")');
+    await expect(subscribeButton).toBeVisible();
+    await expect(subscribeButton).toBeDisabled();
+
+    console.log('✅ All onboarding form elements are visible');
   });
 
-  test('selecting PRO tier updates price correctly', async ({ page }) => {
-    // Click PRO tier (use h3 to be specific)
-    await page.click('h3:has-text("PRO")');
+  test('PRO tier is selected by default', async ({ page }) => {
+    // PRO tier card should have orange border and SELECTED badge
+    const proCard = page.locator('div').filter({ hasText: /^PRO/ }).first();
+    await expect(proCard).toHaveClass(/border-\[#f38020\]/);
+    await expect(page.locator('text=SELECTED')).toBeVisible();
 
-    // PRO button should now have blue border indicating selection
-    const proButton = page.locator('button:has(h3:has-text("PRO"))');
-    await expect(proButton).toHaveClass(/border-blue-500/);
+    // Subscribe button should show PRO price ($40)
+    await expect(page.locator('button:has-text("$40.00/month")')).toBeVisible();
 
-    // Price should update to $40
-    await expect(page.locator('text=$40.00')).toBeVisible();
-
-    console.log('✅ PRO tier selection works, price updated to $40');
+    console.log('✅ PRO tier is selected by default with correct price');
   });
 
-  test('enabling burst adds $10 to price', async ({ page }) => {
-    // Select PRO tier first (burst only available for Pro)
-    await page.click('h3:has-text("PRO")');
-    await expect(page.locator('text=$40.00')).toBeVisible();
+  test('selecting different tier updates price on subscribe button', async ({ page }) => {
+    // Initially PRO ($40)
+    await expect(page.locator('button:has-text("$40.00/month")')).toBeVisible();
 
-    // Enable burst
-    await page.click('label:has-text("Enable burst")');
+    // Click STARTER tier
+    await page.locator('text=STARTER').click();
 
-    // Price should update to $50 ($40 + $10)
-    await expect(page.locator('text=$50.00')).toBeVisible();
+    // Price should update to $20
+    await expect(page.locator('button:has-text("$20.00/month")')).toBeVisible();
 
-    console.log('✅ Burst enabled, price updated to $50');
+    // SELECTED badge should move to STARTER
+    const starterCard = page.locator('div').filter({ hasText: /^STARTER/ }).first();
+    await expect(starterCard).toHaveClass(/border-\[#f38020\]/);
+
+    // Click BUSINESS tier
+    await page.locator('text=BUSINESS').click();
+
+    // Price should update to $80
+    await expect(page.locator('button:has-text("$80.00/month")')).toBeVisible();
+
+    console.log('✅ Tier selection updates subscribe button price correctly');
   });
 
-  test('burst is disabled for STARTER tier', async ({ page }) => {
-    // Should be on STARTER by default
-    // Burst checkbox should be disabled (shadcn Checkbox renders as button with role)
-    const burstCheckbox = page.locator('button[id="burst"]');
-    await expect(burstCheckbox).toBeDisabled();
+  test('tier cards show correct hover states', async ({ page }) => {
+    // Hover over STARTER (not selected)
+    const starterCard = page.locator('div').filter({ hasText: /^STARTER/ }).first();
+    await starterCard.hover();
 
-    console.log('✅ Burst correctly disabled for STARTER tier');
+    // Should show hover border (2px gray)
+    await expect(starterCard).toHaveClass(/hover:border-2/);
+
+    console.log('✅ Tier card hover states work');
   });
 
-  test('adding seal keys updates price correctly', async ({ page }) => {
-    // Select PRO tier ($40 base)
-    await page.click('h3:has-text("PRO")');
+  test('tooltips are functional', async ({ page }) => {
+    // Click "Guaranteed Bandwidth" info icon
+    const bandwidthTooltip = page.locator('h3:has-text("Guaranteed Bandwidth")').locator('..').locator('button').first();
+    await bandwidthTooltip.click();
 
-    // Find seal keys input
-    const sealKeysInput = page.locator('input[id="sealKeys"]');
+    // Should show tooltip content
+    await expect(page.locator('text=/3 regions.*US-East.*US-West.*EU-Frankfurt/i')).toBeVisible();
 
-    // Change from 1 to 2 seal keys (+$5)
-    await sealKeysInput.fill('2');
+    // Click outside to close
+    await page.locator('h3:has-text("Guaranteed Bandwidth")').click();
 
-    // Price should update to $45 ($40 + $5)
-    await expect(page.locator('text=$45.00')).toBeVisible();
+    // Click "Global geo-steering" info icon
+    const geoSteeringTooltip = page.locator('text=Global geo-steering and failover').locator('..').locator('button').first();
+    await geoSteeringTooltip.click();
 
-    console.log('✅ Adding seal key updated price to $45');
+    // Should show tooltip content
+    await expect(page.locator('text=/Closest key-server.*automatically selected/i')).toBeVisible();
+
+    console.log('✅ Tooltips are functional');
   });
 
-  test('adding packages updates price correctly', async ({ page }) => {
-    // Select PRO tier ($40 base)
-    await page.click('h3:has-text("PRO")');
+  test('terms of service link opens modal', async ({ page }) => {
+    // Click terms of service link
+    await page.locator('button:has-text("terms of service")').click();
 
-    // Find packages input
-    const packagesInput = page.locator('input[id="packages"]');
+    // Modal should open
+    await expect(page.locator('text=Suiftly Seal Service Agreement')).toBeVisible();
 
-    // Change from 3 to 5 packages (+2 additional × $1 = $2)
-    await packagesInput.fill('5');
+    // Should see Download PDF button
+    await expect(page.locator('button:has-text("Download PDF")')).toBeVisible();
 
-    // Price should update to $42 ($40 + $2)
-    await expect(page.locator('text=$42.00')).toBeVisible();
+    // Should see Agree and Close button
+    await expect(page.locator('button:has-text("Agree and Close")')).toBeVisible();
 
-    console.log('✅ Adding packages updated price to $42');
+    // Modal should be scrollable
+    const modalContent = page.locator('text=Service Level Agreement');
+    await expect(modalContent).toBeVisible();
+
+    console.log('✅ Terms of service modal opens and displays content');
   });
 
-  test('complex configuration calculates correct total', async ({ page }) => {
-    // Select PRO tier ($40)
-    await page.click('h3:has-text("PRO")');
+  test('accepting terms via modal enables subscribe button', async ({ page }) => {
+    // Subscribe button should be disabled initially
+    const subscribeButton = page.locator('button:has-text("Subscribe to Service")');
+    await expect(subscribeButton).toBeDisabled();
 
-    // Enable burst (+$10)
-    await page.click('label:has-text("Enable burst")');
+    // Open TOS modal
+    await page.locator('button:has-text("terms of service")').click();
 
-    // Set 2 seal keys (+$5)
-    await page.locator('input[id="sealKeys"]').fill('2');
+    // Click "Agree and Close"
+    await page.locator('button:has-text("Agree and Close")').click();
 
-    // Set 5 packages per key (2 additional × $1 × 2 keys = $4)
-    await page.locator('input[id="packages"]').fill('5');
+    // Modal should close
+    await expect(page.locator('text=Suiftly Seal Service Agreement')).not.toBeVisible();
 
-    // Set 2 API keys (+$1)
-    await page.locator('input[id="apiKeys"]').fill('2');
+    // Checkbox should be checked
+    const termsCheckbox = page.locator('#terms');
+    await expect(termsCheckbox).toBeChecked();
 
-    // Total: $40 + $10 + $5 + $4 + $1 = $60
-    await expect(page.locator('text=$60.00')).toBeVisible();
+    // Subscribe button should now be enabled
+    await expect(subscribeButton).toBeEnabled();
 
-    console.log('✅ Complex configuration: $40 + $10 + $5 + $4 + $1 = $60');
+    console.log('✅ Accepting terms via modal enables subscribe button');
+  });
+
+  test('checking terms checkbox directly enables subscribe button', async ({ page }) => {
+    // Subscribe button should be disabled initially
+    const subscribeButton = page.locator('button:has-text("Subscribe to Service")');
+    await expect(subscribeButton).toBeDisabled();
+
+    // Click the checkbox directly (not the modal)
+    await page.locator('label:has-text("Agree to")').click();
+
+    // Checkbox should be checked
+    const termsCheckbox = page.locator('#terms');
+    await expect(termsCheckbox).toBeChecked();
+
+    // Subscribe button should now be enabled
+    await expect(subscribeButton).toBeEnabled();
+
+    console.log('✅ Checking terms checkbox directly enables subscribe button');
+  });
+
+  test('subscribe button shows correct tier and price', async ({ page }) => {
+    // Enable subscribe button
+    await page.locator('label:has-text("Agree to")').click();
+
+    // Check default PRO tier
+    let subscribeButton = page.locator('button:has-text("Subscribe to Service for $40.00/month")');
+    await expect(subscribeButton).toBeVisible();
+
+    // Switch to STARTER
+    await page.locator('text=STARTER').click();
+    subscribeButton = page.locator('button:has-text("Subscribe to Service for $20.00/month")');
+    await expect(subscribeButton).toBeVisible();
+
+    // Switch to BUSINESS
+    await page.locator('text=BUSINESS').click();
+    subscribeButton = page.locator('button:has-text("Subscribe to Service for $80.00/month")');
+    await expect(subscribeButton).toBeVisible();
+
+    console.log('✅ Subscribe button displays correct tier and price');
+  });
+
+  test('subscribe button click logs to console (placeholder)', async ({ page }) => {
+    // Enable subscribe button
+    await page.locator('label:has-text("Agree to")').click();
+
+    // Listen for console messages
+    const consoleLogs: string[] = [];
+    page.on('console', (msg) => {
+      consoleLogs.push(msg.text());
+    });
+
+    // Click subscribe button
+    await page.locator('button:has-text("Subscribe to Service")').click();
+
+    // Should see console log (placeholder implementation)
+    // Wait a bit for console log to appear
+    await page.waitForTimeout(100);
+
+    const hasSubscribeLog = consoleLogs.some((log) => log.includes('Subscribe to'));
+    expect(hasSubscribeLog).toBe(true);
+
+    console.log('✅ Subscribe button click triggers placeholder action');
+  });
+
+  test('included features are displayed correctly', async ({ page }) => {
+    // Should see all included features
+    await expect(page.locator('text=Global geo-steering and failover')).toBeVisible();
+    await expect(page.locator('text=1x Seal Key, 3x packages per key')).toBeVisible();
+    await expect(page.locator('text=2x API-Key')).toBeVisible();
+    await expect(page.locator('text=2x IPv4 Whitelisting')).toBeVisible();
+
+    // Should see checkmark icon
+    await expect(page.locator('svg[class*="lucide-check"]').first()).toBeVisible();
+
+    console.log('✅ Included features are displayed correctly');
+  });
+
+  test('pay-as-you-go section is displayed', async ({ page }) => {
+    // Should see Pay-As-You-Go section
+    await expect(page.locator('text=Pay-As-You-Go (charged separately, no expiration)')).toBeVisible();
+    await expect(page.locator('text=$1 per 10,000 requests')).toBeVisible();
+
+    // Should have blue-tinted background
+    const paygoSection = page.locator('text=Pay-As-You-Go').locator('..');
+    await expect(paygoSection).toHaveClass(/border-blue-200/);
+
+    console.log('✅ Pay-As-You-Go section is displayed correctly');
+  });
+
+  test('optional add-ons info is present', async ({ page }) => {
+    // Should see optional add-ons text with tooltip
+    await expect(page.locator('text=Optional add-ons are available')).toBeVisible();
+
+    // Click info icon
+    const addonsTooltip = page.locator('text=Optional add-ons are available').locator('..').locator('button').first();
+    await addonsTooltip.click();
+
+    // Should show tooltip content
+    await expect(page.locator('text=/Additional Seal Keys.*packages.*API keys/i')).toBeVisible();
+
+    console.log('✅ Optional add-ons info is present with functional tooltip');
   });
 });
