@@ -217,9 +217,11 @@ See **[AUTHENTICATION_DESIGN.md](./AUTHENTICATION_DESIGN.md)** for complete tech
 - All items accessible
 - Active route highlighted automatically
 
-### Page 4: Settings (Spending Limits)
+### Page 4: Billing (Spending Limits)
 
-**URL:** `/settings/spending-limits`
+**URL:** `/billing`
+
+**Note:** Spending limits is part of the main billing page, not a separate route.
 
 **Purpose:** Manage on-chain escrow spending protections.
 
@@ -227,7 +229,7 @@ See **[AUTHENTICATION_DESIGN.md](./AUTHENTICATION_DESIGN.md)** for complete tech
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│ Settings → Spending Limit                            │
+│ Billing → Spending Limit                             │
 │                                                       │
 │  Monthly Spending Limit (On-Chain Protection)        │
 │                                                       │
@@ -316,12 +318,9 @@ Each service page has **two states:**
 
 #### State 1: Not Configured (Onboarding)
 
-**Full-page configuration form with live pricing.**
+A message "Service Not Configured" is shown until a subscription is active.
 
-**When wallet NOT connected:**
--
-- All tabs visible (Config, Keys, Stats, Logs) with placeholder data
-- Enable Service toggle disabled until wallet connects
+**Full-page configuration form with live pricing.**
 
 ```
 ┌──────────────────────────────────────────────────────┐
@@ -332,6 +331,10 @@ Each service page has **two states:**
 │    • Global geo-steering and failover (closest       │
 │      key-server automatically selected)              │
 │    • Auto-failover / retry for high-availability     │
+│    • 1x Seal Key                                     │
+│    • 3x packages per key                             │
+│    • 2x IP Whitelisting                              │
+│    • 2x API-Key                                      │
 │                                                       │
 │  ─────────────────────────────────────────           │
 │                                                       │
@@ -490,12 +493,6 @@ Total Monthly Fee: $60/month
 
 **Tab-based layout with read-only config.**
 
-**When wallet disconnected:**
--
-- Config displayed as read-only (Edit button disabled)
-- Enable Service toggle disabled
-- Reconnect wallet to manage service
-
 ```
 ┌──────────────────────────────────────────────────────┐
 │ Seal Service                     [Status: Active 🟢] │
@@ -591,8 +588,7 @@ Total Monthly Fee: $60/month
   - Copy button → Copies full key to clipboard
   - Revoke button → Disables key (confirmation required, requires wallet)
   - **"Add New API Key":**
-    - If wallet not connected → Prompts "Connect Wallet" modal, then creates key after connection
-    - If wallet connected → Creates new key (+$1/month), shows full key once (copy prompt)
+    - Creates new key (+$1/month), shows full key once (copy prompt)
 
 - **Seal Keys & Packages Section:**
   - Each seal key has an expandable card ([▼] to collapse/expand)
@@ -605,11 +601,9 @@ Total Monthly Fee: $60/month
     - Edit → Rename package (requires wallet)
     - Delete → Remove package (confirmation if deleting would go below 3 total packages, requires wallet)
     - **"Add Package to this Seal Key":**
-      - If wallet not connected → Prompts "Connect Wallet" modal, then creates package after connection
-      - If wallet connected → Creates new package under this seal key (+$1/month)
+      - Creates new package under this seal key (+$1/month)
   - **"Add New Seal Key":**
-    - If wallet not connected → Prompts "Connect Wallet" modal, then creates seal key after connection
-    - If wallet connected → Creates new seal key (+$5/month) with default 3 packages, appears as collapsed card
+    - Creates new seal key (+$5/month) with default 3 packages, appears as collapsed card
 
 **Hierarchy:** Service → Seal Keys → Packages (each seal key owns its packages)
 
