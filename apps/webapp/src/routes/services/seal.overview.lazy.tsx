@@ -10,7 +10,7 @@ import { SealConfigForm } from '../../components/services/SealConfigForm';
 import { AlertCircle, CheckCircle, PauseCircle } from 'lucide-react';
 import { type ServiceStatus } from '@suiftly/shared/schemas';
 
-export const Route = createLazyFileRoute('/services/seal/config')({
+export const Route = createLazyFileRoute('/services/seal/overview')({
   component: SealConfigPage,
 });
 

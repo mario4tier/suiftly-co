@@ -29,8 +29,8 @@ const ServicesSealIndexLazyRouteImport = createFileRoute('/services/seal/')()
 const ServicesSealStatsLazyRouteImport = createFileRoute(
   '/services/seal/stats',
 )()
-const ServicesSealConfigLazyRouteImport = createFileRoute(
-  '/services/seal/config',
+const ServicesSealOverviewLazyRouteImport = createFileRoute(
+  '/services/seal/overview',
 )()
 
 const TestLazyRoute = TestLazyRouteImport.update({
@@ -114,13 +114,14 @@ const ServicesSealStatsLazyRoute = ServicesSealStatsLazyRouteImport.update({
 } as any).lazy(() =>
   import('./routes/services/seal.stats.lazy').then((d) => d.Route),
 )
-const ServicesSealConfigLazyRoute = ServicesSealConfigLazyRouteImport.update({
-  id: '/seal/config',
-  path: '/seal/config',
-  getParentRoute: () => ServicesLazyRoute,
-} as any).lazy(() =>
-  import('./routes/services/seal.config.lazy').then((d) => d.Route),
-)
+const ServicesSealOverviewLazyRoute =
+  ServicesSealOverviewLazyRouteImport.update({
+    id: '/seal/overview',
+    path: '/seal/overview',
+    getParentRoute: () => ServicesLazyRoute,
+  } as any).lazy(() =>
+    import('./routes/services/seal.overview.lazy').then((d) => d.Route),
+  )
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -136,7 +137,7 @@ export interface FileRoutesByFullPath {
   '/test': typeof TestLazyRoute
   '/services/graphql': typeof ServicesGraphqlLazyRoute
   '/services/grpc': typeof ServicesGrpcLazyRoute
-  '/services/seal/config': typeof ServicesSealConfigLazyRoute
+  '/services/seal/overview': typeof ServicesSealOverviewLazyRoute
   '/services/seal/stats': typeof ServicesSealStatsLazyRoute
   '/services/seal': typeof ServicesSealIndexLazyRoute
 }
@@ -154,7 +155,7 @@ export interface FileRoutesByTo {
   '/test': typeof TestLazyRoute
   '/services/graphql': typeof ServicesGraphqlLazyRoute
   '/services/grpc': typeof ServicesGrpcLazyRoute
-  '/services/seal/config': typeof ServicesSealConfigLazyRoute
+  '/services/seal/overview': typeof ServicesSealOverviewLazyRoute
   '/services/seal/stats': typeof ServicesSealStatsLazyRoute
   '/services/seal': typeof ServicesSealIndexLazyRoute
 }
@@ -173,7 +174,7 @@ export interface FileRoutesById {
   '/test': typeof TestLazyRoute
   '/services/graphql': typeof ServicesGraphqlLazyRoute
   '/services/grpc': typeof ServicesGrpcLazyRoute
-  '/services/seal/config': typeof ServicesSealConfigLazyRoute
+  '/services/seal/overview': typeof ServicesSealOverviewLazyRoute
   '/services/seal/stats': typeof ServicesSealStatsLazyRoute
   '/services/seal/': typeof ServicesSealIndexLazyRoute
 }
@@ -193,7 +194,7 @@ export interface FileRouteTypes {
     | '/test'
     | '/services/graphql'
     | '/services/grpc'
-    | '/services/seal/config'
+    | '/services/seal/overview'
     | '/services/seal/stats'
     | '/services/seal'
   fileRoutesByTo: FileRoutesByTo
@@ -211,7 +212,7 @@ export interface FileRouteTypes {
     | '/test'
     | '/services/graphql'
     | '/services/grpc'
-    | '/services/seal/config'
+    | '/services/seal/overview'
     | '/services/seal/stats'
     | '/services/seal'
   id:
@@ -229,7 +230,7 @@ export interface FileRouteTypes {
     | '/test'
     | '/services/graphql'
     | '/services/grpc'
-    | '/services/seal/config'
+    | '/services/seal/overview'
     | '/services/seal/stats'
     | '/services/seal/'
   fileRoutesById: FileRoutesById
@@ -355,11 +356,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ServicesSealStatsLazyRouteImport
       parentRoute: typeof ServicesLazyRoute
     }
-    '/services/seal/config': {
-      id: '/services/seal/config'
-      path: '/seal/config'
-      fullPath: '/services/seal/config'
-      preLoaderRoute: typeof ServicesSealConfigLazyRouteImport
+    '/services/seal/overview': {
+      id: '/services/seal/overview'
+      path: '/seal/overview'
+      fullPath: '/services/seal/overview'
+      preLoaderRoute: typeof ServicesSealOverviewLazyRouteImport
       parentRoute: typeof ServicesLazyRoute
     }
   }
@@ -368,7 +369,7 @@ declare module '@tanstack/react-router' {
 interface ServicesLazyRouteChildren {
   ServicesGraphqlLazyRoute: typeof ServicesGraphqlLazyRoute
   ServicesGrpcLazyRoute: typeof ServicesGrpcLazyRoute
-  ServicesSealConfigLazyRoute: typeof ServicesSealConfigLazyRoute
+  ServicesSealOverviewLazyRoute: typeof ServicesSealOverviewLazyRoute
   ServicesSealStatsLazyRoute: typeof ServicesSealStatsLazyRoute
   ServicesSealIndexLazyRoute: typeof ServicesSealIndexLazyRoute
 }
@@ -376,7 +377,7 @@ interface ServicesLazyRouteChildren {
 const ServicesLazyRouteChildren: ServicesLazyRouteChildren = {
   ServicesGraphqlLazyRoute: ServicesGraphqlLazyRoute,
   ServicesGrpcLazyRoute: ServicesGrpcLazyRoute,
-  ServicesSealConfigLazyRoute: ServicesSealConfigLazyRoute,
+  ServicesSealOverviewLazyRoute: ServicesSealOverviewLazyRoute,
   ServicesSealStatsLazyRoute: ServicesSealStatsLazyRoute,
   ServicesSealIndexLazyRoute: ServicesSealIndexLazyRoute,
 }

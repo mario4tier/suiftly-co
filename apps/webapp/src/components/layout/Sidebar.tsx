@@ -23,7 +23,21 @@ interface NavItem {
   path: string;
   label: string;
   icon: LucideIcon;
-  children?: { path: string; label: string }[];
+  badge?: { text: string; variant: 'new' | 'beta' };
+  children?: { path: string; label: string; badge?: { text: string; variant: 'new' | 'beta' } }[];
+}
+
+// Badge component for sidebar items
+function Badge({ text, variant }: { text: string; variant: 'new' | 'beta' }) {
+  const styles = variant === 'new'
+    ? 'bg-[#dbeafe] dark:bg-blue-900/30 text-[#0051c3] dark:text-blue-400'
+    : 'bg-[#fed7aa] dark:bg-orange-900/30 text-[#c2410c] dark:text-orange-400';
+
+  return (
+    <span className={`ml-2 px-2 py-0.5 text-[11px] font-medium rounded ${styles}`}>
+      {text}
+    </span>
+  );
 }
 
 // Cloudflare-style chevron SVG (filled triangle)
@@ -76,8 +90,8 @@ export function Sidebar() {
       label: 'Seal',
       icon: HardDrive,
       children: [
-        { path: '/services/seal/config', label: 'Config' },
-        { path: '/services/seal/stats', label: 'Stats' },
+        { path: '/services/seal/overview', label: 'Overview' },
+        { path: '/services/seal/stats', label: 'Stats', badge: { text: 'Beta', variant: 'beta' } },
       ],
     },
     { path: '/services/grpc', label: 'gRPC', icon: Network },
@@ -122,20 +136,18 @@ export function Sidebar() {
           open={isOpen}
           onOpenChange={() => sectionKey && toggleSection(sectionKey)}
         >
-          <div
-            className="group flex items-center gap-2 px-3 h-[42px] rounded-r-md text-[14px] font-normal transition-all cursor-pointer text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800"
-          >
+          <div className="flex items-center h-[42px] text-[14px] font-normal relative">
             <div
               onClick={handleParentClick}
-              className="flex items-center gap-2 flex-1"
+              className="flex items-center gap-2 flex-1 cursor-pointer transition-all hover:bg-[#e0f2f1] dark:hover:bg-teal-900/10 hover:rounded-l-full text-gray-700 dark:text-gray-300 absolute inset-0 group"
             >
               <div className="w-[55px] h-5 flex items-center justify-center flex-shrink-0">
                 <Icon className="w-5 h-5 text-gray-500 dark:text-gray-400" />
               </div>
-              <span className="flex-1">{item.label}</span>
+              <span className="flex-1 group-hover:underline group-hover:decoration-dotted group-hover:decoration-1 group-hover:underline-offset-2">{item.label}</span>
             </div>
             <CollapsibleTrigger asChild>
-              <button className="flex items-center justify-center">
+              <button className="relative z-20 flex items-center justify-center w-9 h-9 ml-auto cursor-pointer transition-colors hover:bg-gray-100 dark:hover:bg-gray-800 rounded border-0 bg-transparent">
                 <ChevronUp
                   className={`w-[10px] h-[10px] transition-transform fill-[#9ca3af] dark:fill-[#6b7280] ${isOpen ? '' : 'rotate-180'}`}
                 />
@@ -143,7 +155,7 @@ export function Sidebar() {
             </CollapsibleTrigger>
           </div>
           <CollapsibleContent className="pl-7">
-            <div className="space-y-0.5">
+            <div>
               {item.children?.map((child) => {
                 const childActive = isActive(child.path);
                 return (
@@ -151,14 +163,15 @@ export function Sidebar() {
                     key={child.path}
                     to={child.path}
                     className={`
-                      flex items-center pl-[71px] pr-3 h-[42px] rounded-r-md text-[14px] font-normal transition-all no-underline relative
+                      flex items-center justify-between pl-[26px] h-[28px] ml-1 text-[14px] transition-all no-underline relative group
                       ${childActive
-                        ? 'bg-[#dbeafe] dark:bg-blue-900/20 text-[rgb(0,81,195)] dark:text-blue-400 border border-[#93c5fd] dark:border-blue-700 before:absolute before:left-0 before:top-0 before:bottom-0 before:w-1 before:bg-[rgb(0,81,195)] before:rounded-r-full'
-                        : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'
+                        ? 'bg-[#dbeafe] dark:bg-blue-900/20 text-[rgb(0,81,195)] dark:text-blue-400 border-t border-b border-l border-[#93c5fd] dark:border-blue-700 rounded-l-full font-bold'
+                        : 'text-gray-600 dark:text-gray-400 hover:bg-[#e0f2f1] dark:hover:bg-teal-900/10 hover:rounded-l-full font-normal'
                       }
                     `}
                   >
-                    <span>{child.label}</span>
+                    <span className="group-hover:underline group-hover:decoration-dotted group-hover:decoration-1 group-hover:underline-offset-2">{child.label}</span>
+                    {child.badge && <Badge text={child.badge.text} variant={child.badge.variant} />}
                   </Link>
                 );
               })}
@@ -174,17 +187,20 @@ export function Sidebar() {
         key={item.path}
         to={item.path}
         className={`
-          flex items-center gap-2 px-3 h-[42px] rounded-r-md text-[14px] font-normal transition-all no-underline relative
+          flex items-center justify-between gap-2 h-[42px] text-[14px] transition-all no-underline relative group
           ${active
-            ? 'bg-[#dbeafe] dark:bg-blue-900/20 text-[rgb(0,81,195)] dark:text-blue-400 border border-[#93c5fd] dark:border-blue-700 before:absolute before:left-0 before:top-0 before:bottom-0 before:w-1 before:bg-[rgb(0,81,195)] before:rounded-r-full'
-            : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'
+            ? 'bg-[#dbeafe] dark:bg-blue-900/20 text-[rgb(0,81,195)] dark:text-blue-400 border-t border-b border-l border-[#93c5fd] dark:border-blue-700 rounded-l-full font-bold'
+            : 'text-gray-700 dark:text-gray-300 hover:bg-[#e0f2f1] dark:hover:bg-teal-900/10 hover:rounded-l-full font-normal'
           }
         `}
       >
-        <div className="w-[55px] h-5 flex items-center justify-center flex-shrink-0">
-          <Icon className={`w-5 h-5 ${active ? 'text-[rgb(0,81,195)]' : 'text-gray-500 dark:text-gray-400'}`} />
+        <div className="flex items-center gap-2">
+          <div className="w-[55px] h-5 flex items-center justify-center flex-shrink-0">
+            <Icon className={`w-5 h-5 ${active ? 'text-[rgb(0,81,195)]' : 'text-gray-500 dark:text-gray-400'}`} />
+          </div>
+          <span className="group-hover:underline group-hover:decoration-dotted group-hover:decoration-1 group-hover:underline-offset-2">{item.label}</span>
         </div>
-        <span>{item.label}</span>
+        {item.badge && <Badge text={item.badge.text} variant={item.badge.variant} />}
       </Link>
     );
   };
