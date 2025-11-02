@@ -186,7 +186,7 @@ See **[AUTHENTICATION_DESIGN.md](./AUTHENTICATION_DESIGN.md)** for complete tech
 ├─────────────────────┤
 │ 󰵀 Billing & Payments│
 │ 󰌆 API Keys          │
-│ 󰄷 User Logs         │
+│ 󰉻 User Logs         │
 │                     │
 │ ─────────────────   │  ← Divider
 │                     │

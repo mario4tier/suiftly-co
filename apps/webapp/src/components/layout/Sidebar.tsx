@@ -11,7 +11,7 @@ import {
   Database,
   CreditCard,
   MessageSquare,
-  ScrollText,
+  List,
   KeyRound,
   Home,
   Radio,
@@ -101,7 +101,7 @@ export function Sidebar() {
   const managementItems: NavItem[] = [
     { path: '/billing', label: 'Billing & Payments', icon: CreditCard },
     { path: '/api-keys', label: 'API Keys', icon: KeyRound },
-    { path: '/logs', label: 'User Logs', icon: ScrollText },
+    { path: '/logs', label: 'User Logs', icon: List },
   ];
 
   const statusItems: NavItem[] = [
