@@ -6,13 +6,13 @@
 import { useState } from 'react';
 import { Link, useNavigate, useRouterState } from '@tanstack/react-router';
 import {
-  HardDrive,
+  Shield,
   Network,
   Database,
   CreditCard,
   MessageSquare,
-  Activity,
-  Key,
+  ScrollText,
+  KeyRound,
   Home,
   Radio,
   type LucideIcon,
@@ -88,10 +88,10 @@ export function Sidebar() {
     {
       path: '/services/seal',
       label: 'Seal',
-      icon: HardDrive,
+      icon: Shield,
       children: [
         { path: '/services/seal/overview', label: 'Overview' },
-        { path: '/services/seal/stats', label: 'Stats', badge: { text: 'Beta', variant: 'beta' } },
+        { path: '/services/seal/stats', label: 'Stats' },
       ],
     },
     { path: '/services/grpc', label: 'gRPC', icon: Network },
@@ -100,8 +100,8 @@ export function Sidebar() {
 
   const managementItems: NavItem[] = [
     { path: '/billing', label: 'Billing & Payments', icon: CreditCard },
-    { path: '/api-keys', label: 'API Keys', icon: Key },
-    { path: '/logs', label: 'User Logs', icon: Activity },
+    { path: '/api-keys', label: 'API Keys', icon: KeyRound },
+    { path: '/logs', label: 'User Logs', icon: ScrollText },
   ];
 
   const statusItems: NavItem[] = [
@@ -139,10 +139,10 @@ export function Sidebar() {
           <div className="flex items-center h-[42px] text-[14px] font-normal relative">
             <div
               onClick={handleParentClick}
-              className="flex items-center gap-2 flex-1 cursor-pointer transition-all hover:bg-[#e0f2f1] dark:hover:bg-teal-900/10 hover:rounded-l-full text-gray-700 dark:text-gray-300 absolute inset-0 group"
+              className="sidebar-hover flex items-center flex-1 cursor-pointer transition-all hover:bg-[#e0f2f1] hover:rounded-l-full text-gray-900 dark:text-gray-100 absolute inset-0 group"
             >
               <div className="w-[55px] h-5 flex items-center justify-center flex-shrink-0">
-                <Icon className="w-5 h-5 text-gray-500 dark:text-gray-400" />
+                <Icon className="w-5 h-5 text-[rgb(0,81,195)] dark:text-blue-400" />
               </div>
               <span className="flex-1 group-hover:underline group-hover:decoration-dotted group-hover:decoration-1 group-hover:underline-offset-2">{item.label}</span>
             </div>
@@ -165,8 +165,8 @@ export function Sidebar() {
                     className={`
                       flex items-center justify-between pl-[26px] h-[28px] ml-1 text-[14px] transition-all no-underline relative group
                       ${childActive
-                        ? 'bg-[#dbeafe] dark:bg-blue-900/20 text-[rgb(0,81,195)] dark:text-blue-400 border-t border-b border-l border-[#93c5fd] dark:border-blue-700 rounded-l-full font-bold'
-                        : 'text-gray-600 dark:text-gray-400 hover:bg-[#e0f2f1] dark:hover:bg-teal-900/10 hover:rounded-l-full font-normal'
+                        ? 'sidebar-active bg-[#dbeafe] text-[rgb(0,81,195)] dark:text-blue-400 border-t border-b border-l border-[#93c5fd] dark:border-blue-700 rounded-l-full font-bold'
+                        : 'sidebar-hover text-gray-900 dark:text-gray-100 hover:bg-[#e0f2f1] hover:rounded-l-full font-normal'
                       }
                     `}
                   >
@@ -187,16 +187,16 @@ export function Sidebar() {
         key={item.path}
         to={item.path}
         className={`
-          flex items-center justify-between gap-2 h-[42px] text-[14px] transition-all no-underline relative group
+          flex items-center justify-between h-[42px] text-[14px] transition-all no-underline relative group
           ${active
-            ? 'bg-[#dbeafe] dark:bg-blue-900/20 text-[rgb(0,81,195)] dark:text-blue-400 border-t border-b border-l border-[#93c5fd] dark:border-blue-700 rounded-l-full font-bold'
-            : 'text-gray-700 dark:text-gray-300 hover:bg-[#e0f2f1] dark:hover:bg-teal-900/10 hover:rounded-l-full font-normal'
+            ? 'sidebar-active bg-[#dbeafe] text-[rgb(0,81,195)] dark:text-blue-400 border-t border-b border-l border-[#93c5fd] dark:border-blue-700 rounded-l-full font-bold'
+            : 'sidebar-hover text-gray-900 dark:text-gray-100 hover:bg-[#e0f2f1] hover:rounded-l-full font-normal'
           }
         `}
       >
-        <div className="flex items-center gap-2">
+        <div className="flex items-center">
           <div className="w-[55px] h-5 flex items-center justify-center flex-shrink-0">
-            <Icon className={`w-5 h-5 ${active ? 'text-[rgb(0,81,195)]' : 'text-gray-500 dark:text-gray-400'}`} />
+            <Icon className="w-5 h-5 text-[rgb(0,81,195)] dark:text-blue-400" />
           </div>
           <span className="group-hover:underline group-hover:decoration-dotted group-hover:decoration-1 group-hover:underline-offset-2">{item.label}</span>
         </div>

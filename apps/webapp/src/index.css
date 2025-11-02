@@ -32,3 +32,23 @@
 body {
   font-family: 'Open Sans', Helvetica, Arial, sans-serif;
 }
+
+/* Remove default link colors */
+a {
+  color: inherit;
+  text-decoration: inherit;
+}
+
+/* Dark mode sidebar customizations */
+.dark .sidebar-hover:hover {
+  background-color: #374151 !important;
+}
+
+.dark .sidebar-active {
+  background-color: rgba(30, 64, 175, 0.25) !important; /* blue-800 with moderate opacity */
+}
+
+/* Ensure active sidebar items are bold */
+.sidebar-active {
+  font-weight: 700 !important;
+}
