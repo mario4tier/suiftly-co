@@ -67,12 +67,12 @@ export function WalletWidget() {
           e.stopPropagation();
           setShowAccountMenu(!showAccountMenu);
         }}
-        className="flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-200 rounded-lg hover:border-gray-300 transition text-sm"
+        className="flex items-center gap-2 px-3 py-1.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg hover:border-gray-300 dark:hover:border-gray-600 transition text-sm"
       >
         <div className="w-6 h-6 bg-gradient-to-br from-green-400 to-green-500 rounded-full flex items-center justify-center">
           <Wallet className="h-3 w-3 text-white" />
         </div>
-        <span className="font-mono text-gray-700">
+        <span className="font-mono text-gray-700 dark:text-gray-200">
           {user.walletAddress.slice(0, 6)}...{user.walletAddress.slice(-4)}
         </span>
         {isMock && (
@@ -92,13 +92,13 @@ export function WalletWidget() {
             onClick={() => setShowAccountMenu(false)}
           />
           {/* Menu */}
-          <div className="absolute right-0 mt-2 w-64 bg-white border border-gray-200 rounded-lg shadow-lg z-20">
+          <div className="absolute right-0 mt-2 w-64 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-20">
             <div className="p-1.5">
-              <div className="px-3 py-2 border-b border-gray-100 mb-1">
-                <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wider mb-1">
+              <div className="px-3 py-2 border-b border-gray-100 dark:border-gray-700 mb-1">
+                <p className="text-[11px] font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">
                   Connected Account
                 </p>
-                <p className="text-xs font-mono text-gray-700">
+                <p className="text-xs font-mono text-gray-700 dark:text-gray-200">
                   {user.walletAddress.slice(0, 10)}...{user.walletAddress.slice(-8)}
                 </p>
               </div>
@@ -107,7 +107,7 @@ export function WalletWidget() {
               <a
                 href="/billing"
                 onClick={() => setShowAccountMenu(false)}
-                className="flex items-center gap-2.5 px-3 py-2 hover:bg-gray-50 rounded text-sm text-gray-700 transition"
+                className="flex items-center gap-2.5 px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700 rounded text-sm text-gray-700 dark:text-gray-200 transition"
               >
                 <CreditCard className="h-4 w-4 text-gray-400" />
                 <span>Billing & Balance</span>
@@ -119,19 +119,19 @@ export function WalletWidget() {
                   handleCopyAddress();
                   setShowAccountMenu(false);
                 }}
-                className="w-full flex items-center gap-2.5 px-3 py-2 hover:bg-gray-50 rounded text-sm text-gray-700 transition"
+                className="w-full flex items-center gap-2.5 px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700 rounded text-sm text-gray-700 dark:text-gray-200 transition"
               >
                 <Copy className="h-4 w-4 text-gray-400" />
                 <span>{copySuccess ? 'Copied!' : 'Copy Address'}</span>
               </button>
 
               {/* Divider */}
-              <div className="border-t border-gray-100 my-1" />
+              <div className="border-t border-gray-100 dark:border-gray-700 my-1" />
 
               {/* Disconnect */}
               <button
                 onClick={handleDisconnect}
-                className="w-full flex items-center gap-2.5 px-3 py-2 hover:bg-red-50 text-red-600 rounded text-sm transition"
+                className="w-full flex items-center gap-2.5 px-3 py-2 hover:bg-red-50 dark:hover:bg-red-900/20 text-red-600 dark:text-red-400 rounded text-sm transition"
               >
                 <LogOut className="h-4 w-4" />
                 <span>Disconnect</span>
