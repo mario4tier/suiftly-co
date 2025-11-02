@@ -4,7 +4,7 @@ export default {
   content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
   theme: {
     extend: {
-      // Cloudflare cf-ui design system colors
+      // Cloudflare cf-ui design system colors (adds to default Tailwind colors)
       colors: {
         // Cloudflare primary palette
         marine: '#2F7BBF',
@@ -54,8 +54,4 @@ export default {
     },
   },
   plugins: [],
-  // Tailwind v4: Explicitly enable default utilities
-  corePlugins: {
-    preflight: true,
-  },
 };

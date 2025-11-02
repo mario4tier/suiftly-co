@@ -16,7 +16,7 @@ Customer-facing platform for Suiftly infrastructure services with a clean, profe
 
 **Design System:**
 - **Framework:** React + TypeScript
-- **Styling:** Tailwind CSS (utility-first)
+- **Styling:** Tailwind CSS v4 (utility-first, OKLCH color space)
 - **Components:** shadcn/ui (accessible, customizable)
 - **Icons:** Lucide React (consistent, professional)
 - **Color Palette:**
@@ -24,7 +24,15 @@ Customer-facing platform for Suiftly infrastructure services with a clean, profe
   - Background: Gray-50 (#f9fafb)
   - Borders: Gray-200 (#e5e7eb)
   - Text: Gray-900/700/500 hierarchy
+  - Custom Cloudflare colors: Marine (#2F7BBF), Tangerine (#FF7900), etc.
 - **Inspiration:** Enterprise SaaS dashboards (Cloudflare, Vercel, Stripe)
+
+**Tailwind CSS v4 Notes:**
+- Uses `@import "tailwindcss"` in CSS (not `@tailwind` directives)
+- Config loaded via `@config "../tailwind.config.js"` in index.css
+- Colors rendered in OKLCH format (perceptually uniform, better gradients)
+- Write classes as normal (`text-gray-700`), OKLCH is transparent to development
+- Tests checking computed colors will see `oklch(...)` instead of `rgb(...)`
 
 **Visual Example:**
 ![Dashboard Design Inspiration](./cloudflare-dashboard-example.png)
