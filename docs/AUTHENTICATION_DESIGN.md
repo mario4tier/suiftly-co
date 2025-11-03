@@ -580,34 +580,38 @@ export const authRouter = router({
 
 ## Secret Management
 
+**This section describes JWT_SECRET management for authentication.**
+
+**For comprehensive secret management (all secrets including JWT_SECRET and DB_APP_FIELDS_ENCRYPTION_KEY), see [APP_SECURITY_DESIGN.md](./APP_SECURITY_DESIGN.md).**
+
 ### JWT Signing Key
 
-The JWT signing secret is stored in a `.env` file in the home directory of the user running the API server process.
+The JWT signing secret is stored in a `~/.suiftly.env` file in the home directory of the user running the API server process.
 
 **File Location:**
 ```bash
-# Production (API servers run as 'apiservers' user)
-/home/apiservers/.env
+# All environments (production, development, test)
+~/.suiftly.env
 
-# Development (runs as developer user, e.g., 'olet')
-/home/olet/.env
+# Environment is determined by /etc/walrus/system.conf (not by user account)
+# Same user runs both production and development systems
+# Each system has its own ~/.suiftly.env with appropriate secrets
 ```
 
 **File Permissions:**
 ```bash
-# Must be readable only by the owner
-chmod 600 ~/.env
-chown apiservers:apiservers ~/.env  # Production only
+# Must be readable only by the owner (same for all environments)
+chmod 600 ~/.suiftly.env
 ```
 
 **File Contents:**
 ```bash
-# ~/.env
+# ~/.suiftly.env
 JWT_SECRET=<generated-secret-here>
-DB_ENCRYPTION_KEY=<generated-secret-here>
+DB_APP_FIELDS_ENCRYPTION_KEY=<generated-secret-here>
 ```
 
-**Note:** `DB_ENCRYPTION_KEY` is used for application-level encryption of secrets in the database (API keys, Seal keys, refresh tokens). See [ARCHITECTURE.md - Database Security](./ARCHITECTURE.md#database-security) for details.
+**Note:** `DB_APP_FIELDS_ENCRYPTION_KEY` is used for application-level encryption of secrets in the database (API keys, Seal keys, refresh tokens). See [APP_SECURITY_DESIGN.md](./APP_SECURITY_DESIGN.md) for complete details on secret management and database encryption.
 
 **Generating Secure Secrets:**
 ```bash
@@ -620,17 +624,23 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 
 # Or using openssl
 openssl rand -base64 32  # JWT_SECRET
-openssl rand -base64 32  # DB_ENCRYPTION_KEY
+openssl rand -base64 32  # DB_APP_FIELDS_ENCRYPTION_KEY
 ```
 
 **Important Security Notes:**
 - ✅ Never commit `.env` files to git (add to `.gitignore`)
-- ✅ Use different secrets for production and development
-- ✅ Both API server instances (for HA) read the same `/home/apiservers/.env` file
+- ✅ Use different secrets for production and development systems
+- ✅ Environment determined by `/etc/walrus/system.conf` (not user account)
 - ✅ Both secrets should be at least 32 bytes (256 bits)
 - ⚠️ If JWT_SECRET compromised, all existing JWTs become invalid when rotated
-- ⚠️ If DB_ENCRYPTION_KEY compromised, all encrypted secrets must be re-encrypted
+- ⚠️ If DB_APP_FIELDS_ENCRYPTION_KEY compromised, all encrypted secrets must be re-encrypted
 - ⚠️ Rotating JWT_SECRET will log out all users (they'll need to re-authenticate)
+
+**See [APP_SECURITY_DESIGN.md](./APP_SECURITY_DESIGN.md) for:**
+- Complete secret management procedures
+- Environment isolation safeguards
+- Key rotation procedures
+- Backup security details
 
 **Loading in Application:**
 ```typescript
@@ -642,39 +652,29 @@ import * as path from 'path'
 // Load from home directory
 dotenv.config({ path: path.join(os.homedir(), '.env') })
 
-if (!process.env.JWT_SECRET || !process.env.DB_ENCRYPTION_KEY) {
-  throw new Error('Required secrets not found in ~/.env')
+if (!process.env.JWT_SECRET || !process.env.DB_APP_FIELDS_ENCRYPTION_KEY) {
+  throw new Error('Required secrets not found in ~/.suiftly.env')
 }
 
 export const config = {
   jwtSecret: process.env.JWT_SECRET,
-  dbEncryptionKey: process.env.DB_ENCRYPTION_KEY,
+  dbAppFieldsEncryptionKey: process.env.DB_APP_FIELDS_ENCRYPTION_KEY,
   // ... other config
 }
 ```
 
 **Setup Instructions:**
 
-*Production:*
 ```bash
-# As root or sudo user
-sudo -u apiservers bash
+# Same procedure for both production and development systems
 cd ~
-echo "JWT_SECRET=$(openssl rand -base64 32)" > .env
-echo "DB_ENCRYPTION_KEY=$(openssl rand -base64 32)" >> .env
-chmod 600 .env
-cat .env  # Verify both secrets were created
-exit
+echo "JWT_SECRET=$(openssl rand -base64 32)" > ~/.suiftly.env
+echo "DB_APP_FIELDS_ENCRYPTION_KEY=$(openssl rand -base64 32)" >> ~/.suiftly.env
+chmod 600 ~/.suiftly.env
+cat ~/.suiftly.env  # Verify both secrets were created
 ```
 
-*Development:*
-```bash
-# As your developer user
-cd ~
-echo "JWT_SECRET=$(openssl rand -base64 32)" > .env
-echo "DB_ENCRYPTION_KEY=$(openssl rand -base64 32)" >> .env
-chmod 600 .env
-```
+**Note:** Environment (production vs development) is determined by `/etc/walrus/system.conf`, not by user account or secret values.
 
 ---
 
@@ -753,8 +753,8 @@ chmod 600 .env
 
 **Database encryption:**
 - ✅ Refresh tokens encrypted with AES-256-GCM before storage
-- ✅ Master key in `~/.env` (separate from database)
+- ✅ Master key in `~/.suiftly.env` (separate from database)
 - ✅ DB backups contain only ciphertext (safe from compromise)
-- See [ARCHITECTURE.md - Database Security](./ARCHITECTURE.md#database-security) for complete details
+- See [APP_SECURITY_DESIGN.md](./APP_SECURITY_DESIGN.md) for complete details on database field encryption
 
 This gives us the best of both worlds: Web3 security (cryptographic proof) + Web2 convenience (minimal signatures, auto-refresh) + defense-in-depth (encrypted secrets).
