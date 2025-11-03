@@ -633,7 +633,7 @@ Each service page has **2 major modes of operation**:
 │    • Global geo-steering and failover (i)            │
 │    • 1x Seal Key, 3x packages id                     │
 │    • 2x API-Key                                      │
-│    • 2x IPv4 Whitelisting                            │
+│    • 2x IPv4 Whitelisting (optional)                 │
 │                                                      │
 │  Pay-As-You-Go (charged separately, no expiration)   |
 │    • $1 per 10,000 requests                          │

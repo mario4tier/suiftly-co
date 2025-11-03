@@ -4,7 +4,7 @@
  */
 
 import { useState, useMemo } from 'react';
-import { Check, Info } from 'lucide-react';
+import { Check, Info, Download } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
@@ -22,6 +22,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { SEAL_PRICING } from '@suiftly/shared/schemas';
+import { TermsOfServiceContent } from '@/components/content/TermsOfServiceContent';
 
 interface SealConfigFormProps {
   onTierChange?: (tierSelected: boolean) => void;
@@ -50,6 +51,16 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
   const handleSubscribe = () => {
     // TODO: Implement backend synchronization
     console.log('Subscribe to', selectedTier, 'tier');
+  };
+
+  const handleDownloadPDF = () => {
+    // Download the PDF from public folder
+    const link = document.createElement('a');
+    link.href = '/terms-of-service.pdf';
+    link.download = 'suiftly-terms-of-service.pdf';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   const tierInfo = {
@@ -110,10 +121,10 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
                 key={tier}
                 onClick={() => handleTierSelect(tier)}
                 className={`
-                  relative cursor-pointer rounded-lg transition-all
+                  relative cursor-pointer rounded-lg transition-all border-2
                   ${isSelected
-                    ? 'border-[3px] border-[#f38020] bg-[#f38020]/5'
-                    : 'border border-gray-200 dark:border-gray-700 hover:border-2 hover:border-gray-400 dark:hover:border-gray-500'
+                    ? 'border-[#f38020] bg-[#f38020]/5'
+                    : 'border-gray-200 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-500'
                   }
                 `}
               >
@@ -178,7 +189,7 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
               </li>
               <li>• 1x Seal Key, 3x packages per key</li>
               <li>• 2x API-Key</li>
-              <li>• 2x IPv4 Whitelisting</li>
+              <li>• 2x IPv4 Whitelisting (optional)</li>
             </ul>
           </div>
         </div>
@@ -250,63 +261,48 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
       <Dialog open={tosModalOpen} onOpenChange={setTosModalOpen}>
         <DialogContent className="max-w-2xl max-h-[80vh]">
           <DialogHeader>
-            <DialogTitle>Terms of Service</DialogTitle>
+            <div className="flex items-start justify-between gap-4 mb-2">
+              <div className="flex-1 min-w-0">
+                <DialogTitle>Terms of Service</DialogTitle>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleDownloadPDF}
+                className="flex-shrink-0 text-xs text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 -mt-1"
+              >
+                <Download className="h-3 w-3 mr-1" />
+                <span className="hidden sm:inline">Download PDF</span>
+                <span className="sm:hidden">PDF</span>
+              </Button>
+            </div>
             <DialogDescription>
               Please review and accept our terms of service
             </DialogDescription>
           </DialogHeader>
 
           <div className="overflow-y-auto max-h-96 pr-4">
-            <div className="space-y-4 text-sm text-gray-600 dark:text-gray-400">
-              <p className="font-semibold text-gray-900 dark:text-gray-100">
-                Suiftly Seal Service Agreement
-              </p>
-
-              <p>
-                This is a placeholder Terms of Service document. The actual terms will be provided
-                by legal counsel and will include:
-              </p>
-
-              <ul className="list-disc pl-5 space-y-2">
-                <li>Service Level Agreement (SLA) guarantees</li>
-                <li>Acceptable use policy</li>
-                <li>Data privacy and security commitments</li>
-                <li>Billing terms and conditions</li>
-                <li>Service limitations and restrictions</li>
-                <li>Termination and refund policy</li>
-                <li>Liability limitations</li>
-                <li>Dispute resolution procedures</li>
-              </ul>
-
-              <p>
-                By subscribing to this service, you agree to abide by these terms and acknowledge
-                that you have read and understood all provisions herein.
-              </p>
-
-              <p className="text-xs text-gray-500 dark:text-gray-400 italic">
-                Last updated: {new Date().toLocaleDateString()}
-              </p>
-            </div>
+            <TermsOfServiceContent />
           </div>
 
-          <DialogFooter className="flex gap-2">
+          <DialogFooter className="flex gap-2 sm:gap-2">
             <Button
               variant="outline"
               onClick={() => {
-                // TODO: Implement PDF download
-                console.log('Download PDF');
+                setTosModalOpen(false);
               }}
+              className="flex-1 sm:flex-none"
             >
-              Download PDF
+              Cancel
             </Button>
             <Button
-              className="bg-[#f38020] hover:bg-[#d97019] text-white"
+              className="bg-[#f38020] hover:bg-[#d97019] text-white flex-1 sm:flex-none"
               onClick={() => {
                 setTermsAccepted(true);
                 setTosModalOpen(false);
               }}
             >
-              Agree and Close
+              I Agree
             </Button>
           </DialogFooter>
         </DialogContent>
