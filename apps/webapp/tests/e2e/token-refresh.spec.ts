@@ -4,8 +4,6 @@
  * Tests JWT token expiry and automatic refresh in two scenarios:
  * 1. NORMAL EXPIRY (15m): Verify tokens work well beyond short timeframes
  * 2. SHORT EXPIRY (2s): Verify auto-refresh works when token expires
- *
- * Based on docs/TDD_TOKEN_REFRESH.md
  */
 
 import { test, expect } from '@playwright/test';

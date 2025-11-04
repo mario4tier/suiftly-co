@@ -1,7 +1,6 @@
 /**
  * JWT Configuration with Production Safety Guards
  * Enables fast testing with short expiry times while preventing accidents in production
- * Based on docs/TDD_TOKEN_REFRESH.md
  */
 
 export interface JWTConfig {
