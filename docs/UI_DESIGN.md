@@ -629,9 +629,56 @@ Each service page has **2 major modes of operation**:
 
 #### Seal Interactive Form (Service State >= 3)
 
-**Form Fields (All Services):**
+```
+┌─────────────────────────────────────────────────────┐
+│ Seal                                                │
+│                                                     │
+│  Enable Service                         OFF ⟳ [ON] │
+│  [ Configuration ]  [ Keys ]                        │  ← Tabs
+│  ────────────────                                   │
+│                                                     │
+|  Monthly Charges - ENTERPRISE [Change Plan]         |
+|                                                     |
+│  Guaranteed Bandwidth:      2K req/s/region   $9.00 │
+|  Seal Keys            (1 of 1)  [Add More]     0.00 │
+|  IPv4 Allowlist            (1 of 1)  [Add More]     0.00 │
+|  Packages per Key           5   [Add More]    $2.00 │
+│                                                     │
+│                ┌───────────────────────────────────┐│
+│                │ Total Monthly Fee           $11.00││
+│                └───────────────────────────────────┘│
+│                                                     │
+│  Pending Per-Request Charges: $0.00 [See Details]   |
+│                                                     │
+│  IP Allowlist (?)                                   │
+│  ┌──────────────────────────────────────────┐       │
+│  │ 192.168.1.100                            │  │
+│  │ 10.0.0.0/24                              │  │
+│  └──────────────────────────────────────────┘  │
+│  Burst Allowed:            OFF ⟳ [ON]              │
+│                                                     │
+└─────────────────────────────────────────────────────┘
+```
 
-0. **OMN/O**
+**Configuration Form Fields:**
+
+1. **ON/OFF**
+   - Type: Slider switch
+   - Default: Disabled
+   - Controls if the service is enabled or disabled.
+
+2. **Monthly Charged Items Table**
+    - Title shows tier (STARTER/PRO/ENTERPRISE) with [Change Plan] button next to it.
+    - 4 columns: Description | Usage/Count | [Add More] button | Monthly Price (Total)
+    - Show tier details as Guaranteed Bandwidth on next line (e.g 3 req/s per region)
+    - Displays other various items that are included or can be add-on.
+    - When applicable, display which portion of the included/paid items are being used e.g (0 of 3),(3 of 3)
+    - Total monthly is shown.
+
+3. **Pending Per-Request Charges**
+   - Shows only pending total, [See Details] Will bring up the stats page which covers usage breakdown.
+
+4. **Burst (?)**
    - Type: Checkbox
    - Default: Checked for Pro and Enterprise tiers
    - Grayed out for Starter tier with label "Pro/Enterprise feature"
@@ -639,61 +686,18 @@ Each service page has **2 major modes of operation**:
    - Pricing: No monthly fee (usage-based billing only)
    - Future: May add premium burst tier with higher priority at additional monthly cost
 
-1. **Burst (?)**
-   - Type: Checkbox
-   - Default: Checked for Pro and Enterprise tiers
+5. **IP Allowlist (?)**
+   - Type: Multi-line text area or tag input
+   - Default: Empty (no IP restrictions)
+   - Pro/Enterprise: Up to 2 IPv4 addresses
+   - Enterprise only: Up to 2 CIDR ranges (in addition to IPv4 addresses)
    - Grayed out for Starter tier with label "Pro/Enterprise feature"
-   - Tooltip: "Allow temporary traffic bursts beyond guaranteed bandwidth. Billed per-request for burst traffic."
-   - Pricing: No monthly fee (usage-based billing only)
-   - Future: May add premium burst tier with higher priority at additional monthly cost
+   - Tooltip: "Restrict API access to specific IP addresses or CIDR ranges. Leave empty to allow all IPs."
+   - Format: One IP/CIDR per line (e.g., "192.168.1.100" or "10.0.0.0/24")
+   - Validation: Validates IPv4 format and CIDR notation
+   - Pricing: Included with Pro/Enterprise tiers (no additional cost)
 
-2. **Packages Per Seal Key (?)**
-   - Type: Number input (starts at 3)
-   - Default: 3 (included with all tiers)
-   - Tooltip: "Number of packages per Seal key for organizing your services. Packages are children of seal keys. Each additional package costs $1/month per seal key."
-   - Pricing: For each seal key: max(0, packagesPerSealKey - 3) × $1/month
-     - **Example:** If you have 2 seal keys and set packagesPerSealKey to 5:
-       - Seal Key 1: (5-3) × $1 = $2/month
-       - Seal Key 2: (5-3) × $1 = $2/month
-       - Total additional packages cost: $4/month
-   - Note: When you create a new seal key, it comes with this many packages
-
-3. **Total API Keys (?)**
-   - Type: Number input (starts at 1, min: 1)
-   - Default: 1 (included with all tiers)
-   - Label: "Total API Keys (1 included)"
-   - Tooltip: "API keys for authenticating requests. You get 1 free, each additional key costs $1/month."
-   - Pricing: max(0, totalApiKeys - 1) × $1/month
-   - UI: Number input with decrement disabled at 1, increment button increases count
-
-4. **Total Seal Keys (?)**
-   - Type: Number input (starts at 1, min: 1)
-   - Default: 1 (included with all tiers)
-   - Label: "Total Seal Keys (1 included)"
-   - Tooltip: "Seal-specific keys for cryptographic operations. You get 1 free, each additional key costs $5/month."
-   - Pricing: max(0, totalSealKeys - 1) × $5/month
-   - UI: Number input with decrement disabled at 1, increment button increases count
-
-**Pricing Display:**
-- **Total Monthly Fee:** Total recurring monthly charge (all config options summed)
-- **Usage Fees:** Bulleted list (metered separately, not included in monthly fee)
-  - Requests: $1.00 per 10,000 requests (all tiers)
-
-**Pricing Example (Pro tier, burst enabled, 5 packages per key, 2 total seal keys, 2 total API keys):**
-```
-Pro tier: $40/month
-Burst enabled: $0/month (usage-based billing only)
-Total Seal Keys: 2 (1 included, 1 additional × $5) = $5/month
-Packages per Seal key: 5 (3 included per key, 2 additional per key × $1)
-  - Seal Key 1: (5-3) × $1 = $2/month
-  - Seal Key 2: (5-3) × $1 = $2/month
-  - Total: $4/month
-Total API keys: 2 (1 included, 1 additional × $1) = $1/month
-────────────────────────────────
-Total Monthly Fee: $50/month
-```
-
-**Note:** When gRPC and GraphQL are implemented in the future, they will use the same interactive form and pricing model as Seal.
+**Note:** When gRPC and GraphQL are implemented in the future, they will use similar interactive form and pricing model as Seal.
 
 ---
 
@@ -701,33 +705,7 @@ Total Monthly Fee: $50/month
 
 **Tab-based layout with read-only config.**
 
-```
-┌──────────────────────────────────────────────────────┐
-│ Seal Service                     [Status: Active 🟢] │
 
-│                                                       │
-│  [ Configuration ]  [ Keys ]  [ Stats ]  [ Logs ]    │  ← Tabs
-│  ────────────────                                     │
-│                                                       │
-│  Current Configuration                      [Edit 󰏫] │  ← Read-only + Edit icon
-│                                                       │
-│  Guaranteed Bandwidth:     Business (2K req/s/region) │
-│  Burst:                    Enabled                    │
-│  Packages Per Seal Key:    5                          │
-│  Additional API Keys:      2                          │
-│  Additional Seal Keys:     1                          │
-│                                                       │
-│  ┌──────────────────────────────────────────┐        │
-│  │ Total Monthly Fee           $93.00       │        │
-│  └──────────────────────────────────────────┘        │
-│                                                       │
-│  Current Month Usage:                                 │
-│  • Requests: 125,000 ($12.50)                        │
-│                                                       │
-│  Enable Service                         OFF ⟳ [ON]   │
-│                                                       │
-└──────────────────────────────────────────────────────┘
-```
 
 **Tab 1: Configuration (Default Active)**
 
