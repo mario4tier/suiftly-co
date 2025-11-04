@@ -298,7 +298,7 @@ A service (Seal, gRPC, GraphQL) exists in one of six states, controlling subscri
 - Manage keys (create, revoke, copy) - keys are authenticated but return 503 when called
 - Enable service (toggle switch to ON → transitions to State 4)
 - Change Plan (allows user to select a different tier and re-enable)
-- Cancel subscription (admin-only, shows cancellation banner but stays in State 3)
+- Cancel subscription (shows cancellation banner but stays in State 3)
 
 **UI Indicators:**
 - Status badge: "Disabled" (gray)
@@ -369,7 +369,7 @@ A service (Seal, gRPC, GraphQL) exists in one of six states, controlling subscri
 - View historical stats and logs
 - Resume service (transitions to State 4 at end of cycle, or immediately with no refund)
 - Change Plan (allows user to select a different tier and re-enable)
-- Cancel subscription (admin-only, shows cancellation banner but stays in State 5)
+- Cancel subscription (shows cancellation banner but stays in State 5)
 
 **UI Indicators:**
 - Status badge: "Suspended - Maintenance" (yellow)
