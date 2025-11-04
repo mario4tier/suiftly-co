@@ -1,8 +1,12 @@
 # System Constants - Single Source of Truth
 
-**Purpose:** Define all system-wide constants in ONE place to prevent documentation drift.
+**Purpose:** Define all system-wide hard-coded constants in ONE place to prevent documentation drift.
+
+**Implementation:** All constants are defined in `packages/shared/src/constants/index.ts`
 
 **All documentation and code MUST reference these values.**
+
+**Note:** These are hard-coded system constraints and enums. For runtime-configurable business values (pricing, capacities, rates), see ConfigGlobal system in [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ---
 
@@ -36,7 +40,11 @@ export const MONTHLY_LIMIT = {
 
 ## Customer Status Values
 
-**Model:** Enum with 3 states
+**Model:** Enum with 3 states (account-level status)
+
+**Important:** Customer Status is distinct from Service States:
+- **Customer Status** (this section): Account-level status across all services (active/suspended/closed)
+- **Service States**: Per-service status (NotProvisioned/Provisioning/Disabled/Enabled/Suspended-*) - see [UI_DESIGN.md](./UI_DESIGN.md) Service State Machine
 
 | Status | Description | Can Use Services? | Can Modify Config? |
 |--------|-------------|-------------------|-------------------|
@@ -52,7 +60,7 @@ ALTER TABLE customers ADD CONSTRAINT check_status CHECK (status IN ('active', 's
 
 **Implementation:**
 ```typescript
-// packages/shared/src/constants.ts
+// packages/shared/src/constants/index.ts
 export const CUSTOMER_STATUS = {
   ACTIVE: 'active',
   SUSPENDED: 'suspended',
@@ -62,6 +70,8 @@ export const CUSTOMER_STATUS = {
 export type CustomerStatus = typeof CUSTOMER_STATUS[keyof typeof CUSTOMER_STATUS];
 ```
 
+**Example:** An `active` customer can have multiple services in different states (one service `Enabled`, another `Disabled`, etc.). A `suspended` customer cannot use any services regardless of individual service states.
+
 **Future Refinement:**
 - May add onboarding states: `pending_kyc`, `kyc_approved`, etc.
 - Will remain backward compatible (new states, not replacements)
@@ -70,29 +80,20 @@ export type CustomerStatus = typeof CUSTOMER_STATUS[keyof typeof CUSTOMER_STATUS
 
 ## API Key Fingerprinting
 
-**Model:** Store both full key and fingerprint
+**Model:** Store both full key and fingerprint for fast lookups
 
-| Field | Type | Purpose |
-|-------|------|---------|
-| `api_key_id` | VARCHAR(100) PRIMARY KEY | Full encrypted API key string |
-| `api_key_fp` | VARCHAR(64) NOT NULL | Fingerprint for fast lookups (calculation TBD) |
+API keys use 32-bit fingerprints derived from the first 7 Base32 characters of the key.
 
-**Note:** Fingerprint calculation method will be defined separately. Do NOT assume hash algorithm until specified.
+**Documentation:**
+- **Implementation Details**: See `~/walrus/docs/HAPROXY_CONTROLS.md` (API-Keys-Filter section)
+- **Database Schema**: See [CUSTOMER_SERVICE_SCHEMA.md](./CUSTOMER_SERVICE_SCHEMA.md) (api_keys table)
+- **Database Design**: See [GLOBAL_MANAGER_DESIGN.md](./GLOBAL_MANAGER_DESIGN.md) (MA_VAULT generation)
 
-**Schema:**
-```sql
-ALTER TABLE api_keys ADD COLUMN api_key_fp VARCHAR(64) NOT NULL;
-CREATE INDEX idx_api_key_fp ON api_keys(api_key_fp) WHERE is_active = true;
-```
-
-**Implementation:**
-```typescript
-// Calculation method TBD - placeholder
-export function calculateApiKeyFingerprint(apiKey: string): string {
-  // Implementation to be provided by user
-  throw new Error('Fingerprint calculation not yet defined');
-}
-```
+**Key Points:**
+- Fingerprint: First 7 Base32 characters → 32-bit value
+- Used for fast lookups without exposing full keys
+- Stored in `api_keys.api_key_fp` (INTEGER) field
+- Indexed for performance: `INDEX idx_api_key_fp (api_key_fp) WHERE is_active = true`
 
 ---
 
@@ -128,10 +129,10 @@ const defaultLimit = MONTHLY_LIMIT.DEFAULT_USD; // 500
 
 **When Updating:**
 1. Change value in CONSTANTS.md
-2. Update the constant in packages/shared/src/constants.ts
+2. Update the constant in `packages/shared/src/constants/index.ts`
 3. All code and docs automatically reflect new value
 
 ---
 
-**Last Updated:** 2025-10-28
-**Version:** 1.0
+**Last Updated:** 2025-01-04
+**Version:** 1.1
