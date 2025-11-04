@@ -5,6 +5,7 @@ export const serviceInstances = pgTable('service_instances', {
   instanceId: uuid('instance_id').primaryKey().defaultRandom(),
   customerId: integer('customer_id').notNull().references(() => customers.customerId),
   serviceType: varchar('service_type', { length: 20 }).notNull(),
+  state: varchar('state', { length: 30 }).notNull().default('not_provisioned'),
   tier: varchar('tier', { length: 20 }).notNull(),
   isEnabled: boolean('is_enabled').notNull().default(true),
   config: jsonb('config'),

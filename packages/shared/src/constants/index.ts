@@ -62,3 +62,15 @@ export const BILLING_STATUS = {
 } as const;
 
 export type BillingStatus = typeof BILLING_STATUS[keyof typeof BILLING_STATUS];
+
+// Service States (6 distinct states - see UI_DESIGN.md)
+export const SERVICE_STATE = {
+  NOT_PROVISIONED: 'not_provisioned',
+  PROVISIONING: 'provisioning',
+  DISABLED: 'disabled',
+  ENABLED: 'enabled',
+  SUSPENDED_MAINTENANCE: 'suspended_maintenance',
+  SUSPENDED_NO_PAYMENT: 'suspended_no_payment',
+} as const;
+
+export type ServiceState = typeof SERVICE_STATE[keyof typeof SERVICE_STATE];

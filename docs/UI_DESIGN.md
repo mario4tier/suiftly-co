@@ -258,24 +258,43 @@ A service (Seal, gRPC, GraphQL) exists in one of six states, controlling subscri
 
 ---
 
-#### **(2) Provisioning** (Pending Payment)
+#### **(2) Provisioning** (Transient/Reserved)
 
-**Meaning:** User has selected a tier and initiated subscription, payment is pending confirmation.
+**⚠️ Current Implementation Note:** This state is **transient** in the current atomic transaction implementation. The entire subscription flow (payment + state transition) completes in ~50ms, so the frontend never observes this state directly. Users see a "Processing your subscription..." spinner and then immediately transition to State 3 (Disabled).
 
-**User Experience & UI:**
+**Meaning:** Payment is being processed (exists only within the database transaction).
+
+**Future Use:** Reserved for asynchronous payment processing scenarios such as:
+- On-chain escrow transactions (blockchain confirmation delays)
+- External payment gateway integration
+- Manual payment approval workflows
+
+**Current Backend Flow:**
+```
+not_provisioned → provisioning (transient) → disabled
+                  ↑ All happens in single atomic transaction
+```
+
+**User Experience & UI (Current):**
+- User clicks "Subscribe to Service"
+- Button shows "Processing your subscription..." with spinner (~50ms)
+- Page reloads, showing State 3 (Disabled) UI immediately
+- No separate "Provisioning" UI exists currently
+
+**User Experience & UI (Future with Async Payments):**
 - Shows the **onboarding form** (same as State 1) with loading overlay
 - Banner: "Processing your subscription..." with spinner
 - Form fields remain visible but disabled during payment processing
 - Cannot modify tier selection or submit again during payment processing
-- Return to State (1) only if payment is explicitly canceled (admin-only initially)
+- Poll for state updates or use WebSocket for real-time status
 
-**Allowed Actions:**
+**Allowed Actions (Future):**
 - View selected tier (onboarding form remains visible but disabled)
 - Wait for payment confirmation
 - Admin: Cancel pending subscription (returns to State 1)
 
 **Transitions:**
-- **(2) → (3):** Payment confirmed → Service subscribed, defaulting to disabled state
+- **(2) → (3):** Payment confirmed → Service subscribed, defaulting to disabled state (automatic in current implementation)
 
 ---
 

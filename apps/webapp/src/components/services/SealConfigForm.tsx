@@ -5,10 +5,11 @@
  */
 
 import { useState, useMemo } from "react";
-import { Check, Info, Download } from "lucide-react";
+import { Check, Info, Download, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
+import { trpc } from "@/lib/trpc";
 import {
   Popover,
   PopoverContent,
@@ -47,6 +48,8 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
   const [selectedTier, setSelectedTier] = useState<Tier>("pro");
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [tosModalOpen, setTosModalOpen] = useState(false);
+  const [isValidating, setIsValidating] = useState(false);
+  const [isSubscribing, setIsSubscribing] = useState(false);
 
   const handleTierSelect = (tier: Tier) => {
     setSelectedTier(tier);
@@ -89,9 +92,52 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
     return parseFloat(cost.toPrecision(8));
   }, []);
 
-  const handleSubscribe = () => {
-    // TODO: Implement backend synchronization
+  const handleSubscribe = async () => {
     console.log("Subscribe to", selectedTier, "tier");
+
+    // Step 1: Validate subscription
+    setIsValidating(true);
+    try {
+      const validation = await trpc.services.validateSubscription.mutate({
+        serviceType: 'seal',
+        tier: selectedTier,
+      });
+
+      setIsValidating(false);
+
+      if (!validation.valid) {
+        // Show error message
+        alert(validation.errors![0].message);
+        return;
+      }
+
+      // Show warnings if any
+      if (validation.warnings && validation.warnings.length > 0) {
+        const confirmed = confirm(
+          `Warning: ${validation.warnings[0].message}\n\nDo you want to continue?`
+        );
+        if (!confirmed) return;
+      }
+
+      // Step 2: Execute subscription
+      setIsSubscribing(true);
+      const service = await trpc.services.subscribe.mutate({
+        serviceType: 'seal',
+        tier: selectedTier,
+      });
+
+      console.log("✅ Subscription successful:", service);
+      console.log(`Service state: ${service.state}`);
+
+      // Success! Reload the page to show the new state
+      window.location.reload();
+    } catch (error: any) {
+      console.error("❌ Subscription failed:", error);
+      alert(error.message || 'Subscription failed. Please try again.');
+    } finally {
+      setIsValidating(false);
+      setIsSubscribing(false);
+    }
   };
 
   const handleDownloadPDF = () => {
@@ -335,10 +381,24 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
       <Button
         size="lg"
         className="w-full bg-[#f38020] hover:bg-[#d97019] text-white font-semibold"
-        disabled={!termsAccepted}
+        disabled={!termsAccepted || isValidating || isSubscribing}
         onClick={handleSubscribe}
       >
-        Subscribe to Service for ${monthlyFee.toFixed(2)}/month
+        {isValidating && (
+          <>
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            Validating...
+          </>
+        )}
+        {isSubscribing && (
+          <>
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            Processing your subscription...
+          </>
+        )}
+        {!isValidating && !isSubscribing && (
+          <>Subscribe to Service for ${monthlyFee.toFixed(2)}/month</>
+        )}
       </Button>
 
       {/* Plan Flexibility Notice */}

@@ -75,6 +75,10 @@ server.get('/health', {
 
 // Test endpoints (only in development/test)
 if (config.NODE_ENV !== 'production') {
+  // Import test utilities
+  const { testDelayManager } = await import('./lib/test-delays.js');
+  const { resetCustomerTestData, getCustomerTestData } = await import('./lib/test-data.js');
+
   // Get test configuration - allows tests to verify server config
   server.get('/test/config', {
     config: { rateLimit: false },
@@ -88,6 +92,49 @@ if (config.NODE_ENV !== 'production') {
         refreshTokenExpiry: process.env.JWT_REFRESH_EXPIRY || '30d',
       },
     };
+  });
+
+  // Set test delays - allows tests to slow down API responses for UI testing
+  server.post('/test/delays', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    const body = request.body as any;
+    testDelayManager.setDelays(body);
+    reply.send({
+      success: true,
+      delays: body,
+      message: 'Test delays configured'
+    });
+  });
+
+  // Clear test delays
+  server.post('/test/delays/clear', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    testDelayManager.clearDelays();
+    reply.send({
+      success: true,
+      message: 'Test delays cleared'
+    });
+  });
+
+  // Reset customer test data - deletes all services, keys, resets balance
+  server.post('/test/data/reset', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    const body = request.body as any;
+    const result = await resetCustomerTestData(body);
+    reply.send(result);
+  });
+
+  // Get customer test data - returns current state for debugging
+  server.get('/test/data/customer', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    const query = request.query as any;
+    const walletAddress = query.walletAddress || undefined;
+    const result = await getCustomerTestData(walletAddress);
+    reply.send(result);
   });
 
   // Graceful shutdown endpoint - allows tests to cleanly shutdown server
@@ -152,6 +199,9 @@ async function start() {
     console.log(`  🔧 Health: http://${config.HOST}:${config.PORT}/health`);
     if (config.NODE_ENV !== 'production') {
       console.log(`  🧪 Test Config: http://${config.HOST}:${config.PORT}/test/config`);
+      console.log(`  🧪 Test Delays: POST http://${config.HOST}:${config.PORT}/test/delays`);
+      console.log(`  🧪 Test Data Reset: POST http://${config.HOST}:${config.PORT}/test/data/reset`);
+      console.log(`  🧪 Test Data Get: GET http://${config.HOST}:${config.PORT}/test/data/customer`);
       console.log(`  🧪 Test Shutdown: POST http://${config.HOST}:${config.PORT}/test/shutdown`);
     }
     console.log('='.repeat(50));

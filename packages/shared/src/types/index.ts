@@ -43,3 +43,6 @@ export type WithdrawRequest = z.infer<typeof schemas.withdrawRequestSchema>;
 export type UpdateMonthlyLimit = z.infer<typeof schemas.updateMonthlyLimitSchema>;
 export type TransactionType = z.infer<typeof schemas.escrowTransactionSchema.shape.txType>;
 export type BillingStatus = z.infer<typeof schemas.billingRecordSchema.shape.status>;
+
+// Validation types
+export * from './validation';
