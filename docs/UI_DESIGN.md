@@ -556,7 +556,7 @@ The banners displayed here are relevant only to the service/page content, not th
 A banner can optionally have a small spinner appended.
 
 #### Toasters
-Middle of the screen, fade out after 3 seconds. Used for non-critical feedback after a user action (e.g. "Configuration saved", "Wallet connected", etc.)
+Top-middle of the screen, fade out after 3 seconds. Used for non-critical feedback after a user action (e.g. "Configuration saved", "Wallet connected", etc.)
 
 ### Service Pages (Seal / gRPC / GraphQL)
 
@@ -568,7 +568,7 @@ Each service page has **2 major modes of operation**:
 
 2. **Interactive Form** This is for all other service states (e.g. Disabled, Enabled, Suspended...). Field level actions with immediate effect. No single "submit" button.
 
-**Note:** For MVP, only the Seal service is fully implemented with configuration. gRPC and GraphQL show "coming soon" placeholders (see [docs/COMING_SOON_PAGE.md](../docs/COMING_SOON_PAGE.md)).
+**Note:** For MVP, only the Seal service is fully implemented. gRPC and GraphQL show "coming soon" placeholders (see [docs/COMING_SOON_PAGE.md](../docs/COMING_SOON_PAGE.md)).
 
 ---
 
@@ -583,26 +583,26 @@ Each service page has **2 major modes of operation**:
 │                                                      │
 │  Guaranteed Bandwidth (?)                            │
 │                                                      │
-│  ┌────────────────────────────────────────┐          │
-│  │ STARTER                                │          │
-│  ├────────────────────────────────────────┤          │
-│  │ 3 req/s per region • ~9 req/s globally |          │
-│  │ $9/month                               │          │
-│  └────────────────────────────────────────┘          │
+│  ┌───────────────────────────────────────────┐       │
+│  │ STARTER                                   │       │
+│  ├───────────────────────────────────────────┤       │
+│  │ 3 req/s per region • ~9 req/s globally    │       │
+│  │ $9/month                                  │       │
+│  └───────────────────────────────────────────┘       │
 │                                                      │
-│  ┌────────────────────────────────────────┐          │
-│  │ PRO                         [SELECTED] │  ← Badge │
-│  ├────────────────────────────────────────┤          │
-│  │ 15 req/s per region • ~45 req/s globally│         │
-│  │ $29/month                              │          │
-│  └────────────────────────────────────────┘          │
+│  ┌───────────────────────────────────────────┐       │
+│  │ PRO                         [SELECTED]    │       │
+│  ├───────────────────────────────────────────┤       │
+│  │ 15 req/s per region • ~45 req/s globally  │       │
+│  │ $29/month                                 │       │
+│  └───────────────────────────────────────────┘       │
 │                                                      │
-│  ┌────────────────────────────────────────┐          │
-│  │ ENTERPRISE                             │          │
-│  ├────────────────────────────────────────┤          │
-│  │ 100 req/s per region • ~300 req/s globally │      |
-│  │ $185/month                             │          |
-│  └────────────────────────────────────────┘          │
+│  ┌───────────────────────────────────────────┐       │
+│  │ ENTERPRISE                                │       │
+│  ├───────────────────────────────────────────┤       │
+│  │ 100 req/s per region • ~300 req/s globally│       │
+│  │ $185/month                                │       │
+│  └───────────────────────────────────────────┘       │
 │                                                      │
 │  ✓ Included with every subscription                  │
 │    • Global geo-steering and failover (i)            │
@@ -627,7 +627,7 @@ Each service page has **2 major modes of operation**:
 - **Terms of service** link opens a modal window that can be scrolled down for the TOS, and download as PDF button and "Agree and close" button. The user can also simply checkbox the "Agree" without clicking the link.
 - **DB Driven**: All numbers (pricing, capacities) are DB driven *but can be heavily cached or used to generate static content*.
 
-#### Seal Configuration Form (Service State 3 & 4)
+#### Seal Interactive Form (Service State 3 & 4)
 
 **Form Fields (All Services):**
 
@@ -685,7 +685,7 @@ Total API keys: 2 (1 included, 1 additional × $1) = $1/month
 Total Monthly Fee: $60/month
 ```
 
-**Note:** When gRPC and GraphQL are implemented in the future, they will use the same configuration form and pricing model as Seal.
+**Note:** When gRPC and GraphQL are implemented in the future, they will use the same interactive form and pricing model as Seal.
 
 ---
 
@@ -1329,7 +1329,7 @@ All prices displayed in USD, but payments/deposits/withdrawals use SUI tokens on
 ```
 1. User navigates to /services/seal (already authenticated)
    ↓
-2. Configuration form visible (all fields interactive)
+2. Onboarding form visible (all fields interactive)
    ↓
 3. Select tier: Pro
    ↓
@@ -1466,7 +1466,7 @@ User changes tier: Pro ($40) → Starter ($20)
 
 | Component | Purpose | Location |
 |-----------|---------|----------|
-| `ServiceConfigForm` | Configuration form (onboarding) | `components/services/` |
+| `ServiceConfigForm` | Onboarding form | `components/services/` |
 | `ServiceConfigDisplay` | Read-only config view | `components/services/` |
 | `ServiceTabs` | Tab navigation (Config/Keys/Stats/Logs) | `components/services/` |
 | `PricingCalculator` | Live monthly fee calculator | `components/services/` |
@@ -2149,7 +2149,7 @@ colors: {
 - Before enable: Check balance, show warning if insufficient
 - Error modal: "Insufficient balance ($X needed, $Y available). Top up your wallet to continue."
 - [Top Up] button in error modal
-- [Cancel] returns to config form
+- [Cancel] returns to onboarding form
 
 **Validation Errors:**
 - Inline form errors (Zod schema validation)
@@ -2159,7 +2159,7 @@ colors: {
 
 **Backend Error (500, timeout):**
 - Toast: "An error occurred. Please try again."
-- Config form state preserved (don't lose user's input)
+- Onboarding form state preserved (don't lose user's input)
 - Retry button or manual retry
 
 **Rate Limit:**
