@@ -641,7 +641,7 @@ Each service page has **2 major modes of operation**:
 |                                                     |
 │  Guaranteed Bandwidth:      2K req/s/region   $9.00 │
 |  Seal Keys            (1 of 1)  [Add More]     0.00 │
-|  IPv4 Allowlist            (1 of 1)  [Add More]     0.00 │
+|  IPv4 Allowlist       (1 of 1)  [Add More]     0.00 │
 |  Packages per Key           5   [Add More]    $2.00 │
 │                                                     │
 │                ┌───────────────────────────────────┐│
@@ -650,17 +650,19 @@ Each service page has **2 major modes of operation**:
 │                                                     │
 │  Pending Per-Request Charges: $0.00 [See Details]   |
 │                                                     │
+│  Burst Allowed:            OFF ⟳ [ON]              │
+│                                                     │
 │  IP Allowlist (?)                                   │
 │  ┌──────────────────────────────────────────┐       │
-│  │ 192.168.1.100                            │  │
-│  │ 10.0.0.0/24                              │  │
-│  └──────────────────────────────────────────┘  │
-│  Burst Allowed:            OFF ⟳ [ON]              │
+│  │ 192.168.1.100                            │       │
+│  │ 10.0.0.0/24                              │       │
+│  └──────────────────────────────────────────┘       │
 │                                                     │
 └─────────────────────────────────────────────────────┘
 ```
 
-**Configuration Form Fields:**
+
+**Tab 1: Configuration**
 
 - **ON/OFF**
   - Type: Slider switch
@@ -701,42 +703,19 @@ Each service page has **2 major modes of operation**:
 
 ---
 
-#### State 2: Configured (Active Service)
-
-**Tab-based layout with read-only config.**
-
-
-
-**Tab 1: Configuration (Default Active)**
-
-- **Read-only config display**
-- **Edit button (pencil icon)** → Click to edit
-  - Opens modal or inline form (same form as onboarding)
-  - Shows current values pre-filled
-  - Live price recalculation
-  - "Save Changes" button → Updates config
-  - Note: Config changes may cause charges/credits (handled later)
-- **Current usage** (this billing period)
-- **"Enable Service" toggle** (ON position) → Switch to OFF to disable service
-
 **Tab 2: Keys**
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│  Keys & Packages                                      │
-│                                                       │
-│  API Keys (2 active)                                  │
+│  Keys & Packages                                     │
+│                                                      │
+│                                                      │
+│  Seal Keys & Packages (1 of 1) used                  │
 │  ┌────────────────────────────────────────┐          │
-│  │  key_abc123...  [Copy] [Revoke]       │          │
-│  │  key_def456...  [Copy] [Revoke]       │          │
-│  └────────────────────────────────────────┘          │
-│                          [ Add New API Key ]         │
-│                                                       │
-│  Seal Keys & Packages (1 seal key)                    │
-│  ┌────────────────────────────────────────┐          │
-│  │  seal_xyz789...  [Copy] [Revoke] [▼]  │          │
+│  │  seal_xyz789...  [Export] [Disable] [▼]│          │
+|  |  Object ID: 0xabcde... [Copy]          │          │
 │  │                                        │          │
-│  │  Packages (5):                         │          │
+│  │  Packages (4 of 5) Used                │          │
 │  │    • package-1  [Edit] [Delete]        │          │
 │  │    • package-2  [Edit] [Delete]        │          │
 │  │    • package-3  [Edit] [Delete]        │          │
@@ -746,89 +725,53 @@ Each service page has **2 major modes of operation**:
 │  │    [ Add Package to this Seal Key ]    │          │
 │  └────────────────────────────────────────┘          │
 │                         [ Add New Seal Key ]         │
-│                                                       │
+│                                                      │
+│  API Keys (1 of 2) used                              │
+│  ┌────────────────────────────────────────┐          │
+│  │  key_abc123...  [Copy] [Revoke]        │          │
+│  └────────────────────────────────────────┘          │
+│                          [ Add New API Key ]         │
 └──────────────────────────────────────────────────────┘
 ```
 
-**Keys Tab (Before Service Enabled / Demo Mode):**
-```
-┌──────────────────────────────────────────────────────┐
-│  Keys & Packages                                      │
-
-│                                                       │
-│  ⓘ After enabling this service, you'll be able to:  │
-│                                                       │
-│  • Add and manage API keys                           │
-│  • Add and manage Seal keys                          │
-│  • Add packages to Seal keys for organization        │
-│                                                       │
-│  Enable the service from the Configuration tab       │
-│  to access these features.                           │
-│                                                       │
-└──────────────────────────────────────────────────────┘
-```
+**Hierarchy:** Service → Seal Keys → Packages (each seal key owns its packages)
+               Service → API Keys (independent of seal keys)
 
 **Keys Tab Behavior (After Service Enabled):**
+- **Seal Keys & Packages Section:**
+  - Each seal key has an expandable card ([▼] to collapse/expand)
+  - Seal key is shown truncated (first 6 + last 4 chars). Need to press [Export] to see full key.
+
+  - **Seal Key actions:**
+    - Export → Shows key in a modal for copying.
+    - Disable → Disable seal key (confirmation required)
+    - Enable (if disabled) → Re-enables key
+    - Delete (if disabled) → Remove key (confirmation required, dangerous not recoverable)
+    - Add New Seal Key → Give choice to import or generate new one.
+
+  - **Object ID** shows (truncated) once the seal key is registered or imported. It has a
+  copy to clipboard" button.
+
+  - **Packages (nested under each seal key):**
+    - Packages are children of their parent seal key
+    - Each package shows: address truncated + [Edit] [Delete] actions
+    - Edit → Change package address
+    - Delete → Remove package (confirmation needed)
+    - **"Add Package to this Seal Key":**
+      - Creates new package under this seal key.
+
+
 - **API Keys Section:**
   - List of active API keys (truncated display)
   - Copy button → Copies full key to clipboard
-  - Revoke button → Disables key (confirmation required, requires wallet)
+  - Revoke button → Disables key (confirmation required)
+  - Enable button (if revoked) → Re-enables key
+  - Delete button → Remove key forever (confirmation required)
   - **"Add New API Key":**
-    - Creates new key (+$1/month), shows full key once (copy prompt)
+    - Creates new key (+$1/month to add if all used).
 
-- **Seal Keys & Packages Section:**
-  - Each seal key has an expandable card ([▼] to collapse/expand)
-  - **Seal Key actions:**
-    - Copy → Copies full seal key to clipboard
-    - Revoke → Disables seal key and all its packages (confirmation required, requires wallet)
-  - **Packages (nested under each seal key):**
-    - Packages are children of their parent seal key
-    - Each package shows: name + [Edit] [Delete] actions
-    - Edit → Rename package (requires wallet)
-    - Delete → Remove package (confirmation if deleting would go below 3 total packages, requires wallet)
-    - **"Add Package to this Seal Key":**
-      - Creates new package under this seal key (+$1/month)
-  - **"Add New Seal Key":**
-    - Creates new seal key (+$5/month) with default 3 packages, appears as collapsed card
-
-**Hierarchy:** Service → Seal Keys → Packages (each seal key owns its packages)
-
-**Note:** Adding/deleting keys or packages updates monthly fee and triggers billing events.
-
-### Key Lifecycle & Revocation Semantics
-
-**Key Creation:**
-- New keys generated server-side (secure random)
-- Shown once in modal: "Copy this key now - it won't be shown again"
-- **Security:** Raw key never stored - only bcrypt hash stored in database
-- Billing adjustment applied immediately (pro-rated for current month)
-- Logged in activity feed with timestamp
-
-**Key Revocation:**
-- **Effect Timing:** Immediate (no grace period)
-- **Confirmation Required:** "Are you sure? This key will stop working immediately and cannot be recovered."
-- **Impact on Traffic:** Requests using revoked key receive 401 Unauthorized
-- **Billing:** Credit applied immediately (pro-rated for remaining month)
-- **Audit Trail:** Logged with timestamp, key ID (last 4 chars), and revoking wallet address
-
-**Key Rotation Best Practices (shown in tooltip/help):**
-1. Create new key (+$1/month temporarily)
-2. Update your applications to use new key
-3. Test that new key works
-4. Revoke old key (credit applied)
-- **Recommended rotation:** Every 90 days or on security event
-
-**Package Deletion:**
-- Can delete packages down to minimum (3 per seal key)
-- Deleting below 3 shows error: "Each seal key must have at least 3 packages"
-- Deletion is immediate (no grace period)
-- Credit applied pro-rated for remaining month
-
-**Seal Key Revocation:**
-- Revokes parent seal key AND all child packages
-- Confirmation: "This will revoke the seal key and all {N} packages under it. Continue?"
-- Immediate effect (401 on requests)
-- Pro-rated credit for seal key + all packages
+**Note:** Adding/deleting keys or packages may updates monthly fee and triggers billing events.
+          Keys are encrypted in DB for security, and have fingerprint used for internal coordination.
 
 ### Anti-Abuse & Rate Limiting (Key Operations)
 
@@ -840,7 +783,7 @@ Each service page has **2 major modes of operation**:
 
 **Minimum Time Windows:**
 - Cannot revoke a key within 5 minutes of creation (prevents accidental spam)
-- Cannot change billing-impacting config more than twice per hour
+- Cannot change billing-impacting config more than twice per 5 minutes
 
 **Abuse Detection & Throttling:**
 - Backend monitors for rapid create/revoke cycles
@@ -852,8 +795,11 @@ Each service page has **2 major modes of operation**:
 - Prevents disputes: "You authorized this change at {timestamp}"
 - Pro-rated charges/credits prevent gaming the system (e.g., rapid add/remove cycles)
 
-**Tab 3: Stats**
+### Stats Pages (Seal / gRPC / GraphQL)
 
+**URL:** `services/seal/stats`
+
+**Tab 4: Stats**
 ```
 ┌──────────────────────────────────────────────────────┐
 │  Stats                                               │
@@ -895,13 +841,12 @@ Each service page has **2 major modes of operation**:
   - Response times (multi-line: p50, p95, p99)
   - Optional: Error rate, geographic distribution
 
-**Tab 4: Logs**
+**Tab 2: Logs**
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│  Activity Log                                         │
-
-│                                                       │
+│  Activity Log                                        │
+│                                                      │
 │  ┌────────────────────────────────────────┐          │
 │  │ Jan 9, 2025 14:23                      │          │
 │  │ Service enabled                        │          │
@@ -919,9 +864,9 @@ Each service page has **2 major modes of operation**:
 │  │ Charge: $10.00                         │          │
 │  │ Pro-rated charge for additional endpoint│         │
 │  └────────────────────────────────────────┘          │
-│                                                       │
+│                                                      │
 │                           [ Load More ]              │
-│                                                       │
+│                                                      │
 └──────────────────────────────────────────────────────┘
 ```
 
@@ -936,7 +881,7 @@ Each service page has **2 major modes of operation**:
 
 ---
 
-### Page 2: Support
+### Support Page
 
 **URL:** `/support`
 
@@ -944,21 +889,21 @@ Each service page has **2 major modes of operation**:
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│ Support                                               │
-│                                                       │
-│  Contact Us                                           │
+│ Support                                              │
+│                                                      │
+│  Contact Us                                          │
 │  ┌────────────────────────────────────────┐          │
 │  │  Email: support@mhax.io                │          │
 │  │  Response time: 24-48 hours            │          │
 │  └────────────────────────────────────────┘          │
-│                                                       │
-│  Community                                            │
+│                                                      │
+│  Community                                           │
 │  ┌────────────────────────────────────────┐          │
 │  │  [Discord] Join our Discord server     │          │
 │  │  Get help from the community           │          │
 │  └────────────────────────────────────────┘          │
-│                                                       │
-│  Frequently Asked Questions                           │
+│                                                      │
+│  Frequently Asked Questions                          │
 │  ┌────────────────────────────────────────┐          │
 │  │  ▶ How do I configure my first service?│          │
 │  │  ▶ What is guaranteed bandwidth?       │          │
@@ -967,7 +912,7 @@ Each service page has **2 major modes of operation**:
 │  │  ▶ What payment methods are supported? │          │
 │  │  ▶ How do I cancel a service?          │          │
 │  └────────────────────────────────────────┘          │
-│                                                       │
+│                                                      │
 └──────────────────────────────────────────────────────┘
 ```
 
@@ -1004,15 +949,12 @@ Each service page has **2 major modes of operation**:
 
 **Purpose:** Consolidated view of all usage, charges, and wallet balance.
 
-**Two States: Connected vs. Not Connected**
 
 ## Billing and Payments Page
 
 **URL:** `/billing`
 
 **Purpose:** Manage on-chain escrow spending protections, view balance, and control spending limits.
-
-**Wallet Required:** Yes
 
 
 ### Account Section
@@ -1310,39 +1252,47 @@ All prices displayed in USD, but payments/deposits/withdrawals use SUI tokens on
 
 ---
 
-### Flow 2: Configure First Service
+### Flow 2: Subscribe to First Service (Onboarding)
 
 ```
 1. User navigates to /services/seal (already authenticated)
    ↓
-2. Onboarding form visible (all fields interactive)
+2. Onboarding form visible (tier selection only)
    ↓
-3. Select tier: Pro
+3. Select tier: Pro (shows $100/month base price)
    ↓
-4. Enable burst: checked
+4. Click tooltips (?) to learn about guaranteed bandwidth and features
    ↓
-5. Adjust additional packages: 5
+5. Review per-request pricing ($0.0001/req, $1 per 10K requests)
    ↓
-6. See Monthly Fee update: $63.00 (live calculation)
+6. Check "Agree to terms of service" checkbox
    ↓
-7. Click tooltips (?) to learn about fields
+7. Click "Subscribe to Service for $100.00/month" button
    ↓
-8. Review usage fees (listed below)
+8. Service provisioning (State: Provisioning, spinner shown)
    ↓
-9. Click "Enable Service" toggle
+9. Backend provisions service infrastructure
    ↓
-10. Service enabling (spinner shown)
+10. Service moves to Disabled state (State: Disabled)
     ↓
-11. Configuration validated and saved
+11. Page updates to show Interactive Form (Config tab active)
     ↓
-12. Page updates to show configured state with tabs (Config/Keys/Stats/Logs)
+12. User can now configure: burst, IP allowlist, and future add-ons
     ↓
-13. Escrow balance charged: $63.00 (pro-rated for current month)
+13. User clicks [Enable Service] toggle
     ↓
-14. Toast: "Seal service enabled. $63.00 charged."
+14. Service enabled (State: Enabled)
+    ↓
+15. Escrow balance charged: $100.00 (pro-rated for current month)
+    ↓
+16. Toast: "Seal service enabled. $100.00 charged."
 ```
 
-**Note:** User is already authenticated before reaching this flow. Service configuration does not require additional wallet signatures (charges auto-deducted from escrow balance).
+**Note:**
+- Onboarding (State: NotProvisioned) only allows tier selection and ToS acceptance
+- After provisioning completes (State: Disabled), user can configure burst, packages, IP allowlist, etc.
+- Service must be explicitly enabled to start billing
+- Charges are auto-deducted from escrow balance (no wallet signature required)
 
 ---
 
