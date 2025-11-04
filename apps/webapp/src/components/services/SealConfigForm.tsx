@@ -26,10 +26,10 @@ import {
   freg_count,
   fbw_sta,
   fbw_pro,
-  fbw_bus,
+  fbw_ent,
   fsubs_usd_sta,
   fsubs_usd_pro,
-  fsubs_usd_bus,
+  fsubs_usd_ent,
   fskey_incl,
   fskey_pkg_incl,
   freqs_usd,
@@ -41,7 +41,7 @@ interface SealConfigFormProps {
   onTierChange?: (tierSelected: boolean) => void;
 }
 
-type Tier = "starter" | "pro" | "business";
+type Tier = "starter" | "pro" | "enterprise";
 
 export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
   const [selectedTier, setSelectedTier] = useState<Tier>("pro");
@@ -69,11 +69,11 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
       reqGlobal: fbw_pro * freg_count,
       price: fsubs_usd_pro,
     },
-    business: {
-      name: "BUSINESS",
-      reqPerRegion: fbw_bus,
-      reqGlobal: fbw_bus * freg_count,
-      price: fsubs_usd_bus,
+    enterprise: {
+      name: "ENTERPRISE",
+      reqPerRegion: fbw_ent,
+      reqGlobal: fbw_ent * freg_count,
+      price: fsubs_usd_ent,
     },
   };
 
@@ -145,7 +145,7 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
                 1 second are not charged.
                 <br />
                 <br />
-                Pro/Business tiers can enable burst support for best-effort traffic above
+                Pro/Enterprise tiers can enable burst support for best-effort traffic above
                 the guaranteed bandwidth.
               </p>
             </PopoverContent>
@@ -154,7 +154,7 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
 
         {/* Tier Cards */}
         <div className="space-y-3">
-          {(["starter", "pro", "business"] as Tier[]).map((tier) => {
+          {(["starter", "pro", "enterprise"] as Tier[]).map((tier) => {
             const info = tierInfo[tier];
             const isSelected = selectedTier === tier;
 
@@ -263,7 +263,7 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
           <Check className="h-5 w-5 text-green-600 dark:text-green-500 flex-shrink-0 mt-0.5" />
           <div>
             <p className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-2">
-              Additional features for Pro/Business
+              Additional features for Pro/Enterprise
             </p>
             <ul className="text-sm text-gray-600 dark:text-gray-400 space-y-1">
               <li>• Burst support</li>
@@ -277,7 +277,7 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
           <Check className="h-5 w-5 text-green-600 dark:text-green-500 flex-shrink-0 mt-0.5" />
           <div>
             <p className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-2">
-              Additional features for Business only
+              Additional features for Enterprise only
             </p>
             <ul className="text-sm text-gray-600 dark:text-gray-400 space-y-1">
               <li>• Advanced metrics drill-down (per-region, per API-Key)</li>

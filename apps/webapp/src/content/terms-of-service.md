@@ -53,7 +53,7 @@ Subscription billing operates as follows:
 The Seal service has the following limitations:
 
 - Guaranteed bandwidth as specified in your subscription tier
-- Burst capacity available for Pro and Business tiers (subject to fair use)
+- Burst capacity available for Pro and Enterprise tiers (subject to fair use)
 - Geographic distribution across 3 regions (US-East, US-West, EU-Frankfurt)
 - Maximum package size: 1 GB per sealed object
 - API rate limits as specified in tier documentation

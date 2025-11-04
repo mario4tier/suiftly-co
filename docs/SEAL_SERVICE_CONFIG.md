@@ -174,7 +174,7 @@ Generated from MA_VAULT by Global Manager:
 - Medium traffic (up to 500 req/s per region)
 - Multiple encryption keys
 
-**Business Tier:**
+**Enterprise Tier:**
 - High-traffic production (up to 2000 req/s per region)
 - Multiple applications/environments
 - Extended burst capacity

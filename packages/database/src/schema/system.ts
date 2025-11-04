@@ -45,11 +45,11 @@ export const serviceTierConfig = pgTable('service_tier_config', {
   proReqPerSecGlobal: integer('pro_req_per_sec_global').notNull().default(1200),
   proPrice: decimal('pro_price', { precision: 10, scale: 2 }).notNull().default('100.00'),
   proBurstAllowed: boolean('pro_burst_allowed').notNull().default(true),
-  // Business tier
-  businessReqPerSecRegion: integer('business_req_per_sec_region').notNull().default(1000),
-  businessReqPerSecGlobal: integer('business_req_per_sec_global').notNull().default(4000),
-  businessPrice: decimal('business_price', { precision: 10, scale: 2 }).notNull().default('300.00'),
-  businessBurstAllowed: boolean('business_burst_allowed').notNull().default(true),
+  // Enterprise tier
+  enterpriseReqPerSecRegion: integer('enterprise_req_per_sec_region').notNull().default(1000),
+  enterpriseReqPerSecGlobal: integer('enterprise_req_per_sec_global').notNull().default(4000),
+  enterprisePrice: decimal('enterprise_price', { precision: 10, scale: 2 }).notNull().default('300.00'),
+  enterpriseBurstAllowed: boolean('enterprise_burst_allowed').notNull().default(true),
   // Metadata
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
 }, (table) => ({

@@ -623,7 +623,7 @@ Each service page has **2 major modes of operation**:
 │  └────────────────────────────────────────┘          │
 │                                                      │
 │  ┌────────────────────────────────────────┐          │
-│  │ BUSINESS                               │          │
+│  │ ENTERPRISE                               │          │
 │  ├────────────────────────────────────────┤          │
 │  │ 2,000 req/s per region • ~6,000 req/s globally    │
 │  │ $80/month - Burst support, CIDR Allowlisting      │
@@ -1613,7 +1613,7 @@ Protected routes (require authentication):
 
 ```typescript
 const serviceConfigSchema = z.object({
-  guaranteedBandwidth: z.enum(['starter', 'pro', 'business']),
+  guaranteedBandwidth: z.enum(['starter', 'pro', 'enterprise']),
   burstEnabled: z.boolean(),
   packagesPerSealKey: z.number().min(3), // Comes with 3, can add more
   totalApiKeys: z.number().min(1),       // Total API keys (1 included)
@@ -1636,7 +1636,7 @@ const PRICING = {
   tiers: {
     starter: { base: 20, reqPerSec: 100 },
     pro: { base: 40, reqPerSec: 500 },
-    business: { base: 80, reqPerSec: 2000 },
+    enterprise: { base: 80, reqPerSec: 2000 },
   },
   burst: 10, // +$10/month if enabled
   additionalPackagePerKey: 1, // $1/month per package (after 3) per seal key

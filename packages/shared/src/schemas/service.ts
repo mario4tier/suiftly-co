@@ -15,19 +15,19 @@ export const serviceStatusSchema = z.enum(['NotProvisioned', 'Enabled', 'Disable
 export type ServiceStatus = z.infer<typeof serviceStatusSchema>;
 
 export const sealConfigSchema = z.object({
-  tier: z.enum(['starter', 'pro', 'business']),
+  tier: z.enum(['starter', 'pro', 'enterprise']),
   burstEnabled: z.boolean(),
   totalSealKeys: z.number().int().min(1),
   packagesPerSealKey: z.number().int().min(3),
   totalApiKeys: z.number().int().min(1),
 }).refine((data) => {
-  // Burst only available for Pro and Business
+  // Burst only available for Pro and Enterprise
   if (data.burstEnabled && data.tier === 'starter') {
     return false;
   }
   return true;
 }, {
-  message: "Burst is only available for Pro and Business tiers",
+  message: "Burst is only available for Pro and Enterprise tiers",
   path: ["burstEnabled"],
 });
 
@@ -49,7 +49,7 @@ export const SEAL_PRICING = {
       reqPerSecGlobal: 1200,
       burstAllowed: true
     },
-    business: {
+    enterprise: {
       base: 300,
       reqPerSecRegion: 1000,
       reqPerSecGlobal: 4000,

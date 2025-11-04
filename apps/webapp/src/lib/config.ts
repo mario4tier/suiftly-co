@@ -16,10 +16,10 @@ export let fver = 1;
 export let freg_count = 3;
 export let fbw_sta = 3;
 export let fbw_pro = 15;
-export let fbw_bus = 100;
+export let fbw_ent = 100;
 export let fsubs_usd_sta = 9;
 export let fsubs_usd_pro = 29;
-export let fsubs_usd_bus = 185;
+export let fsubs_usd_ent = 185;
 export let freqs_usd = 1.00;
 export let freqs_count = 10000;
 export let fskey_incl = 1;
@@ -58,8 +58,8 @@ export async function loadFrontendConfig(): Promise<void> {
 
         // Validate that all required keys are present
         if (!config.fver || !config.freg_count || !config.fbw_sta || !config.fbw_pro ||
-            !config.fbw_bus || !config.fsubs_usd_sta || !config.fsubs_usd_pro ||
-            !config.fsubs_usd_bus || !config.freqs_usd || !config.freqs_count ||
+            !config.fbw_ent || !config.fsubs_usd_sta || !config.fsubs_usd_pro ||
+            !config.fsubs_usd_ent || !config.freqs_usd || !config.freqs_count ||
             !config.fskey_incl || !config.fskey_pkg_incl) {
           throw new Error('Missing required configuration keys from database');
         }
@@ -69,10 +69,10 @@ export async function loadFrontendConfig(): Promise<void> {
         freg_count = parseInt(config.freg_count);
         fbw_sta = parseInt(config.fbw_sta);
         fbw_pro = parseInt(config.fbw_pro);
-        fbw_bus = parseInt(config.fbw_bus);
+        fbw_ent = parseInt(config.fbw_ent);
         fsubs_usd_sta = parseFloat(config.fsubs_usd_sta);
         fsubs_usd_pro = parseFloat(config.fsubs_usd_pro);
-        fsubs_usd_bus = parseFloat(config.fsubs_usd_bus);
+        fsubs_usd_ent = parseFloat(config.fsubs_usd_ent);
         freqs_usd = parseFloat(config.freqs_usd);
         freqs_count = parseInt(config.freqs_count);
         fskey_incl = parseInt(config.fskey_incl);
