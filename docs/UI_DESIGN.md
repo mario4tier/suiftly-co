@@ -1557,7 +1557,7 @@ function calculateMonthlyFee(config: ServiceConfig): number {
 }
 ```
 
-**Note:** Pricing values in the code above are examples. Actual pricing defined in [SEAL_SERVICE_CONFIG.md](./SEAL_SERVICE_CONFIG.md#pricing-model). The implementation should import pricing constants from a shared configuration file.
+**Note:** Pricing values in the code above are examples. Actual pricing defined in [UI_DESIGN.md (pricing section)](./UI_DESIGN.md (pricing section)#pricing-model). The implementation should import pricing constants from a shared configuration file.
 
 ---
 
@@ -2334,9 +2334,9 @@ Once this UI design is approved:
 - ✅ Mock wallet for development (no real Web3 needed initially)
 
 **Pricing Model:**
-- See [SEAL_SERVICE_CONFIG.md](./SEAL_SERVICE_CONFIG.md#pricing-model) for complete pricing details
+- See [UI_DESIGN.md (pricing section)](./UI_DESIGN.md (pricing section)#pricing-model) for complete pricing details
 - Tier base fees, add-on pricing, usage fees, and calculation examples documented there
-- UI implements live pricing calculator based on SEAL_SERVICE_CONFIG.md pricing rules
+- UI implements live pricing calculator based on UI_DESIGN.md (pricing section) pricing rules
 
 **Always Included (All Tiers):**
 - Global geo-steering and failover (closest key-server automatically selected)

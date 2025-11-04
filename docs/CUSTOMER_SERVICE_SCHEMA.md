@@ -242,11 +242,11 @@ Each service can be configured independently with different tiers:
 | **Pro** | Enhanced limits and features | Small teams, production apps |
 | **Enterprise** | Highest limits, priority support | Enterprise, high-volume apps |
 
-**For complete tier definitions and rate limits, see [SEAL_SERVICE_CONFIG.md](./SEAL_SERVICE_CONFIG.md).**
+**For complete tier definitions and rate limits, see [UI_DESIGN.md](./UI_DESIGN.md) (pricing and tier configuration).**
 
 ### Service Billing
 - **Primary model**: Usage-based charging (e.g., requests count)
-- **Tier structure**: See [SEAL_SERVICE_CONFIG.md](./SEAL_SERVICE_CONFIG.md) for tier definitions and rate limits
+- **Tier structure**: See [UI_DESIGN.md](./UI_DESIGN.md) (pricing and tier configuration) for tier definitions and rate limits
 - **Metering**: Real-time usage tracking against rate limits
 - **Billing cycle**: Charges deducted from escrow account from time to time (usually when at least 5$ accumulated)
 - **Monthly limits**: All charges validated against customer's authorized monthly spending cap
@@ -457,7 +457,7 @@ These are completely different concepts:
 
 **Seal Service Configuration:**
 
-For tier-specific limits, pricing, and rate limiting details, see [SEAL_SERVICE_CONFIG.md](./SEAL_SERVICE_CONFIG.md).
+For tier-specific limits, pricing, and rate limiting details, see [UI_DESIGN.md](./UI_DESIGN.md) (pricing and tier configuration).
 
 ## Rate Limiting
 

@@ -501,7 +501,7 @@ async function validateOperation(customerId: number, estimatedCost: number) {
 **Goal:** Usage-based billing with on-chain escrow charging
 **Files:** services/global-manager/src/tasks/bill.ts
 **Ref:**
-- docs/SEAL_SERVICE_CONFIG.md#pricing
+- docs/UI_DESIGN.md (pricing section)#pricing
 - docs/CUSTOMER_SERVICE_SCHEMA.md#billing-flow
 
 **Logic:**

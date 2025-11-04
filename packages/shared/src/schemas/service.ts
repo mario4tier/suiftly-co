@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 /**
  * Service configuration schemas
- * Based on SEAL_SERVICE_CONFIG.md pricing model
+ * Pricing values loaded from config_global table at runtime
  */
 
 /**
@@ -33,8 +33,8 @@ export const sealConfigSchema = z.object({
 
 export type SealConfig = z.infer<typeof sealConfigSchema>;
 
-// Pricing constants from SEAL_SERVICE_CONFIG.md
-// Note: These are default values. Production values should be fetched from service_tier_config table
+// Pricing constants (fallback/default values only)
+// Note: Production values are fetched from config_global table at runtime
 export const SEAL_PRICING = {
   tiers: {
     starter: {

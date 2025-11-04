@@ -357,7 +357,7 @@ SELECT add_retention_policy('haproxy_logs', INTERVAL '90 days');
 SELECT add_compression_policy('haproxy_logs', INTERVAL '7 days');
 ```
 
-**Tiers:** Starter, Pro, Enterprise (see [SEAL_SERVICE_CONFIG.md](./SEAL_SERVICE_CONFIG.md) for rate limits and pricing)
+**Tiers:** Starter, Pro, Enterprise (see [UI_DESIGN.md](./UI_DESIGN.md) (pricing and tier configuration) for rate limits and pricing)
 
 ---
 

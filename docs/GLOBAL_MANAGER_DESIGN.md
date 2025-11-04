@@ -410,7 +410,7 @@ export async function generateMAVault() {
     const tier = sealService?.tier || 'starter'
 
     // Store customer config as JSON string value
-    // See SEAL_SERVICE_CONFIG.md for tier structure and rate limit definitions
+    // See UI_DESIGN.md (pricing section) for tier structure and rate limit definitions
     const customerConfig = {
       api_keys: customer.api_keys.map(k => k.api_key_fp),  // Use fingerprint, not hash
       tier,  // From service_instances.tier
@@ -423,7 +423,7 @@ export async function generateMAVault() {
   }
 
   function getTierLimits(tier: string) {
-    // See SEAL_SERVICE_CONFIG.md for tier-specific limits
+    // See UI_DESIGN.md (pricing section) for tier-specific limits
     const tierConfig = {
       starter: { guaranteed_rps: 100, burst_rps: 0, burst_duration_sec: 0 },
       pro: { guaranteed_rps: 500, burst_rps: 200, burst_duration_sec: 60 },
@@ -623,7 +623,7 @@ CREATE TABLE billing_records (
 -- NOTE: For complete database schema, see CUSTOMER_SERVICE_SCHEMA.md
 -- This section shows only the tables specific to Global Manager operations
 
--- Customer limits (see SEAL_SERVICE_CONFIG.md for tier definitions)
+-- Customer limits (see UI_DESIGN.md (pricing section) for tier definitions)
 CREATE TABLE customer_limits (
   customer_id INTEGER PRIMARY KEY REFERENCES customers(customer_id),
   tier TEXT NOT NULL DEFAULT 'starter',  -- starter, pro, enterprise
