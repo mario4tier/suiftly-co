@@ -249,7 +249,6 @@ A service (Seal, gRPC, GraphQL) exists in one of six states, controlling subscri
 - Service page shows onboarding form with interactive configuration fields
 - Page title: "Configure [Service Name]"
 - Prominent "Subscribe to Service" button at bottom of form
-- No status badge in header
 - No billing charges
 
 **Allowed Actions:**
@@ -287,12 +286,11 @@ A service (Seal, gRPC, GraphQL) exists in one of six states, controlling subscri
 **User Experience & UI:**
 - Service page shows tab-based layout (Config / Keys)
 - Configuration tab displays current settings (editable)
-- Status badge: "Disabled" (gray)
 - Toggle switch: [OFF] ⟳ ON
 - Banner (normal): "Service is subscribed but currently disabled. Enable to start serving traffic."
 - Banner (if cancelled): "Subscription cancelled. You can re-enable anytime by selecting Change Plan."
 - All keys (API keys and Seal keys) return `503 Service Unavailable` when called
-- **Billing:** User is charged full base monthly fee (maintaining subscription/capacity reservation)
+- **Billing:** User is still charged full base monthly fee (maintaining subscription/capacity reservation)
 
 **Allowed Actions:**
 - Edit configuration (tier, burst, keys, packages)
@@ -314,12 +312,11 @@ A service (Seal, gRPC, GraphQL) exists in one of six states, controlling subscri
 **Meaning:** Active subscription with service fully operational and serving traffic.
 
 **User Experience & UI:**
-- Service page shows tab-based layout (Config / Keys / Stats / Logs)
+- Same as Disabled, except the Service is Enabled!
 - Configuration tab displays current settings (editable)
-- Status badge: "Active" (green) 🟢
 - Toggle switch: OFF ⟳ [ON]
-- Stats charts show real-time usage data
-- API/Seal keys working, traffic flowing normally
+- API/Seal keys working, traffic should be flowing normally
+- User will use stats/logs to monitor health and usage.
 - **Billing:** Base monthly fee + usage charges apply
 
 **Allowed Actions:**
@@ -348,7 +345,6 @@ A service (Seal, gRPC, GraphQL) exists in one of six states, controlling subscri
 **User Experience & UI:**
 - Service page shows tab-based layout (Config / Keys / Stats / Logs)
 - Configuration locked (read-only, cannot edit)
-- Status badge: "Suspended - Maintenance" (yellow)
 - "Resume Service" button replaces toggle switch
 - Banner (normal): "Service suspended for maintenance. Configuration and keys preserved at $2/month. Resume anytime."
 - Banner (if cancelled): "Subscription cancelled. You can re-enable anytime by selecting Change Plan."
@@ -389,7 +385,6 @@ A service (Seal, gRPC, GraphQL) exists in one of six states, controlling subscri
 **User Experience & UI:**
 - Service page shows tab-based layout (read-only mode)
 - Configuration locked (cannot edit)
-- Status badge: "Suspended - Payment Required" (red) 🔴
 - Banner: "Service suspended due to payment issues. Top up your escrow balance to resume. Contact support if you need help."
 - All edit/action buttons disabled
 - Lock icons on configuration fields
