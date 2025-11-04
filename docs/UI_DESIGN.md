@@ -693,7 +693,7 @@ Each service page has **2 major modes of operation**:
    - Enterprise only: Up to 2 CIDR ranges (in addition to IPv4 addresses)
    - Grayed out for Starter tier with label "Pro/Enterprise feature"
    - Tooltip: "Restrict API access to specific IP addresses or CIDR ranges. Leave empty to allow all IPs."
-   - Format: One IP/CIDR per line (e.g., "192.168.1.100" or "10.0.0.0/24")
+   - Format: Accepts space, newline, or comma as delimiters (e.g., "192.168.1.100, 10.0.0.0/24" or one per line)
    - Validation: Validates IPv4 format and CIDR notation
    - Pricing: Included with Pro/Enterprise tiers (no additional cost)
 
