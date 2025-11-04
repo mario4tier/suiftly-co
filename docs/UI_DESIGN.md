@@ -627,19 +627,27 @@ Each service page has **2 major modes of operation**:
 - **Terms of service** link opens a modal window that can be scrolled down for the TOS, and download as PDF button and "Agree and close" button. The user can also simply checkbox the "Agree" without clicking the link.
 - **DB Driven**: All numbers (pricing, capacities) are DB driven *but can be heavily cached or used to generate static content*.
 
-#### Seal Interactive Form (Service State 3 & 4)
+#### Seal Interactive Form (Service State >= 3)
 
 **Form Fields (All Services):**
 
-
-
-2. **Burst (?)**
+0. **OMN/O**
    - Type: Checkbox
-   - Enabled only for Pro and Enterprise tiers (disabled for Starter)
-   - Tooltip: "Allow temporary traffic bursts beyond guaranteed bandwidth. Additional charges apply for burst usage."
-   - Pricing: +$10/month (only if enabled)
+   - Default: Checked for Pro and Enterprise tiers
+   - Grayed out for Starter tier with label "Pro/Enterprise feature"
+   - Tooltip: "Allow temporary traffic bursts beyond guaranteed bandwidth. Billed per-request for burst traffic."
+   - Pricing: No monthly fee (usage-based billing only)
+   - Future: May add premium burst tier with higher priority at additional monthly cost
 
-3. **Packages Per Seal Key (?)**
+1. **Burst (?)**
+   - Type: Checkbox
+   - Default: Checked for Pro and Enterprise tiers
+   - Grayed out for Starter tier with label "Pro/Enterprise feature"
+   - Tooltip: "Allow temporary traffic bursts beyond guaranteed bandwidth. Billed per-request for burst traffic."
+   - Pricing: No monthly fee (usage-based billing only)
+   - Future: May add premium burst tier with higher priority at additional monthly cost
+
+2. **Packages Per Seal Key (?)**
    - Type: Number input (starts at 3)
    - Default: 3 (included with all tiers)
    - Tooltip: "Number of packages per Seal key for organizing your services. Packages are children of seal keys. Each additional package costs $1/month per seal key."
@@ -650,7 +658,7 @@ Each service page has **2 major modes of operation**:
        - Total additional packages cost: $4/month
    - Note: When you create a new seal key, it comes with this many packages
 
-4. **Total API Keys (?)**
+3. **Total API Keys (?)**
    - Type: Number input (starts at 1, min: 1)
    - Default: 1 (included with all tiers)
    - Label: "Total API Keys (1 included)"
@@ -658,7 +666,7 @@ Each service page has **2 major modes of operation**:
    - Pricing: max(0, totalApiKeys - 1) × $1/month
    - UI: Number input with decrement disabled at 1, increment button increases count
 
-5. **Total Seal Keys (?)**
+4. **Total Seal Keys (?)**
    - Type: Number input (starts at 1, min: 1)
    - Default: 1 (included with all tiers)
    - Label: "Total Seal Keys (1 included)"
@@ -674,7 +682,7 @@ Each service page has **2 major modes of operation**:
 **Pricing Example (Pro tier, burst enabled, 5 packages per key, 2 total seal keys, 2 total API keys):**
 ```
 Pro tier: $40/month
-Burst enabled: $10/month
+Burst enabled: $0/month (usage-based billing only)
 Total Seal Keys: 2 (1 included, 1 additional × $5) = $5/month
 Packages per Seal key: 5 (3 included per key, 2 additional per key × $1)
   - Seal Key 1: (5-3) × $1 = $2/month
@@ -682,7 +690,7 @@ Packages per Seal key: 5 (3 included per key, 2 additional per key × $1)
   - Total: $4/month
 Total API keys: 2 (1 included, 1 additional × $1) = $1/month
 ────────────────────────────────
-Total Monthly Fee: $60/month
+Total Monthly Fee: $50/month
 ```
 
 **Note:** When gRPC and GraphQL are implemented in the future, they will use the same interactive form and pricing model as Seal.
@@ -1595,7 +1603,7 @@ const PRICING = {
     pro: { base: 40, reqPerSec: 500 },
     enterprise: { base: 80, reqPerSec: 2000 },
   },
-  burst: 10, // +$10/month if enabled
+  // burst: No monthly fee (usage-based billing only)
   additionalPackagePerKey: 1, // $1/month per package (after 3) per seal key
   additionalApiKey: 1, // $1/month per key (after 1)
   additionalSealKey: 5, // $5/month per key (after 1)
@@ -1605,9 +1613,7 @@ const PRICING = {
 function calculateMonthlyFee(config: ServiceConfig): number {
   let total = PRICING.tiers[config.guaranteedBandwidth].base
 
-  if (config.burstEnabled) {
-    total += PRICING.burst
-  }
+  // Burst has no monthly fee (usage-based billing only)
 
   // Additional API keys cost (1 included)
   total += Math.max(0, config.totalApiKeys - 1) * PRICING.additionalApiKey
