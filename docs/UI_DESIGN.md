@@ -246,7 +246,7 @@ A service (Seal, gRPC, GraphQL) exists in one of six states, controlling subscri
 **Meaning:** No active subscription exists for this service.
 
 **User Experience:**
-- Service page shows onboarding configuration form
+- Service page shows onboarding form
 - All configuration fields are interactive
 - "Subscribe to Service" button displayed (replaces old "Enable Service" terminology)
 - No billing charges
@@ -268,20 +268,14 @@ A service (Seal, gRPC, GraphQL) exists in one of six states, controlling subscri
 **Meaning:** User has selected a tier and initiated subscription, payment is pending confirmation.
 
 **User Experience:**
-- Configuration form locked (read-only, fields disabled)
-- Loading spinner or "Processing subscription..." message
-- Cannot modify configuration during payment processing
+- Still shows the **onboarding form** (same as State 1)
+- Loading spinner or "Processing subscription..." banner/overlay displayed on the form
+- Cannot modify tier selection or submit again during payment processing
 - Return to State (1) only if payment is explicitly canceled (admin-only initially)
 
-**Allowed Actions:**
-- View selected configuration (read-only)
-- Wait for payment confirmation
-- Admin: Cancel pending subscription (returns to State 1)
-
 **UI Indicators:**
-- Status badge: "Provisioning" (yellow/orange)
-- Banner: "Subscription pending payment confirmation..."
-- Configuration fields grayed out with lock icon
+- Top info message: "Processing your subscription..." with spinner
+- Form fields remain visible but disabled during payment processing
 
 **Transitions:**
 - **(2) → (3):** Payment confirmed → Service subscribed, defaulting to disabled state
@@ -293,7 +287,7 @@ A service (Seal, gRPC, GraphQL) exists in one of six states, controlling subscri
 **Meaning:** Active subscription exists, but service is currently disabled by user choice.
 
 **User Experience:**
-- Service page shows tab-based layout (Config / Keys / Stats / Logs)
+- Service page shows tab-based layout (Config / Keys)
 - Configuration tab displays current settings (editable)
 - "Enable Service" toggle switch in OFF position
 - All keys (API keys and Seal keys) return `503 Service Unavailable` when called
@@ -303,18 +297,18 @@ A service (Seal, gRPC, GraphQL) exists in one of six states, controlling subscri
 - Edit configuration (tier, burst, keys, packages)
 - Manage keys (create, revoke, copy) - keys are authenticated but return 503 when called
 - Enable service (toggle switch to ON → transitions to State 4)
-- View historical stats from when service was previously enabled
-- View logs showing state transitions and configuration changes
-- Cancel subscription (admin-only, transitions to State 1)
+- Change Plan (allows user to select a different tier and re-enable)
+- Cancel subscription (admin-only, shows cancellation banner but stays in State 3)
 
 **UI Indicators:**
 - Status badge: "Disabled" (gray)
 - Toggle switch: [OFF] ⟳ ON
-- Banner: "Service is subscribed but currently disabled. Enable to start serving traffic."
+- Banner (normal): "Service is subscribed but currently disabled. Enable to start serving traffic."
+- Banner (if cancelled): "Subscription cancelled. You can re-enable anytime by selecting Change Plan."
 
 **Transitions:**
 - **(3) → (4):** User toggles service ON (immediate effect)
-- **(3) → (1):** Cancel subscription (admin-only)
+- **(3) → (3):** Cancel subscription (stays in State 3, shows cancellation message with Change Plan button)
 - **(3) → (6):** Admin suspends for non-payment
 
 **Note:** Individual API keys and Seal keys can also be disabled independently. Disabled keys return `503` regardless of service state.
@@ -374,11 +368,13 @@ A service (Seal, gRPC, GraphQL) exists in one of six states, controlling subscri
 - View keys (read-only, cannot create/revoke)
 - View historical stats and logs
 - Resume service (transitions to State 4 at end of cycle, or immediately with no refund)
-- Cancel subscription (transitions to State 1, admin-only)
+- Change Plan (allows user to select a different tier and re-enable)
+- Cancel subscription (admin-only, shows cancellation banner but stays in State 5)
 
 **UI Indicators:**
 - Status badge: "Suspended - Maintenance" (yellow)
-- Banner: "Service suspended for maintenance. Configuration and keys preserved at $2/month. Resume anytime."
+- Banner (normal): "Service suspended for maintenance. Configuration and keys preserved at $2/month. Resume anytime."
+- Banner (if cancelled): "Subscription cancelled. You can re-enable anytime by selecting Change Plan."
 - "Resume Service" button (replaces toggle)
 - Info note: "Suspension takes effect at end of current billing cycle (DD/MM/YYYY). Current charges are non-refundable."
 
@@ -389,7 +385,7 @@ A service (Seal, gRPC, GraphQL) exists in one of six states, controlling subscri
 
 **Transitions:**
 - **(5) → (4):** User clicks "Resume Service" (takes effect at end of cycle, or immediately with warning)
-- **(5) → (1):** Cancel subscription (admin-only)
+- **(5) → (5):** Cancel subscription (stays in State 5, shows cancellation message with Change Plan button)
 - **(5) → (6):** Admin suspends for non-payment
 
 **Difference from State (3) Disabled:**
@@ -444,7 +440,7 @@ A service (Seal, gRPC, GraphQL) exists in one of six states, controlling subscri
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                   Service State Transitions                  │
+│                   Service State Transitions                 │
 └─────────────────────────────────────────────────────────────┘
 
     (1) Not Provisioned
@@ -600,43 +596,43 @@ Each service page has **2 major modes of operation**:
 
 ---
 
-#### Seal Onboarding Form
+#### Seal Onboarding Form (Service State 1 & 2)
 
 ```
 ┌──────────────────────────────────────────────────────┐
 │ Seal Configuration                                   │
+│                                                      │
+│  Per-Request Pricing (i)                             │
+│    • $1 per 10,000 requests                          │
 │                                                      │
 │  Guaranteed Bandwidth (?)                            │
 │                                                      │
 │  ┌────────────────────────────────────────┐          │
 │  │ STARTER                                │          │
 │  ├────────────────────────────────────────┤          │
-│  │ 100 req/s per region • ~300 req/s globally        │
-│  │ $20/month, No burst support            │          │
+│  │ 3 req/s per region • ~9 req/s globally |          │
+│  │ $9/month                               │          │
 │  └────────────────────────────────────────┘          │
 │                                                      │
 │  ┌────────────────────────────────────────┐          │
 │  │ PRO                         [SELECTED] │  ← Badge │
 │  ├────────────────────────────────────────┤          │
-│  │ 500 req/s per region • ~1,500 req/s globally      |
-│  │ $40/month  - Burst support             │          │
+│  │ 15 req/s per region • ~45 req/s globally│         │
+│  │ $29/month                              │          │
 │  └────────────────────────────────────────┘          │
 │                                                      │
 │  ┌────────────────────────────────────────┐          │
-│  │ ENTERPRISE                               │          │
+│  │ ENTERPRISE                             │          │
 │  ├────────────────────────────────────────┤          │
-│  │ 2,000 req/s per region • ~6,000 req/s globally    │
-│  │ $80/month - Burst support, CIDR Allowlisting      │
+│  │ 100 req/s per region • ~300 req/s globally │      |
+│  │ $185/month                             │          |
 │  └────────────────────────────────────────┘          │
 │                                                      │
 │  ✓ Included with every subscription                  │
 │    • Global geo-steering and failover (i)            │
 │    • 1x Seal Key, 3x packages id                     │
 │    • 2x API-Key                                      │
-│    • On-chain spending-limit protection              │
-│                                                      │
-│  Pay-As-You-Go (charged separately, no expiration)   |
-│    • $1 per 10,000 requests                          │
+│    ...                                               │
 │                                                      │
 │  Optional add-ons are available (i)                  │
 │                                                      │
@@ -646,35 +642,20 @@ Each service page has **2 major modes of operation**:
 │  │ Subscribe to Service for $55.00/month    │        │
 │  └──────────────────────────────────────────┘        │
 │                                                      │
-│                                                      │
 └──────────────────────────────────────────────────────┘
 ```
 
 **Behavior:**
 - **Tooltips (i):** Click to show explanation
 - **Tier Cards** User can switch between tiers and price on bottom button is updated.
-- **Terms of service** link opens a modal window that can be scrolled down for the TOS, and download as PDF button and "Agree and close" button. The user can also simply click the "Agree" without clicking the link.
+- **Terms of service** link opens a modal window that can be scrolled down for the TOS, and download as PDF button and "Agree and close" button. The user can also simply checkbox the "Agree" without clicking the link.
 - **DB Driven**: All numbers (pricing, capacities) are DB driven *but can be heavily cached or used to generate static content*.
+
+#### Seal Configuration Form (Service State 3 & 4)
 
 **Form Fields (All Services):**
 
-**1. Guaranteed Bandwidth (?) - Tier Selection**
-   - Type: **Horizontal card blocks** (stacked vertically, full-width)
-   - Layout: Three stacked cards (full-width on all screen sizes)
-   - Interaction: Click entire card to select
-   - Each card shows:
-     - **Header row:** Tier name (left) + "SELECTED" badge (right, when selected)
-     - **Content row:** Capacity info on one line: "X req/s per region • ~Y req/s globally"
-     - **Footer row:** Monthly price "$Z/month"
 
-   **Tier Details:**
-   - **Starter:** 100 req/s per region, ~300 req/s globally, $20/mo
-   - **Pro:** 1,000 req/s per region, ~3,000 req/s globally, $40/mo
-   - **Enterprise:** Custom capacity, contact sales
-
-   **Responsive:**
-   - Desktop: Full-width cards, 3px padding between cards
-   - Mobile: Same layout (works perfectly, no changes needed)
 
 2. **Burst (?)**
    - Type: Checkbox
