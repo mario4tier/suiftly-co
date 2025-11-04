@@ -294,11 +294,10 @@ A service (Seal, gRPC, GraphQL) exists in one of six states, controlling subscri
 - **Billing:** User is charged full base monthly fee (maintaining subscription/capacity reservation)
 
 **Allowed Actions:**
-- Edit configuration (tier, burst, keys, packages)
+- Edit configuration (burst, keys, packages)
 - Manage keys (create, revoke, copy) - keys are authenticated but return 503 when called
 - Enable service (toggle switch to ON → transitions to State 4)
-- Change Plan (allows user to select a different tier and re-enable)
-- Cancel subscription (shows cancellation banner but stays in State 3)
+- Change Plan (allows user to select a different tier, re-enable, or cancel subscription)
 
 **UI Indicators:**
 - Status badge: "Disabled" (gray)
@@ -308,7 +307,7 @@ A service (Seal, gRPC, GraphQL) exists in one of six states, controlling subscri
 
 **Transitions:**
 - **(3) → (4):** User toggles service ON (immediate effect)
-- **(3) → (3):** Cancel subscription (stays in State 3, shows cancellation message with Change Plan button)
+- **(3) → (3):** Cancel subscription via Change Plan (stays in State 3, shows cancellation message)
 - **(3) → (6):** Admin suspends for non-payment
 
 **Note:** Individual API keys and Seal keys can also be disabled independently. Disabled keys return `503` regardless of service state.
@@ -368,8 +367,7 @@ A service (Seal, gRPC, GraphQL) exists in one of six states, controlling subscri
 - View keys (read-only, cannot create/revoke)
 - View historical stats and logs
 - Resume service (transitions to State 4 at end of cycle, or immediately with no refund)
-- Change Plan (allows user to select a different tier and re-enable)
-- Cancel subscription (shows cancellation banner but stays in State 5)
+- Change Plan (allows user to select a different tier, re-enable, or cancel subscription)
 
 **UI Indicators:**
 - Status badge: "Suspended - Maintenance" (yellow)
@@ -385,7 +383,7 @@ A service (Seal, gRPC, GraphQL) exists in one of six states, controlling subscri
 
 **Transitions:**
 - **(5) → (4):** User clicks "Resume Service" (takes effect at end of cycle, or immediately with warning)
-- **(5) → (5):** Cancel subscription (stays in State 5, shows cancellation message with Change Plan button)
+- **(5) → (5):** Cancel subscription via Change Plan (stays in State 5, shows cancellation message)
 - **(5) → (6):** Admin suspends for non-payment
 
 **Difference from State (3) Disabled:**
