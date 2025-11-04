@@ -662,40 +662,40 @@ Each service page has **2 major modes of operation**:
 
 **Configuration Form Fields:**
 
-1. **ON/OFF**
-   - Type: Slider switch
-   - Default: Disabled
-   - Controls if the service is enabled or disabled.
+- **ON/OFF**
+  - Type: Slider switch
+  - Default: Disabled
+  - Controls if the service is enabled or disabled.
 
-2. **Monthly Charged Items Table**
-    - Title shows tier (STARTER/PRO/ENTERPRISE) with [Change Plan] button next to it.
-    - 4 columns: Description | Usage/Count | [Add More] button | Monthly Price (Total)
-    - Show tier details as Guaranteed Bandwidth on next line (e.g 3 req/s per region)
-    - Displays other various items that are included or can be add-on.
-    - When applicable, display which portion of the included/paid items are being used e.g (0 of 3),(3 of 3)
-    - Total monthly is shown.
+- **Monthly Charged Items Table**
+  - Title shows tier (STARTER/PRO/ENTERPRISE) with [Change Plan] button next to it.
+  - 4 columns: Description | Usage/Count | [Add More] button | Monthly Price (Total)
+  - Show tier details as Guaranteed Bandwidth on next line (e.g 3 req/s per region)
+  - Displays other various items that are included or can be add-on.
+  - When applicable, display which portion of the included/paid items are being used e.g (0 of 3),(3 of 3)
+  - Total monthly is shown.
 
-3. **Pending Per-Request Charges**
-   - Shows only pending total, [See Details] Will bring up the stats page which covers usage breakdown.
+- **Pending Per-Request Charges**
+  - Shows only pending total, [See Details] Will bring up the stats page which covers usage breakdown.
 
-4. **Burst (?)**
-   - Type: Checkbox
-   - Default: Checked for Pro and Enterprise tiers
-   - Grayed out for Starter tier with label "Pro/Enterprise feature"
-   - Tooltip: "Allow temporary traffic bursts beyond guaranteed bandwidth. Billed per-request for burst traffic."
-   - Pricing: No monthly fee (usage-based billing only)
-   - Future: May add premium burst tier with higher priority at additional monthly cost
+- **Burst (?)**
+  - Type: Checkbox
+  - Default: Checked for Pro and Enterprise tiers
+  - Grayed out for Starter tier with label "Pro/Enterprise feature"
+  - Tooltip: "Allow temporary traffic bursts beyond guaranteed bandwidth. Billed per-request for burst traffic."
+  - Pricing: No monthly fee (usage-based billing only)
+  - Future: May add premium burst tier with higher priority at additional monthly cost
 
-5. **IP Allowlist (?)**
-   - Type: Multi-line text area or tag input
-   - Default: Empty (no IP restrictions)
-   - Pro/Enterprise: Up to 2 IPv4 addresses
-   - Enterprise only: Up to 2 CIDR ranges (in addition to IPv4 addresses)
-   - Grayed out for Starter tier with label "Pro/Enterprise feature"
-   - Tooltip: "Restrict API access to specific IP addresses or CIDR ranges. Leave empty to allow all IPs."
-   - Format: Accepts space, newline, or comma as delimiters (e.g., "192.168.1.100, 10.0.0.0/24" or one per line)
-   - Validation: Validates IPv4 format and CIDR notation
-   - Pricing: Included with Pro/Enterprise tiers (no additional cost)
+- **IP Allowlist (?)**
+  - Type: Multi-line text area or tag input
+  - Default: Empty (no IP restrictions)
+  - Pro/Enterprise: Up to 2 IPv4 addresses
+  - Enterprise only: Up to 2 CIDR ranges (in addition to IPv4 addresses)
+  - Grayed out for Starter tier with label "Pro/Enterprise feature"
+  - Tooltip: "Restrict API access to specific IP addresses or CIDR ranges. Leave empty to allow all IPs."
+  - Format: Accepts space, newline, or comma as delimiters (e.g., "192.168.1.100, 10.0.0.0/24" or one per line)
+  - Validation: Validates IPv4 format and CIDR notation
+  - Pricing: Included with Pro/Enterprise tiers (no additional cost)
 
 **Note:** When gRPC and GraphQL are implemented in the future, they will use similar interactive form and pricing model as Seal.
 
