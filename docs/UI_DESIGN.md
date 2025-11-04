@@ -285,12 +285,16 @@ A service (Seal, gRPC, GraphQL) exists in one of six states, controlling subscri
 
 **User Experience & UI:**
 - Service page shows tab-based layout (Config / Keys)
-- Configuration tab displays current settings (editable)
+- Configuration (normal): tab displays current settings (editable)
+- Configuration (if cancelled): Everything is greyed out. No edits allowed.
 - Toggle switch: [OFF] ⟳ ON
 - Banner (normal): "Service is subscribed but currently disabled. Enable to start serving traffic."
 - Banner (if cancelled): "Subscription cancelled. You can re-enable anytime by selecting Change Plan."
 - All keys (API keys and Seal keys) return `503 Service Unavailable` when called
-- **Billing:** User is still charged full base monthly fee (maintaining subscription/capacity reservation)
+- **Billing:**
+    if normal: User is still charged full base monthly fee (maintaining subscription/capacity reservation)
+    if cancelled: There is no monthly charge. Re-enabling will incur new charges.
+
 
 **Allowed Actions:**
 - Edit configuration (tier, burst, keys, packages)
@@ -333,6 +337,7 @@ A service (Seal, gRPC, GraphQL) exists in one of six states, controlling subscri
 
 **Transitions:**
 - **(4) → (3):** User toggles service OFF (immediate effect, all keys return 503)
+- **(4) → (3):** User cancel subscription
 - **(4) → (5):** User initiates maintenance suspension (future feature, end-of-cycle transition)
 - **(4) → (6):** Admin suspends for non-payment
 
@@ -343,13 +348,12 @@ A service (Seal, gRPC, GraphQL) exists in one of six states, controlling subscri
 **Meaning:** User-initiated long-term suspension to maintain configuration and key ownership at significantly reduced cost.
 
 **User Experience & UI:**
-- Service page shows tab-based layout (Config / Keys / Stats / Logs)
-- Configuration locked (read-only, cannot edit)
+- Same UI state as when service is cancelled (service is disabled, everything is greyed out).
 - "Resume Service" button replaces toggle switch
-- Banner (normal): "Service suspended for maintenance. Configuration and keys preserved at $2/month. Resume anytime."
-- Banner (if cancelled): "Subscription cancelled. You can re-enable anytime by selecting Change Plan."
+- Banner: "Service suspended for maintenance. Configuration and keys preserved at $2/month. Resume anytime."
 - Info note: "Suspension takes effect at end of current billing cycle (DD/MM/YYYY). Current charges are non-refundable."
 - All keys (API keys and Seal keys) return `503 Service Unavailable`
+- In future, may allow key export feature only.
 - **Billing:** Flat $2/month (no usage charges)
 - **Important:** Transition to this state happens at end of current payment cycle (non-refundable if re-enabled)
 
@@ -366,7 +370,7 @@ A service (Seal, gRPC, GraphQL) exists in one of six states, controlling subscri
 - Long-term cost optimization while retaining configuration and key ownership
 
 **Transitions:**
-- **(5) → (4):** User clicks "Resume Service" (takes effect at end of cycle, or immediately with warning)
+- **(5) → (3):** User clicks "Resume Service" (resumes to Disabled state, allowing config adjustment before re-enabling)
 - **(5) → (5):** Cancel subscription via Change Plan (stays in State 5, shows cancellation message)
 - **(5) → (6):** Admin suspends for non-payment
 
