@@ -387,14 +387,8 @@ A service (Seal, gRPC, GraphQL) exists in one of six states, controlling subscri
 **Meaning:** Service and configuration locked due to payment failure or insufficient escrow balance.
 
 **User Experience & UI:**
-- Service page shows tab-based layout (read-only mode)
-- Configuration locked (cannot edit)
-- Banner: "Service suspended due to payment issues. Top up your escrow balance to resume. Contact support if you need help."
-- All edit/action buttons disabled
-- Lock icons on configuration fields
-- All keys/packages locked (cannot create, revoke, or edit)
-- All keys (API keys and Seal keys) return `503 Service Unavailable` (same as disabled state)
-- Authentication still validates before returning 503 (consistent behavior)
+- Same as "Suspended - Maintenance", except no key export feature. The user is somewhat locked out.
+- Banner: "Service suspended due to payment issues. Contact support or deposit to your account to restore service."
 - **Billing:** No new charges (service frozen)
 
 **Allowed Actions:**
@@ -509,8 +503,6 @@ A service (Seal, gRPC, GraphQL) exists in one of six states, controlling subscri
 
 ### Design Decisions - CONFIRMED
 
-Based on requirements clarification, the following design decisions are finalized:
-
 1. **HTTP Status Codes (All States):** ✅ CONFIRMED
    - **All disabled/suspended states (3, 5, 6):** Return `503 Service Unavailable`
    - **Authentication:** Always validated before checking service state
@@ -552,14 +544,16 @@ Based on requirements clarification, the following design decisions are finalize
 
 ### Common Elements
 
-#### Messages Section
-At the top of the main content area. Each message intended to be brief (one liner) with an icon to show severity (info, warning, error). More than one message might be displayed.
+#### Banner Section
+At the top of the main content area. Each banner intended to be brief (one liner) with an icon to show severity (info, warning, error). More than one banner might be displayed.
 
-The section does not have a title and takes no vertical space when there are no messages to show.
+The section does not have a title and takes no vertical space when there are no banners to show.
 
-Any messages just push down the rest of the content.
+Any banners just push down the rest of the content.
 
-The messages displayed here are relevant only to the service/page content, not the entire app.
+The banners displayed here are relevant only to the service/page content, not the entire app.
+
+A banner can optionally have a small spinner appended.
 
 #### Toasters
 Middle of the screen, fade out after 3 seconds. Used for non-critical feedback after a user action (e.g. "Configuration saved", "Wallet connected", etc.)
