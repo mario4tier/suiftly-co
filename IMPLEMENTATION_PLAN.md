@@ -472,8 +472,8 @@ async function validateOperation(customerId: number, estimatedCost: number) {
 
 ## Phase 12: Coming Soon Pages
 **Goal:** Placeholder for gRPC/GraphQL
-**Ref:** docs/COMING_SOON_PAGE.md
-**Files:** apps/webapp/src/pages/services/{grpc,graphql}/
+**Ref:** apps/webapp/src/routes/services/grpc.lazy.tsx, apps/webapp/src/routes/services/graphql.lazy.tsx
+**Files:** apps/webapp/src/routes/services/{grpc,graphql}.lazy.tsx
 **Test:** Routes render correct content
 
 ## Phase 13: Global Manager Core

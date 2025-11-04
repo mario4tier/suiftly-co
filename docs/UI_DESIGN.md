@@ -568,7 +568,7 @@ Each service page has **2 major modes of operation**:
 
 2. **Interactive Form** This is for all other service states (e.g. Disabled, Enabled, Suspended...). Field level actions with immediate effect. No single "submit" button.
 
-**Note:** For MVP, only the Seal service is fully implemented. gRPC and GraphQL show "coming soon" placeholders (see [docs/COMING_SOON_PAGE.md](../docs/COMING_SOON_PAGE.md)).
+**Note:** For MVP, only the Seal service is fully implemented. gRPC and GraphQL show "coming soon" placeholders (see [grpc.lazy.tsx](../apps/webapp/src/routes/services/grpc.lazy.tsx) and [graphql.lazy.tsx](../apps/webapp/src/routes/services/graphql.lazy.tsx)).
 
 ---
 
