@@ -419,28 +419,34 @@ These are completely different concepts:
 | Aspect | API Key | Seal Key |
 |--------|---------|----------|
 | **Purpose** | Authenticate customer requests | Sui signing keys for Seal protocol |
-| **Managed By** | Suiftly platform | Customer (purchased from Suiftly) |
-| **Quantity** | Multiple per customer | 1+ per customer (purchasable) |
+| **Managed By** | Suiftly platform | Customer (derived or imported) |
+| **Quantity** | 0+ per customer (1 created by default) | 0+ per customer (NOT created by default) |
 | **Used In** | HTTP request headers | Seal transaction signing |
 | **Revocable** | Yes, instantly | No (blockchain key pairs) |
+| **Default Creation** | Yes (1 API key on service creation) | No (user must derive or import) |
 
 ### Seal Key Management
 
 **Schema:** See `seal_keys` table in [Database Schema Summary](#database-schema-summary) below.
 
-**Purchase Flow:**
+**Creation Flow (Derive or Import):**
 
-1. Customer initiates Seal key purchase through dashboard
-2. Payment transaction on-chain (deducted from escrow)
-3. Backend generates new Sui key pair
-4. Private key encrypted with customer's wallet public key
-5. Public key registered on-chain if required by Seal protocol
-6. Customer can download encrypted private key
+**Option 1: Derive New Seal Key**
+1. Customer initiates Seal key derivation through dashboard
+2. Backend generates new Sui key pair (derived from customer's wallet)
+3. Private key encrypted with customer's wallet public key
+4. Public key registered on-chain if required by Seal protocol
+5. Customer can download encrypted private key
+
+**Option 2: Import Existing Seal Key**
+1. Customer provides existing Sui key pair
+2. Backend validates and stores encrypted private key
+3. Public key registered on-chain if required by Seal protocol
 
 **Additional Seal Keys:**
 
-- Customers can purchase additional Seal keys beyond the first
-- Each additional key incurs a monthly fee
+- Customers can create additional Seal keys (derived or imported)
+- Each Seal key incurs a monthly fee (no free tier)
 - All Seal keys for a customer have equal privileges
 - Use cases: Separate keys per environment (dev/staging/prod), organizational isolation, disaster recovery backup
 - **Important:** Seal keys are NOT rotated - they must be preserved to decrypt existing data
