@@ -7,9 +7,11 @@
 
 import { router } from '../lib/trpc';
 import { testRouter } from './test';
+import { configRouter } from './config';
 
 export const appRouter = router({
   test: testRouter,
+  config: configRouter,
 });
 
 export type AppRouter = typeof appRouter;

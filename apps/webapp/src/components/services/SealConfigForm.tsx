@@ -1,18 +1,19 @@
 /**
  * Seal Service Configuration Form
  * Onboarding form for subscribing to Seal service
+ * Uses global config variables loaded at app startup
  */
 
-import { useState, useMemo } from 'react';
-import { Check, Info, Download } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Checkbox } from '@/components/ui/checkbox';
-import { Label } from '@/components/ui/label';
+import { useState, useMemo } from "react";
+import { Check, Info, Download } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
-} from '@/components/ui/popover';
+} from "@/components/ui/popover";
 import {
   Dialog,
   DialogContent,
@@ -20,18 +21,30 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog';
-import { SEAL_PRICING } from '@suiftly/shared/schemas';
-import { TermsOfServiceContent } from '@/components/content/TermsOfServiceContent';
+} from "@/components/ui/dialog";
+import {
+  freg_count,
+  fbw_sta,
+  fbw_pro,
+  fbw_bus,
+  fsubs_usd_sta,
+  fsubs_usd_pro,
+  fsubs_usd_bus,
+  fskey_incl,
+  fskey_pkg_incl,
+  freqs_usd,
+  freqs_count,
+} from "@/lib/config";
+import { TermsOfServiceContent } from "@/components/content/TermsOfServiceContent";
 
 interface SealConfigFormProps {
   onTierChange?: (tierSelected: boolean) => void;
 }
 
-type Tier = 'basic' | 'pro' | 'business';
+type Tier = "starter" | "pro" | "business";
 
 export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
-  const [selectedTier, setSelectedTier] = useState<Tier>('pro');
+  const [selectedTier, setSelectedTier] = useState<Tier>("pro");
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [tosModalOpen, setTosModalOpen] = useState(false);
 
@@ -42,53 +55,81 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
     }
   };
 
+  // Tier info using global config variables (zero-cost access)
+  const tierInfo = {
+    starter: {
+      name: "STARTER",
+      reqPerRegion: fbw_sta,
+      reqGlobal: fbw_sta * freg_count,
+      price: fsubs_usd_sta,
+      features: "No burst support",
+    },
+    pro: {
+      name: "PRO",
+      reqPerRegion: fbw_pro,
+      reqGlobal: fbw_pro * freg_count,
+      price: fsubs_usd_pro,
+      features: "Burst support",
+    },
+    business: {
+      name: "BUSINESS",
+      reqPerRegion: fbw_bus,
+      reqGlobal: fbw_bus * freg_count,
+      price: fsubs_usd_bus,
+      features: "Burst support, CIDR Whitelisting",
+    },
+  };
+
   // Calculate monthly fee
   const monthlyFee = useMemo(() => {
-    const tierData = SEAL_PRICING.tiers[selectedTier];
-    return tierData.base;
+    return tierInfo[selectedTier].price;
   }, [selectedTier]);
+
+  // Calculate per-request cost (up to 8 digits, no trailing zeros)
+  const perRequestCost = useMemo(() => {
+    const cost = freqs_usd / freqs_count;
+    // Use toPrecision for up to 8 significant digits, then remove trailing zeros
+    return parseFloat(cost.toPrecision(8));
+  }, []);
 
   const handleSubscribe = () => {
     // TODO: Implement backend synchronization
-    console.log('Subscribe to', selectedTier, 'tier');
+    console.log("Subscribe to", selectedTier, "tier");
   };
 
   const handleDownloadPDF = () => {
     // Download the PDF from public folder
-    const link = document.createElement('a');
-    link.href = '/terms-of-service.pdf';
-    link.download = 'suiftly-terms-of-service.pdf';
+    const link = document.createElement("a");
+    link.href = "/terms-of-service.pdf";
+    link.download = "suiftly-terms-of-service.pdf";
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   };
 
-  const tierInfo = {
-    basic: {
-      name: 'STARTER',
-      reqPerRegion: 100,
-      reqGlobal: 300,
-      price: 20,
-      features: 'No burst support',
-    },
-    pro: {
-      name: 'PRO',
-      reqPerRegion: 500,
-      reqGlobal: 1500,
-      price: 40,
-      features: 'Burst support',
-    },
-    business: {
-      name: 'BUSINESS',
-      reqPerRegion: 2000,
-      reqGlobal: 6000,
-      price: 80,
-      features: 'Burst support, CIDR Whitelisting',
-    },
-  };
-
   return (
     <div className="max-w-3xl mx-auto space-y-6 py-4">
+      {/* Marketing Tagline */}
+      <div className="text-center">
+        <p className="text-lg text-gray-700 dark:text-gray-300 font-medium">
+          Build on guaranteed bandwidth, scale with usage billing
+        </p>
+      </div>
+
+      {/* Per-Request Pricing Section */}
+      <div>
+        <div className="flex items-center gap-2 mb-4">
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+            Per-Request Pricing
+          </h3>
+        </div>
+        <p className="text-sm text-gray-600 dark:text-gray-400">
+          ${perRequestCost}/req ($
+          {freqs_usd % 1 === 0 ? freqs_usd : freqs_usd.toFixed(2)} charged per{" "}
+          {freqs_count.toLocaleString()} successful requests)
+        </p>
+      </div>
+
       {/* Guaranteed Bandwidth Section */}
       <div>
         <div className="flex items-center gap-2 mb-4">
@@ -103,8 +144,16 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
             </PopoverTrigger>
             <PopoverContent className="w-80">
               <p className="text-sm text-gray-600 dark:text-gray-300">
-                Choose your guaranteed bandwidth tier. We operate in 3 regions (US-East, US-West, EU-Frankfurt),
-                so global capacity is approximately 3× per-region capacity.
+                Select your reserved bandwidth with sub-second guarantee.
+                <br />
+                <br />
+                When response time exceeds 1 second, then the request(s) are not
+                charged (dashboard provides relevant metrics).
+                <br />
+                <br />
+                Traffic rate exceeding the guaranteed bandwidth is served
+                best-effort when you choose to enable burst support
+                (pro/business only).
               </p>
             </PopoverContent>
           </Popover>
@@ -112,7 +161,7 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
 
         {/* Tier Cards */}
         <div className="space-y-3">
-          {(['basic', 'pro', 'business'] as Tier[]).map((tier) => {
+          {(["starter", "pro", "business"] as Tier[]).map((tier) => {
             const info = tierInfo[tier];
             const isSelected = selectedTier === tier;
 
@@ -122,13 +171,14 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
                 onClick={() => handleTierSelect(tier)}
                 className={`
                   relative cursor-pointer rounded-lg transition-all border-2
-                  ${isSelected
-                    ? 'border-[#f38020] bg-[#f38020]/5'
-                    : 'border-gray-200 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-500'
+                  ${
+                    isSelected
+                      ? "border-[#f38020] bg-[#f38020]/5"
+                      : "border-gray-200 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-500"
                   }
                 `}
               >
-                <div className="p-4">
+                <div className="p-2">
                   {/* Header Row */}
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-base font-bold text-gray-900 dark:text-gray-100">
@@ -143,7 +193,8 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
 
                   {/* Content Row */}
                   <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
-                    {info.reqPerRegion} req/s per region • ~{info.reqGlobal} req/s globally
+                    {info.reqPerRegion} req/s per region ( ~{info.reqGlobal}{" "}
+                    req/s globally )
                   </p>
 
                   {/* Footer Row */}
@@ -172,7 +223,8 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
             </p>
             <ul className="text-sm text-gray-600 dark:text-gray-400 space-y-1">
               <li className="flex items-center gap-1">
-                • Global geo-steering and failover
+                • Global geo-steering and failover (3 regions: us-east, europe,
+                asia)
                 <Popover>
                   <PopoverTrigger asChild>
                     <button className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
@@ -181,28 +233,27 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
                   </PopoverTrigger>
                   <PopoverContent className="w-80">
                     <p className="text-sm text-gray-600 dark:text-gray-300">
-                      Closest key-server is automatically selected based on your location.
-                      Automatic failover ensures high availability.
+                      Closest key-server automatically selected based on your
+                      location.
+                      <br />
+                      <br /> Regional load-balancing and automatic inter-region
+                      failover ensures high availability.
+                      <br />
+                      <br />
+                      We use cloudflare for smart global routing and DDoS
+                      protection.
                     </p>
                   </PopoverContent>
                 </Popover>
               </li>
-              <li>• 1x Seal Key, 3x packages per key</li>
+              <li>
+                • {fskey_incl}x Seal Key, {fskey_pkg_incl}x packages per key
+              </li>
               <li>• 2x API-Key</li>
               <li>• 2x IPv4 Whitelisting (optional)</li>
             </ul>
           </div>
         </div>
-      </div>
-
-      {/* Pay-As-You-Go */}
-      <div className="rounded-lg border border-blue-200 dark:border-blue-900 bg-blue-50 dark:bg-blue-950/20 p-4">
-        <p className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-2">
-          Pay-As-You-Go (charged separately, no expiration)
-        </p>
-        <ul className="text-sm text-gray-600 dark:text-gray-400 space-y-1">
-          <li>• $1 per 10,000 requests</li>
-        </ul>
       </div>
 
       {/* Optional Add-ons */}
@@ -216,7 +267,8 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
           </PopoverTrigger>
           <PopoverContent className="w-80">
             <p className="text-sm text-gray-600 dark:text-gray-300">
-              Additional Seal Keys, packages, API keys, and IP whitelisting can be added after subscription.
+              Additional Seal Keys, packages, API keys, and IP whitelisting can
+              be added after subscription.
             </p>
           </PopoverContent>
         </Popover>
@@ -233,7 +285,7 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
           htmlFor="terms"
           className="text-sm text-gray-700 dark:text-gray-300 cursor-pointer"
         >
-          Agree to{' '}
+          Agree to{" "}
           <button
             type="button"
             onClick={(e) => {
@@ -244,6 +296,7 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
           >
             terms of service
           </button>
+          {" "}including monthly subscription and per-request charges
         </Label>
       </div>
 

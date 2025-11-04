@@ -135,7 +135,7 @@ Generated from MA_VAULT by Global Manager:
 
 ### Example Pricing Calculations
 
-**Example 1: Starter Tier (Basic)**
+**Example 1: Starter Tier**
 - Tier: Starter ($20/month)
 - Seal Keys: 1 (included)
 - Packages: 3 (included)

@@ -65,18 +65,20 @@ function SealConfigPage() {
           <h1 className="text-2xl font-semibold text-gray-900 dark:text-gray-50">Seal Configuration</h1>
         </div>
 
-        {/* Status Alert */}
-        <div className={`${alert.bgColor} border ${alert.borderColor} rounded-lg p-3 flex gap-3`}>
-          <StatusIcon className={`h-5 w-5 ${alert.iconColor} flex-shrink-0 mt-0.5`} />
-          <div className="flex-1">
-            <div className={`text-sm ${alert.textColor}`}>
-              {alert.message}
+        {/* Status Alert - Only show for enabled/disabled services */}
+        {serviceStatus !== 'NotProvisioned' && (
+          <div className={`${alert.bgColor} border ${alert.borderColor} rounded-lg p-3 flex gap-3`}>
+            <StatusIcon className={`h-5 w-5 ${alert.iconColor} flex-shrink-0 mt-0.5`} />
+            <div className="flex-1">
+              <div className={`text-sm ${alert.textColor}`}>
+                {alert.message}
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
         {/* Configuration Form */}
-        <SealConfigForm onTierChange={setTierSelected} serviceStatus={serviceStatus} />
+        <SealConfigForm onTierChange={setTierSelected} />
       </div>
     </DashboardLayout>
   );

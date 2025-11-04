@@ -9,6 +9,7 @@
   },
   "scripts": {
     "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx src/migrate.ts && tsx src/timescale-setup.ts",
     "db:push": "drizzle-kit push && tsx src/timescale-setup.ts",
     "db:studio": "drizzle-kit studio",
     "db:timescale": "tsx src/timescale-setup.ts"

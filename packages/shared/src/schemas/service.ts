@@ -15,14 +15,14 @@ export const serviceStatusSchema = z.enum(['NotProvisioned', 'Enabled', 'Disable
 export type ServiceStatus = z.infer<typeof serviceStatusSchema>;
 
 export const sealConfigSchema = z.object({
-  tier: z.enum(['basic', 'pro', 'business']),
+  tier: z.enum(['starter', 'pro', 'business']),
   burstEnabled: z.boolean(),
   totalSealKeys: z.number().int().min(1),
   packagesPerSealKey: z.number().int().min(3),
   totalApiKeys: z.number().int().min(1),
 }).refine((data) => {
   // Burst only available for Pro and Business
-  if (data.burstEnabled && data.tier === 'basic') {
+  if (data.burstEnabled && data.tier === 'starter') {
     return false;
   }
   return true;
@@ -37,7 +37,7 @@ export type SealConfig = z.infer<typeof sealConfigSchema>;
 // Note: These are default values. Production values should be fetched from service_tier_config table
 export const SEAL_PRICING = {
   tiers: {
-    basic: {
+    starter: {
       base: 20,
       reqPerSecRegion: 20,
       reqPerSecGlobal: 60,

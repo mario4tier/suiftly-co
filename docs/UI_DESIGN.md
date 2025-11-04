@@ -658,14 +658,6 @@ Each service page has **2 major modes of operation**:
 
 **Form Fields (All Services):**
 
-**0. Always Included Features (Top of Form)**
-   - Type: Informational banner (not interactive)
-   - Content:
-     - "Global geo-steering and failover (closest key-server automatically selected)"
-     - "Auto-failover / retry for high-availability"
-   - Style: Light background, checkmark icon, non-dismissible
-   - Purpose: Show value included with all tiers
-
 **1. Guaranteed Bandwidth (?) - Tier Selection**
    - Type: **Horizontal card blocks** (stacked vertically, full-width)
    - Layout: Three stacked cards (full-width on all screen sizes)
@@ -674,16 +666,6 @@ Each service page has **2 major modes of operation**:
      - **Header row:** Tier name (left) + "SELECTED" badge (right, when selected)
      - **Content row:** Capacity info on one line: "X req/s per region • ~Y req/s globally"
      - **Footer row:** Monthly price "$Z/month"
-
-   **Selection States:**
-   - **Default:** 1px solid border (gray-200)
-   - **Hover:** 2px solid border (gray-400) + subtle cursor change
-   - **Selected:**
-     - 3px solid border (primary color: #f38020 orange)
-     - "SELECTED" badge appears (top-right, pill-shaped, primary color background)
-     - Optional: Subtle background tint (rgba(243, 128, 32, 0.05))
-
-   - Tooltip: "Choose your guaranteed bandwidth tier. We operate in 3 regions (US-East, US-West, EU-Frankfurt), so global capacity is approximately 3× per-region capacity."
 
    **Tier Details:**
    - **Starter:** 100 req/s per region, ~300 req/s globally, $20/mo

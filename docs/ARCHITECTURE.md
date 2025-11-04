@@ -282,6 +282,73 @@ suiftly-co/
 - **haproxy_logs** (TimescaleDB hypertable) - timestamp, customer_id, service_type, method, status_code, bytes_out
 - **usage_records** - customer_id, service_type, request_count, window_start, window_end, charged_amount
 - **escrow_transactions** - customer_id, tx_digest, tx_type, amount, timestamp
+- **config_global** - key-value configuration table for system-wide settings (see below)
+
+### ConfigGlobal Table
+
+**Purpose:** Single source of truth for system-wide configuration that controls both frontend display and backend behavior.
+
+**Schema:**
+```typescript
+{
+  key: string (primary key)  // Unique configuration key
+  value: string               // Configuration value (string representation)
+}
+```
+
+**Access:**
+- Each development environment has its own ConfigGlobal (from local test DB)
+- Production has a single ConfigGlobal (in production DB)
+- Heavily cached by application layer (LRU cache with TTL)
+- No fallback/default values - database is single source of truth
+
+**Frontend Configuration Keys (f*):**
+
+Controls what is displayed on the Seal service overview page:
+
+| Key | Description | Example Value |
+|-----|-------------|---------------|
+| `fver` | Config version (increment to force client reload) | `1` |
+| `freg_count` | Number of regions (for calculating global bandwidth) | `3` |
+| `fbw_sta` | Starter tier bandwidth (req/s per region) | `3` |
+| `fbw_pro` | Pro tier bandwidth (req/s per region) | `15` |
+| `fbw_bus` | Business tier bandwidth (req/s per region) | `100` |
+| `fsubs_usd_sta` | Starter tier subscription fee | `9` |
+| `fsubs_usd_pro` | Pro tier subscription fee | `29` |
+| `fsubs_usd_bus` | Business tier subscription fee | `185` |
+| `freqs_usd` | Usage-based pricing (USD) | `1.00` |
+| `freqs_count` | Requests per pricing unit | `10000` |
+| `fskey_incl` | Included Seal keys | `1` |
+| `fskey_pkg_incl` | Included packages per key | `3` |
+
+**Version Tracking:**
+- `fver` should be incremented whenever important fields change (e.g., pricing)
+- Client can periodically check version and force reload if out of sync
+- Future enhancement: background polling to detect version mismatch
+
+**Backend Configuration Keys (b*):**
+
+Controls backend behavior and rate limiting:
+
+| Key | Description | Example Value |
+|-----|-------------|---------------|
+| `bglim_sta` | Guaranteed limit for Starter tier (req/s) | `3` |
+| `bglim_pro` | Guaranteed limit for Pro tier (req/s) | `15` |
+| `bglim_bus` | Guaranteed limit for Business tier (req/s) | `100` |
+
+**Usage Pattern:**
+```typescript
+// API endpoint fetches all f* keys for frontend
+GET /api/config/frontend -> { fbw_sta: "100", ... }
+
+// Backend reads b* keys for rate limiting
+const guaranteedLimit = await getConfig('bglim_pro') // "500"
+```
+
+**Caching Strategy:**
+- Cache invalidation: Manual (admin dashboard or script)
+- TTL: 5 minutes (values rarely change)
+- Cache key: `config:global:{key}` for single values, `config:global:frontend` for all fe_* keys
 
 **TimescaleDB Configuration:**
 ```sql
