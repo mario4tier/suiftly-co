@@ -245,10 +245,11 @@ A service (Seal, gRPC, GraphQL) exists in one of six states, controlling subscri
 
 **Meaning:** No active subscription exists for this service.
 
-**User Experience:**
-- Service page shows onboarding form
-- All configuration fields are interactive
-- "Subscribe to Service" button displayed (replaces old "Enable Service" terminology)
+**User Experience & UI:**
+- Service page shows onboarding form with interactive configuration fields
+- Page title: "Configure [Service Name]"
+- Prominent "Subscribe to Service" button at bottom of form
+- No status badge in header
 - No billing charges
 
 **Allowed Actions:**
@@ -256,26 +257,23 @@ A service (Seal, gRPC, GraphQL) exists in one of six states, controlling subscri
 - Calculate pricing estimates
 - Subscribe to service (transitions to State 2)
 
-**UI Indicators:**
-- Page title: "Configure [Service Name]"
-- Prominent "Subscribe to Service" button at bottom of form
-- No status badge in header
-
 ---
 
 #### **(2) Provisioning** (Pending Payment)
 
 **Meaning:** User has selected a tier and initiated subscription, payment is pending confirmation.
 
-**User Experience:**
-- Still shows the **onboarding form** (same as State 1)
-- Loading spinner or "Processing subscription..." banner/overlay displayed on the form
+**User Experience & UI:**
+- Shows the **onboarding form** (same as State 1) with loading overlay
+- Banner: "Processing your subscription..." with spinner
+- Form fields remain visible but disabled during payment processing
 - Cannot modify tier selection or submit again during payment processing
 - Return to State (1) only if payment is explicitly canceled (admin-only initially)
 
-**UI Indicators:**
-- Top info message: "Processing your subscription..." with spinner
-- Form fields remain visible but disabled during payment processing
+**Allowed Actions:**
+- View selected tier (onboarding form remains visible but disabled)
+- Wait for payment confirmation
+- Admin: Cancel pending subscription (returns to State 1)
 
 **Transitions:**
 - **(2) → (3):** Payment confirmed → Service subscribed, defaulting to disabled state
@@ -286,24 +284,21 @@ A service (Seal, gRPC, GraphQL) exists in one of six states, controlling subscri
 
 **Meaning:** Active subscription exists, but service is currently disabled by user choice.
 
-**User Experience:**
+**User Experience & UI:**
 - Service page shows tab-based layout (Config / Keys)
 - Configuration tab displays current settings (editable)
-- "Enable Service" toggle switch in OFF position
-- All keys (API keys and Seal keys) return `503 Service Unavailable` when called
-- **Billing:** User is charged full base monthly fee (maintaining subscription/capacity reservation)
-
-**Allowed Actions:**
-- Edit configuration (burst, keys, packages)
-- Manage keys (create, revoke, copy) - keys are authenticated but return 503 when called
-- Enable service (toggle switch to ON → transitions to State 4)
-- Change Plan (allows user to select a different tier, re-enable, or cancel subscription)
-
-**UI Indicators:**
 - Status badge: "Disabled" (gray)
 - Toggle switch: [OFF] ⟳ ON
 - Banner (normal): "Service is subscribed but currently disabled. Enable to start serving traffic."
 - Banner (if cancelled): "Subscription cancelled. You can re-enable anytime by selecting Change Plan."
+- All keys (API keys and Seal keys) return `503 Service Unavailable` when called
+- **Billing:** User is charged full base monthly fee (maintaining subscription/capacity reservation)
+
+**Allowed Actions:**
+- Edit configuration (tier, burst, keys, packages)
+- Manage keys (create, revoke, copy) - keys are authenticated but return 503 when called
+- Enable service (toggle switch to ON → transitions to State 4)
+- Change Plan (allows user to select a different tier, re-enable, or cancel subscription)
 
 **Transitions:**
 - **(3) → (4):** User toggles service ON (immediate effect)
@@ -318,12 +313,13 @@ A service (Seal, gRPC, GraphQL) exists in one of six states, controlling subscri
 
 **Meaning:** Active subscription with service fully operational and serving traffic.
 
-**User Experience:**
+**User Experience & UI:**
 - Service page shows tab-based layout (Config / Keys / Stats / Logs)
 - Configuration tab displays current settings (editable)
-- "Enable Service" toggle switch in ON position
+- Status badge: "Active" (green) 🟢
+- Toggle switch: OFF ⟳ [ON]
+- Stats charts show real-time usage data
 - API/Seal keys working, traffic flowing normally
-- Stats show real-time usage data
 - **Billing:** Base monthly fee + usage charges apply
 
 **Allowed Actions:**
@@ -331,11 +327,6 @@ A service (Seal, gRPC, GraphQL) exists in one of six states, controlling subscri
 - Disable service (toggle switch to OFF → transitions to State 3)
 - Manage keys (create, revoke, copy, enable/disable individual keys)
 - View stats and logs (live data accumulating)
-
-**UI Indicators:**
-- Status badge: "Active" (green) 🟢
-- Toggle switch: OFF ⟳ [ON]
-- Stats charts show real-time data
 
 **Configuration Change Behavior:**
 - **Tier changes:** Apply immediately, no traffic disruption
@@ -354,10 +345,14 @@ A service (Seal, gRPC, GraphQL) exists in one of six states, controlling subscri
 
 **Meaning:** User-initiated long-term suspension to maintain configuration and key ownership at significantly reduced cost.
 
-**User Experience:**
+**User Experience & UI:**
 - Service page shows tab-based layout (Config / Keys / Stats / Logs)
 - Configuration locked (read-only, cannot edit)
+- Status badge: "Suspended - Maintenance" (yellow)
 - "Resume Service" button replaces toggle switch
+- Banner (normal): "Service suspended for maintenance. Configuration and keys preserved at $2/month. Resume anytime."
+- Banner (if cancelled): "Subscription cancelled. You can re-enable anytime by selecting Change Plan."
+- Info note: "Suspension takes effect at end of current billing cycle (DD/MM/YYYY). Current charges are non-refundable."
 - All keys (API keys and Seal keys) return `503 Service Unavailable`
 - **Billing:** Flat $2/month (no usage charges)
 - **Important:** Transition to this state happens at end of current payment cycle (non-refundable if re-enabled)
@@ -368,13 +363,6 @@ A service (Seal, gRPC, GraphQL) exists in one of six states, controlling subscri
 - View historical stats and logs
 - Resume service (transitions to State 4 at end of cycle, or immediately with no refund)
 - Change Plan (allows user to select a different tier, re-enable, or cancel subscription)
-
-**UI Indicators:**
-- Status badge: "Suspended - Maintenance" (yellow)
-- Banner (normal): "Service suspended for maintenance. Configuration and keys preserved at $2/month. Resume anytime."
-- Banner (if cancelled): "Subscription cancelled. You can re-enable anytime by selecting Change Plan."
-- "Resume Service" button (replaces toggle)
-- Info note: "Suspension takes effect at end of current billing cycle (DD/MM/YYYY). Current charges are non-refundable."
 
 **Use Cases:**
 - Planned infrastructure changes (multi-week downtime)
@@ -398,13 +386,16 @@ A service (Seal, gRPC, GraphQL) exists in one of six states, controlling subscri
 
 **Meaning:** Service and configuration locked due to payment failure or insufficient escrow balance.
 
-**User Experience:**
+**User Experience & UI:**
 - Service page shows tab-based layout (read-only mode)
 - Configuration locked (cannot edit)
+- Status badge: "Suspended - Payment Required" (red) 🔴
+- Banner: "Service suspended due to payment issues. Top up your escrow balance to resume. Contact support if you need help."
+- All edit/action buttons disabled
+- Lock icons on configuration fields
 - All keys/packages locked (cannot create, revoke, or edit)
 - All keys (API keys and Seal keys) return `503 Service Unavailable` (same as disabled state)
 - Authentication still validates before returning 503 (consistent behavior)
-- Prominent banner with payment action required
 - **Billing:** No new charges (service frozen)
 
 **Allowed Actions:**
@@ -412,12 +403,6 @@ A service (Seal, gRPC, GraphQL) exists in one of six states, controlling subscri
 - View keys, stats, logs (read-only)
 - Top up escrow balance (resolves suspension)
 - Contact support
-
-**UI Indicators:**
-- Status badge: "Suspended - Payment Required" (red) 🔴
-- Banner: "Service suspended due to payment issues. Top up your escrow balance to resume. Contact support if you need help."
-- All edit/action buttons disabled
-- Lock icons on configuration fields
 
 **Transitions:**
 - **(6) → (3):** Admin resolves payment issue or user tops up balance → Service restored to disabled state
