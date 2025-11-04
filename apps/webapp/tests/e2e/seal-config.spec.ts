@@ -226,7 +226,7 @@ test.describe('Seal Service Onboarding Form', () => {
     await expect(page.locator('text=Global geo-steering and failover')).toBeVisible();
     await expect(page.locator('text=1x Seal Key, 3x packages per key')).toBeVisible();
     await expect(page.locator('text=2x API-Key')).toBeVisible();
-    await expect(page.locator('text=2x IPv4 Whitelisting')).toBeVisible();
+    await expect(page.locator('text=On-chain spending-limit protection')).toBeVisible();
 
     // Should see checkmark icon
     await expect(page.locator('svg[class*="lucide-check"]').first()).toBeVisible();

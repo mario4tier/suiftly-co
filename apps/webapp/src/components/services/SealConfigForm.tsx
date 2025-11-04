@@ -62,21 +62,18 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
       reqPerRegion: fbw_sta,
       reqGlobal: fbw_sta * freg_count,
       price: fsubs_usd_sta,
-      features: "No burst support",
     },
     pro: {
       name: "PRO",
       reqPerRegion: fbw_pro,
       reqGlobal: fbw_pro * freg_count,
       price: fsubs_usd_pro,
-      features: "Burst support",
     },
     business: {
       name: "BUSINESS",
       reqPerRegion: fbw_bus,
       reqGlobal: fbw_bus * freg_count,
       price: fsubs_usd_bus,
-      features: "Burst support, CIDR Whitelisting",
     },
   };
 
@@ -144,16 +141,12 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
             </PopoverTrigger>
             <PopoverContent className="w-80">
               <p className="text-sm text-gray-600 dark:text-gray-300">
-                Select your reserved bandwidth with sub-second guarantee.
+                Reserved bandwidth with sub-second response guarantee. Requests exceeding
+                1 second are not charged.
                 <br />
                 <br />
-                When response time exceeds 1 second, then the request(s) are not
-                charged (dashboard provides relevant metrics).
-                <br />
-                <br />
-                Traffic rate exceeding the guaranteed bandwidth is served
-                best-effort when you choose to enable burst support
-                (pro/business only).
+                Pro/Business tiers can enable burst support for best-effort traffic above
+                the guaranteed bandwidth.
               </p>
             </PopoverContent>
           </Popover>
@@ -178,32 +171,29 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
                   }
                 `}
               >
-                <div className="p-2">
-                  {/* Header Row */}
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-base font-bold text-gray-900 dark:text-gray-100">
+                <div className="p-2 flex items-start justify-between gap-4">
+                  {/* Left Column: Title and Bandwidth */}
+                  <div className="flex-1 min-w-0">
+                    <h4 className="text-base font-bold text-gray-900 dark:text-gray-100 mb-1">
                       {info.name}
-                    </span>
-                    {isSelected && (
-                      <span className="px-3 py-1 text-xs font-semibold rounded-full bg-[#f38020] text-white">
-                        SELECTED
-                      </span>
-                    )}
+                    </h4>
+                    <p className="text-sm text-gray-600 dark:text-gray-400">
+                      {info.reqPerRegion} req/s per region ( ~{info.reqGlobal}{" "}
+                      req/s globally )
+                    </p>
                   </div>
 
-                  {/* Content Row */}
-                  <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
-                    {info.reqPerRegion} req/s per region ( ~{info.reqGlobal}{" "}
-                    req/s globally )
-                  </p>
-
-                  {/* Footer Row */}
-                  <div className="flex items-center justify-between">
+                  {/* Right Column: Badge and Price */}
+                  <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                    <div className="h-[28px] flex items-center">
+                      {isSelected && (
+                        <span className="px-3 py-1 text-xs font-semibold rounded-full bg-[#f38020] text-white">
+                          SELECTED
+                        </span>
+                      )}
+                    </div>
                     <span className="text-base font-semibold text-gray-900 dark:text-gray-100">
                       ${info.price}/month
-                    </span>
-                    <span className="text-sm text-gray-500 dark:text-gray-400">
-                      {info.features}
                     </span>
                   </div>
                 </div>
@@ -223,8 +213,7 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
             </p>
             <ul className="text-sm text-gray-600 dark:text-gray-400 space-y-1">
               <li className="flex items-center gap-1">
-                • Global geo-steering and failover (3 regions: us-east, europe,
-                asia)
+                • Global geo-steering and failover (3 regions)
                 <Popover>
                   <PopoverTrigger asChild>
                     <button className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
@@ -247,10 +236,52 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
                 </Popover>
               </li>
               <li>
-                • {fskey_incl}x Seal Key, {fskey_pkg_incl}x packages per key
+                • {fskey_incl}x Seal Key ({fskey_pkg_incl} packages), Import/Export support
               </li>
-              <li>• 2x API-Key</li>
-              <li>• 2x IPv4 Whitelisting (optional)</li>
+              <li className="flex items-center gap-1">
+                • 2x API-Key
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <button className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
+                      <Info className="h-3 w-3" />
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-80">
+                    <p className="text-sm text-gray-600 dark:text-gray-300">
+                      API-Keys can be created, revoked, and rotated from your dashboard.
+                    </p>
+                  </PopoverContent>
+                </Popover>
+              </li>
+              <li>• On-chain spending-limit protection</li>
+              <li>• Usage and response time metrics</li>
+            </ul>
+          </div>
+        </div>
+
+        <div className="flex items-start gap-2 mb-3">
+          <Check className="h-5 w-5 text-green-600 dark:text-green-500 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-2">
+              Additional features for Pro/Business
+            </p>
+            <ul className="text-sm text-gray-600 dark:text-gray-400 space-y-1">
+              <li>• Burst support</li>
+              <li>• 2x IPv4 Allowlist support</li>
+              <li>• More metrics/graphs</li>
+            </ul>
+          </div>
+        </div>
+
+        <div className="flex items-start gap-2">
+          <Check className="h-5 w-5 text-green-600 dark:text-green-500 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-2">
+              Additional features for Business only
+            </p>
+            <ul className="text-sm text-gray-600 dark:text-gray-400 space-y-1">
+              <li>• Advanced metrics drill-down (per-region, per API-Key)</li>
+              <li>• 2x CIDR Allowlist support</li>
             </ul>
           </div>
         </div>
@@ -267,7 +298,7 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
           </PopoverTrigger>
           <PopoverContent className="w-80">
             <p className="text-sm text-gray-600 dark:text-gray-300">
-              Additional Seal Keys, packages, API keys, and IP whitelisting can
+              Additional Seal Keys, packages, API keys, and IP allowlisting can
               be added after subscription.
             </p>
           </PopoverContent>
@@ -309,6 +340,11 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
       >
         Subscribe to Service for ${monthlyFee.toFixed(2)}/month
       </Button>
+
+      {/* Plan Flexibility Notice */}
+      <p className="text-center text-sm text-gray-500 dark:text-gray-400">
+        Change plans or cancel anytime from your dashboard
+      </p>
 
       {/* Terms of Service Modal */}
       <Dialog open={tosModalOpen} onOpenChange={setTosModalOpen}>

@@ -626,14 +626,14 @@ Each service page has **2 major modes of operation**:
 │  │ BUSINESS                               │          │
 │  ├────────────────────────────────────────┤          │
 │  │ 2,000 req/s per region • ~6,000 req/s globally    │
-│  │ $80/month - Burst support, CIDR Whitelisting      │
+│  │ $80/month - Burst support, CIDR Allowlisting      │
 │  └────────────────────────────────────────┘          │
 │                                                      │
 │  ✓ Included with every subscription                  │
 │    • Global geo-steering and failover (i)            │
 │    • 1x Seal Key, 3x packages id                     │
 │    • 2x API-Key                                      │
-│    • 2x IPv4 Whitelisting (optional)                 │
+│    • On-chain spending-limit protection              │
 │                                                      │
 │  Pay-As-You-Go (charged separately, no expiration)   |
 │    • $1 per 10,000 requests                          │
