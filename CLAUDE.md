@@ -41,6 +41,52 @@ Initial setup phase - no code scaffolded yet.
 - TypeScript strict mode
 - Update this file only when adding commands or major patterns
 
+## Database Management
+
+### Quick Reset (Destroys all data)
+```bash
+./scripts/dev/reset-database.sh
+```
+
+### Migration Squash (Early development only)
+Consolidate migrations into single initial schema:
+```bash
+./scripts/dev/squash-migrations.sh
+git add packages/database/migrations/
+git commit -m "chore: squash migrations to single initial schema"
+```
+
+**When to squash:**
+- During early development (what you're doing now)
+- Before major milestones
+- Last time before production launch
+
+**Never squash after production launch!**
+
+See [docs/MIGRATION_SQUASH_GUIDE.md](docs/MIGRATION_SQUASH_GUIDE.md) for detailed guide.
+
+### Production Safety 🛡️
+
+All destructive dev scripts include **four layers of protection**:
+
+1. **system.conf check** - Blocks if `ENVIRONMENT=production`
+2. **Database name blocking** - Rejects production DB names
+3. **Non-standard name confirmation** - Requires manual typing of DB name
+4. **Remote host blocking** - Only allows localhost
+
+**Test safeguards:**
+```bash
+./scripts/test-safety.sh  # Verify all protections work
+```
+
+**Setup production:**
+```bash
+cp system.conf.example system.conf
+sed -i 's/ENVIRONMENT=development/ENVIRONMENT=production/' system.conf
+```
+
+See [docs/PRODUCTION_SAFETY.md](docs/PRODUCTION_SAFETY.md) for complete details.
+
 ## CRITICAL: Process Management
 
 **NEVER use `killall -9 node` or similar commands!** This kills the AI agent process itself.

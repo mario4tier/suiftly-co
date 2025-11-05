@@ -10,6 +10,8 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { trpc } from "@/lib/trpc";
+import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import {
   Popover,
   PopoverContent,
@@ -48,8 +50,11 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
   const [selectedTier, setSelectedTier] = useState<Tier>("pro");
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [tosModalOpen, setTosModalOpen] = useState(false);
-  const [isValidating, setIsValidating] = useState(false);
-  const [isSubscribing, setIsSubscribing] = useState(false);
+  const queryClient = useQueryClient();
+
+  // React Query mutations
+  const validateMutation = trpc.services.validateSubscription.useMutation();
+  const subscribeMutation = trpc.services.subscribe.useMutation();
 
   const handleTierSelect = (tier: Tier) => {
     setSelectedTier(tier);
@@ -93,50 +98,65 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
   }, []);
 
   const handleSubscribe = async () => {
-    console.log("Subscribe to", selectedTier, "tier");
-
     // Step 1: Validate subscription
-    setIsValidating(true);
     try {
-      const validation = await trpc.services.validateSubscription.mutate({
+      const validation = await validateMutation.mutateAsync({
         serviceType: 'seal',
         tier: selectedTier,
       });
 
-      setIsValidating(false);
-
       if (!validation.valid) {
-        // Show error message
-        alert(validation.errors![0].message);
+        // Show error message with toast
+        toast.error(validation.errors![0].message);
         return;
       }
 
-      // Show warnings if any
+      // Show warnings if any (requires user confirmation)
       if (validation.warnings && validation.warnings.length > 0) {
-        const confirmed = confirm(
-          `Warning: ${validation.warnings[0].message}\n\nDo you want to continue?`
-        );
-        if (!confirmed) return;
+        // For warnings requiring confirmation, use a promise-based approach
+        const warning = validation.warnings[0].message;
+        let userConfirmed = false;
+
+        // Show warning toast with action button
+        toast.warning(warning, {
+          duration: Infinity, // Keep visible until user acts
+          action: {
+            label: 'Continue',
+            onClick: () => {
+              userConfirmed = true;
+              handleContinueSubscription();
+            }
+          },
+          cancel: {
+            label: 'Cancel',
+            onClick: () => {
+              userConfirmed = false;
+            }
+          }
+        });
+        return; // Exit - continuation will be handled by action callback
       }
 
+      // No warnings - proceed directly
+      await handleContinueSubscription();
+    } catch (error: any) {
+      toast.error(error.message || 'Subscription failed. Please try again.');
+    }
+  };
+
+  const handleContinueSubscription = async () => {
+    try {
       // Step 2: Execute subscription
-      setIsSubscribing(true);
-      const service = await trpc.services.subscribe.mutate({
+      const service = await subscribeMutation.mutateAsync({
         serviceType: 'seal',
         tier: selectedTier,
       });
 
-      console.log("✅ Subscription successful:", service);
-      console.log(`Service state: ${service.state}`);
-
-      // Success! Reload the page to show the new state
-      window.location.reload();
+      // Success! Invalidate queries to refresh UI
+      toast.success('Subscription successful!');
+      await queryClient.invalidateQueries({ queryKey: ['services'] });
     } catch (error: any) {
-      console.error("❌ Subscription failed:", error);
-      alert(error.message || 'Subscription failed. Please try again.');
-    } finally {
-      setIsValidating(false);
-      setIsSubscribing(false);
+      toast.error(error.message || 'Subscription failed. Please try again.');
     }
   };
 
@@ -381,22 +401,22 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
       <Button
         size="lg"
         className="w-full bg-[#f38020] hover:bg-[#d97019] text-white font-semibold"
-        disabled={!termsAccepted || isValidating || isSubscribing}
+        disabled={!termsAccepted || validateMutation.isPending || subscribeMutation.isPending}
         onClick={handleSubscribe}
       >
-        {isValidating && (
+        {validateMutation.isPending && (
           <>
             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
             Validating...
           </>
         )}
-        {isSubscribing && (
+        {subscribeMutation.isPending && (
           <>
             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
             Processing your subscription...
           </>
         )}
-        {!isValidating && !isSubscribing && (
+        {!validateMutation.isPending && !subscribeMutation.isPending && (
           <>Subscribe to Service for ${monthlyFee.toFixed(2)}/month</>
         )}
       </Button>

@@ -8,6 +8,7 @@ import ReactDOM from 'react-dom/client';
 import { RouterProvider, createRouter } from '@tanstack/react-router';
 import { WalletProvider } from './components/wallet/WalletProvider';
 import { ThemeProvider } from './components/providers/ThemeProvider';
+import { TRPCProvider } from './components/providers/TRPCProvider';
 import { routeTree } from './routeTree.gen';
 import { Toaster } from 'sonner';
 import { loadFrontendConfig } from './lib/config';
@@ -47,9 +48,8 @@ async function initializeApp() {
           margin: '0 auto 16px',
           animation: 'spin 1s linear infinite'
         }} />
-        <p style={{ marginBottom: '8px' }}>Loading configuration from database...</p>
-        <p style={{ fontSize: '12px', color: '#9ca3af' }}>
-          Waiting for backend connection
+        <p style={{ fontSize: '14px', color: '#6b7280' }}>
+          Connecting to Suiftly...
         </p>
       </div>
       <style>{`
@@ -67,10 +67,12 @@ async function initializeApp() {
   root.render(
     <React.StrictMode>
       <ThemeProvider>
-        <WalletProvider>
-          <Toaster position="top-center" />
-          <RouterProvider router={router} />
-        </WalletProvider>
+        <TRPCProvider>
+          <WalletProvider>
+            <Toaster position="top-center" />
+            <RouterProvider router={router} />
+          </WalletProvider>
+        </TRPCProvider>
       </ThemeProvider>
     </React.StrictMode>
   );

@@ -1,13 +1,12 @@
 /**
- * tRPC client setup for React
+ * tRPC client setup for React with React Query
  * Type-safe API calls to backend with auth support
  */
 
-import { createTRPCClient, httpBatchLink, TRPCClientError } from '@trpc/client';
+import { createTRPCReact } from '@trpc/react-query';
+import { createTRPCClient, httpBatchLink } from '@trpc/client';
 import type { AppRouter } from '../../../api/src/routes';
 import { useAuthStore } from '../stores/auth';
-
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
 /**
  * Get access token from Zustand store
@@ -27,8 +26,35 @@ function getAccessToken(): string | null {
   }
 }
 
-export const trpc = createTRPCClient<AppRouter>({
+/**
+ * React Query tRPC client - USE THIS IN 99% OF CASES
+ * Provides hooks (.useQuery, .useMutation) for use in React components
+ * Includes automatic caching, refetching, and React state integration
+ */
+export const trpc = createTRPCReact<AppRouter>();
+
+/**
+ * Vanilla tRPC client - ONLY USE FOR PRE-REACT INITIALIZATION
+ * Used in config.ts to load frontend config before React mounts
+ * Provides .query()/.mutate() methods without React dependency
+ * If you're in a React component, use `trpc` instead
+ */
+export const vanillaTrpc = createTRPCClient<AppRouter>({
   links: [
+    httpBatchLink({
+      url: '/i/api',
+      credentials: 'include',
+      headers() {
+        const token = getAccessToken();
+        return token ? { Authorization: `Bearer ${token}` } : {};
+      },
+    }),
+  ],
+});
+
+// Create tRPC link configuration
+export function getTRPCLinks() {
+  return [
     httpBatchLink({
       url: '/i/api', // Same-origin (dev: proxied, prod: served by Fastify)
       credentials: 'include', // Send cookies (for refresh token)
@@ -100,5 +126,5 @@ export const trpc = createTRPCClient<AppRouter>({
         return response;
       },
     }),
-  ],
-});
+  ];
+}

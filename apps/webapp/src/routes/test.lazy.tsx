@@ -25,10 +25,17 @@ function TestPageContent() {
   const { user, logout } = useAuth();
   const [testResult, setTestResult] = useState<string>('');
 
+  // Use React Query for the test endpoint (disabled by default, only fetch on button click)
+  const testQuery = trpc.test.getProfile.useQuery(undefined, { enabled: false });
+
   const testProtectedEndpoint = async () => {
     try {
-      const result = await trpc.test.getProfile.query();
-      setTestResult(JSON.stringify(result, null, 2));
+      const result = await testQuery.refetch();
+      if (result.data) {
+        setTestResult(JSON.stringify(result.data, null, 2));
+      } else if (result.error) {
+        setTestResult(`Error: ${result.error.message}`);
+      }
     } catch (error: any) {
       setTestResult(`Error: ${error.message}`);
     }

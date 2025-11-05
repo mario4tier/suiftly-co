@@ -15,6 +15,7 @@ import { Route as WalletDemoRouteImport } from './routes/wallet-demo'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ServicesSealRouteImport } from './routes/services/seal'
 
 const TestLazyRouteImport = createFileRoute('/test')()
 const SupportLazyRouteImport = createFileRoute('/support')()
@@ -100,25 +101,30 @@ const ServicesGraphqlLazyRoute = ServicesGraphqlLazyRouteImport.update({
 } as any).lazy(() =>
   import('./routes/services/graphql.lazy').then((d) => d.Route),
 )
-const ServicesSealIndexLazyRoute = ServicesSealIndexLazyRouteImport.update({
-  id: '/seal/',
-  path: '/seal/',
+const ServicesSealRoute = ServicesSealRouteImport.update({
+  id: '/seal',
+  path: '/seal',
   getParentRoute: () => ServicesLazyRoute,
+} as any)
+const ServicesSealIndexLazyRoute = ServicesSealIndexLazyRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => ServicesSealRoute,
 } as any).lazy(() =>
   import('./routes/services/seal.index.lazy').then((d) => d.Route),
 )
 const ServicesSealStatsLazyRoute = ServicesSealStatsLazyRouteImport.update({
-  id: '/seal/stats',
-  path: '/seal/stats',
-  getParentRoute: () => ServicesLazyRoute,
+  id: '/stats',
+  path: '/stats',
+  getParentRoute: () => ServicesSealRoute,
 } as any).lazy(() =>
   import('./routes/services/seal.stats.lazy').then((d) => d.Route),
 )
 const ServicesSealOverviewLazyRoute =
   ServicesSealOverviewLazyRouteImport.update({
-    id: '/seal/overview',
-    path: '/seal/overview',
-    getParentRoute: () => ServicesLazyRoute,
+    id: '/overview',
+    path: '/overview',
+    getParentRoute: () => ServicesSealRoute,
   } as any).lazy(() =>
     import('./routes/services/seal.overview.lazy').then((d) => d.Route),
   )
@@ -135,11 +141,12 @@ export interface FileRoutesByFullPath {
   '/status': typeof StatusLazyRoute
   '/support': typeof SupportLazyRoute
   '/test': typeof TestLazyRoute
+  '/services/seal': typeof ServicesSealRouteWithChildren
   '/services/graphql': typeof ServicesGraphqlLazyRoute
   '/services/grpc': typeof ServicesGrpcLazyRoute
   '/services/seal/overview': typeof ServicesSealOverviewLazyRoute
   '/services/seal/stats': typeof ServicesSealStatsLazyRoute
-  '/services/seal': typeof ServicesSealIndexLazyRoute
+  '/services/seal/': typeof ServicesSealIndexLazyRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -172,6 +179,7 @@ export interface FileRoutesById {
   '/status': typeof StatusLazyRoute
   '/support': typeof SupportLazyRoute
   '/test': typeof TestLazyRoute
+  '/services/seal': typeof ServicesSealRouteWithChildren
   '/services/graphql': typeof ServicesGraphqlLazyRoute
   '/services/grpc': typeof ServicesGrpcLazyRoute
   '/services/seal/overview': typeof ServicesSealOverviewLazyRoute
@@ -192,11 +200,12 @@ export interface FileRouteTypes {
     | '/status'
     | '/support'
     | '/test'
+    | '/services/seal'
     | '/services/graphql'
     | '/services/grpc'
     | '/services/seal/overview'
     | '/services/seal/stats'
-    | '/services/seal'
+    | '/services/seal/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -228,6 +237,7 @@ export interface FileRouteTypes {
     | '/status'
     | '/support'
     | '/test'
+    | '/services/seal'
     | '/services/graphql'
     | '/services/grpc'
     | '/services/seal/overview'
@@ -342,44 +352,63 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ServicesGraphqlLazyRouteImport
       parentRoute: typeof ServicesLazyRoute
     }
-    '/services/seal/': {
-      id: '/services/seal/'
+    '/services/seal': {
+      id: '/services/seal'
       path: '/seal'
       fullPath: '/services/seal'
-      preLoaderRoute: typeof ServicesSealIndexLazyRouteImport
+      preLoaderRoute: typeof ServicesSealRouteImport
       parentRoute: typeof ServicesLazyRoute
+    }
+    '/services/seal/': {
+      id: '/services/seal/'
+      path: '/'
+      fullPath: '/services/seal/'
+      preLoaderRoute: typeof ServicesSealIndexLazyRouteImport
+      parentRoute: typeof ServicesSealRoute
     }
     '/services/seal/stats': {
       id: '/services/seal/stats'
-      path: '/seal/stats'
+      path: '/stats'
       fullPath: '/services/seal/stats'
       preLoaderRoute: typeof ServicesSealStatsLazyRouteImport
-      parentRoute: typeof ServicesLazyRoute
+      parentRoute: typeof ServicesSealRoute
     }
     '/services/seal/overview': {
       id: '/services/seal/overview'
-      path: '/seal/overview'
+      path: '/overview'
       fullPath: '/services/seal/overview'
       preLoaderRoute: typeof ServicesSealOverviewLazyRouteImport
-      parentRoute: typeof ServicesLazyRoute
+      parentRoute: typeof ServicesSealRoute
     }
   }
 }
 
-interface ServicesLazyRouteChildren {
-  ServicesGraphqlLazyRoute: typeof ServicesGraphqlLazyRoute
-  ServicesGrpcLazyRoute: typeof ServicesGrpcLazyRoute
+interface ServicesSealRouteChildren {
   ServicesSealOverviewLazyRoute: typeof ServicesSealOverviewLazyRoute
   ServicesSealStatsLazyRoute: typeof ServicesSealStatsLazyRoute
   ServicesSealIndexLazyRoute: typeof ServicesSealIndexLazyRoute
 }
 
-const ServicesLazyRouteChildren: ServicesLazyRouteChildren = {
-  ServicesGraphqlLazyRoute: ServicesGraphqlLazyRoute,
-  ServicesGrpcLazyRoute: ServicesGrpcLazyRoute,
+const ServicesSealRouteChildren: ServicesSealRouteChildren = {
   ServicesSealOverviewLazyRoute: ServicesSealOverviewLazyRoute,
   ServicesSealStatsLazyRoute: ServicesSealStatsLazyRoute,
   ServicesSealIndexLazyRoute: ServicesSealIndexLazyRoute,
+}
+
+const ServicesSealRouteWithChildren = ServicesSealRoute._addFileChildren(
+  ServicesSealRouteChildren,
+)
+
+interface ServicesLazyRouteChildren {
+  ServicesSealRoute: typeof ServicesSealRouteWithChildren
+  ServicesGraphqlLazyRoute: typeof ServicesGraphqlLazyRoute
+  ServicesGrpcLazyRoute: typeof ServicesGrpcLazyRoute
+}
+
+const ServicesLazyRouteChildren: ServicesLazyRouteChildren = {
+  ServicesSealRoute: ServicesSealRouteWithChildren,
+  ServicesGraphqlLazyRoute: ServicesGraphqlLazyRoute,
+  ServicesGrpcLazyRoute: ServicesGrpcLazyRoute,
 }
 
 const ServicesLazyRouteWithChildren = ServicesLazyRoute._addFileChildren(

@@ -251,6 +251,20 @@ export const servicesRouter = router({
         // 5. Create service in PROVISIONING state
         // Note: This state is transient. We immediately transition to DISABLED after payment.
         // The PROVISIONING state is reserved for future async payment flows (on-chain, etc.)
+
+        // Initialize config with defaults based on tier
+        const defaultConfig = {
+          tier: input.tier,
+          burstEnabled: input.tier !== SERVICE_TIER.STARTER, // Enabled by default for Pro/Enterprise
+          totalSealKeys: 1,
+          packagesPerSealKey: 3,
+          totalApiKeys: 2,
+          purchasedSealKeys: 0,
+          purchasedPackages: 0,
+          purchasedApiKeys: 0,
+          ipAllowlist: [],
+        };
+
         const [service] = await tx
           .insert(serviceInstances)
           .values({
@@ -258,7 +272,7 @@ export const servicesRouter = router({
             serviceType: input.serviceType,
             tier: input.tier,
             state: SERVICE_STATE.PROVISIONING,
-            config: input.config || null,
+            config: input.config || defaultConfig,
             isEnabled: false, // Start disabled
           })
           .returning();
@@ -337,4 +351,134 @@ export const servicesRouter = router({
 
     return services;
   }),
+
+  /**
+   * Toggle service enabled/disabled state
+   * Transitions between State 3 (Disabled) ↔ State 4 (Enabled)
+   */
+  toggleService: protectedProcedure
+    .input(z.object({
+      serviceType: serviceTypeSchema,
+      enabled: z.boolean(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.user) {
+        throw new TRPCError({
+          code: 'UNAUTHORIZED',
+          message: 'Not authenticated',
+        });
+      }
+
+      const service = await db.query.serviceInstances.findFirst({
+        where: and(
+          eq(serviceInstances.customerId, ctx.user.customerId),
+          eq(serviceInstances.serviceType, input.serviceType)
+        ),
+      });
+
+      if (!service) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Service not found',
+        });
+      }
+
+      // Only allow toggling if service is in disabled or enabled state
+      if (service.state !== SERVICE_STATE.DISABLED && service.state !== SERVICE_STATE.ENABLED) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: `Cannot toggle service in state: ${service.state}`,
+        });
+      }
+
+      const [updatedService] = await db
+        .update(serviceInstances)
+        .set({
+          isEnabled: input.enabled,
+          state: input.enabled ? SERVICE_STATE.ENABLED : SERVICE_STATE.DISABLED,
+          enabledAt: input.enabled ? new Date() : service.enabledAt,
+          disabledAt: !input.enabled ? new Date() : service.disabledAt,
+        })
+        .where(eq(serviceInstances.instanceId, service.instanceId))
+        .returning();
+
+      return updatedService;
+    }),
+
+  /**
+   * Update service configuration (burst, IP allowlist)
+   */
+  updateConfig: protectedProcedure
+    .input(z.object({
+      serviceType: serviceTypeSchema,
+      burstEnabled: z.boolean().optional(),
+      ipAllowlist: z.array(z.string()).max(4).optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.user) {
+        throw new TRPCError({
+          code: 'UNAUTHORIZED',
+          message: 'Not authenticated',
+        });
+      }
+
+      const service = await db.query.serviceInstances.findFirst({
+        where: and(
+          eq(serviceInstances.customerId, ctx.user.customerId),
+          eq(serviceInstances.serviceType, input.serviceType)
+        ),
+      });
+
+      if (!service) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Service not found',
+        });
+      }
+
+      // Get current config or create new one
+      const currentConfig = service.config as any || {
+        tier: service.tier,
+        burstEnabled: false,
+        totalSealKeys: 1,
+        packagesPerSealKey: 3,
+        totalApiKeys: 2,
+        purchasedSealKeys: 0,
+        purchasedPackages: 0,
+        purchasedApiKeys: 0,
+      };
+
+      // Update only the fields that were provided
+      const updatedConfig = {
+        ...currentConfig,
+        ...(input.burstEnabled !== undefined && { burstEnabled: input.burstEnabled }),
+        ...(input.ipAllowlist !== undefined && { ipAllowlist: input.ipAllowlist }),
+      };
+
+      // Validate burst is only for Pro/Enterprise
+      if (updatedConfig.burstEnabled && service.tier === SERVICE_TIER.STARTER) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Burst is only available for Pro and Enterprise tiers',
+        });
+      }
+
+      // Validate IP allowlist is only for Pro/Enterprise
+      if (updatedConfig.ipAllowlist?.length > 0 && service.tier === SERVICE_TIER.STARTER) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'IP allowlist is only available for Pro and Enterprise tiers',
+        });
+      }
+
+      const [updated] = await db
+        .update(serviceInstances)
+        .set({
+          config: updatedConfig,
+        })
+        .where(eq(serviceInstances.instanceId, service.instanceId))
+        .returning();
+
+      return updated;
+    }),
 });

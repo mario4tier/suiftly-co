@@ -1,0 +1,19 @@
+# System Configuration File
+# Copy to system.conf and set ENVIRONMENT for your deployment
+
+# Environment: development, staging, production
+# CRITICAL: Setting ENVIRONMENT=production blocks dangerous dev scripts
+ENVIRONMENT=development
+
+# Database Configuration (optional - overrides defaults)
+# DB_HOST=localhost
+# DB_USER=deploy
+# DB_PASSWORD=deploy_password_change_me
+# DB_NAME=suiftly_dev
+
+# Production Safety Notes:
+# =======================
+# 1. NEVER set ENVIRONMENT=production on development machines
+# 2. Production servers MUST have ENVIRONMENT=production in system.conf
+# 3. Dev scripts (reset-database.sh, squash-migrations.sh) will refuse to run in production
+# 4. This file should be in .gitignore (never commit actual system.conf)

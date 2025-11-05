@@ -2193,6 +2193,153 @@ colors: {
 **No Activity Logs:**
 - Logs tab: "No activity yet. Enable a service to see logs."
 
+## Global Loading Overlay Pattern
+
+### Overview
+
+To prevent race conditions and provide clear user feedback, the application uses a **global loading overlay** for mutations that modify service state. This pattern blocks all UI interactions while a mutation is in progress, ensuring data consistency and eliminating the need for complex optimistic update rollback logic.
+
+### Pattern Description
+
+**Trigger Condition:**
+- Any mutation (service toggle, config update, key creation, subscription, etc.) that takes longer than **2 seconds** triggers the global overlay
+- Operations under 2 seconds show inline loading states only (e.g., button spinner, disabled form)
+
+**Visual Design:**
+- **Overlay:** Semi-transparent backdrop (bg-black/50 or bg-gray-900/50) covering entire viewport
+- **Centered content:** Spinner + action description
+- **Z-index:** Above all other UI elements (z-50 or higher)
+- **Style:** Matches existing design system (uses Lucide Loader2 icon with spin animation)
+
+**Example:**
+```
+┌─────────────────────────────────────┐
+│  [Semi-transparent dark overlay]    │
+│                                     │
+│            ⟳ (spinning)             │
+│      Processing your request...     │
+│                                     │
+└─────────────────────────────────────┘
+```
+
+### Rationale
+
+**Why This Pattern:**
+1. **Prevents Race Conditions:** Only one mutation can run at a time - no concurrent updates fighting each other
+2. **Clear User Feedback:** Users know the system is processing, not frozen or broken
+3. **Simpler State Management:** No need for complex optimistic updates with rollback logic
+4. **Honest UX:** Transparent about processing time rather than pretending instant success
+5. **Production-Ready:** Straightforward to implement and maintain
+
+**Alternatives Rejected:**
+- **Optimistic updates:** Complex rollback on failure, risk of showing incorrect state
+- **Concurrent mutations:** Requires conflict resolution, race condition handling
+- **Per-component spinners only:** Users might try other actions while mutation pending
+
+### Implementation
+
+**React Query Integration:**
+
+The pattern leverages React Query's built-in mutation tracking:
+
+```typescript
+import { useIsMutating } from '@tanstack/react-query';
+
+// Track if ANY mutation is currently running
+const isMutating = useIsMutating() > 0;
+
+// Optionally track specific mutations by key
+const isServiceMutating = useIsMutating({
+  mutationKey: ['services']
+}) > 0;
+```
+
+**Global Overlay Component:**
+
+```tsx
+// GlobalLoadingOverlay.tsx
+export function GlobalLoadingOverlay() {
+  const isMutating = useIsMutating() > 0;
+  const [showOverlay, setShowOverlay] = useState(false);
+
+  useEffect(() => {
+    let timeout: NodeJS.Timeout;
+
+    if (isMutating) {
+      // Show overlay after 2 seconds
+      timeout = setTimeout(() => setShowOverlay(true), 2000);
+    } else {
+      setShowOverlay(false);
+    }
+
+    return () => clearTimeout(timeout);
+  }, [isMutating]);
+
+  if (!showOverlay) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+      <div className="text-center">
+        <Loader2 className="w-12 h-12 animate-spin text-white mx-auto mb-4" />
+        <p className="text-white text-lg">Processing your request...</p>
+      </div>
+    </div>
+  );
+}
+```
+
+**Mutation Configuration:**
+
+```typescript
+const toggleMutation = trpc.services.toggleService.useMutation({
+  mutationKey: ['services', 'toggle'],
+  onSuccess: () => {
+    // Refetch to get fresh data
+    queryClient.invalidateQueries(['services']);
+    toast.success('Service updated');
+  },
+  onError: (error) => {
+    toast.error(`Error: ${error.message}`);
+  },
+});
+```
+
+### Behavior Examples
+
+**Service Toggle (fast operation):**
+1. User clicks toggle switch
+2. Toggle shows inline spinner (< 2s)
+3. Toggle updates immediately on success
+4. No global overlay shown
+
+**Subscription (slow operation):**
+1. User clicks "Subscribe to Service"
+2. Button shows inline spinner
+3. After 2 seconds → Global overlay appears
+4. On success → Overlay disappears, page refreshes
+5. On error → Overlay disappears, error toast shown
+
+**Key Creation:**
+1. User clicks "Add Key"
+2. Modal shows loading state
+3. After 2 seconds → Global overlay appears
+4. On success → Overlay disappears, key list refreshes
+5. Key appears in list with success toast
+
+### Accessibility
+
+- **Aria-live region:** Announce "Processing request" to screen readers
+- **Focus trap:** Keep focus within overlay (prevent tab navigation behind)
+- **Escape key:** Disabled (don't allow cancellation mid-mutation)
+- **Reduced motion:** Respect `prefers-reduced-motion` for spinner animation
+
+### Future Enhancements
+
+- **Progress indicator:** For multi-step operations (e.g., "Step 2 of 3")
+- **Cancellation:** Allow user to cancel long-running operations (requires backend support)
+- **Custom messages:** Pass specific action description to overlay (e.g., "Creating seal key...")
+- **Timeout handling:** Auto-dismiss after 60s with error message
+
 ## Performance Considerations
 
 ### Lazy Loading

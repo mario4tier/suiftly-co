@@ -8,7 +8,7 @@
  *   const price = fsubs_usd_pro; // Direct variable access - fastest possible
  */
 
-import { trpc } from './trpc';
+import { vanillaTrpc } from './trpc';
 
 // Frontend configuration variables (loaded once at startup)
 // Direct variable access for maximum performance
@@ -24,6 +24,20 @@ export let freqs_usd = 1.00;
 export let freqs_count = 10000;
 export let fskey_incl = 1;
 export let fskey_pkg_incl = 3;
+export let fapikey_incl = 2;
+export let fipv4_incl = 2;
+export let fcidr_incl = 2;
+export let fadd_skey_usd = 5;
+export let fadd_pkg_usd = 1;
+export let fadd_apikey_usd = 1;
+export let fadd_ipv4_usd = 0;
+export let fadd_cidr_usd = 0;
+export let fmax_skey = 10;
+export let fmax_pkg = 10;
+export let fmax_apikey = 10;
+export let fmax_ipv4 = 20;
+export let fmax_cidr = 20;
+export let mockAuth = false;
 
 // Track initialization state
 let isInitialized = false;
@@ -54,13 +68,17 @@ export async function loadFrontendConfig(): Promise<void> {
     while (retryCount < maxRetries) {
       try {
         console.log('[Config] Loading frontend configuration from backend...');
-        const config = await trpc.config.getFrontendConfig.query();
+        const config = await vanillaTrpc.config.getFrontendConfig.query();
 
-        // Validate that all required keys are present
+        // Validate that all required keys are present (mockAuth is optional)
         if (!config.fver || !config.freg_count || !config.fbw_sta || !config.fbw_pro ||
             !config.fbw_ent || !config.fsubs_usd_sta || !config.fsubs_usd_pro ||
             !config.fsubs_usd_ent || !config.freqs_usd || !config.freqs_count ||
-            !config.fskey_incl || !config.fskey_pkg_incl) {
+            !config.fskey_incl || !config.fskey_pkg_incl || !config.fapikey_incl ||
+            !config.fipv4_incl || !config.fcidr_incl || !config.fadd_skey_usd ||
+            !config.fadd_pkg_usd || !config.fadd_apikey_usd || !config.fadd_ipv4_usd ||
+            !config.fadd_cidr_usd || !config.fmax_skey || !config.fmax_pkg ||
+            !config.fmax_apikey || !config.fmax_ipv4 || !config.fmax_cidr) {
           throw new Error('Missing required configuration keys from database');
         }
 
@@ -77,9 +95,23 @@ export async function loadFrontendConfig(): Promise<void> {
         freqs_count = parseInt(config.freqs_count);
         fskey_incl = parseInt(config.fskey_incl);
         fskey_pkg_incl = parseInt(config.fskey_pkg_incl);
+        fapikey_incl = parseInt(config.fapikey_incl);
+        fipv4_incl = parseInt(config.fipv4_incl);
+        fcidr_incl = parseInt(config.fcidr_incl);
+        fadd_skey_usd = parseFloat(config.fadd_skey_usd);
+        fadd_pkg_usd = parseFloat(config.fadd_pkg_usd);
+        fadd_apikey_usd = parseFloat(config.fadd_apikey_usd);
+        fadd_ipv4_usd = parseFloat(config.fadd_ipv4_usd);
+        fadd_cidr_usd = parseFloat(config.fadd_cidr_usd);
+        fmax_skey = parseInt(config.fmax_skey);
+        fmax_pkg = parseInt(config.fmax_pkg);
+        fmax_apikey = parseInt(config.fmax_apikey);
+        fmax_ipv4 = parseInt(config.fmax_ipv4);
+        fmax_cidr = parseInt(config.fmax_cidr);
+        mockAuth = config.mockAuth === 'true';
 
         isInitialized = true;
-        console.log(`[Config] Configuration loaded successfully (version: ${fver})`);
+        console.log(`[Config] Configuration loaded successfully (version: ${fver}, mockAuth: ${mockAuth})`);
         return; // Success - exit the retry loop
       } catch (error) {
         retryCount++;
@@ -111,7 +143,7 @@ export function isConfigLoaded(): boolean {
  */
 export async function checkVersionMismatch(): Promise<boolean> {
   try {
-    const config = await trpc.config.getFrontendConfig.query();
+    const config = await vanillaTrpc.config.getFrontendConfig.query();
     const serverVersion = parseInt(config.fver || '1');
 
     if (serverVersion !== fver) {

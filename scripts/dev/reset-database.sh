@@ -1,0 +1,109 @@
+#!/bin/bash
+# Reset development database from scratch
+# WARNING: This destroys all data in suiftly_dev database!
+# SAFETY: Only runs on development environments
+
+set -e  # Exit on error
+
+# ============================================================================
+# PRODUCTION SAFEGUARDS
+# ============================================================================
+
+# 1. Check for system.conf production flag
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SYSTEM_CONF="$SCRIPT_DIR/../../system.conf"
+
+if [ -f "$SYSTEM_CONF" ]; then
+  # Source the config file
+  source "$SYSTEM_CONF"
+
+  # Check if ENVIRONMENT is set to production
+  if [ "${ENVIRONMENT:-}" = "production" ]; then
+    echo "❌ ERROR: Production environment detected in system.conf"
+    echo "   This script is ONLY for development databases."
+    echo "   ENVIRONMENT=$ENVIRONMENT"
+    exit 1
+  fi
+fi
+
+# 2. Block common production database names
+DB_NAME="${DB_NAME:-suiftly_dev}"
+BLOCKED_NAMES=("suiftly_prod" "suiftly_production" "production" "prod" "main")
+for blocked in "${BLOCKED_NAMES[@]}"; do
+  if [ "$DB_NAME" = "$blocked" ]; then
+    echo "❌ ERROR: Database name '$DB_NAME' appears to be a production database"
+    echo "   This script is ONLY for development databases."
+    echo "   Blocked names: ${BLOCKED_NAMES[*]}"
+    exit 1
+  fi
+done
+
+# 3. Require explicit confirmation for non-default database names
+if [ "$DB_NAME" != "suiftly_dev" ]; then
+  echo "⚠️  WARNING: Non-standard database name detected: $DB_NAME"
+  echo "   Expected: suiftly_dev"
+  echo ""
+  echo "   Type the database name exactly to confirm: "
+  read -r confirmation
+  if [ "$confirmation" != "$DB_NAME" ]; then
+    echo "❌ Database name mismatch. Aborting for safety."
+    exit 1
+  fi
+fi
+
+# 4. Block non-localhost hosts (production databases are not on localhost)
+DB_HOST="${DB_HOST:-localhost}"
+if [ "$DB_HOST" != "localhost" ] && [ "$DB_HOST" != "127.0.0.1" ]; then
+  echo "❌ ERROR: Remote database host detected: $DB_HOST"
+  echo "   This script is ONLY for local development databases."
+  echo "   Production databases should never be reset from dev scripts."
+  exit 1
+fi
+
+# ============================================================================
+# DEVELOPMENT RESET
+# ============================================================================
+
+echo "🗑️  Resetting DEVELOPMENT database..."
+echo ""
+echo "⚠️  WARNING: This will destroy all data in $DB_NAME!"
+echo "Press Ctrl+C to cancel, or Enter to continue..."
+read -r
+
+# Database connection settings (after safety checks)
+DB_USER="${DB_USER:-deploy}"
+DB_PASSWORD="${DB_PASSWORD:-deploy_password_change_me}"
+export PGPASSWORD="$DB_PASSWORD"
+
+# Step 1: Drop database (requires postgres superuser)
+echo "1️⃣  Dropping database $DB_NAME..."
+sudo -u postgres psql -c "DROP DATABASE IF EXISTS $DB_NAME;"
+echo "   ✅ Database dropped"
+
+# Step 2: Create database with proper owner
+echo "2️⃣  Creating fresh database $DB_NAME..."
+sudo -u postgres psql -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;"
+echo "   ✅ Database created (owner: $DB_USER)"
+
+# Step 2.5: Install TimescaleDB extension
+echo "2.5️⃣  Installing TimescaleDB extension..."
+sudo -u postgres psql -d "$DB_NAME" -c "CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;"
+echo "   ✅ TimescaleDB extension installed"
+
+# Step 3: Apply migrations
+echo "3️⃣  Applying migrations..."
+cd "$(dirname "$0")/../../packages/database"
+DATABASE_URL="postgresql://$DB_USER:$DB_PASSWORD@$DB_HOST/$DB_NAME" npm run db:migrate
+echo "   ✅ Migrations applied"
+
+# Step 4: Setup TimescaleDB hypertables
+echo "4️⃣  Setting up TimescaleDB hypertables..."
+DATABASE_URL="postgresql://$DB_USER:$DB_PASSWORD@$DB_HOST/$DB_NAME" npm run db:timescale
+echo "   ✅ TimescaleDB configured"
+
+echo ""
+echo "🎉 Database reset complete!"
+echo ""
+echo "📊 To view database:"
+echo "   cd packages/database"
+echo "   npm run db:studio"

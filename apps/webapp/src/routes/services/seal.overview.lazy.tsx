@@ -11,19 +11,34 @@ import { SealInteractiveForm } from '../../components/services/SealInteractiveFo
 import { AlertCircle, CheckCircle, PauseCircle, AlertTriangle } from 'lucide-react';
 import { type ServiceStatus } from '@suiftly/shared/schemas';
 import { type ServiceState, type ServiceTier } from '@suiftly/shared/constants';
+import { trpc } from '../../lib/trpc';
 
 export const Route = createLazyFileRoute('/services/seal/overview')({
-  component: SealConfigPage,
+  component: SealOverviewPage,
 });
 
-function SealConfigPage() {
+function SealOverviewPage() {
   const [tierSelected, setTierSelected] = useState(false);
 
-  // TODO: This should come from the API
-  // For now, we can toggle this to test different states
-  const serviceState: ServiceState = 'disabled'; // Change to test: not_provisioned, disabled, enabled, etc.
-  const tier: ServiceTier = 'pro'; // Current tier
-  const isEnabled = serviceState === 'enabled';
+  // Fetch services using React Query hook
+  const { data: services, isLoading } = trpc.services.list.useQuery();
+
+  // Find seal service
+  const sealService = services?.find(s => s.serviceType === 'seal');
+
+  if (isLoading) {
+    return (
+      <DashboardLayout>
+        <div className="flex items-center justify-center h-64">
+          <div className="text-gray-500">Loading...</div>
+        </div>
+      </DashboardLayout>
+    );
+  }
+
+  const serviceState: ServiceState = (sealService?.state as ServiceState) ?? 'not_provisioned';
+  const tier: ServiceTier = (sealService?.tier as ServiceTier) ?? 'pro';
+  const isEnabled = sealService?.isEnabled ?? false;
 
   // Determine which form to show based on service state
   const showOnboardingForm = serviceState === 'not_provisioned' || serviceState === 'provisioning';

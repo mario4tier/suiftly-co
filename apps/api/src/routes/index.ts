@@ -9,11 +9,13 @@ import { router } from '../lib/trpc';
 import { testRouter } from './test';
 import { configRouter } from './config';
 import { servicesRouter } from './services';
+import { sealRouter } from './seal';
 
 export const appRouter = router({
   test: testRouter,
   config: configRouter,
   services: servicesRouter,
+  seal: sealRouter,
 });
 
 export type AppRouter = typeof appRouter;

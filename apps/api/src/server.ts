@@ -13,6 +13,7 @@ import { createContext } from './lib/trpc';
 import { appRouter } from './routes';
 import { registerAuthRoutes } from './routes/rest-auth';
 import { config, logConfig } from './lib/config';
+import { initializeFrontendConfig } from './lib/init-config';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -188,6 +189,9 @@ process.on('SIGINT', async () => {
 // Start server
 async function start() {
   try {
+    // Initialize frontend configuration in database before starting server
+    await initializeFrontendConfig();
+
     await server.listen({ port: parseInt(config.PORT), host: config.HOST });
 
     console.log('\n🚀 Suiftly API Server');

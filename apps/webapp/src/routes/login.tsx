@@ -8,6 +8,7 @@ import { useEffect, useState } from 'react';
 import { useCurrentAccount, useConnectWallet, useDisconnectWallet, useWallets } from '@mysten/dapp-kit';
 import { connectMockWallet } from '../lib/mockWallet';
 import { useAuth } from '../lib/auth';
+import { mockAuth } from '../lib/config';
 import { Wallet, AlertCircle } from 'lucide-react';
 
 export const Route = createFileRoute('/login')({
@@ -119,7 +120,7 @@ function LoginPage() {
           )}
 
           {/* Mock Wallet Option (Dev) */}
-          {import.meta.env.DEV && (
+          {mockAuth && (
             <>
               <div className="relative my-6">
                 <div className="absolute inset-0 flex items-center">

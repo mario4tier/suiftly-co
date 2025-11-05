@@ -8,6 +8,8 @@ import { db } from '@suiftly/database';
 import { configGlobal } from '@suiftly/database/schema';
 import { like } from 'drizzle-orm';
 
+const MOCK_AUTH = process.env.MOCK_AUTH === 'true';
+
 export const configRouter = router({
   /**
    * Get all frontend configuration values (f* keys)
@@ -24,6 +26,9 @@ export const configRouter = router({
     for (const config of feConfigs) {
       configObj[config.key] = config.value;
     }
+
+    // Add mockAuth flag so frontend knows if Mock Wallet should be shown
+    configObj['mockAuth'] = MOCK_AUTH ? 'true' : 'false';
 
     return configObj;
   }),

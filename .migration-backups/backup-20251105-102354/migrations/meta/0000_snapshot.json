@@ -1,5 +1,5 @@
 {
-  "id": "7d60f716-7802-48e2-ae64-f25e528cdeb0",
+  "id": "3c97d653-e347-4085-9a62-e42604f708ab",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -781,13 +781,6 @@
           "primaryKey": false,
           "notNull": true
         },
-        "state": {
-          "name": "state",
-          "type": "varchar(30)",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'not_provisioned'"
-        },
         "tier": {
           "name": "tier",
           "type": "varchar(20)",
@@ -868,12 +861,6 @@
           "primaryKey": false,
           "notNull": true
         },
-        "instance_id": {
-          "name": "instance_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
         "public_key": {
           "name": "public_key",
           "type": "varchar(66)",
@@ -922,21 +909,6 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
-        },
-        "idx_seal_instance": {
-          "name": "idx_seal_instance",
-          "columns": [
-            {
-              "expression": "instance_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
         }
       },
       "foreignKeys": {
@@ -951,101 +923,6 @@
             "customer_id"
           ],
           "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "seal_keys_instance_id_service_instances_instance_id_fk": {
-          "name": "seal_keys_instance_id_service_instances_instance_id_fk",
-          "tableFrom": "seal_keys",
-          "tableTo": "service_instances",
-          "columnsFrom": [
-            "instance_id"
-          ],
-          "columnsTo": [
-            "instance_id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.seal_packages": {
-      "name": "seal_packages",
-      "schema": "",
-      "columns": {
-        "package_id": {
-          "name": "package_id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "seal_key_id": {
-          "name": "seal_key_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "package_address": {
-          "name": "package_address",
-          "type": "varchar(66)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "name": {
-          "name": "name",
-          "type": "varchar(100)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "is_active": {
-          "name": "is_active",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": true
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "idx_package_seal_key": {
-          "name": "idx_package_seal_key",
-          "columns": [
-            {
-              "expression": "seal_key_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "seal_packages_seal_key_id_seal_keys_seal_key_id_fk": {
-          "name": "seal_packages_seal_key_id_seal_keys_seal_key_id_fk",
-          "tableFrom": "seal_packages",
-          "tableTo": "seal_keys",
-          "columnsFrom": [
-            "seal_key_id"
-          ],
-          "columnsTo": [
-            "seal_key_id"
-          ],
-          "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },
@@ -1497,38 +1374,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.config_global": {
-      "name": "config_global",
-      "schema": "",
-      "columns": {
-        "key": {
-          "name": "key",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "value": {
-          "name": "value",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.processing_state": {
       "name": "processing_state",
       "schema": "",
@@ -1559,121 +1404,6 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.service_tier_config": {
-      "name": "service_tier_config",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "integer",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "starter_req_per_sec_region": {
-          "name": "starter_req_per_sec_region",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 20
-        },
-        "starter_req_per_sec_global": {
-          "name": "starter_req_per_sec_global",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 60
-        },
-        "starter_price": {
-          "name": "starter_price",
-          "type": "numeric(10, 2)",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'20.00'"
-        },
-        "starter_burst_allowed": {
-          "name": "starter_burst_allowed",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "pro_req_per_sec_region": {
-          "name": "pro_req_per_sec_region",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 300
-        },
-        "pro_req_per_sec_global": {
-          "name": "pro_req_per_sec_global",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 1200
-        },
-        "pro_price": {
-          "name": "pro_price",
-          "type": "numeric(10, 2)",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'100.00'"
-        },
-        "pro_burst_allowed": {
-          "name": "pro_burst_allowed",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": true
-        },
-        "enterprise_req_per_sec_region": {
-          "name": "enterprise_req_per_sec_region",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 1000
-        },
-        "enterprise_req_per_sec_global": {
-          "name": "enterprise_req_per_sec_global",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 4000
-        },
-        "enterprise_price": {
-          "name": "enterprise_price",
-          "type": "numeric(10, 2)",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'300.00'"
-        },
-        "enterprise_burst_allowed": {
-          "name": "enterprise_burst_allowed",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": true
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "check_singleton": {
-          "name": "check_singleton",
-          "value": "\"service_tier_config\".\"id\" = 1"
-        }
-      },
       "isRLSEnabled": false
     },
     "public.system_control": {

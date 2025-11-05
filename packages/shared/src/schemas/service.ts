@@ -16,19 +16,37 @@ export type ServiceStatus = z.infer<typeof serviceStatusSchema>;
 
 export const sealConfigSchema = z.object({
   tier: z.enum(['starter', 'pro', 'enterprise']),
-  burstEnabled: z.boolean(),
-  totalSealKeys: z.number().int().min(1),
-  packagesPerSealKey: z.number().int().min(3),
-  totalApiKeys: z.number().int().min(1),
+  burstEnabled: z.boolean().default(false),
+  totalSealKeys: z.number().int().min(1).default(1),
+  packagesPerSealKey: z.number().int().min(3).default(3),
+  totalApiKeys: z.number().int().min(1).default(2),
+  purchasedSealKeys: z.number().int().min(0).default(0),
+  purchasedPackages: z.number().int().min(0).default(0),
+  purchasedApiKeys: z.number().int().min(0).default(0),
+  ipAllowlist: z.array(z.string()).max(4).optional(),
 }).refine((data) => {
   // Burst only available for Pro and Enterprise
   if (data.burstEnabled && data.tier === 'starter') {
     return false;
   }
+
+  // IP allowlist only for Pro and Enterprise
+  if (data.ipAllowlist && data.ipAllowlist.length > 0 && data.tier === 'starter') {
+    return false;
+  }
+
+  // Validate IP allowlist limits based on tier
+  if (data.ipAllowlist && data.tier === 'pro' && data.ipAllowlist.length > 2) {
+    return false; // Pro: max 2 IPv4 addresses
+  }
+
+  if (data.ipAllowlist && data.tier === 'enterprise' && data.ipAllowlist.length > 4) {
+    return false; // Enterprise: max 2 IPv4 + 2 CIDR ranges
+  }
+
   return true;
 }, {
-  message: "Burst is only available for Pro and Enterprise tiers",
-  path: ["burstEnabled"],
+  message: "Invalid configuration for tier",
 });
 
 export type SealConfig = z.infer<typeof sealConfigSchema>;
