@@ -10,7 +10,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { walletConnectSchema, verifySignatureSchema } from '@suiftly/shared/schemas';
 import { generateAccessToken, generateRefreshToken } from '../lib/jwt';
 import { getJWTConfig, parseExpiryToMs } from '../lib/jwt-config';
-import { db } from '@suiftly/database';
+import { db, logActivity } from '@suiftly/database';
 import { customers, authNonces, refreshTokens } from '@suiftly/database/schema';
 import { eq, and, gt } from 'drizzle-orm';
 import { randomBytes, createHash } from 'crypto';
@@ -242,6 +242,14 @@ export async function registerAuthRoutes(server: FastifyInstance) {
       sameSite: 'lax',
       maxAge: Math.floor(refreshExpiryMs / 1000), // Convert ms to seconds
       path: '/',
+    });
+
+    // Log user activity
+    const clientIp = request.ip || request.socket.remoteAddress || '0.0.0.0';
+    await logActivity({
+      customerId,
+      clientIp,
+      message: 'Login',
     });
 
     return reply.send({

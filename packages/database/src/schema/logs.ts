@@ -1,6 +1,18 @@
-import { pgTable, timestamp, integer, text, bigint, smallint, index } from 'drizzle-orm/pg-core';
+import { pgTable, timestamp, integer, text, bigint, smallint, index, serial, inet } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { customers } from './customers';
+
+// User activity logs - tracks user-level actions (login, config changes, subscriptions)
+// Auto-purges to keep ~100 entries per customer
+export const userActivityLogs = pgTable('user_activity_logs', {
+  id: serial('id').primaryKey(),
+  customerId: integer('customer_id').notNull().references(() => customers.customerId),
+  timestamp: timestamp('timestamp', { withTimezone: true }).notNull().defaultNow(),
+  clientIp: inet('client_ip').notNull(),
+  message: text('message').notNull(),
+}, (table) => ({
+  idxCustomerTime: index('idx_activity_customer_time').on(table.customerId, table.timestamp.desc()),
+}));
 
 export const haproxyRawLogs = pgTable('haproxy_raw_logs', {
   // Timestamp (TimescaleDB partition key)

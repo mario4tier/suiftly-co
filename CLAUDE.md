@@ -87,6 +87,21 @@ sed -i 's/ENVIRONMENT=development/ENVIRONMENT=production/' system.conf
 
 See [docs/PRODUCTION_SAFETY.md](docs/PRODUCTION_SAFETY.md) for complete details.
 
+## CRITICAL: Route Security 🔒
+
+**All routes require authentication by default** (fail-secure design).
+
+- Global auth guard in `apps/webapp/src/routes/__root.tsx`
+- Only routes in `PUBLIC_ROUTES` allowlist are accessible without auth
+- Currently public: `/` (redirects based on auth), `/login`
+- **DO NOT add routes to PUBLIC_ROUTES without security review**
+
+When adding new routes:
+- Protected routes (default): Just create the route file - automatically protected
+- Public routes (rare): Add to `PUBLIC_ROUTES` in `__root.tsx` + document why
+
+See [docs/ROUTE_SECURITY.md](docs/ROUTE_SECURITY.md) for complete details.
+
 ## CRITICAL: Process Management
 
 **NEVER use `killall -9 node` or similar commands!** This kills the AI agent process itself.

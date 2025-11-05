@@ -1,25 +1,12 @@
 /**
- * Dashboard Route (with auth guard)
- * Redirects to /login if not authenticated
+ * Dashboard Route
+ * Auth guard handled by __root.tsx global guard
  */
 
-import { createFileRoute, redirect } from '@tanstack/react-router';
-import { useAuthStore } from '../stores/auth';
+import { createFileRoute } from '@tanstack/react-router';
 import { DashboardLayout } from '../components/layout/DashboardLayout';
 
 export const Route = createFileRoute('/dashboard')({
-  beforeLoad: async ({ location }) => {
-    const { isAuthenticated } = useAuthStore.getState();
-
-    if (!isAuthenticated) {
-      throw redirect({
-        to: '/login',
-        search: {
-          redirect: location.href,
-        },
-      });
-    }
-  },
   component: DashboardPage,
 });
 

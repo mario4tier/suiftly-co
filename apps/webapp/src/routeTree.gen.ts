@@ -11,7 +11,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as WalletDemoRouteImport } from './routes/wallet-demo'
+import { Route as LogsRouteImport } from './routes/logs'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as IndexRouteImport } from './routes/index'
@@ -21,7 +21,6 @@ const TestLazyRouteImport = createFileRoute('/test')()
 const SupportLazyRouteImport = createFileRoute('/support')()
 const StatusLazyRouteImport = createFileRoute('/status')()
 const ServicesLazyRouteImport = createFileRoute('/services')()
-const LogsLazyRouteImport = createFileRoute('/logs')()
 const BillingLazyRouteImport = createFileRoute('/billing')()
 const ApiKeysLazyRouteImport = createFileRoute('/api-keys')()
 const ServicesGrpcLazyRouteImport = createFileRoute('/services/grpc')()
@@ -54,11 +53,6 @@ const ServicesLazyRoute = ServicesLazyRouteImport.update({
   path: '/services',
   getParentRoute: () => rootRouteImport,
 } as any).lazy(() => import('./routes/services.lazy').then((d) => d.Route))
-const LogsLazyRoute = LogsLazyRouteImport.update({
-  id: '/logs',
-  path: '/logs',
-  getParentRoute: () => rootRouteImport,
-} as any).lazy(() => import('./routes/logs.lazy').then((d) => d.Route))
 const BillingLazyRoute = BillingLazyRouteImport.update({
   id: '/billing',
   path: '/billing',
@@ -69,11 +63,11 @@ const ApiKeysLazyRoute = ApiKeysLazyRouteImport.update({
   path: '/api-keys',
   getParentRoute: () => rootRouteImport,
 } as any).lazy(() => import('./routes/api-keys.lazy').then((d) => d.Route))
-const WalletDemoRoute = WalletDemoRouteImport.update({
-  id: '/wallet-demo',
-  path: '/wallet-demo',
+const LogsRoute = LogsRouteImport.update({
+  id: '/logs',
+  path: '/logs',
   getParentRoute: () => rootRouteImport,
-} as any)
+} as any).lazy(() => import('./routes/logs.lazy').then((d) => d.Route))
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
   path: '/login',
@@ -133,10 +127,9 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/dashboard': typeof DashboardRoute
   '/login': typeof LoginRoute
-  '/wallet-demo': typeof WalletDemoRoute
+  '/logs': typeof LogsRoute
   '/api-keys': typeof ApiKeysLazyRoute
   '/billing': typeof BillingLazyRoute
-  '/logs': typeof LogsLazyRoute
   '/services': typeof ServicesLazyRouteWithChildren
   '/status': typeof StatusLazyRoute
   '/support': typeof SupportLazyRoute
@@ -152,10 +145,9 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/dashboard': typeof DashboardRoute
   '/login': typeof LoginRoute
-  '/wallet-demo': typeof WalletDemoRoute
+  '/logs': typeof LogsRoute
   '/api-keys': typeof ApiKeysLazyRoute
   '/billing': typeof BillingLazyRoute
-  '/logs': typeof LogsLazyRoute
   '/services': typeof ServicesLazyRouteWithChildren
   '/status': typeof StatusLazyRoute
   '/support': typeof SupportLazyRoute
@@ -171,10 +163,9 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/dashboard': typeof DashboardRoute
   '/login': typeof LoginRoute
-  '/wallet-demo': typeof WalletDemoRoute
+  '/logs': typeof LogsRoute
   '/api-keys': typeof ApiKeysLazyRoute
   '/billing': typeof BillingLazyRoute
-  '/logs': typeof LogsLazyRoute
   '/services': typeof ServicesLazyRouteWithChildren
   '/status': typeof StatusLazyRoute
   '/support': typeof SupportLazyRoute
@@ -192,10 +183,9 @@ export interface FileRouteTypes {
     | '/'
     | '/dashboard'
     | '/login'
-    | '/wallet-demo'
+    | '/logs'
     | '/api-keys'
     | '/billing'
-    | '/logs'
     | '/services'
     | '/status'
     | '/support'
@@ -211,10 +201,9 @@ export interface FileRouteTypes {
     | '/'
     | '/dashboard'
     | '/login'
-    | '/wallet-demo'
+    | '/logs'
     | '/api-keys'
     | '/billing'
-    | '/logs'
     | '/services'
     | '/status'
     | '/support'
@@ -229,10 +218,9 @@ export interface FileRouteTypes {
     | '/'
     | '/dashboard'
     | '/login'
-    | '/wallet-demo'
+    | '/logs'
     | '/api-keys'
     | '/billing'
-    | '/logs'
     | '/services'
     | '/status'
     | '/support'
@@ -249,10 +237,9 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   DashboardRoute: typeof DashboardRoute
   LoginRoute: typeof LoginRoute
-  WalletDemoRoute: typeof WalletDemoRoute
+  LogsRoute: typeof LogsRoute
   ApiKeysLazyRoute: typeof ApiKeysLazyRoute
   BillingLazyRoute: typeof BillingLazyRoute
-  LogsLazyRoute: typeof LogsLazyRoute
   ServicesLazyRoute: typeof ServicesLazyRouteWithChildren
   StatusLazyRoute: typeof StatusLazyRoute
   SupportLazyRoute: typeof SupportLazyRoute
@@ -289,13 +276,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ServicesLazyRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/logs': {
-      id: '/logs'
-      path: '/logs'
-      fullPath: '/logs'
-      preLoaderRoute: typeof LogsLazyRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/billing': {
       id: '/billing'
       path: '/billing'
@@ -310,11 +290,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiKeysLazyRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/wallet-demo': {
-      id: '/wallet-demo'
-      path: '/wallet-demo'
-      fullPath: '/wallet-demo'
-      preLoaderRoute: typeof WalletDemoRouteImport
+    '/logs': {
+      id: '/logs'
+      path: '/logs'
+      fullPath: '/logs'
+      preLoaderRoute: typeof LogsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/login': {
@@ -419,10 +399,9 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   DashboardRoute: DashboardRoute,
   LoginRoute: LoginRoute,
-  WalletDemoRoute: WalletDemoRoute,
+  LogsRoute: LogsRoute,
   ApiKeysLazyRoute: ApiKeysLazyRoute,
   BillingLazyRoute: BillingLazyRoute,
-  LogsLazyRoute: LogsLazyRoute,
   ServicesLazyRoute: ServicesLazyRouteWithChildren,
   StatusLazyRoute: StatusLazyRoute,
   SupportLazyRoute: SupportLazyRoute,

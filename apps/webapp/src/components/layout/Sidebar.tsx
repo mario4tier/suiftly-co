@@ -101,7 +101,7 @@ export function Sidebar() {
   const managementItems: NavItem[] = [
     { path: '/billing', label: 'Billing & Payments', icon: CreditCard },
     { path: '/api-keys', label: 'API Keys', icon: KeyRound },
-    { path: '/logs', label: 'User Logs', icon: List },
+    { path: '/logs', label: 'Activity Logs', icon: List },
   ];
 
   const statusItems: NavItem[] = [
