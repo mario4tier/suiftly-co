@@ -12,7 +12,7 @@ test.describe('Service State Transitions', () => {
     await page.request.post('http://localhost:3000/test/data/reset', {
       data: {
         balanceUsdCents: 100000, // $1000
-        monthlyLimitUsdCents: 50000, // $500
+        spendingLimitUsdCents: 25000, // $250
       },
     });
 
@@ -180,7 +180,7 @@ test.describe('Service State - Edge Cases', () => {
     await page.request.post('http://localhost:3000/test/data/reset', {
       data: {
         balanceUsdCents: 100000, // $1000
-        monthlyLimitUsdCents: 50000, // $500
+        spendingLimitUsdCents: 25000, // $250
       },
     });
 

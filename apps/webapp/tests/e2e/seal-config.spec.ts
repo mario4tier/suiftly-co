@@ -11,7 +11,7 @@ test.describe('Seal Service Onboarding Form', () => {
     await page.request.post('http://localhost:3000/test/data/reset', {
       data: {
         balanceUsdCents: 100000, // $1000
-        monthlyLimitUsdCents: 50000, // $500
+        spendingLimitUsdCents: 25000, // $250
       },
     });
 

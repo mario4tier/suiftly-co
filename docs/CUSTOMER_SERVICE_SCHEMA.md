@@ -58,7 +58,7 @@ Customers must explicitly authorize a maximum monthly spending cap (in USD equiv
 - ✅ Protects customers: Prevents unexpected charges
 - ✅ Protects Suiftly: Clear authorization trail
 
-Default limit: **$500/month** (adjustable from **$20** to **unlimited**) - See [CONSTANTS.md](./CONSTANTS.md) for authoritative values
+Default limit: **$250/28 days** (adjustable from **$10** to **unlimited**) - See [CONSTANTS.md](./CONSTANTS.md) for authoritative values
 
 **Off-Chain Validation:**
 
@@ -70,8 +70,8 @@ if (customerBalance < estimatedCost) {
   return { allowed: false, reason: "insufficient_balance" };
 }
 
-if (currentMonthCharged + estimatedCost > maxMonthlyUSD) {
-  return { allowed: false, reason: "monthly_limit_exceeded" };
+if (currentPeriodCharged + estimatedCost > spendingLimitUSD) {
+  return { allowed: false, reason: "spending_limit_exceeded" };
 }
 
 // Allow operation

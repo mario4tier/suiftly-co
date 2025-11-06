@@ -2,11 +2,17 @@
 
 ## Overview
 
-Suiftly uses a **shared escrow smart contract** model where users deposit tokens that Suiftly can charge for services without requiring repeated wallet signatures. This document specifies the escrow account architecture, protections, user flows, and technical implementation.
+Suiftly uses a **per-user shared object** escrow model where each user has their own Suiftly Escrow Account (shared object) that holds their USDC tokens. Both the user and Suiftly have capabilities to operate on this account, enabling Suiftly to auto-charge for services without requiring repeated wallet signatures while maintaining user control.
 
 **Key Principle:** User deposits once → Suiftly auto-charges for services → User can withdraw remaining balance anytime.
 
 **Initial Asset:** For MVP launch, **only USDC** is accepted as the escrow deposit asset. SUI and other tokens may be added in future phases.
+
+**Architecture Highlights:**
+- **Per-user isolation:** Each user has their own shared Account object (no centralized user list)
+- **Dual capabilities:** Both Suiftly and user can operate on the shared object
+- **Optional tracking:** User-owned tracking object for convenience (recoverable if lost)
+- **Non-revocable:** Capabilities cannot be revoked (escrow semantics require both parties to have permanent access)
 
 ---
 
@@ -18,47 +24,89 @@ Suiftly uses a **shared escrow smart contract** model where users deposit tokens
 ┌─────────────────────────────────────────────────────┐
 │  User Wallet (Sui)                                  │
 │  - User controls private keys                       │
+│  - Owns tracking object (optional, for convenience)│
 │  - Signs deposits/withdrawals only                  │
+│  - Has capability on shared Account object          │
 └──────────────────┬──────────────────────────────────┘
                    │
                    │ Deposit USDC (blockchain TX)
                    ↓
 ┌─────────────────────────────────────────────────────┐
-│  Suiftly Escrow Smart Contract (On-Chain)          │
-│  - Holds USDC tokens for all users (MVP: USDC only)│
-│  - Enforces monthly spending limits (per user)     │
-│  - Allows Suiftly to deduct charges                │
-│  - Allows user to withdraw remaining balance       │
+│  Suiftly Escrow Account (Shared Object, Per-User)  │
+│  - Holds USDC tokens for THIS user (MVP: USDC only)│
+│  - Tracks account activities                        │
+│  - Enforces 28-day spending limit (rolling period)  │
+│  - Grants capability to BOTH:                       │
+│    • User address (deposits/withdrawals/set limit)  │
+│    • Suiftly address (charges/credits only)         │
+│  - Capabilities are NON-REVOCABLE (escrow semantics)│
 └──────────────────┬──────────────────────────────────┘
                    │
                    │ Charge events
                    ↓
 ┌─────────────────────────────────────────────────────┐
 │  Suiftly Backend Database (Off-Chain)              │
-│  - Tracks USD balance per user                     │
+│  - Tracks USD balance per user (redundant)         │
+│  - Stores shared_account_address for each user     │
 │  - Records all charges/credits                     │
 │  - Suspends service when balance insufficient      │
 │  - Validates before applying charges               │
+└─────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────┐
+│  Tracking Object (Owned by User, Optional)         │
+│  - Points to user's shared Account object          │
+│  - Used by webapp for convenience                  │
+│  - Does NOT grant capabilities itself              │
+│  - If lost/deleted: User still has access via      │
+│    capabilities in shared Account object           │
+│  - Can be recovered via:                           │
+│    • Suiftly backend DB (tracks account address)   │
+│    • On-chain analysis                             │
 └─────────────────────────────────────────────────────┘
 ```
 
 ### Key Components
 
 1. **Sui Blockchain (On-Chain)**
-   - Escrow smart contract holds USDC tokens (MVP: USDC only)
-   - Enforces monthly spending limit per user
+   - **Shared Account object (per user):** Holds USDC tokens (MVP: USDC only)
+   - **Dual capabilities:** User + Suiftly (non-revocable)
+   - **Spending limit enforcement:** 28-day rolling period per-account (simple, no drift)
+   - **Tracking object (owned):** Optional convenience object pointing to shared Account
+   - **No centralized contract:** Each user has isolated Account object
    - Logs all deposits/withdrawals with TX hashes
 
 2. **Suiftly Backend (Off-Chain)**
-   - PostgreSQL database tracks USD balances
+   - PostgreSQL database tracks USD balances (redundant to on-chain)
+   - Stores `shared_account_address` for each user (discovery/recovery)
    - For MVP: Direct USD value from USDC (1:1 peg)
    - Future: Rate oracle for SUI and other non-stablecoin assets
-   - Applies charges automatically (no blockchain TX needed)
+   - Applies charges automatically (no blockchain TX needed for charges)
    - Validates balance and limits before charging
 
 3. **User Wallet (Sui)**
-   - User signs: Deposits (USDC), withdrawals, spending limit changes
-   - User does NOT sign: Service charges, credits, config changes
+   - Owns tracking object (optional, for webapp convenience)
+   - Has capability to operate on shared Account object
+   - **User controls:** Deposits (USDC), withdrawals, spending limit changes
+   - **User does NOT control:** Service charges, credits (Suiftly-only capability)
+
+### Discovery & Recovery
+
+**Three-tier discovery model for finding user's shared Account object:**
+
+1. **Primary:** Tracking object in user's wallet
+   - Webapp reads tracking object → gets shared Account address
+   - Fast, direct lookup
+
+2. **Secondary:** Suiftly backend database
+   - If tracking object lost/deleted
+   - Webapp queries backend API → gets `shared_account_address`
+   - User authenticated via wallet signature
+
+3. **Tertiary:** On-chain analysis
+   - Query blockchain for Account objects with user's capability
+   - Worst case recovery mechanism
+   - Not used in normal operation
 
 ---
 
@@ -106,35 +154,35 @@ Current SUI rate: 1 SUI = $2.45 (updated 47s ago, from 3 sources)
 
 ## On-Chain Protections
 
-### User-Configurable Monthly Spending Limit
+### User-Configurable 28-Day Spending Limit
 
-**Smart contract enforces a monthly spending cap to protect users from bugs, exploits, or excessive billing.**
+**Smart contract enforces a 28-day spending cap to protect users from bugs, exploits, or excessive billing.**
 
 **Values (see [CONSTANTS.md](./CONSTANTS.md) for authoritative source):**
-- Default: **$500 per month**
-- Minimum: **$20**
+- Default: **$250 per 28-day period**
+- Minimum: **$10**
 - Maximum: **Unlimited** (no cap)
 - User-adjustable via Settings (requires wallet signature)
 - Enforced by smart contract (Suiftly backend cannot override)
 
-**Calendar Month Model:**
-- Tracks spending from 1st to last day of each calendar month (UTC)
-- Resets automatically on the 1st of each month
-- Smart contract emits `MonthlyReset` event on rollover
-- Off-chain database field `current_month_start` tracks current billing period
-- Example: Spending in January resets on February 1st (regardless of when service started)
+**Rolling Period Model:**
+- Tracks spending over rolling 28-day periods from account creation timestamp
+- Resets automatically every 28 days (exact timestamp arithmetic: 2,419,200,000 milliseconds)
+- Smart contract uses `current_period_start_ms` field to track period start
+- Off-chain database field `current_month_start` tracks current period for convenience
+- Example: Account created Jan 15 → Period 1: Jan 15 - Feb 11, Period 2: Feb 12 - Mar 11, etc.
 
 **Behavior When Limit Reached:**
 - Additional charges blocked by smart contract
-- User notified: "Monthly spending limit reached ($X). Service changes available on [next month date], or increase limit in Settings."
+- User notified: "28-day spending limit reached ($X). Service changes available on [next period start date], or increase limit in Settings."
 - Current services continue running (only NEW charges blocked)
 
 **Changing the Limit:**
 - User navigates to Settings → Spending Limit
-- Enters new limit (validated: ≥$20, or "unlimited")
+- Enters new limit (validated: ≥$10, or "unlimited")
 - Clicks "Update Limit" → Wallet signature requested
 - Blockchain transaction updates escrow contract config
-- Activity log: "Monthly spending limit changed: $500 → $1,000"
+- Activity log: "28-day spending limit changed: $250 → $1,000"
 
 ---
 
@@ -152,7 +200,7 @@ Current SUI rate: 1 SUI = $2.45 (updated 47s ago, from 3 sources)
 - User can proceed (not blocked), just a helpful nudge
 
 **3. Proactive Frontend Validation**
-- Frontend checks balance and monthly limit BEFORE allowing save
+- Frontend checks balance and 28-day limit BEFORE allowing save
 - "Enable Service" or "Save Changes" button disabled if insufficient funds
 - Clear error banner shows exact problem and solution
 - No failed save attempts (if button enabled, save will succeed)
@@ -167,64 +215,67 @@ Current SUI rate: 1 SUI = $2.45 (updated 47s ago, from 3 sources)
 
 ## User Flows
 
-### Flow 1: First Deposit (Set Spending Limit)
+### Flow 1: First Deposit (Create Account Objects)
 
 ```
 1. User connects wallet (JWT issued)
    ↓
 2. User clicks "Top Up" in header
    ↓
-3. Modal: "Set Your Monthly Spending Limit" (first-time only)
+3. Webapp checks: Does user have Account object?
+   - Checks for tracking object in wallet
+   - If not found → checks backend DB for shared_account_address
+   - Result: No Account object exists (first deposit)
+   ↓
+4. Modal: "Create Escrow Account & Deposit" (first-time only)
 
-   Maximum charges per month (30 days): [$ 2000 ]
+   Set 28-Day Spending Limit: [$ 250 ]
 
    ⓘ This protects your escrow account from excessive charges.
-     Most users spend $50-$500/month. You can change this anytime.
+     Your limit resets every 28 days. You can change this anytime.
+     Minimum: $10
 
    Suggested:
-   • $500/month  - Single service (Starter/Pro)
-   • $500/month - Default (see CONSTANTS.md)
-   • $5,000/month - Heavy usage / multiple services
+   • $250/28 days - Default (see CONSTANTS.md)
+   • $1,000/28 days - Heavy usage / multiple services
 
-   ☑ Use $500/month (see CONSTANTS.md)
-
-   [Set Limit & Continue]
-   ↓
-4. User clicks "Set Limit & Continue"
-   ↓
-5. Wallet signature requested (on-chain config)
-   ↓
-6. Blockchain TX: Create escrow account with monthly limit = $500
-   ↓
-7. Modal updates: "Deposit Funds to Escrow"
-
-   Amount (USD): [$ 100 ]
+   Initial Deposit Amount (USD): [$ 100 ]
 
    Required USDC: 100 USDC
    (USDC is a USD stablecoin: 1 USDC ≈ $1)
 
-   [Deposit]
+   [Create Account & Deposit]
    ↓
-8. User clicks "Deposit"
+5. User clicks "Create Account & Deposit"
    ↓
-9. Wallet signature requested (blockchain TX)
+6. Wallet signature requested (blockchain TX: create_account_and_deposit)
    ↓
-10. TX submitted → Shows "Pending confirmation... (TX: 0xabc123...)"
+7. Blockchain TX creates TWO objects:
+   - Shared Account object (holds 100 USDC, spending limit $250)
+   - Tracking object (owned by user, points to Account)
+   ↓
+8. TX submitted → Shows "Creating escrow account... (TX: 0xabc123...)"
+   ↓
+9. Backend monitors: 0 → 1 → 2 → 3 confirmations (~3-5 sec)
+   ↓
+10. After 3 confirmations → TX finalized
     ↓
-11. Backend monitors: 0 → 1 → 2 → 3 confirmations (~3-5 sec)
+11. Backend detects AccountCreated event:
+    - Stores shared_account_address in database (customers.shared_account_address)
+    - Credits $100 USD to balance in database
     ↓
-12. After 3 confirmations → TX finalized
+12. Balance updates in UI: $0 → $100
     ↓
-13. Backend credits $100 USD to user's balance in database
+13. Toast: "Escrow account created. +$100.00 deposited."
     ↓
-14. Balance updates in UI: $0 → $100
-    ↓
-15. Toast: "Deposit successful. +$100.00 added to escrow balance."
-    ↓
-16. Activity log: "Deposit: +$100.00 (100 USDC) - TX: 0xabc123..."
+14. Activity log: "Account created, initial deposit: +$100.00 (100 USDC) - TX: 0xabc123..."
 ```
 
-**Note:** Once deposited, Suiftly can auto-charge for services without requiring additional wallet signatures.
+**Note:** Once Account created, Suiftly can auto-charge for services without requiring additional wallet signatures.
+
+**Objects created:**
+- **Shared Account object:** Accessible by both user and Suiftly (dual capabilities)
+- **Tracking object:** Owned by user, used by webapp to find Account address
 
 ---
 
@@ -244,7 +295,7 @@ User on: /services/seal (not configured)
    ↓
 3. Frontend validates continuously:
    - Balance check: $100 > $30 ✓
-   - Monthly limit check: $0 + $30 = $30 < $500 ✓
+   - 28-day limit check: $0 + $30 = $30 < $250 ✓
    - Result: "Enable Service" button ENABLED
    ↓
 4. User clicks "Enable Service"
@@ -253,7 +304,7 @@ User on: /services/seal (not configured)
    ↓
 6. Backend validates:
    - Balance: $100 > $30 ✓
-   - Monthly limit: $30 < $500 ✓
+   - 28-day limit: $30 < $250 ✓
    - Signature check: JWT valid ✓
    ↓
 7. Backend decrements balance in database: $100 → $70 (NO blockchain TX)
@@ -280,8 +331,8 @@ User on: /services/seal (not configured)
 
 ```
 User balance: $15
-Monthly spent: $50
-Monthly limit: $500
+28-day period spent: $50
+28-day limit: $250
 Active service: Seal (Pro tier, $40/month)
 
 1. User clicks [Edit] on service config
@@ -294,7 +345,7 @@ Active service: Seal (Pro tier, $40/month)
    ↓
 5. Frontend validates as user changes:
    - Balance check: $10 < $15 ❌
-   - Monthly limit check: $50 + $15 = $65 < $500 ✓
+   - 28-day limit check: $50 + $15 = $65 < $250 ✓
    ↓
 6. "Save Changes" button becomes DISABLED
    ↓
@@ -326,12 +377,12 @@ Active service: Seal (Pro tier, $40/month)
 
 ---
 
-### Flow 4: Config Change (Would Exceed Monthly Limit - Blocked)
+### Flow 4: Config Change (Would Exceed 28-Day Limit - Blocked)
 
 ```
 User balance: $500
-Monthly spent: $1,950
-Monthly limit: $500
+28-day period spent: $195
+28-day limit: $250
 
 1. User on Keys tab, clicks "Add Seal Key" 15 times
    ↓
@@ -339,33 +390,33 @@ Monthly limit: $500
    ↓
 3. Frontend validates:
    - Balance check: $500 > $75 ✓
-   - Monthly limit check: $1,950 + $75 = $510 > $500 ❌
+   - 28-day limit check: $195 + $75 = $270 > $250 ❌
    ↓
 4. "Save Changes" button DISABLED
    ↓
 5. Error banner:
-   "⚠ Cannot save - Would exceed monthly spending limit
+   "⚠ Cannot save - Would exceed 28-day spending limit
 
-   Your monthly limit: $500
-   Spent this month: $1,950
+   Your 28-day limit: $250
+   Spent this period: $195
    This change: +$75
-   Total: $2,025 (exceeds by $25)
+   Total: $270 (exceeds by $20)
 
    Options:
-   - Reduce to max 10 keys ($50, within limit)
-   - Increase monthly limit in Settings
-   - Wait 12 days for spending window reset
+   - Reduce to max 11 keys ($55, within limit)
+   - Increase 28-day limit in Settings
+   - Wait X days for spending period reset
 
-   [Increase Monthly Limit] [Adjust to 10 Keys]"
+   [Increase 28-Day Limit] [Adjust to 11 Keys]"
    ↓
-6. User clicks "Adjust to 10 Keys"
+6. User clicks "Adjust to 11 Keys"
    ↓
-7. Number of keys reduced to 10
+7. Number of keys reduced to 11
    ↓
-8. Live pricing: "+$50/month"
+8. Live pricing: "+$55/month"
    ↓
 9. Frontend validates:
-   - Monthly limit check: $1,950 + $50 = $500 ✓ (at limit but not over)
+   - 28-day limit check: $195 + $55 = $250 ✓ (at limit but not over)
    ↓
 10. "Save Changes" button ENABLED
     ↓
@@ -388,7 +439,11 @@ Active services: Seal ($60/month)
 
 1. User clicks wallet widget → Dropdown → "Withdraw"
    ↓
-2. Modal: "Withdraw Funds from Escrow"
+2. Webapp finds user's Account object:
+   - Reads tracking object → gets shared_account_address
+   - (If tracking object lost → queries backend DB)
+   ↓
+3. Modal: "Withdraw Funds from Escrow"
 
    Total balance: $127.50
    Amount (USD): [$ 50 ]
@@ -401,26 +456,28 @@ Active services: Seal ($60/month)
 
    [Withdraw]
    ↓
-3. User clicks "Withdraw"
+4. User clicks "Withdraw"
    ↓
-4. Wallet signature requested (blockchain TX)
+5. Wallet signature requested (blockchain TX: withdraw from shared Account)
    ↓
-5. TX submitted → "Pending confirmation... (TX: 0xdef456...)"
+6. TX submitted → "Pending confirmation... (TX: 0xdef456...)"
    ↓
-6. Backend monitors confirmations (3 required)
+7. Backend monitors confirmations (3 required)
    ↓
-7. After 3 confirmations → Escrow contract releases 50 USDC to user wallet
+8. After 3 confirmations → Shared Account object releases 50 USDC to user wallet
    ↓
-8. Backend decrements USD balance: $127.50 → $77.50
+9. Backend decrements USD balance: $127.50 → $77.50
    ↓
-9. Modal closes
-   ↓
-10. Toast: "Withdrawal successful. -$50.00 (50 USDC sent to your wallet)"
+10. Modal closes
     ↓
-11. Activity log: "Withdrawal: -$50.00 (50 USDC) - TX: 0xdef456..."
+11. Toast: "Withdrawal successful. -$50.00 (50 USDC sent to your wallet)"
+    ↓
+12. Activity log: "Withdrawal: -$50.00 (50 USDC) - TX: 0xdef456..."
 ```
 
 **Note:** User can withdraw full balance. If balance becomes insufficient for charges, service automatically moves to "suspended" state.
+
+**Discovery:** Webapp uses tracking object (or backend DB if tracking lost) to find user's shared Account address.
 
 ---
 
@@ -518,75 +575,350 @@ Rate: 1 USDC ≈ $1.00
 
 ## Smart Contract Interface
 
-### Escrow Contract Functions (Sui Move)
+### Object Definitions (Sui Move)
 
-**User-Callable:**
+**Shared Account Object (per user, shared):**
 ```move
-// Deposit USDC to escrow (MVP: USDC only)
-public entry fun deposit(account: &mut EscrowAccount, payment: Coin<USDC>)
-
-// Withdraw USDC from escrow (enforces minimum balance if services active)
-public entry fun withdraw(account: &mut EscrowAccount, amount: u64, ctx: &mut TxContext)
-
-// Set monthly spending limit
-public entry fun set_monthly_limit(account: &mut EscrowAccount, limit_usd_cents: u64, ctx: &mut TxContext)
-```
-
-**Suiftly-Backend-Callable (via capability):**
-```move
-// Charge user for service (enforces monthly limit)
-public fun charge(
-    account: &mut EscrowAccount,
-    amount_usd_cents: u64,
-    capability: &SuiftlyAdminCap,
-    ctx: &mut TxContext
-): bool  // Returns true if charge succeeded, false if would exceed monthly limit
-
-// Credit user (refund)
-public fun credit(
-    account: &mut EscrowAccount,
-    amount_usd_cents: u64,
-    capability: &SuiftlyAdminCap
-)
-```
-
-**Contract State (per user):**
-```move
-struct EscrowAccount has key {
+/// Suiftly Escrow Account - holds USDC and tracks spending
+/// Shared object with dual capabilities (user + Suiftly)
+struct Account has key {
     id: UID,
-    owner: address,  // User's wallet address
-    balance_usdc: Balance<USDC>,  // Actual USDC tokens (MVP: USDC only)
-    monthly_limit_usd_cents: u64,  // See CONSTANTS.md (e.g., 50000 = $500 default)
-    current_month_charged_usd_cents: u64,  // Charged this calendar month
-    current_month_start_epoch: u64,  // Epoch timestamp of current month start (1st day, 00:00 UTC)
+    user_address: address,           // User's wallet address (has capability)
+    suiftly_address: address,        // Suiftly backend address (has capability)
+    balance_usdc: Balance<USDC>,     // Actual USDC tokens (MVP: USDC only)
+    spending_limit_usd_cents: u64,   // See CONSTANTS.md (e.g., 25000 = $250 default, 1000 = $10 minimum)
+    current_period_charged_usd_cents: u64,  // Charged this 28-day period
+    current_period_start_ms: u64,    // Timestamp when current 28-day period started (account creation or last reset)
+    upgraded_to: Option<address>,    // If upgraded, points to new Account object
 }
 ```
 
-**Note:** For MVP, `balance_usdc` represents both the token balance and USD value (1:1 peg). Future versions supporting SUI/other assets will require additional fields and conversion logic.
-
-**Monthly Limit Enforcement Logic:**
+**Tracking Object (owned by user):**
 ```move
-// Check if charge would exceed monthly limit
-public fun can_charge(account: &EscrowAccount, amount_usd_cents: u64, clock: &Clock): bool {
-    // Check if we've rolled over to a new month
-    let now_ms = clock::timestamp_ms(clock);
-    let current_month_start = get_month_start_epoch(now_ms);  // Helper: returns epoch of 1st of current month
+/// User-owned object for tracking their shared Account
+/// Does NOT grant capabilities - just convenience pointer
+struct AccountTracker has key, store {
+    id: UID,
+    account_address: address,  // Points to user's shared Account object
+    account_type: String,      // Type name of Account (for upgrades, if Sui supports)
+}
+```
 
-    // If new month started, reset counter
-    let charged_this_month = if (current_month_start > account.current_month_start_epoch) {
-        0  // New month, counter resets
+**Events:**
+```move
+/// Emitted when new Account created (for discovery)
+struct AccountCreated has copy, drop {
+    account_id: ID,
+    user_address: address,
+    tracker_id: ID,  // Tracking object ID
+}
+
+/// Emitted when Account upgraded
+struct AccountUpgraded has copy, drop {
+    old_account_id: ID,
+    new_account_id: ID,
+    user_address: address,
+}
+```
+
+### Contract Functions (Sui Move)
+
+**Account Creation (first deposit):**
+```move
+/// Create new Account and tracking object on first deposit
+/// Called by user during initial deposit
+public entry fun create_account_and_deposit(
+    payment: Coin<USDC>,
+    spending_limit_usd_cents: u64,
+    suiftly_address: address,  // Suiftly's backend address (gets capability)
+    clock: &Clock,
+    ctx: &mut TxContext
+) {
+    let user_address = tx_context::sender(ctx);
+
+    // Create shared Account object
+    let account = Account {
+        id: object::new(ctx),
+        user_address,
+        suiftly_address,
+        balance_usdc: coin::into_balance(payment),
+        spending_limit_usd_cents,
+        current_period_charged_usd_cents: 0,
+        current_period_start_ms: clock::timestamp_ms(clock),  // Period starts at account creation
+        upgraded_to: option::none(),
+    };
+
+    let account_id = object::id(&account);
+    let account_address = object::id_to_address(&account_id);
+
+    // Create tracking object (owned by user)
+    let tracker = AccountTracker {
+        id: object::new(ctx),
+        account_address,
+        account_type: type_name::get<Account>().into_string(),
+    };
+
+    let tracker_id = object::id(&tracker);
+
+    // Emit event for discovery
+    event::emit(AccountCreated {
+        account_id,
+        user_address,
+        tracker_id,
+    });
+
+    // Share the Account object (accessible by both user and Suiftly via capabilities)
+    share_object(account);
+
+    // Transfer tracking object to user
+    transfer::transfer(tracker, user_address);
+}
+```
+
+**User-Callable Operations (require user signature):**
+```move
+/// Deposit USDC to shared Account (MVP: USDC only)
+/// User must sign this transaction
+public entry fun deposit(
+    account: &mut Account,
+    payment: Coin<USDC>,
+    ctx: &TxContext
+) {
+    // Verify caller is the user
+    assert!(tx_context::sender(ctx) == account.user_address, E_NOT_AUTHORIZED);
+
+    let deposit_amount = coin::value(&payment);
+    balance::join(&mut account.balance_usdc, coin::into_balance(payment));
+
+    // Emit deposit event
+    event::emit(DepositEvent { account_id: object::id(account), amount: deposit_amount });
+}
+
+/// Withdraw USDC from shared Account
+/// User must sign this transaction
+public entry fun withdraw(
+    account: &mut Account,
+    amount: u64,
+    ctx: &mut TxContext
+) {
+    // Verify caller is the user
+    assert!(tx_context::sender(ctx) == account.user_address, E_NOT_AUTHORIZED);
+
+    // Check sufficient balance
+    assert!(balance::value(&account.balance_usdc) >= amount, E_INSUFFICIENT_BALANCE);
+
+    // Withdraw
+    let withdrawn = coin::take(&mut account.balance_usdc, amount, ctx);
+    transfer::public_transfer(withdrawn, account.user_address);
+
+    // Emit withdrawal event
+    event::emit(WithdrawalEvent { account_id: object::id(account), amount });
+}
+
+/// Set spending limit (28-day period)
+/// User must sign this transaction
+public entry fun set_spending_limit(
+    account: &mut Account,
+    new_limit_usd_cents: u64,
+    ctx: &TxContext
+) {
+    // Verify caller is the user
+    assert!(tx_context::sender(ctx) == account.user_address, E_NOT_AUTHORIZED);
+
+    account.spending_limit_usd_cents = new_limit_usd_cents;
+
+    // Emit limit change event
+    event::emit(LimitChangedEvent {
+        account_id: object::id(account),
+        new_limit: new_limit_usd_cents,
+    });
+}
+```
+
+**Suiftly-Callable Operations (require Suiftly signature):**
+```move
+/// Charge user for service (enforces 28-day spending limit)
+/// Called by Suiftly backend (must be signed by suiftly_address)
+/// Returns true if charge succeeded, false if would exceed limit
+public fun charge(
+    account: &mut Account,
+    amount_usd_cents: u64,
+    clock: &Clock,
+    ctx: &TxContext
+): bool {
+    // Verify caller is Suiftly
+    assert!(tx_context::sender(ctx) == account.suiftly_address, E_NOT_AUTHORIZED);
+
+    // Check if charge would exceed 28-day spending limit
+    if (!can_charge(account, amount_usd_cents, clock)) {
+        return false
+    };
+
+    // Note: This is an off-chain charge (balance tracked in DB)
+    // Just update period spending counter
+    update_period_spending(account, amount_usd_cents, clock);
+
+    // Emit charge event
+    event::emit(ChargeEvent {
+        account_id: object::id(account),
+        amount: amount_usd_cents,
+    });
+
+    true
+}
+
+/// Credit user (refund)
+/// Called by Suiftly backend
+public fun credit(
+    account: &mut Account,
+    amount_usd_cents: u64,
+    ctx: &TxContext
+) {
+    // Verify caller is Suiftly
+    assert!(tx_context::sender(ctx) == account.suiftly_address, E_NOT_AUTHORIZED);
+
+    // Note: This is an off-chain credit (balance tracked in DB)
+    // Could decrease period spending if within same period
+    // (implementation details depend on refund policy)
+
+    // Emit credit event
+    event::emit(CreditEvent {
+        account_id: object::id(account),
+        amount: amount_usd_cents,
+    });
+}
+```
+
+**28-Day Period Limit Enforcement Logic:**
+```move
+const PERIOD_DURATION_MS: u64 = 2419200000;  // 28 days * 24 hours * 60 min * 60 sec * 1000 ms
+
+/// Check if charge would exceed 28-day spending limit
+fun can_charge(account: &Account, amount_usd_cents: u64, clock: &Clock): bool {
+    let now_ms = clock::timestamp_ms(clock);
+    let elapsed_ms = now_ms - account.current_period_start_ms;
+
+    // Check if 28-day period has elapsed
+    let charged_this_period = if (elapsed_ms >= PERIOD_DURATION_MS) {
+        0  // New period, counter resets
     } else {
-        account.current_month_charged_usd_cents
+        account.current_period_charged_usd_cents
     };
 
     // Check if new charge would exceed limit (0 means unlimited)
-    if (account.monthly_limit_usd_cents == 0) {
-        return true;  // Unlimited
+    if (account.spending_limit_usd_cents == 0) {
+        return true  // Unlimited
     };
 
-    charged_this_month + amount_usd_cents <= account.monthly_limit_usd_cents
+    charged_this_period + amount_usd_cents <= account.spending_limit_usd_cents
+}
+
+/// Update period spending counter (resets every 28 days)
+fun update_period_spending(account: &mut Account, amount: u64, clock: &Clock) {
+    let now_ms = clock::timestamp_ms(clock);
+    let elapsed_ms = now_ms - account.current_period_start_ms;
+
+    // Reset if 28-day period has elapsed
+    if (elapsed_ms >= PERIOD_DURATION_MS) {
+        // Start new period (aligned to current time, not exact 28-day boundary)
+        account.current_period_start_ms = now_ms;
+        account.current_period_charged_usd_cents = amount;
+    } else {
+        account.current_period_charged_usd_cents = account.current_period_charged_usd_cents + amount;
+    };
 }
 ```
+
+**Notes:**
+- For MVP, `balance_usdc` represents both token balance and USD value (1:1 peg)
+- Capabilities are implicit in the address checks (user_address, suiftly_address)
+- No centralized admin capability - each Account has its own dual authorization
+- Tracking object is optional - if lost, user can still access Account via capabilities
+- Future versions supporting SUI/other assets will require additional fields and conversion logic
+
+---
+
+## Object Lifecycle Management
+
+### Creation (First Deposit)
+
+**When:** User makes their first deposit to Suiftly escrow
+
+**What happens:**
+1. User calls `create_account_and_deposit()` with:
+   - USDC payment (initial deposit)
+   - 28-day spending limit
+   - Suiftly backend address (hardcoded in webapp config)
+
+2. Smart contract creates TWO objects:
+   - **Shared Account object** (holds USDC, grants capabilities to user + Suiftly)
+   - **Tracking object** (owned by user, points to Account)
+
+3. `AccountCreated` event emitted (for discovery/indexing)
+
+4. Backend monitors event → stores `shared_account_address` in database
+
+**Result:** User has isolated Account object with dual capabilities (non-revocable)
+
+### Normal Operations
+
+**Deposit/Withdrawal:**
+- User signs transaction → operates on shared Account object
+- Backend monitors blockchain → updates database balance
+- Tracking object used by webapp to find Account address
+
+**Charge/Credit:**
+- Backend signs transaction using `suiftly_address` private key
+- Operates on shared Account object → enforces 28-day limit
+- Off-chain balance tracked in database (no USDC transfer for charges)
+
+**If tracking object lost:**
+- Webapp queries backend API → gets `shared_account_address`
+- User still has full access via capabilities in Account object
+- Optional: User can recreate tracking object (webapp feature)
+
+### Upgrade Path
+
+**When:** Smart contract needs upgrade (new features, bug fixes, terms changes)
+
+**Mechanism:**
+1. New contract version deployed with `upgrade_account()` function
+
+2. User triggers upgrade (automatic on next deposit/withdrawal):
+   - Webapp detects old Account version
+   - Prompts: "Accept updated terms to continue" (one-click)
+   - User approves → calls `upgrade_account()`
+
+3. `upgrade_account()` does:
+   - Creates new Account object (new contract version)
+   - Transfers USDC balance from old to new Account
+   - Sets `old_account.upgraded_to = new_account_address` (audit trail)
+   - Updates tracking object to point to new Account (if provided)
+   - Emits `AccountUpgraded` event
+
+4. Backend monitors event → updates `shared_account_address` in database
+
+**Result:** User migrated to new contract version, old Account preserved for audit trail
+
+**User experience:**
+- Transparent (one-click approval)
+- Piggybacks on normal operation (deposit/withdrawal)
+- Old Account object remains on-chain (permanent record)
+
+### Cleanup Policy
+
+**Never clean up Account objects.**
+
+**Rationale:**
+- Permanent audit trail (all historical Account objects remain queryable)
+- Old objects point to new objects (`upgraded_to` field)
+- Blockchain storage is cheap enough for permanent records
+- Enables forensic analysis if disputes arise
+
+**Dormant accounts:**
+- No automatic cleanup
+- If user withdraws full balance → Account remains (balance = 0)
+- Can be re-used (user deposits again → same Account object)
 
 ---
 
@@ -599,9 +931,25 @@ This section describes the escrow-specific tables and their usage:
 ### Key Tables for Escrow Operations
 
 **customers** (canonical schema in CUSTOMER_SERVICE_SCHEMA.md)
-- Stores wallet_address, balance_usd_cents, monthly_limit_usd_cents
+- Stores wallet_address, balance_usd_cents, max_monthly_usd_cents (28-day spending limit)
+- **NEW:** `shared_account_address` - Address of user's shared Account object on-chain
 - customer_id is a random 32-bit integer (1 to 4,294,967,295)
 - See [CUSTOMER_SERVICE_SCHEMA.md](./CUSTOMER_SERVICE_SCHEMA.md#complete-schema) for complete table definition
+
+**Escrow-specific fields in customers table:**
+```sql
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS
+  shared_account_address VARCHAR(66);  -- On-chain address of user's Account object (for discovery/recovery)
+
+CREATE INDEX idx_customers_shared_account ON customers(shared_account_address)
+  WHERE shared_account_address IS NOT NULL;
+```
+
+**Notes:**
+- `shared_account_address` is NULL until user creates their first Account object
+- Backend populates this by monitoring `AccountCreated` events
+- Used for discovery when tracking object is lost
+- Updated when Account is upgraded (`AccountUpgraded` event)
 
 **ledger_entries** - All financial transactions
 ```sql
@@ -625,7 +973,7 @@ CREATE INDEX idx_ledger_tx_hash ON ledger_entries(tx_hash) WHERE tx_hash IS NOT 
 
 **Note:** For MVP with USDC only, `asset_type='USDC'` and `asset_usd_rate_cents=100` (1:1 peg). Future multi-asset support will use variable rates for SUI and other tokens.
 
-**Note:** With calendar month model, we don't need a separate `spending_window` table. The `customers.current_month_charged_usd_cents` field tracks spending, which resets on the 1st of each month via the Global Manager's monthly reset task.
+**Note:** With rolling 28-day period model, we don't need a separate `spending_window` table. The `customers.current_month_charged_usd_cents` field tracks spending for the current 28-day period. The period resets automatically based on timestamp arithmetic (every 28 days from `current_month_start`), enforced at the smart contract level when charges are applied.
 
 ---
 
@@ -638,9 +986,9 @@ interface EscrowStore {
   // Balance
   balanceUsd: number  // USD balance (e.g., 127.50)
 
-  // Spending limit
-  monthlyLimitUsd: number  // e.g., 2000
-  monthlySpentUsd: number  // Last 30 days (e.g., 680)
+  // Spending limit (28-day period)
+  spendingLimitUsd: number  // e.g., 250
+  periodSpentUsd: number  // Current 28-day period (e.g., 180)
 
   // Validation helpers
   canAfford: (costUsd: number) => boolean
@@ -650,7 +998,7 @@ interface EscrowStore {
   // Actions
   deposit: (amountUsd: number) => Promise<void>
   withdraw: (amountUsd: number) => Promise<void>
-  setMonthlyLimit: (newLimitUsd: number) => Promise<void>
+  setSpendingLimit: (newLimitUsd: number) => Promise<void>
 }
 
 // Usage in components
@@ -670,25 +1018,25 @@ function canAfford(balanceUsd: number, costUsd: number): boolean {
   return balanceUsd >= costUsd
 }
 
-// Check if charge would exceed monthly limit
+// Check if charge would exceed spending limit (28-day period)
 function wouldExceedLimit(
-  monthlySpentUsd: number,
-  monthlyLimitUsd: number,
+  periodSpentUsd: number,
+  spendingLimitUsd: number,
   costUsd: number
 ): boolean {
-  return (monthlySpentUsd + costUsd) > monthlyLimitUsd
+  return (periodSpentUsd + costUsd) > spendingLimitUsd
 }
 
 // Calculate maximum units affordable within limits
 function calculateMaxAffordable(
   balanceUsd: number,
-  monthlySpentUsd: number,
-  monthlyLimitUsd: number,
+  periodSpentUsd: number,
+  spendingLimitUsd: number,
   unitCostUsd: number
 ): number {
   const maxByBalance = Math.floor(balanceUsd / unitCostUsd)
-  const remainingMonthly = monthlyLimitUsd - monthlySpentUsd
-  const maxByLimit = Math.floor(remainingMonthly / unitCostUsd)
+  const remainingInPeriod = spendingLimitUsd - periodSpentUsd
+  const maxByLimit = Math.floor(remainingInPeriod / unitCostUsd)
 
   return Math.min(maxByBalance, maxByLimit)
 }
@@ -700,23 +1048,36 @@ function calculateMaxAffordable(
 
 ### Smart Contract Security
 
-1. **Access Control**
-   - Only user can: Deposit, withdraw, set monthly limit
-   - Only Suiftly backend (via capability) can: Charge, credit
-   - Capability stored securely on backend (not exposed to users)
+1. **Access Control (Dual Capability Model)**
+   - Only user (user_address) can: Deposit, withdraw, set 28-day spending limit
+   - Only Suiftly backend (suiftly_address) can: Charge, credit
+   - **No centralized admin capability** - each Account has its own authorization
+   - Capabilities are **non-revocable** (escrow semantics require both parties)
+   - Address verification enforced in smart contract functions
 
 2. **Reentrancy Protection**
    - Use Sui Move's resource model (linear types)
    - No external calls during balance mutations
+   - Shared object locking prevents concurrent mutations
 
-3. **Monthly Limit Enforcement**
+3. **28-Day Spending Limit Enforcement**
    - Enforced at smart contract level (backend cannot override)
-   - Rolling 30-day window prevents gaming the system
-   - All charges logged on-chain for transparency
+   - Rolling 28-day period from account creation (no drift, exact timestamp arithmetic)
+   - Guarantees at most one monthly bill per period (Suiftly bills on 1st of each month)
+   - All charges logged on-chain via events for transparency
+   - User can change limit anytime (requires wallet signature)
 
-4. **Minimum Balance Enforcement**
-   - Checked during withdrawal (if services active, cannot withdraw below $50)
-   - Prevents withdraw-and-abandon attack
+4. **Per-User Isolation**
+   - Each user has independent shared Account object
+   - No centralized list of users (eliminates single point of attack)
+   - Compromise of one Account does not affect others
+   - Backend compromise cannot drain arbitrary accounts (requires suiftly_address private key per transaction)
+
+5. **Capability Management**
+   - Suiftly backend private key for `suiftly_address` stored in secrets (env var)
+   - Key used to sign charge/credit transactions
+   - Rotate periodically (90 days recommended)
+   - Never exposed to frontend or API responses
 
 ### Backend Security
 
@@ -744,20 +1105,23 @@ function calculateMaxAffordable(
    - Always check balance BEFORE applying charge
    - Use database transactions (BEGIN/COMMIT) for balance updates
    - Prevent negative balances (constraint: balance_usd_cents >= 0)
+   - Reconcile database balance with on-chain Account balance periodically
 
 3. **Rate Limiting**
    - Limit deposit/withdrawal requests (5 per hour per user)
    - Limit config changes (2 per hour per user)
-   - Prevent rapid create/revoke cycles (fraud detection)
+   - Prevent rapid account creation (fraud detection)
 
 4. **Audit Logging**
    - All ledger entries immutable (INSERT only, no UPDATE/DELETE)
    - Log includes: User ID, action, amount, timestamp, TX hash, idempotency key
+   - Account creation events logged (`AccountCreated`, `AccountUpgraded`)
 
-5. **Capability Protection**
-   - Suiftly admin capability stored in backend secrets (env var)
-   - Never exposed to frontend or API responses
-   - Rotate periodically (90 days)
+5. **Discovery/Recovery Security**
+   - `shared_account_address` in database protected by auth (JWT validation)
+   - Tracking object is convenience only (loss doesn't compromise security)
+   - Three-tier discovery ensures users can always recover access
+   - On-chain events provide independent verification of account ownership
 
 ---
 
@@ -777,20 +1141,20 @@ To enable Seal service, you need:
 [Top Up $15] [Top Up $50] [Cancel]
 ```
 
-**Would Exceed Monthly Limit:**
+**Would Exceed 28-Day Limit:**
 ```
-Banner: "⚠ Cannot save - Would exceed monthly spending limit"
+Banner: "⚠ Cannot save - Would exceed 28-day spending limit"
 
-Your monthly limit: $500
-Spent this month: $1,950
+Your 28-day limit: $250
+Spent this period: $195
 This change: +$75
-Total: $2,025 (exceeds by $25)
+Total: $270 (exceeds by $20)
 
 Options:
-- Reduce to max 10 keys ($50, within limit)
-- Increase monthly limit in Settings
+- Reduce to max 11 keys ($55, within limit)
+- Increase 28-day limit in Settings
 
-[Increase Monthly Limit] [Adjust to 10 Keys]
+[Increase 28-Day Limit] [Adjust to 11 Keys]
 ```
 
 **Deposit Transaction Failed:**
@@ -834,15 +1198,15 @@ class InsufficientBalanceError extends Error {
 // Service will auto-resume when balance becomes sufficient (checked on deposit/billing cycle)
 ```
 
-**Monthly Limit Exceeded:**
+**28-Day Spending Limit Exceeded:**
 ```typescript
-class MonthlyLimitExceededError extends Error {
+class SpendingLimitExceededError extends Error {
   constructor(
     public limit: number,
     public spent: number,
     public attemptedCharge: number
   ) {
-    super(`Monthly limit exceeded: ${spent} + ${attemptedCharge} > ${limit}`)
+    super(`28-day spending limit exceeded: ${spent} + ${attemptedCharge} > ${limit}`)
   }
 }
 ```
@@ -853,21 +1217,34 @@ class MonthlyLimitExceededError extends Error {
 
 ### Metrics to Track
 
-1. **Escrow Health**
-   - Total SUI in escrow contract (should match sum of user balances)
-   - Discrepancies → Alert (potential reconciliation issue)
+1. **Escrow Health (Per-Account Reconciliation)**
+   - For each user: Compare on-chain Account balance vs. database balance
+   - Query shared Account object → read `balance_usdc` field
+   - Compare to `customers.balance_usd_cents` in database
+   - Discrepancies → Alert (potential reconciliation issue for specific account)
+   - **No global sum needed** - each Account is isolated
 
-2. **Deposit/Withdrawal Success Rate**
+2. **Aggregate Monitoring**
+   - Total USDC across all user Accounts (sum of on-chain balances)
+   - Should match sum of all database balances
+   - Used for overall system health, not required for correctness
+
+3. **Deposit/Withdrawal Success Rate**
    - Track failed transactions
    - Alert if failure rate > 5%
 
-3. **Low Balance Users**
+4. **Low Balance Users**
    - Count users with balance < 1 month estimate
    - Proactive outreach to prevent service pauses
 
-4. **Monthly Limit Hit Rate**
-   - Track how often users hit monthly limit
+5. **28-Day Spending Limit Hit Rate**
+   - Track how often users hit their 28-day spending limit
    - May indicate limits are too low or usage spikes
+
+6. **Account Discovery Health**
+   - Monitor `shared_account_address` field population
+   - Alert if `AccountCreated` events not being indexed properly
+   - Ensures discovery/recovery mechanism works
 
 ### Alerts
 
@@ -892,7 +1269,7 @@ class MonthlyLimitExceededError extends Error {
    - Charge with insufficient balance → Error
    - Charge exactly at balance → Success (balance = 0)
 
-2. **Monthly Limit Validation**
+2. **28-Day Spending Limit Validation**
    - Charge within limit → Success
    - Charge would exceed limit → Error
    - Charge exactly at limit → Success
@@ -928,7 +1305,7 @@ class MonthlyLimitExceededError extends Error {
 2. **Insufficient Balance Path**
    - Try to enable service with low balance → Blocked → Top up → Success
 
-3. **Monthly Limit Path**
+3. **28-Day Spending Limit Path**
    - Spend near limit → Try config change → Blocked → Increase limit → Success
 
 ---
@@ -964,10 +1341,18 @@ class MonthlyLimitExceededError extends Error {
 
 ## Summary
 
+**Shared Object Architecture Benefits:**
+- ✅ **Decentralized:** Per-user Account objects (no centralized user list)
+- ✅ **Dual capabilities:** User and Suiftly both have access (non-revocable escrow semantics)
+- ✅ **Isolated:** Each Account is independent (compromise of one doesn't affect others)
+- ✅ **Recoverable:** Three-tier discovery model (tracking object, backend DB, on-chain analysis)
+- ✅ **Upgradeable:** Migration path preserves audit trail (old objects remain on-chain)
+
 **Escrow Model Benefits:**
 - ✅ User deposits once, Suiftly auto-charges (no repeated wallet popups)
-- ✅ On-chain monthly spending limit (smart contract enforced)
-- ✅ User can withdraw remaining balance anytime (except $50 minimum if service active)
+- ✅ On-chain 28-day spending limit (smart contract enforced per-account, simple implementation)
+- ✅ Rolling period guarantees at most one monthly bill per limit cycle
+- ✅ User can withdraw remaining balance anytime
 - ✅ Proactive frontend validation (no failed save attempts)
 - ✅ Clear UX (always shows exact amount needed, one-click top-up buttons)
 - ✅ Transparent (all deposits/withdrawals linked to on-chain TX hashes)
@@ -979,7 +1364,14 @@ class MonthlyLimitExceededError extends Error {
 - **Future-Proof:** Database schema supports multi-asset expansion (SUI, USDT, etc.)
 
 **Protection for Both Parties:**
-- **User Protected:** Monthly spending cap (on-chain), USDC stablecoin (no volatility), proactive validation, can withdraw full balance anytime
-- **Suiftly Protected:** Automatic service suspension on insufficient balance, pre-charge validation, automatic resume on deposit
+- **User Protected:** 28-day spending cap (on-chain, simple enforcement), USDC stablecoin (no volatility), proactive validation, can withdraw full balance anytime, capabilities non-revocable (escrow security)
+- **Suiftly Protected:** Automatic service suspension on insufficient balance, pre-charge validation, automatic resume on deposit, capabilities non-revocable (escrow security)
 
-**Ready for Implementation:** Smart contract interface defined (USDC-based), database schema specified (multi-asset ready), frontend validation logic provided, user flows documented with detailed scenarios.
+**Ready for Implementation:**
+- Smart contract interface defined (shared Account + tracking objects)
+- Dual capability model specified (user_address + suiftly_address)
+- Database schema specified (includes shared_account_address for discovery)
+- Object lifecycle documented (creation, operations, upgrade, no cleanup)
+- Frontend validation logic provided
+- User flows documented with detailed scenarios
+- Discovery/recovery mechanisms specified

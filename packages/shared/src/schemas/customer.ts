@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { CUSTOMER_STATUS, MONTHLY_LIMIT } from '../constants';
+import { CUSTOMER_STATUS, SPENDING_LIMIT } from '../constants';
 
 /**
  * Customer validation schemas
@@ -17,10 +17,10 @@ export const customerStatusSchema = z.enum([
   CUSTOMER_STATUS.CLOSED,
 ]);
 
-// Monthly spending limit validation
-export const monthlyLimitSchema = z.number()
+// 28-day spending limit validation
+export const spendingLimitSchema = z.number()
   .int()
-  .min(MONTHLY_LIMIT.MINIMUM_USD * 100, `Minimum monthly limit is $${MONTHLY_LIMIT.MINIMUM_USD}`)
+  .min(SPENDING_LIMIT.MINIMUM_USD * 100, `Minimum spending limit is $${SPENDING_LIMIT.MINIMUM_USD}`)
   .nullable();
 
 // Complete customer schema
@@ -29,7 +29,7 @@ export const customerSchema = z.object({
   walletAddress: walletAddressSchema,
   escrowContractId: z.string().regex(/^0x[a-fA-F0-9]{64}$/).nullable().optional(),
   status: customerStatusSchema,
-  maxMonthlyUsdCents: monthlyLimitSchema.nullable().optional(),
+  maxMonthlyUsdCents: spendingLimitSchema.nullable().optional(),
   currentBalanceUsdCents: z.number().int().nonnegative().nullable().optional(),
   currentMonthChargedUsdCents: z.number().int().nonnegative().nullable().optional(),
   lastMonthChargedUsdCents: z.number().int().nonnegative().nullable().optional(),

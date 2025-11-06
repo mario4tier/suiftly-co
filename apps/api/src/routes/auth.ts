@@ -167,7 +167,7 @@ export const authRouter = router({
               customerId,
               walletAddress,
               status: 'active',
-              maxMonthlyUsdCents: 50000, // $500 default from CONSTANTS.md
+              maxMonthlyUsdCents: 25000, // $250 default from CONSTANTS.md
               currentBalanceUsdCents: 0,
               currentMonthChargedUsdCents: 0,
               lastMonthChargedUsdCents: 0,

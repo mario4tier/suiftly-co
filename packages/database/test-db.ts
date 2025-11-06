@@ -19,7 +19,7 @@ async function testDatabase() {
       customerId: testCustomerId,
       walletAddress: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
       status: 'active' as const,
-      maxMonthlyUsdCents: BigInt(50000), // $500
+      maxMonthlyUsdCents: BigInt(25000), // $250
       currentBalanceUsdCents: BigInt(10000), // $100
       currentMonthChargedUsdCents: BigInt(0),
       lastMonthChargedUsdCents: BigInt(0),

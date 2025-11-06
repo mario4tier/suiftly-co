@@ -52,7 +52,7 @@ test('Valid customer object', () => {
     customerId: 12345678,
     walletAddress: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
     status: CUSTOMER_STATUS.ACTIVE,
-    maxMonthlyUsdCents: 50000, // $500
+    maxMonthlyUsdCents: 25000, // $250
     currentBalanceUsdCents: 10000, // $100
     currentMonthChargedUsdCents: 0,
     lastMonthChargedUsdCents: 0,
@@ -116,7 +116,7 @@ test('Valid deposit request', () => {
   });
 });
 
-// Test 9: Monthly limit validation (minimum $20)
+// Test 9: 28-day spending limit validation (minimum $10)
 test('Monthly limit minimum enforced', () => {
   try {
     customerSchema.parse({

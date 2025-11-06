@@ -5,11 +5,13 @@
  * See docs/CONSTANTS.md for detailed explanations.
  */
 
-// Monthly Spending Limits (Calendar month model)
-export const MONTHLY_LIMIT = {
-  DEFAULT_USD: 500,
-  MINIMUM_USD: 20,
+// 28-Day Spending Limits (Rolling period from account creation)
+export const SPENDING_LIMIT = {
+  DEFAULT_USD: 250,
+  MINIMUM_USD: 10,
   MAXIMUM_USD: null, // unlimited
+  PERIOD_DAYS: 28,
+  PERIOD_MS: 28 * 24 * 60 * 60 * 1000, // 2419200000 milliseconds
 } as const;
 
 // Customer Status Values

@@ -10,29 +10,40 @@
 
 ---
 
-## Monthly Spending Limits
+## 28-Day Spending Limits
 
-**Model:** Calendar month (resets on 1st of each month)
+**Model:** Rolling 28-day period from account creation (not calendar month)
 
 | Constant | Value | Description |
 |----------|-------|-------------|
-| `MONTHLY_LIMIT_DEFAULT_USD` | **$500** | Default monthly spending authorization |
-| `MONTHLY_LIMIT_MINIMUM_USD` | **$20** | Minimum allowed monthly limit |
-| `MONTHLY_LIMIT_MAXIMUM_USD` | **unlimited** | No maximum cap (customer can set any value ≥ $20) |
+| `SPENDING_LIMIT_DEFAULT_USD` | **$250** | Default 28-day spending authorization |
+| `SPENDING_LIMIT_MINIMUM_USD` | **$10** | Minimum allowed spending limit |
+| `SPENDING_LIMIT_MAXIMUM_USD` | **unlimited** | No maximum cap (customer can set any value ≥ $10) |
+| `SPENDING_PERIOD_DAYS` | **28** | Period duration (28 days = 4 weeks) |
 
 **Reset Behavior:**
-- Resets automatically on the 1st day of each calendar month (UTC)
-- Smart contract emits `MonthlyReset` event
-- Off-chain database field `current_month_start` tracks reset date
-- Field `current_month_charged_usd_cents` resets to 0
+- Resets automatically every 28 days from account creation
+- Rolling period: Each user has independent cycle starting from their account creation timestamp
+- Smart contract uses exact timestamp arithmetic (no drift): `28 × 86,400,000 milliseconds`
+- Guarantees at most one monthly bill per period (Suiftly bills on 1st of each month)
+- Off-chain database field `current_period_start_ms` tracks period start
+- Field `current_period_charged_usd_cents` resets to 0 every 28 days
+
+**Why 28 Days:**
+- Ensures at most one monthly bill per limit period (months are 28-31 days)
+- Simple arithmetic (no calendar math, no leap years, no drift)
+- Similar to EU consumer protection periods (14-28 days)
+- 28 days = exactly 4 weeks
 
 **Implementation:**
 ```typescript
-// packages/shared/src/constants.ts
-export const MONTHLY_LIMIT = {
-  DEFAULT_USD: 500,
-  MINIMUM_USD: 20,
+// packages/shared/src/constants/index.ts
+export const SPENDING_LIMIT = {
+  DEFAULT_USD: 250,
+  MINIMUM_USD: 10,
   MAXIMUM_USD: null, // unlimited
+  PERIOD_DAYS: 28,
+  PERIOD_MS: 28 * 24 * 60 * 60 * 1000, // 2419200000 milliseconds
 } as const;
 ```
 
@@ -117,14 +128,15 @@ export const BALANCE_LIMITS = {
 
 **In Documentation:**
 ```markdown
-Default monthly limit: $500 (see CONSTANTS.md)
+Default spending limit: $250/28 days (see CONSTANTS.md)
 ```
 
 **In Code:**
 ```typescript
-import { MONTHLY_LIMIT } from '@suiftly/shared/constants';
+import { SPENDING_LIMIT } from '@suiftly/shared/constants';
 
-const defaultLimit = MONTHLY_LIMIT.DEFAULT_USD; // 500
+const defaultLimit = SPENDING_LIMIT.DEFAULT_USD; // 250
+const periodMs = SPENDING_LIMIT.PERIOD_MS; // 2419200000
 ```
 
 **When Updating:**

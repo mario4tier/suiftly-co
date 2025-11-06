@@ -991,10 +991,10 @@ Each service page has **2 major modes of operation**:
 │     excessive charges. Changes require wallet         │
 │     signature to update the smart contract.           │
 │                                                       │
-│  Current Limit: $500 per month (calendar month)     │
+│  Current Limit: $250 per 28-day period              │
 │                                                       │
-│  [━━━━━━━━━━━━━━━━━━━] $85 / $500               │
-│  This month: $680 (34%) - Resets in 12 days          │
+│  [━━━━━━━━━━━━━━━━━━━] $85 / $250               │
+│  This period: $85 (34%) - Resets in 12 days          │
 │                                                       │
 │  Recent charges:                                      │
 │  • Jan 9: Service enabled - $60                       │
@@ -1023,17 +1023,16 @@ Each service page has **2 major modes of operation**:
 **Change Spending Limit Modal:**
 ```
 ┌──────────────────────────────────────────────────────┐
-│ Change Monthly Spending Limit                        │
+│ Change 28-Day Spending Limit                         │
 │                                                       │
-│  Current limit: $500 per month                      │
-│  Spent this month: $680                               │
+│  Current limit: $250 per 28-day period               │
+│  Spent this period: $85                               │
 │                                                       │
-│  New limit: [$ 5000  ]  (min: $20, unlimited)    │
+│  New limit: [$ 1000  ]  (min: $10, unlimited)     │
 │                                                       │
 │  Suggested:                                           │
-│  • $500/month  - Single service (Starter/Pro)        │
-│  • $500/month - Default (see CONSTANTS.md)               │
-│  • $5,000/month - Heavy usage / multiple services    │
+│  • $250/28 days  - Default (see CONSTANTS.md)        │
+│  • $1,000/28 days - Heavy usage / multiple services  │
 │                                                       │
 │  ⓘ This change requires a wallet signature to       │
 │     update the on-chain escrow contract.              │
@@ -1045,14 +1044,14 @@ Each service page has **2 major modes of operation**:
 
 **Interactions:**
 - Clicking [Change Limit] opens modal
-- User enters new value (validated: min $100, max $50,000)
+- User enters new value (validated: min $10 or unlimited)
 - Clicking "Update Limit" triggers wallet signature request
 - On-chain transaction updates escrow contract config
-- Toast: "Monthly spending limit updated: $5,000"
-- Activity log: "Monthly spending limit changed: $500 → $1,000"
+- Toast: "28-day spending limit updated: $1,000"
+- Activity log: "28-day spending limit changed: $250 → $1,000"
 
 **Tooltip:**
-- **Monthly Limit:** "Maximum Suiftly can charge in any 30-day rolling window. Protects your escrow from excessive billing."
+- **28-Day Spending Limit:** "Maximum Suiftly can charge in any 28-day rolling period. Protects your escrow from excessive billing."
 
 ---
 
@@ -1164,7 +1163,7 @@ All prices displayed in USD, but payments/deposits/withdrawals use SUI tokens on
   - User can withdraw anytime (minimum $50 if services active)
 
 - **Monthly Spending Limit (On-Chain):**
-  - Default: $500/month (user-adjustable: $20-unlimited, see CONSTANTS.md)
+  - Default: $250/28 days (user-adjustable: $10-unlimited, see CONSTANTS.md)
   - Enforced by smart contract
   - User sets limit on first deposit
 

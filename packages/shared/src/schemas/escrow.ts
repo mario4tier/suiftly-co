@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { TRANSACTION_TYPE, BILLING_STATUS, MONTHLY_LIMIT } from '../constants';
+import { TRANSACTION_TYPE, BILLING_STATUS, SPENDING_LIMIT } from '../constants';
 
 /**
  * Escrow and financial validation schemas
@@ -72,7 +72,7 @@ export const withdrawRequestSchema = z.object({
   amountUsd: z.number().positive().min(1), // USD amount (minimum $1)
 });
 
-// Update monthly limit request
-export const updateMonthlyLimitSchema = z.object({
-  limitUsdCents: z.number().int().min(MONTHLY_LIMIT.MINIMUM_USD * 100).nullable(), // NULL = unlimited
+// Update spending limit request (28-day period)
+export const updateSpendingLimitSchema = z.object({
+  limitUsdCents: z.number().int().min(SPENDING_LIMIT.MINIMUM_USD * 100).nullable(), // NULL = unlimited
 });

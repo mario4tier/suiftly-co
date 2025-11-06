@@ -108,21 +108,21 @@ async function validateSubscription(
     };
   }
 
-  // 5. Check monthly limit
-  const currentMonthCharged = customer.currentMonthChargedUsdCents ?? 0;
-  const monthlyLimit = customer.maxMonthlyUsdCents ?? 50000; // $500 default
+  // 5. Check 28-day spending limit
+  const currentPeriodCharged = customer.currentMonthChargedUsdCents ?? 0;
+  const spendingLimit = customer.maxMonthlyUsdCents ?? 25000; // $250 default
 
-  if (currentMonthCharged + required > monthlyLimit) {
+  if (currentPeriodCharged + required > spendingLimit) {
     return {
       valid: false,
       errors: [{
-        code: 'MONTHLY_LIMIT_EXCEEDED',
-        message: `Would exceed monthly limit of $${monthlyLimit / 100}`,
+        code: 'SPENDING_LIMIT_EXCEEDED',
+        message: `Would exceed spending limit of $${spendingLimit / 100}`,
         details: {
-          limit: monthlyLimit / 100,
-          currentSpent: currentMonthCharged / 100,
+          limit: spendingLimit / 100,
+          currentSpent: currentPeriodCharged / 100,
           additionalCharge: required / 100,
-          total: (currentMonthCharged + required) / 100,
+          total: (currentPeriodCharged + required) / 100,
         },
       }],
     };

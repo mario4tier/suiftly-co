@@ -35,7 +35,7 @@ async function setMockBalance() {
     .update(customers)
     .set({
       currentBalanceUsdCents: balanceCents,
-      maxMonthlyUsdCents: 50000, // $500 monthly limit
+      maxMonthlyUsdCents: 25000, // $250 spending limit (28-day)
       currentMonthChargedUsdCents: 0,
       currentMonthStart: new Date(),
       updatedAt: new Date(),
@@ -45,7 +45,7 @@ async function setMockBalance() {
   console.log(`✅ Balance updated successfully`);
   console.log(`   Customer ID: ${customer.customerId}`);
   console.log(`   New balance: $${balanceUsd}`);
-  console.log(`   Monthly limit: $500`);
+  console.log(`   28-day spending limit: $250`);
 
   process.exit(0);
 }

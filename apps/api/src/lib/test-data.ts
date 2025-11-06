@@ -11,12 +11,12 @@ import { eq } from 'drizzle-orm';
 
 const MOCK_WALLET_ADDRESS = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const DEFAULT_BALANCE_USD_CENTS = 100000; // $1000
-const DEFAULT_MONTHLY_LIMIT_USD_CENTS = 50000; // $500
+const DEFAULT_SPENDING_LIMIT_USD_CENTS = 25000; // $250
 
 interface TestDataResetOptions {
   walletAddress?: string;
   balanceUsdCents?: number;
-  monthlyLimitUsdCents?: number;
+  spendingLimitUsdCents?: number;
 }
 
 /**
@@ -30,7 +30,7 @@ interface TestDataResetOptions {
 export async function resetCustomerTestData(options: TestDataResetOptions = {}) {
   const walletAddress = options.walletAddress || MOCK_WALLET_ADDRESS;
   const balanceUsdCents = options.balanceUsdCents ?? DEFAULT_BALANCE_USD_CENTS;
-  const monthlyLimitUsdCents = options.monthlyLimitUsdCents ?? DEFAULT_MONTHLY_LIMIT_USD_CENTS;
+  const spendingLimitUsdCents = options.spendingLimitUsdCents ?? DEFAULT_SPENDING_LIMIT_USD_CENTS;
 
   // Find customer
   const customer = await db.query.customers.findFirst({
@@ -75,7 +75,7 @@ export async function resetCustomerTestData(options: TestDataResetOptions = {}) 
       .update(customers)
       .set({
         currentBalanceUsdCents: balanceUsdCents,
-        maxMonthlyUsdCents: monthlyLimitUsdCents,
+        maxMonthlyUsdCents: spendingLimitUsdCents,
         currentMonthChargedUsdCents: 0,
         currentMonthStart: new Date(),
         updatedAt: new Date(),
@@ -87,7 +87,7 @@ export async function resetCustomerTestData(options: TestDataResetOptions = {}) 
     console.log(`  - Deleted ${deletedApiKeys.length} API keys`);
     console.log(`  - Deleted ${deletedSealKeys.length} Seal keys`);
     console.log(`  - Reset balance to $${balanceUsdCents / 100}`);
-    console.log(`  - Reset monthly limit to $${monthlyLimitUsdCents / 100}`);
+    console.log(`  - Reset spending limit to $${spendingLimitUsdCents / 100}`);
   });
 
   return {
@@ -95,7 +95,7 @@ export async function resetCustomerTestData(options: TestDataResetOptions = {}) 
     message: 'Customer test data reset successfully',
     customerId,
     balanceUsd: balanceUsdCents / 100,
-    monthlyLimitUsd: monthlyLimitUsdCents / 100,
+    spendingLimitUsd: spendingLimitUsdCents / 100,
   };
 }
 
@@ -132,8 +132,8 @@ export async function getCustomerTestData(walletAddress: string = MOCK_WALLET_AD
       customerId: customer.customerId,
       walletAddress: customer.walletAddress,
       balanceUsd: (customer.currentBalanceUsdCents ?? 0) / 100,
-      monthlyLimitUsd: (customer.maxMonthlyUsdCents ?? 0) / 100,
-      currentMonthChargedUsd: (customer.currentMonthChargedUsdCents ?? 0) / 100,
+      spendingLimitUsd: (customer.maxMonthlyUsdCents ?? 0) / 100,
+      currentPeriodChargedUsd: (customer.currentMonthChargedUsdCents ?? 0) / 100,
     },
     services: services.map(s => ({
       serviceType: s.serviceType,
