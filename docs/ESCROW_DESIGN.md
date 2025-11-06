@@ -2,9 +2,11 @@
 
 ## Overview
 
-Suiftly uses a **shared escrow smart contract** model where users deposit SUI tokens that Suiftly can charge for services without requiring repeated wallet signatures. This document specifies the escrow account architecture, protections, user flows, and technical implementation.
+Suiftly uses a **shared escrow smart contract** model where users deposit tokens that Suiftly can charge for services without requiring repeated wallet signatures. This document specifies the escrow account architecture, protections, user flows, and technical implementation.
 
 **Key Principle:** User deposits once → Suiftly auto-charges for services → User can withdraw remaining balance anytime.
+
+**Initial Asset:** For MVP launch, **only USDC** is accepted as the escrow deposit asset. SUI and other tokens may be added in future phases.
 
 ---
 
@@ -19,11 +21,11 @@ Suiftly uses a **shared escrow smart contract** model where users deposit SUI to
 │  - Signs deposits/withdrawals only                  │
 └──────────────────┬──────────────────────────────────┘
                    │
-                   │ Deposit (blockchain TX)
+                   │ Deposit USDC (blockchain TX)
                    ↓
 ┌─────────────────────────────────────────────────────┐
 │  Suiftly Escrow Smart Contract (On-Chain)          │
-│  - Holds SUI tokens for all users                  │
+│  - Holds USDC tokens for all users (MVP: USDC only)│
 │  - Enforces monthly spending limits (per user)     │
 │  - Allows Suiftly to deduct charges                │
 │  - Allows user to withdraw remaining balance       │
@@ -35,7 +37,7 @@ Suiftly uses a **shared escrow smart contract** model where users deposit SUI to
 │  Suiftly Backend Database (Off-Chain)              │
 │  - Tracks USD balance per user                     │
 │  - Records all charges/credits                     │
-│  - Enforces $50 minimum for active services        │
+│  - Suspends service when balance insufficient      │
 │  - Validates before applying charges               │
 └─────────────────────────────────────────────────────┘
 ```
@@ -43,59 +45,61 @@ Suiftly uses a **shared escrow smart contract** model where users deposit SUI to
 ### Key Components
 
 1. **Sui Blockchain (On-Chain)**
-   - Escrow smart contract holds SUI tokens
+   - Escrow smart contract holds USDC tokens (MVP: USDC only)
    - Enforces monthly spending limit per user
    - Logs all deposits/withdrawals with TX hashes
 
 2. **Suiftly Backend (Off-Chain)**
    - PostgreSQL database tracks USD balances
-   - Converts SUI ↔ USD at transaction time using rate oracle
+   - For MVP: Direct USD value from USDC (1:1 peg)
+   - Future: Rate oracle for SUI and other non-stablecoin assets
    - Applies charges automatically (no blockchain TX needed)
    - Validates balance and limits before charging
 
 3. **User Wallet (Sui)**
-   - User signs: Deposits, withdrawals, spending limit changes
+   - User signs: Deposits (USDC), withdrawals, spending limit changes
    - User does NOT sign: Service charges, credits, config changes
 
 ---
 
 ## Currency Model
 
-### USD Denominated, SUI Settled
+### USD Denominated, USDC Settled (MVP)
 
-**All prices displayed in USD, all blockchain transactions in SUI.**
+**All prices displayed in USD, all blockchain transactions in USDC.**
 
 - **Pricing:** Services priced in USD (e.g., $40/month for Pro tier)
 - **Display:** Balances shown in USD throughout UI
-- **Settlement:** Deposits/withdrawals use SUI tokens on Sui blockchain
-- **Conversion:** Backend converts SUI ↔ USD at transaction time using rate oracle
+- **Settlement:** Deposits/withdrawals use USDC tokens on Sui blockchain (MVP: USDC only)
+- **Conversion:** For MVP, USDC ≈ USD (1:1 peg assumed). No rate oracle needed.
 
-### SUI ↔ USD Conversion (Rate Oracle)
+### USDC → USD Conversion (MVP)
 
-**Multiple Sources for Reliability:**
-- Primary: CoinGecko API
-- Fallback 1: CoinMarketCap API
-- Fallback 2: Binance public ticker
+**Simplified Model for MVP:**
+- USDC is a USD-pegged stablecoin (1 USDC ≈ $1)
+- No rate oracle required for MVP
+- Direct 1:1 conversion: 100 USDC = $100 USD balance
+- Deposit/withdrawal amounts match exactly (no volatility risk)
 
-**Rate Aggregation:**
-- Median of available sources (require ≥2 sources, prefer 3)
+**Display Example (MVP):**
+```
+Balance: $100.00 (100 USDC in escrow)
+```
+
+### Future: Multi-Asset Support with Rate Oracle
+
+**When SUI and other assets are added (post-MVP):**
+- Rate oracle for volatile assets (SUI, etc.)
+- Multiple sources: CoinGecko API, CoinMarketCap API, Binance ticker
+- Rate aggregation: Median of ≥2 sources
 - Staleness check: Reject rates older than 5 minutes
 - Cache: 60-second cache to reduce API load
 - Slippage protection: Warn if sources differ by >5%
 
-**Conversion Timing:**
-- Rate locked at transaction confirmation time
-- Deposits: SUI amount calculated at deposit, USD credited at that rate
-- Withdrawals: SUI amount calculated at withdrawal, USD debited at that rate
-- Charges: No conversion needed (USD balance decremented directly)
-
-**Volatility Risk:**
-- User bears exchange rate risk
-- Rates locked at transaction time (no surprise rate changes mid-transaction)
-
-**Display Example:**
+**Future Display Example:**
 ```
-Current rate: 1 SUI = $2.45 (updated 47s ago, from 3 sources)
+Balance: $100.00 (100 USDC + 40.82 SUI)
+Current SUI rate: 1 SUI = $2.45 (updated 47s ago, from 3 sources)
 ```
 
 ---
@@ -136,10 +140,11 @@ Current rate: 1 SUI = $2.45 (updated 47s ago, from 3 sources)
 
 ### Suiftly-Enforced Protections
 
-**1. Minimum Balance Requirement: $50**
-- Cannot withdraw balance below $50 if any service is active/enabled
-- Prevents user from withdrawing and immediately causing service pause
-- Withdrawal modal shows: "Balance: $127, Available: $77 (reserving $50 for active services)"
+**1. Insufficient Balance Handling**
+- No minimum balance requirement enforced on withdrawals
+- User can withdraw their full balance at any time
+- If charge fails due to insufficient balance: Service automatically moves to "suspended" state
+- Periodic checks (on deposit or billing cycle) automatically resume service if balance becomes sufficient
 
 **2. 2-Month Buffer Warning (Recommended, Not Enforced)**
 - Frontend warns if balance < 2× monthly estimate
@@ -154,8 +159,9 @@ Current rate: 1 SUI = $2.45 (updated 47s ago, from 3 sources)
 
 **4. Backend Validation (Defense in Depth)**
 - Backend validates again before applying any charge
-- If check fails: Charge NOT applied, error returned
+- If check fails: Charge NOT applied, service moves to "suspended" state
 - Prevents race conditions or stale frontend data
+- Automatic resume when balance becomes sufficient (checked on deposits and periodic billing)
 
 ---
 
@@ -194,8 +200,8 @@ Current rate: 1 SUI = $2.45 (updated 47s ago, from 3 sources)
 
    Amount (USD): [$ 100 ]
 
-   Required SUI: ~40.82 SUI
-   Rate: 1 SUI = $2.45 (updated 23s ago, from 3 sources)
+   Required USDC: 100 USDC
+   (USDC is a USD stablecoin: 1 USDC ≈ $1)
 
    [Deposit]
    ↓
@@ -215,7 +221,7 @@ Current rate: 1 SUI = $2.45 (updated 47s ago, from 3 sources)
     ↓
 15. Toast: "Deposit successful. +$100.00 added to escrow balance."
     ↓
-16. Activity log: "Deposit: +$100.00 (40.82 SUI) - TX: 0xabc123..."
+16. Activity log: "Deposit: +$100.00 (100 USDC) - TX: 0xabc123..."
 ```
 
 **Note:** Once deposited, Suiftly can auto-charge for services without requiring additional wallet signatures.
@@ -385,13 +391,13 @@ Active services: Seal ($60/month)
 2. Modal: "Withdraw Funds from Escrow"
 
    Total balance: $127.50
-   Reserved for active services: $50.00
-   Available to withdraw: $77.50
-
    Amount (USD): [$ 50 ]
 
-   Will receive: ~20.41 SUI
-   Rate: 1 SUI = $2.45 (updated 12s ago, from 3 sources)
+   Will receive: 50 USDC
+   (USDC is a USD stablecoin: 1 USDC ≈ $1)
+
+   ⓘ Note: You have active services ($60/month).
+     Low balance may cause service suspension at next charge.
 
    [Withdraw]
    ↓
@@ -403,18 +409,18 @@ Active services: Seal ($60/month)
    ↓
 6. Backend monitors confirmations (3 required)
    ↓
-7. After 3 confirmations → Escrow contract releases 20.41 SUI to user wallet
+7. After 3 confirmations → Escrow contract releases 50 USDC to user wallet
    ↓
 8. Backend decrements USD balance: $127.50 → $77.50
    ↓
 9. Modal closes
    ↓
-10. Toast: "Withdrawal successful. -$50.00 (20.41 SUI sent to your wallet)"
+10. Toast: "Withdrawal successful. -$50.00 (50 USDC sent to your wallet)"
     ↓
-11. Activity log: "Withdrawal: -$50.00 (20.41 SUI) - TX: 0xdef456..."
+11. Activity log: "Withdrawal: -$50.00 (50 USDC) - TX: 0xdef456..."
 ```
 
-**Protection:** Cannot withdraw below $50 if service active (prevents immediate service pause).
+**Note:** User can withdraw full balance. If balance becomes insufficient for charges, service automatically moves to "suspended" state.
 
 ---
 
@@ -422,28 +428,32 @@ Active services: Seal ($60/month)
 
 ```
 Service active: Seal ($60/month)
-Balance drops over time: $75 → $35 → $10 → $3
+Balance drops over time: $75 → $35 → $10 → $0
 
 Timeline:
 Day 1 (balance $35):
-  → Warning toast: "Low balance: $35 remaining. Top up to avoid service interruption."
+  → Warning toast: "Low balance: $35 remaining. Top up to avoid service suspension."
 
 Day 5 (balance $10):
-  → Warning banner on all pages: "⚠ Low Balance ($10). Service will pause when balance reaches $0. [Top Up Now]"
+  → Warning banner on all pages: "⚠ Low Balance ($10). Service will be suspended when balance is insufficient for next charge. [Top Up Now]"
 
-Day 8 (balance reaches $3):
-  → Service paused:
-    - Banner: "⚠ Service Paused - Insufficient Funds. Deposit $50+ to resume service. You have 7 days before service termination."
+Day 8 (charge attempt fails - balance insufficient):
+  → Service automatically moves to "suspended" state:
+    - Service state: active → suspended
+    - Banner: "⚠ Service Suspended - Insufficient Funds. Deposit to resume service automatically."
     - API requests return 402 Payment Required
-    - No new charges applied during pause
-    - Grace period: 7 days to top up
+    - No new charges applied during suspension
 
-Day 15 (if no top-up):
-  → Service terminated
-  → Data deleted after 30 days (archival period)
+User deposits $100:
+  → Periodic check triggered on deposit
+  → Balance check: $100 > monthly cost ✓
+  → Service automatically resumes:
+    - Service state: suspended → active
+    - Toast: "Service resumed. Sufficient balance detected."
+    - Charge applied for current period
 ```
 
-**Grace Period:** 7 days between pause and termination gives users time to top up without losing service permanently.
+**Automatic Resume:** Service automatically resumes when sufficient balance is detected (checked on deposit and periodic billing cycles). No manual intervention required.
 
 ---
 
@@ -494,14 +504,14 @@ Day 15 (if no top-up):
 - Invoice line item ID
 - On-chain TX hash
 - Timestamp of finality
-- Amount in SUI and USD equivalent at transaction time
+- Amount in USDC and USD equivalent at transaction time (MVP: 1:1)
 
 **Billing history shows TX hash links for verification:**
 ```
 Jan 9, 2025 14:23
-Deposit: +$100.00 (40.82 SUI)
+Deposit: +$100.00 (100 USDC)
 TX: 0xabc123... [View on SuiScan]
-Rate: 1 SUI = $2.45
+Rate: 1 USDC ≈ $1.00
 ```
 
 ---
@@ -512,10 +522,10 @@ Rate: 1 SUI = $2.45
 
 **User-Callable:**
 ```move
-// Deposit SUI to escrow
-public entry fun deposit(account: &mut EscrowAccount, payment: Coin<SUI>)
+// Deposit USDC to escrow (MVP: USDC only)
+public entry fun deposit(account: &mut EscrowAccount, payment: Coin<USDC>)
 
-// Withdraw SUI from escrow (enforces minimum balance if services active)
+// Withdraw USDC from escrow (enforces minimum balance if services active)
 public entry fun withdraw(account: &mut EscrowAccount, amount: u64, ctx: &mut TxContext)
 
 // Set monthly spending limit
@@ -545,12 +555,14 @@ public fun credit(
 struct EscrowAccount has key {
     id: UID,
     owner: address,  // User's wallet address
-    balance_sui: Balance<SUI>,  // Actual SUI tokens
+    balance_usdc: Balance<USDC>,  // Actual USDC tokens (MVP: USDC only)
     monthly_limit_usd_cents: u64,  // See CONSTANTS.md (e.g., 50000 = $500 default)
     current_month_charged_usd_cents: u64,  // Charged this calendar month
     current_month_start_epoch: u64,  // Epoch timestamp of current month start (1st day, 00:00 UTC)
 }
 ```
+
+**Note:** For MVP, `balance_usdc` represents both the token balance and USD value (1:1 peg). Future versions supporting SUI/other assets will require additional fields and conversion logic.
 
 **Monthly Limit Enforcement Logic:**
 ```move
@@ -598,8 +610,9 @@ CREATE TABLE ledger_entries (
   customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
   type VARCHAR(20) NOT NULL,  -- 'deposit', 'withdrawal', 'charge', 'credit'
   amount_usd_cents BIGINT NOT NULL,  -- USD amount (signed: + for deposit/credit, - for charge/withdrawal)
-  amount_sui_mist BIGINT,  -- SUI amount in mist (1 SUI = 10^9 mist), null for charges/credits
-  sui_usd_rate_cents BIGINT,  -- Rate at transaction time (cents per 1 SUI), e.g., 245 = $2.45
+  amount_usdc_cents BIGINT,  -- USDC amount in smallest unit (MVP: USDC only), null for charges/credits
+  asset_type VARCHAR(20),  -- 'USDC' (MVP), future: 'SUI', 'USDT', etc.
+  asset_usd_rate_cents BIGINT,  -- Rate at transaction time (cents per 1 token), MVP: 100 = $1.00 for USDC
   tx_hash VARCHAR(66),  -- On-chain TX hash for deposits/withdrawals, null for charges/credits
   description TEXT,  -- e.g., "Service enabled - Pro tier (pro-rated)"
   invoice_id VARCHAR(50),  -- e.g., "INV-2025-01-001"
@@ -609,6 +622,8 @@ CREATE TABLE ledger_entries (
 CREATE INDEX idx_ledger_customer_created ON ledger_entries(customer_id, created_at DESC);
 CREATE INDEX idx_ledger_tx_hash ON ledger_entries(tx_hash) WHERE tx_hash IS NOT NULL;
 ```
+
+**Note:** For MVP with USDC only, `asset_type='USDC'` and `asset_usd_rate_cents=100` (1:1 peg). Future multi-asset support will use variable rates for SUI and other tokens.
 
 **Note:** With calendar month model, we don't need a separate `spending_window` table. The `customers.current_month_charged_usd_cents` field tracks spending, which resets on the 1st of each month via the Global Manager's monthly reset task.
 
@@ -789,28 +804,34 @@ Blockchain error: Insufficient gas
 [Retry] [Cancel]
 ```
 
-**Withdrawal Below Minimum:**
+**Withdrawal Warning (Insufficient Balance):**
 ```
-Modal: "Cannot Withdraw"
+Modal: "Low Balance Warning"
 
-You cannot withdraw below $50 while services are active.
+Your balance after withdrawal will be insufficient for your active services.
+This may cause service suspension at the next charge.
 
-Total balance: $127.50
-Reserved: $50.00 (1 active service)
-Available: $77.50
+Current balance: $127.50
+After withdrawal: $27.50
+Monthly service cost: $60.00
 
-[Withdraw $77.50] [Cancel]
+Do you want to proceed?
+
+[Proceed with Withdrawal] [Cancel]
 ```
 
 ### Backend Errors
 
-**Balance Check Failed:**
+**Balance Check Failed (Triggers Suspension):**
 ```typescript
 class InsufficientBalanceError extends Error {
   constructor(public required: number, public available: number) {
-    super(`Insufficient balance: required $${required}, available $${available}`)
+    super(`Insufficient balance: required $${required}, available $${available}. Service suspended.`)
   }
 }
+
+// On charge failure, automatically transition to suspended state
+// Service will auto-resume when balance becomes sufficient (checked on deposit/billing cycle)
 ```
 
 **Monthly Limit Exceeded:**
@@ -916,26 +937,28 @@ class MonthlyLimitExceededError extends Error {
 
 ### Post-MVP Features
 
-1. **Usage-Based Spending Cap (Off-Chain)**
+1. **Multi-Asset Support (SUI, USDT, etc.)**
+   - Currently: USDC only (MVP)
+   - Phase 2: Add SUI token support with rate oracle
+   - Phase 3: Add other stablecoins (USDT, etc.)
+   - Requires: Rate oracle implementation, multi-balance tracking
+
+2. **Usage-Based Spending Cap (Off-Chain)**
    - Separate limit for metered usage (requests/bandwidth)
    - Example: Max $500/month for usage fees (separate from base service fees)
    - Prevents runaway metered charges
 
-2. **Auto-Top-Up**
+3. **Auto-Top-Up**
    - User sets threshold: "If balance < $50, auto-deposit $100"
    - Requires pre-authorized wallet transaction
 
-3. **Recurring Deposits**
+4. **Recurring Deposits**
    - User schedules monthly deposits (e.g., $100 on 1st of month)
    - Prevents service pauses for regular users
 
-4. **Tiered Spending Limits**
+5. **Tiered Spending Limits**
    - Daily/weekly caps in addition to monthly
    - More granular control for power users
-
-5. **Multi-Currency Support**
-   - Accept USDC, USDT in addition to SUI
-   - Simplifies USD conversion (stablecoins)
 
 ---
 
@@ -949,8 +972,14 @@ class MonthlyLimitExceededError extends Error {
 - ✅ Clear UX (always shows exact amount needed, one-click top-up buttons)
 - ✅ Transparent (all deposits/withdrawals linked to on-chain TX hashes)
 
-**Protection for Both Parties:**
-- **User Protected:** Monthly spending cap (on-chain), rate oracle (multi-source), proactive validation
-- **Suiftly Protected:** $50 minimum balance, 7-day grace period, pre-charge validation
+**MVP Asset Strategy:**
+- **USDC Only:** Simplifies MVP implementation (no rate oracle needed)
+- **1:1 Peg:** Direct USD value mapping (100 USDC = $100 USD balance)
+- **No Volatility Risk:** Stablecoin eliminates exchange rate concerns
+- **Future-Proof:** Database schema supports multi-asset expansion (SUI, USDT, etc.)
 
-**Ready for Implementation:** Smart contract interface defined, database schema specified, frontend validation logic provided, user flows documented with detailed scenarios.
+**Protection for Both Parties:**
+- **User Protected:** Monthly spending cap (on-chain), USDC stablecoin (no volatility), proactive validation, can withdraw full balance anytime
+- **Suiftly Protected:** Automatic service suspension on insufficient balance, pre-charge validation, automatic resume on deposit
+
+**Ready for Implementation:** Smart contract interface defined (USDC-based), database schema specified (multi-asset ready), frontend validation logic provided, user flows documented with detailed scenarios.
