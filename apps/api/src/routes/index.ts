@@ -11,6 +11,7 @@ import { configRouter } from './config';
 import { servicesRouter } from './services';
 import { sealRouter } from './seal';
 import { activityRouter } from './activity';
+import { billingRouter } from './billing';
 
 export const appRouter = router({
   test: testRouter,
@@ -18,6 +19,7 @@ export const appRouter = router({
   services: servicesRouter,
   seal: sealRouter,
   activity: activityRouter,
+  billing: billingRouter,
 });
 
 export type AppRouter = typeof appRouter;

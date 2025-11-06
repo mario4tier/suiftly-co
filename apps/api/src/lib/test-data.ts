@@ -67,13 +67,15 @@ export async function resetCustomerTestData(options: TestDataResetOptions = {}) 
       .where(eq(sealKeys.customerId, customerId))
       .returning();
 
-    // 4. Delete ledger entries (optional - keep for audit trail)
-    // await tx.delete(ledgerEntries).where(eq(ledgerEntries.customerId, customerId));
+    // 4. Delete ledger entries (for clean test state)
+    await tx.delete(ledgerEntries).where(eq(ledgerEntries.customerId, customerId));
 
     // 5. Reset customer balance and limits
+    // Also clear escrowContractId to simulate no escrow account
     await tx
       .update(customers)
       .set({
+        escrowContractId: null,
         currentBalanceUsdCents: balanceUsdCents,
         maxMonthlyUsdCents: spendingLimitUsdCents,
         currentMonthChargedUsdCents: 0,

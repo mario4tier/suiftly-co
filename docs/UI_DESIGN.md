@@ -962,185 +962,161 @@ Each service page has **2 major modes of operation**:
 
 ---
 
-### Page 3: Billing
+
+### Billing and Payments Page
 
 **URL:** `/billing`
 
-**Purpose:** Consolidated view of all usage, charges, and wallet balance.
+**Purpose:** Manage on-chain escrow spending protections, view balance and transaction history.
 
 
-## Billing and Payments Page
-
-**URL:** `/billing`
-
-**Purpose:** Manage on-chain escrow spending protections, view balance, and control spending limits.
-
-
-### Account Section
-
-### Spending Limits Section
-
-**Note:** Spending limits is part of the main billing page, not a separate route.
+**Main Content**
 ```
 ┌──────────────────────────────────────────────────────┐
-│ Billing → Spending Limit                             │
+│ Billing                                               │
 │                                                       │
-│  Monthly Spending Limit (On-Chain Protection)        │
+│  Suiftly Escrow Account                               │
+│  ┌────────────────────────────────────────┐          │
+│  │  Balance                      $127.50  │          │
+│  │  Spending Limit Protection    $250.00  │          │
+│  │                                        │          │
+│  │  [ Deposit ]  [ Withdraw ]             │          │
+│  │  [ Adjust Spending Limit ]             │          │
+│  └────────────────────────────────────────┘          │
 │                                                       │
-│  ⓘ This limit protects your escrow account from     │
-│     excessive charges. Changes require wallet         │
-│     signature to update the smart contract.           │
+│  Pending Per-Request Charges           $12.45        │
+│  Last Month Charged (December 2024)     $54.20       │
 │                                                       │
-│  Current Limit: $250 per 28-day period              │
+│  Next Scheduled Payment              $58.00  [›]     │
+│  February 1, 2025                                     │
+│  ┌────────────────────────────────────────┐          │
+│  │  Seal Service - Pro tier    $40.00    │  (shown  │
+│  │  gRPC Service - Starter      $9.00    │   when   │
+│  │  API Keys (3)                $9.00    │  chevron │
+│  └────────────────────────────────────────┘  opened) │
 │                                                       │
-│  [━━━━━━━━━━━━━━━━━━━] $85 / $250               │
-│  This period: $85 (34%) - Resets in 12 days          │
-│                                                       │
-│  Recent charges:                                      │
-│  • Jan 9: Service enabled - $60                       │
-│  • Jan 15: Tier upgrade - $20                         │
-│  • Jan 18: Added 10 API keys - $10                    │
-│  • Jan 28: Monthly usage fees - $590                  │
-│                                                       │
-│  [ Change Limit ]                                     │
-│                                                       │
-│  ─────────────────────────────────────                │
-│                                                       │
-│  Withdrawal Protection                                │
-│                                                       │
-│  ⓘ Minimum balance required while services active:  │
-│     $50.00 (prevents accidental service interruption) │
-│                                                       │
-│  Active services: 1 (Seal)                            │
-│  Current balance: $127.50                             │
-│  Available to withdraw: $77.50                        │
-│                                                       │
-│  [ Withdraw Funds ]                                   │
+│  Billing History  [›]                                 │
+│  ┌────────────────────────────────────────┐          │
+│  │  Jan 1, 2025   $66.75  [›]             │  (shown  │
+│  │  Dec 1, 2024   $54.20  [›]             │   when   │
+│  │  Nov 1, 2024   $48.00  [›]             │  chevron │
+│  │  ...                                   │  opened) │
+│  │                                        │          │
+│  │  [ ‹ Previous ]        [ Next › ]      │          │
+│  └────────────────────────────────────────┘          │
 │                                                       │
 └──────────────────────────────────────────────────────┘
 ```
+
+**When history item expanded (click chevron):**
+```
+│  ┌────────────────────────────────────────┐          │
+│  │  Jan 1, 2025   $66.75  [▽]             │          │
+│  │                                        │          │
+│  │  Subscription Charges:                 │          │
+│  │    Seal Service - Pro       $40.00     │          │
+│  │    gRPC Service - Starter    $9.00     │          │
+│  │    API Keys (3)              $9.00     │          │
+│  │                                        │          │
+│  │  Usage Charges:                        │          │
+│  │    Seal requests (125k)      $8.75     │          │
+│  │                                        │          │
+│  │  TX: 0xabc123...           [View ↗]    │          │
+│  └────────────────────────────────────────┘          │
+```
+
+**Sections:**
+
+0. **Escrow Flow Diagram (Top Visual)**
+   - Visual diagram showing the escrow account model
+   - Left: User icon (You)
+   - Middle: Escrow Account icon (Suiftly Escrow Account - On-Chain)
+   - Right: Suiftly icon (Building)
+   - Arrows between User ↔ Escrow:
+     - "Deposit / Withdraw" (green, bidirectional)
+     - "Control Spending Limit" (blue, shield icon)
+   - Arrows between Escrow ↔ Suiftly:
+     - "Charge / Refund" (orange, bidirectional)
+   - Helps users understand:
+     - They control deposits/withdrawals
+     - They set spending limit protection
+     - Suiftly can only charge within the limit
+     - All operations are on-chain (transparent)
+
+1. **Suiftly Escrow Account (Top Box)**
+   - Balance in USD (from USDC escrow, 1:1 peg for MVP)
+   - Spending Limit Protection (28-day rolling period, see CONSTANTS.md)
+   - Actions:
+     - **Deposit** → Add funds to escrow (via wallet signature)
+     - **Withdraw** → Remove funds from escrow (via wallet signature)
+     - **Adjust Spending Limit** → Change 28-day cap (requires wallet signature)
+   - **When no escrow account exists yet:**
+     - Always show the escrow account section (don't hide it)
+     - Display balance as $0.00
+     - Display spending limit as "Unlimited" (or default)
+     - Show all action buttons (Deposit/Withdraw/Adjust)
+     - Show note: "Escrow account will be created on your first deposit via Sui wallet"
+     - Escrow account is automatically created on first deposit transaction
+
+2. **Current Charges (Below Escrow Box)**
+   - **Pending Per-Request Charges:** Accumulated usage charges not yet billed
+   - **Last Month Charged:** What was charged last month (for reference)
+   - **Next Scheduled Payment:** What will be charged on 1st of next month
+     - Chevron expands to show itemized breakdown
+     - Includes: subscription fees + pending usage charges
+
+3. **Billing History (Bottom, Collapsible)**
+   - Header shows "Billing History [›]" - click chevron to expand
+   - **Lazy loading:** History is only fetched from API when user opens the section
+   - Once expanded:
+     - List of past charges (paginated, 20 per page)
+     - Each line shows: date, total amount, chevron to expand
+     - Expanded view shows:
+       - Subscription charges (itemized by service/tier)
+       - Usage charges (itemized by service)
+       - Transaction hash (if on-chain charge)
+     - Navigation: Previous / Next buttons
+     - Similar to Activity Logs pagination
+
+**Escrow Integration:**
+- Balance synced from blockchain (or mock for development)
+- Deposit → User signs blockchain transaction to add USDC (MVP)
+- Withdraw → User signs blockchain transaction to remove USDC
+- Spending limit → User signs blockchain transaction to update on-chain limit
+- Auto-billing: Suiftly charges escrow directly (no signature needed)
 
 **Change Spending Limit Modal:**
 ```
 ┌──────────────────────────────────────────────────────┐
 │ Change 28-Day Spending Limit                         │
 │                                                       │
+│  ⓘ This change requires a wallet approval to         │
+│     update the on-chain escrow contract.             │
+│                                                       │
+│     This is to protect your escrow account from      │
+│     excessive charges (bug or hack). Set a limit high│
+│     enough to cover your expected cost to avoid      │
+│     service interruption.                            │
+│                                                       │
 │  Current limit: $250 per 28-day period               │
-│  Spent this period: $85                               │
 │                                                       │
-│  New limit: [$ 1000  ]  (min: $10, unlimited)     │
+│  New limit: [$ 1000  ]  (min: $10)                   │
 │                                                       │
-│  Suggested:                                           │
-│  • $250/28 days  - Default (see CONSTANTS.md)        │
-│  • $1,000/28 days - Heavy usage / multiple services  │
-│                                                       │
-│  ⓘ This change requires a wallet signature to       │
-│     update the on-chain escrow contract.              │
-│                                                       │
-│  [ Update Limit ]  [ Cancel ]                         │
+│  [ Update Limit ]  [ Cancel ]                        │
 │                                                       │
 └──────────────────────────────────────────────────────┘
 ```
 
-**Interactions:**
-- Clicking [Change Limit] opens modal
+**Spending Limit Interactions:**
+- Clicking [Adjust Spending Limit] opens modal
 - User enters new value (validated: min $10 or unlimited)
 - Clicking "Update Limit" triggers wallet signature request
 - On-chain transaction updates escrow contract config
 - Toast: "28-day spending limit updated: $1,000"
 - Activity log: "28-day spending limit changed: $250 → $1,000"
 
-**Tooltip:**
-- **28-Day Spending Limit:** "Maximum Suiftly can charge in any 28-day rolling period. Protects your escrow from excessive billing."
 
 ---
-
-**State 1: Wallet Not Connected (Demo Mode)**
-```
-┌──────────────────────────────────────────────────────┐
-│ Billing & Usage                                       │
-
-│                                                       │
-│  ⓘ Connect your wallet to view billing information  │
-│                                                       │
-│  ┌────────────────────────────────────────┐          │
-│  │                                        │          │
-│  │     [Connect Wallet]                   │          │
-│  │                                        │          │
-│  │  Connect to view:                      │          │
-│  │  • Wallet balance                      │          │
-│  │  • Current month charges               │          │
-│  │  • Usage details                       │          │
-│  │  • Billing history                     │          │
-│  │                                        │          │
-│  └────────────────────────────────────────┘          │
-│                                                       │
-└──────────────────────────────────────────────────────┘
-```
-
-**State 2: Wallet Connected**
-```
-┌──────────────────────────────────────────────────────┐
-│ Billing & Usage                                       │
-│                                                       │
-│  Wallet Balance                      $127.50         │
-│  ┌────────────────────────────────────────┐          │
-│  │  [ Top Up ]  [ Withdraw ]             │          │
-│  └────────────────────────────────────────┘          │
-│                                                       │
-│  Current Month (January 2025)                         │
-│  ┌────────────────────────────────────────┐          │
-│  │  Seal Service              $46.25      │          │
-│  │  gRPC Service              $12.00      │          │
-│  │  GraphQL Service            $8.50      │          │
-│  │  ─────────────────────────────────     │          │
-│  │  Total                     $66.75      │          │
-│  └────────────────────────────────────────┘          │
-│                                                       │
-│  Usage Details (Current Month)                        │
-│  ┌────────────────────────────────────────┐          │
-│  │  Service    │ Requests  │ Cost         │          │
-│  ├────────────────────────────────────────┤          │
-│  │  Seal       │ 125,000   │ $12.50       │          │
-│  │  gRPC       │ 32,000    │ $3.20        │          │
-│  │  GraphQL    │ 18,000    │ $1.80        │          │
-│  └────────────────────────────────────────┘          │
-│                                                       │
-│  Billing History                                      │
-│  ┌────────────────────────────────────────┐          │
-│  │  Jan 1, 2025   Invoice #001   $66.75  │          │
-│  │  Dec 1, 2024   Invoice #000   $54.20  │          │
-│  │  ...                                   │          │
-│  └────────────────────────────────────────┘          │
-│                                                       │
-└──────────────────────────────────────────────────────┘
-```
-
-**Sections:**
-
-1. **Wallet Balance (Top)**
-   - Current balance (large, prominent)
-   - "Top Up" button → Opens wallet deposit modal
-   - "Withdraw" button → Opens wallet withdrawal modal
-
-2. **Current Month Summary**
-   - Breakdown by service
-   - Total charges
-   - Note: Auto-charged from wallet balance
-
-3. **Usage Details**
-   - Table showing usage metrics per service
-   - Current billing period (month-to-date)
-
-4. **Billing History**
-   - List of past invoices (monthly)
-   - Click invoice → View detailed breakdown
-
-**Wallet Integration:**
-- Balance synced with Web3 wallet escrow
-- Top-up → Deposit SUI tokens to escrow
-- Withdraw → Release SUI tokens from escrow
-- Auto-billing: Charges deducted from balance automatically
 
 ### Billing & Currency Model
 
@@ -1148,34 +1124,39 @@ Each service page has **2 major modes of operation**:
 
 **Summary:**
 
-**Canonical Currency: USD (denominated), SUI (settled)**
+**Canonical Currency: USD (denominated), USDC (settled) for MVP**
 
-All prices displayed in USD, but payments/deposits/withdrawals use SUI tokens on Sui blockchain.
+All prices displayed in USD. Deposits/withdrawals use **USDC** tokens on Sui blockchain.
+
+**MVP Asset Strategy:**
+- **USDC Only:** Simplifies MVP implementation (no rate oracle needed)
+- **1:1 Peg:** USDC is a USD stablecoin, so 1 USDC ≈ $1 USD
+- **No Rate Display Needed:** Direct conversion (100 USDC = $100 balance)
+- **No Volatility:** Stablecoin eliminates exchange rate concerns
+- **Future:** SUI and other tokens may be added post-MVP
 
 **Key UX Elements (detailed flows in [ESCROW_DESIGN.md](./ESCROW_DESIGN.md)):**
 
-- **Rate Display:** Always show SUI/USD rate with timestamp and source count
-  - Example: "1 SUI = $2.45 (updated 47s ago, from 3 sources)"
-
 - **Escrow Account Model:**
-  - User deposits once → Suiftly auto-charges for services (no repeated signatures)
-  - Balance shown in USD throughout UI
+  - User deposits USDC once → Suiftly auto-charges for services (no repeated signatures)
+  - Balance shown in USD throughout UI (1:1 with USDC for MVP)
   - User can withdraw anytime (minimum $50 if services active)
 
-- **Monthly Spending Limit (On-Chain):**
+- **28-Day Spending Limit Protection (On-Chain):**
   - Default: $250/28 days (user-adjustable: $10-unlimited, see CONSTANTS.md)
   - Enforced by smart contract
-  - User sets limit on first deposit
+  - User sets limit on first deposit or can adjust later
+  - Rolling period (not calendar month)
 
 - **Proactive Validation:**
-  - Frontend validates balance + monthly limit in real-time
+  - Frontend validates balance + spending limit in real-time
   - "Save Changes" button disabled if insufficient funds or would exceed limit
   - Clear error banners show exact problem and solution
   - No failed save attempts
 
 - **Charging Behavior:**
   - Immediate: Service enable, tier changes, add keys/packages
-  - Deferred: Usage fees (end of month)
+  - Deferred: Usage fees (billed monthly on 1st)
   - Credits: Instant (revoke keys, tier downgrades)
 
 - **Low Balance Warnings:**
@@ -1184,12 +1165,12 @@ All prices displayed in USD, but payments/deposits/withdrawals use SUI tokens on
   - Balance = $0: Service paused, 7-day grace period
 
 **See [ESCROW_DESIGN.md](./ESCROW_DESIGN.md) for:**
-- Complete deposit/withdrawal flows
+- Complete deposit/withdrawal flows (USDC-based)
 - Smart contract interface
 - Database schema
 - Ledger reconciliation details
 - Security considerations
-- Testing scenarios
+- Multi-asset future roadmap (SUI, USDT, etc.)
 
 ---
 

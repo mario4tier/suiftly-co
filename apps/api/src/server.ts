@@ -138,6 +138,244 @@ if (config.NODE_ENV !== 'production') {
     reply.send(result);
   });
 
+  // Mock wallet control endpoints
+  const { getSuiService } = await import('./services/sui/index.js');
+  const suiService = getSuiService();
+
+  // Get mock wallet balance
+  server.get('/test/wallet/balance', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    const query = request.query as any;
+    const walletAddress = query.walletAddress || '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+
+    const account = await suiService.getAccount(walletAddress);
+    if (!account) {
+      reply.send({
+        found: false,
+        message: 'Account not found',
+      });
+      return;
+    }
+
+    reply.send({
+      found: true,
+      walletAddress,
+      balanceUsd: account.balanceUsdcCents / 100,
+      spendingLimitUsd: account.spendingLimitUsdCents / 100,
+      currentPeriodChargedUsd: account.currentPeriodChargedUsdCents / 100,
+      currentPeriodStartMs: account.currentPeriodStartMs,
+    });
+  });
+
+  // Mock wallet deposit
+  server.post('/test/wallet/deposit', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    const body = request.body as any;
+    const walletAddress = body.walletAddress || '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    const amountUsd = body.amountUsd || 0;
+    const initialSpendingLimitUsd = body.initialSpendingLimitUsd;
+
+    if (amountUsd <= 0) {
+      reply.code(400).send({
+        success: false,
+        error: 'Amount must be positive',
+      });
+      return;
+    }
+
+    const result = await suiService.deposit({
+      userAddress: walletAddress,
+      amountUsdcCents: Math.round(amountUsd * 100),
+      initialSpendingLimitUsdCents: initialSpendingLimitUsd !== undefined
+        ? Math.round(initialSpendingLimitUsd * 100)
+        : undefined,
+    });
+
+    reply.send({
+      success: result.success,
+      error: result.error,
+      digest: result.digest,
+      accountCreated: result.accountCreated,
+      newBalanceUsd: result.success
+        ? ((await suiService.getAccount(walletAddress))?.balanceUsdcCents ?? 0) / 100
+        : undefined,
+    });
+  });
+
+  // Mock wallet withdraw
+  server.post('/test/wallet/withdraw', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    const body = request.body as any;
+    const walletAddress = body.walletAddress || '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    const amountUsd = body.amountUsd || 0;
+
+    if (amountUsd <= 0) {
+      reply.code(400).send({
+        success: false,
+        error: 'Amount must be positive',
+      });
+      return;
+    }
+
+    const result = await suiService.withdraw({
+      userAddress: walletAddress,
+      amountUsdcCents: Math.round(amountUsd * 100),
+    });
+
+    reply.send({
+      success: result.success,
+      error: result.error,
+      digest: result.digest,
+      accountCreated: result.accountCreated,
+      newBalanceUsd: result.success
+        ? ((await suiService.getAccount(walletAddress))?.balanceUsdcCents ?? 0) / 100
+        : undefined,
+    });
+  });
+
+  // Mock wallet set spending limit
+  server.post('/test/wallet/spending-limit', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    const body = request.body as any;
+    const walletAddress = body.walletAddress || '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    const limitUsd = body.limitUsd ?? 0;
+
+    if (limitUsd < 0) {
+      reply.code(400).send({
+        success: false,
+        error: 'Limit must be non-negative (0 = unlimited)',
+      });
+      return;
+    }
+
+    const result = await suiService.updateSpendingLimit({
+      userAddress: walletAddress,
+      newLimitUsdCents: Math.round(limitUsd * 100),
+    });
+
+    reply.send({
+      success: result.success,
+      error: result.error,
+      digest: result.digest,
+      accountCreated: result.accountCreated,
+      newLimitUsd: result.success
+        ? ((await suiService.getAccount(walletAddress))?.spendingLimitUsdCents ?? 0) / 100
+        : undefined,
+    });
+  });
+
+  // Mock wallet charge - simulates Suiftly charging for services
+  server.post('/test/wallet/charge', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    const body = request.body as any;
+    const walletAddress = body.walletAddress || '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    const amountUsd = body.amountUsd || 0;
+    const description = body.description || 'Test charge';
+
+    if (amountUsd <= 0) {
+      reply.code(400).send({
+        success: false,
+        error: 'Amount must be positive',
+      });
+      return;
+    }
+
+    const result = await suiService.charge({
+      userAddress: walletAddress,
+      amountUsdCents: Math.round(amountUsd * 100),
+      description,
+    });
+
+    // If successful, create ledger entry
+    if (result.success) {
+      const { db } = await import('@suiftly/database');
+      const { ledgerEntries, customers } = await import('@suiftly/database/schema');
+      const { eq } = await import('drizzle-orm');
+
+      const customer = await db.query.customers.findFirst({
+        where: eq(customers.walletAddress, walletAddress),
+      });
+
+      if (customer) {
+        await db.insert(ledgerEntries).values({
+          customerId: customer.customerId,
+          type: 'charge',
+          amountUsdCents: Math.round(amountUsd * 100),
+          txHash: result.digest,
+          description,
+        });
+      }
+    }
+
+    reply.send({
+      success: result.success,
+      error: result.error,
+      digest: result.digest,
+      newBalanceUsd: result.success
+        ? ((await suiService.getAccount(walletAddress))?.balanceUsdcCents ?? 0) / 100
+        : undefined,
+    });
+  });
+
+  // Mock wallet refund - simulates Suiftly refunding charges
+  server.post('/test/wallet/refund', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    const body = request.body as any;
+    const walletAddress = body.walletAddress || '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    const amountUsd = body.amountUsd || 0;
+    const description = body.description || 'Test refund';
+
+    if (amountUsd <= 0) {
+      reply.code(400).send({
+        success: false,
+        error: 'Amount must be positive',
+      });
+      return;
+    }
+
+    const result = await suiService.credit({
+      userAddress: walletAddress,
+      amountUsdCents: Math.round(amountUsd * 100),
+      description,
+    });
+
+    // If successful, create ledger entry
+    if (result.success) {
+      const { db } = await import('@suiftly/database');
+      const { ledgerEntries, customers } = await import('@suiftly/database/schema');
+      const { eq } = await import('drizzle-orm');
+
+      const customer = await db.query.customers.findFirst({
+        where: eq(customers.walletAddress, walletAddress),
+      });
+
+      if (customer) {
+        await db.insert(ledgerEntries).values({
+          customerId: customer.customerId,
+          type: 'credit',
+          amountUsdCents: Math.round(amountUsd * 100),
+          txHash: result.digest,
+          description,
+        });
+      }
+    }
+
+    reply.send({
+      success: result.success,
+      error: result.error,
+      digest: result.digest,
+      newBalanceUsd: result.success
+        ? ((await suiService.getAccount(walletAddress))?.balanceUsdcCents ?? 0) / 100
+        : undefined,
+    });
+  });
+
   // Graceful shutdown endpoint - allows tests to cleanly shutdown server
   server.post('/test/shutdown', {
     config: { rateLimit: false },
