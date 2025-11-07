@@ -254,7 +254,7 @@ function BillingPage() {
           <div>
             <div className="text-sm text-gray-500">Spending Limit Protection</div>
             <div className="text-2xl font-bold">
-              {spendingLimit === null || spendingLimit === 0 ? 'Unlimited' : `$${spendingLimit.toFixed(2)} per 28-days`}
+              {!spendingLimit ? 'Unlimited' : `$${spendingLimit.toFixed(2)} per 28-days`}
             </div>
           </div>
         </div>
