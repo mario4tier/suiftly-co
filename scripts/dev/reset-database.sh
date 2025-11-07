@@ -72,9 +72,6 @@ read -r
 
 # Database connection settings (after safety checks)
 # Use postgres superuser for setup/migrations
-DB_ADMIN_USER="${DB_ADMIN_USER:-postgres}"
-DB_ADMIN_PASSWORD="${DB_ADMIN_PASSWORD:-}"
-export PGPASSWORD="$DB_ADMIN_PASSWORD"
 
 # Step 1: Drop database
 echo "1️⃣  Dropping database $DB_NAME..."
@@ -91,15 +88,15 @@ echo "3️⃣  Installing TimescaleDB extension..."
 sudo -u postgres psql -d "$DB_NAME" -c "CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;"
 echo "   ✅ TimescaleDB extension installed"
 
-# Step 4: Apply migrations (as postgres)
+# Step 4: Apply migrations (as postgres Unix user for peer auth)
 echo "4️⃣  Applying migrations..."
 cd "$(dirname "$0")/../../packages/database"
-DATABASE_URL="postgresql://$DB_ADMIN_USER@$DB_HOST/$DB_NAME" npm run db:migrate
+sudo -u postgres DATABASE_URL="postgresql://postgres@$DB_HOST/$DB_NAME" npm run db:migrate
 echo "   ✅ Migrations applied"
 
 # Step 5: Setup TimescaleDB hypertables
 echo "5️⃣  Setting up TimescaleDB hypertables..."
-DATABASE_URL="postgresql://$DB_ADMIN_USER@$DB_HOST/$DB_NAME" npm run db:timescale
+sudo -u postgres DATABASE_URL="postgresql://postgres@$DB_HOST/$DB_NAME" npm run db:timescale
 echo "   ✅ TimescaleDB configured"
 
 # Step 6: Grant minimal permissions to deploy user
