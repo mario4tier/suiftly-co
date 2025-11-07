@@ -14,6 +14,7 @@ import { appRouter } from './routes';
 import { registerAuthRoutes } from './routes/rest-auth';
 import { config, logConfig } from './lib/config';
 import { initializeFrontendConfig } from './lib/init-config';
+import { verifyDatabasePermissions } from './lib/db-permissions-check';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -136,6 +137,46 @@ if (config.NODE_ENV !== 'production') {
     const walletAddress = query.walletAddress || undefined;
     const result = await getCustomerTestData(walletAddress);
     reply.send(result);
+  });
+
+  // Truncate all tables - full database reset (no sudo required with TRUNCATE permission)
+  server.post('/test/data/truncate-all', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    const { db } = await import('@suiftly/database');
+    const { sql } = await import('drizzle-orm');
+
+    try {
+      await db.transaction(async (tx) => {
+        // Disable triggers to avoid foreign key issues
+        await tx.execute(sql`SET CONSTRAINTS ALL DEFERRED`);
+
+        // Truncate all tables (CASCADE handles foreign keys)
+        await tx.execute(sql`
+          TRUNCATE TABLE
+            customers,
+            api_keys,
+            escrow_accounts,
+            ledger_entries,
+            activity_logs,
+            services,
+            service_endpoints,
+            service_instances,
+            seal_keys
+          CASCADE
+        `);
+      });
+
+      reply.send({
+        success: true,
+        message: 'All tables truncated successfully',
+      });
+    } catch (error: any) {
+      reply.code(500).send({
+        success: false,
+        error: error.message,
+      });
+    }
   });
 
   // Mock wallet control endpoints
@@ -427,6 +468,9 @@ process.on('SIGINT', async () => {
 // Start server
 async function start() {
   try {
+    // Verify database permissions (fail-fast if misconfigured)
+    await verifyDatabasePermissions();
+
     // Initialize frontend configuration in database before starting server
     await initializeFrontendConfig();
 
@@ -444,6 +488,7 @@ async function start() {
       console.log(`  🧪 Test Delays: POST http://${config.HOST}:${config.PORT}/test/delays`);
       console.log(`  🧪 Test Data Reset: POST http://${config.HOST}:${config.PORT}/test/data/reset`);
       console.log(`  🧪 Test Data Get: GET http://${config.HOST}:${config.PORT}/test/data/customer`);
+      console.log(`  🧪 Test Truncate All: POST http://${config.HOST}:${config.PORT}/test/data/truncate-all`);
       console.log(`  🧪 Test Shutdown: POST http://${config.HOST}:${config.PORT}/test/shutdown`);
     }
     console.log('='.repeat(50));

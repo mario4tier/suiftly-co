@@ -90,17 +90,20 @@ echo "   ✅ TimescaleDB extension installed"
 
 # Step 4: Apply migrations (as postgres Unix user for peer auth)
 echo "4️⃣  Applying migrations..."
-cd "$(dirname "$0")/../../packages/database"
-sudo -u postgres DATABASE_URL="postgresql://postgres@$DB_HOST/$DB_NAME" npm run db:migrate
+SCRIPT_DIR="$(dirname "$0")"
+DB_DIR="$(cd "$SCRIPT_DIR/../../packages/database" && pwd)"
+# Use Unix socket with explicit socket directory for peer auth
+# PostgreSQL default socket is in /var/run/postgresql
+sudo -u postgres sh -c "cd '$DB_DIR' && DATABASE_URL='postgresql://postgres@%2Fvar%2Frun%2Fpostgresql:5432/$DB_NAME' node --import tsx src/migrate.ts"
 echo "   ✅ Migrations applied"
 
 # Step 5: Setup TimescaleDB hypertables
 echo "5️⃣  Setting up TimescaleDB hypertables..."
-sudo -u postgres DATABASE_URL="postgresql://postgres@$DB_HOST/$DB_NAME" npm run db:timescale
+sudo -u postgres sh -c "cd '$DB_DIR' && DATABASE_URL='postgresql://postgres@%2Fvar%2Frun%2Fpostgresql:5432/$DB_NAME' node --import tsx src/timescale-setup.ts"
 echo "   ✅ TimescaleDB configured"
 
-# Step 6: Grant minimal permissions to deploy user
-echo "6️⃣  Granting minimal permissions to deploy user..."
+# Step 6: Grant permissions to deploy user (DML + TRUNCATE for test resets)
+echo "6️⃣  Granting permissions to deploy user..."
 sudo -u postgres psql -d "$DB_NAME" <<EOF
 -- Grant CONNECT privilege
 GRANT CONNECT ON DATABASE $DB_NAME TO deploy;
@@ -108,14 +111,17 @@ GRANT CONNECT ON DATABASE $DB_NAME TO deploy;
 -- Grant USAGE on schema
 GRANT USAGE ON SCHEMA public TO deploy;
 
--- Grant SELECT, INSERT, UPDATE, DELETE on all tables
+-- Grant DML operations on all tables
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO deploy;
+
+-- Grant TRUNCATE for test data resets (dev only, production uses different setup)
+GRANT TRUNCATE ON ALL TABLES IN SCHEMA public TO deploy;
 
 -- Grant USAGE on all sequences (for auto-increment IDs)
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO deploy;
 
 -- Grant default privileges for future tables/sequences
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO deploy;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON TABLES TO deploy;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO deploy;
 
 -- Verify permissions
@@ -124,7 +130,7 @@ FROM information_schema.table_privileges
 WHERE grantee = 'deploy'
 ORDER BY table_name, privilege_type;
 EOF
-echo "   ✅ Minimal permissions granted to deploy user"
+echo "   ✅ Permissions granted to deploy user (DML + TRUNCATE)"
 
 echo ""
 echo "🎉 Database reset complete!"

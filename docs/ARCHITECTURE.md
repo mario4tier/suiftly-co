@@ -403,12 +403,13 @@ SQL
 We use **production-like minimal permissions** even in development to catch permission issues early:
 
 1. **`postgres` (superuser)** - Database setup, migrations, test data reset
-2. **`deploy` (minimal runtime)** - API operations only (SELECT/INSERT/UPDATE/DELETE)
+2. **`deploy` (minimal runtime)** - DML operations (SELECT/INSERT/UPDATE/DELETE/TRUNCATE)
 
 **Why:** The `deploy` user has NO DDL permissions (can't CREATE/ALTER/DROP tables). This ensures:
 - Permission issues are caught in dev, not production
 - Migrations run as `postgres`, API runs as `deploy`
 - Production-ready security model from day one
+- Automated verification runs on server startup (fails fast if DDL not blocked)
 
 **First-Time Project Setup:**
 ```bash
@@ -461,9 +462,11 @@ cd services/global-manager && npm run dev
 
 **Database Management:**
 ```bash
-# Development scripts (use postgres superuser)
+# Development scripts
 ./scripts/dev/reset-database.sh    # Full reset: drop, create, migrate, grant permissions
-./scripts/dev/reset-test-data.sh   # Quick reset: truncate all tables (keeps schema)
+
+# Test data reset (no sudo required - uses deploy user TRUNCATE permission)
+curl -X POST http://localhost:3000/test/data/truncate-all  # Quick reset: truncate all tables
 
 # Drizzle commands
 npm run db:studio        # Visual database browser (Drizzle Studio)
@@ -472,10 +475,10 @@ npm run db:generate      # Prod: create migration from schema changes
 npm run db:migrate       # Prod: apply migrations (run as postgres)
 
 # Deploy user permissions (what API can do)
-# ✅ SELECT, INSERT, UPDATE, DELETE on all tables
+# ✅ SELECT, INSERT, UPDATE, DELETE, TRUNCATE on all tables (dev includes TRUNCATE for test resets)
 # ✅ USAGE on sequences (for auto-increment IDs)
-# ❌ NO CREATE/ALTER/DROP tables (DDL requires migrations as postgres)
-# ❌ NO TRUNCATE (test reset scripts use postgres)
+# ❌ NO CREATE/ALTER/DROP tables (DDL blocked, verified on startup)
+# Startup verification: Server checks DDL operations fail (fail-fast if misconfigured)
 ```
 
 **CI/CD Pipeline (GitHub Actions):**
