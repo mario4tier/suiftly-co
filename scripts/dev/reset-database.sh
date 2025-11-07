@@ -71,35 +71,63 @@ echo "Press Ctrl+C to cancel, or Enter to continue..."
 read -r
 
 # Database connection settings (after safety checks)
-DB_USER="${DB_USER:-deploy}"
-DB_PASSWORD="${DB_PASSWORD:-deploy_password_change_me}"
-export PGPASSWORD="$DB_PASSWORD"
+# Use postgres superuser for setup/migrations
+DB_ADMIN_USER="${DB_ADMIN_USER:-postgres}"
+DB_ADMIN_PASSWORD="${DB_ADMIN_PASSWORD:-}"
+export PGPASSWORD="$DB_ADMIN_PASSWORD"
 
-# Step 1: Drop database (requires postgres superuser)
+# Step 1: Drop database
 echo "1️⃣  Dropping database $DB_NAME..."
 sudo -u postgres psql -c "DROP DATABASE IF EXISTS $DB_NAME;"
 echo "   ✅ Database dropped"
 
-# Step 2: Create database with proper owner
+# Step 2: Create database
 echo "2️⃣  Creating fresh database $DB_NAME..."
-sudo -u postgres psql -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;"
-echo "   ✅ Database created (owner: $DB_USER)"
+sudo -u postgres psql -c "CREATE DATABASE $DB_NAME;"
+echo "   ✅ Database created"
 
-# Step 2.5: Install TimescaleDB extension
-echo "2.5️⃣  Installing TimescaleDB extension..."
+# Step 3: Install TimescaleDB extension
+echo "3️⃣  Installing TimescaleDB extension..."
 sudo -u postgres psql -d "$DB_NAME" -c "CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;"
 echo "   ✅ TimescaleDB extension installed"
 
-# Step 3: Apply migrations
-echo "3️⃣  Applying migrations..."
+# Step 4: Apply migrations (as postgres)
+echo "4️⃣  Applying migrations..."
 cd "$(dirname "$0")/../../packages/database"
-DATABASE_URL="postgresql://$DB_USER:$DB_PASSWORD@$DB_HOST/$DB_NAME" npm run db:migrate
+DATABASE_URL="postgresql://$DB_ADMIN_USER@$DB_HOST/$DB_NAME" npm run db:migrate
 echo "   ✅ Migrations applied"
 
-# Step 4: Setup TimescaleDB hypertables
-echo "4️⃣  Setting up TimescaleDB hypertables..."
-DATABASE_URL="postgresql://$DB_USER:$DB_PASSWORD@$DB_HOST/$DB_NAME" npm run db:timescale
+# Step 5: Setup TimescaleDB hypertables
+echo "5️⃣  Setting up TimescaleDB hypertables..."
+DATABASE_URL="postgresql://$DB_ADMIN_USER@$DB_HOST/$DB_NAME" npm run db:timescale
 echo "   ✅ TimescaleDB configured"
+
+# Step 6: Grant minimal permissions to deploy user
+echo "6️⃣  Granting minimal permissions to deploy user..."
+sudo -u postgres psql -d "$DB_NAME" <<EOF
+-- Grant CONNECT privilege
+GRANT CONNECT ON DATABASE $DB_NAME TO deploy;
+
+-- Grant USAGE on schema
+GRANT USAGE ON SCHEMA public TO deploy;
+
+-- Grant SELECT, INSERT, UPDATE, DELETE on all tables
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO deploy;
+
+-- Grant USAGE on all sequences (for auto-increment IDs)
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO deploy;
+
+-- Grant default privileges for future tables/sequences
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO deploy;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO deploy;
+
+-- Verify permissions
+SELECT grantee, privilege_type, table_name
+FROM information_schema.table_privileges
+WHERE grantee = 'deploy'
+ORDER BY table_name, privilege_type;
+EOF
+echo "   ✅ Minimal permissions granted to deploy user"
 
 echo ""
 echo "🎉 Database reset complete!"

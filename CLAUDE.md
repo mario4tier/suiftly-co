@@ -87,6 +87,26 @@ sed -i 's/ENVIRONMENT=development/ENVIRONMENT=production/' system.conf
 
 See [docs/PRODUCTION_SAFETY.md](docs/PRODUCTION_SAFETY.md) for complete details.
 
+### Database Permissions (Two-User Model)
+
+**We test production permissions in development** to catch issues early.
+
+**Two users:**
+1. **`postgres` (superuser)** - Database setup, migrations, test data reset
+2. **`deploy` (minimal runtime)** - API operations only (SELECT, INSERT, UPDATE, DELETE)
+
+**Why:**
+- `deploy` user has NO DDL permissions (no CREATE/ALTER/DROP tables)
+- Permission issues caught in dev, not production
+- Migrations run as `postgres`, API runs as `deploy`
+
+**Scripts use appropriate user automatically:**
+- `./scripts/dev/reset-database.sh` - Uses `postgres`, grants permissions to `deploy`
+- `./scripts/dev/reset-test-data.sh` - Uses `postgres` for TRUNCATE
+- API runtime (apps/api) - Uses `deploy` from DATABASE_URL in .env
+
+See [docs/DATABASE_PERMISSIONS.md](docs/DATABASE_PERMISSIONS.md) for complete details.
+
 ## CRITICAL: Route Security 🔒
 
 **All routes require authentication by default** (fail-secure design).
