@@ -105,7 +105,7 @@ See [docs/PRODUCTION_SAFETY.md](docs/PRODUCTION_SAFETY.md) for complete details.
 - `./scripts/dev/reset-test-data.sh` - Uses `postgres` for TRUNCATE
 - API runtime (apps/api) - Uses `deploy` from DATABASE_URL in .env
 
-See [docs/DATABASE_PERMISSIONS.md](docs/DATABASE_PERMISSIONS.md) for complete details.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#development) PostgreSQL Setup section for complete details.
 
 ## CRITICAL: Route Security 🔒
 

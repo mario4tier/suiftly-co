@@ -392,33 +392,41 @@ sudo apt install postgresql-17 postgresql-17-timescaledb
 # Start PostgreSQL service
 sudo service postgresql start
 
-# Create development and test databases
+# Create deploy user (minimal permissions for API runtime)
 sudo -u postgres psql <<SQL
-CREATE DATABASE suiftly_dev;
-CREATE DATABASE suiftly_test;
-\c suiftly_dev
-CREATE EXTENSION timescaledb;
-\c suiftly_test
-CREATE EXTENSION timescaledb;
+CREATE USER deploy WITH PASSWORD 'deploy_password_change_me';
 SQL
-
-# Configure connection (create .env file)
-cat > .env <<EOF
-DATABASE_URL=postgresql://postgres@localhost/suiftly_dev
-TEST_DATABASE_URL=postgresql://postgres@localhost/suiftly_test
-EOF
 ```
+
+**Database Users (Two-User Model):**
+
+We use **production-like minimal permissions** even in development to catch permission issues early:
+
+1. **`postgres` (superuser)** - Database setup, migrations, test data reset
+2. **`deploy` (minimal runtime)** - API operations only (SELECT/INSERT/UPDATE/DELETE)
+
+**Why:** The `deploy` user has NO DDL permissions (can't CREATE/ALTER/DROP tables). This ensures:
+- Permission issues are caught in dev, not production
+- Migrations run as `postgres`, API runs as `deploy`
+- Production-ready security model from day one
 
 **First-Time Project Setup:**
 ```bash
 # Install dependencies
 npm install
 
-# Apply migrations to dev database
-npm run db:migrate
+# Create databases and apply migrations (uses postgres for setup, grants permissions to deploy)
+./scripts/dev/reset-database.sh
 
-# Optional: seed test data
-npm run db:seed
+# This will:
+# 1. Create suiftly_dev database
+# 2. Install TimescaleDB extension
+# 3. Apply migrations
+# 4. Grant minimal permissions to deploy user
+# 5. Verify permissions
+
+# API will use deploy user from DATABASE_URL in packages/database/.env
+# DATABASE_URL=postgresql://deploy:deploy_password_change_me@localhost/suiftly_dev
 ```
 
 **Daily Development Workflow:**
@@ -453,11 +461,21 @@ cd services/global-manager && npm run dev
 
 **Database Management:**
 ```bash
+# Development scripts (use postgres superuser)
+./scripts/dev/reset-database.sh    # Full reset: drop, create, migrate, grant permissions
+./scripts/dev/reset-test-data.sh   # Quick reset: truncate all tables (keeps schema)
+
+# Drizzle commands
 npm run db:studio        # Visual database browser (Drizzle Studio)
 npm run db:push          # Dev: sync schema instantly (no migration files)
 npm run db:generate      # Prod: create migration from schema changes
-npm run db:migrate       # Prod: apply migrations
-npm run db:test:reset    # Reset test database to clean state
+npm run db:migrate       # Prod: apply migrations (run as postgres)
+
+# Deploy user permissions (what API can do)
+# ✅ SELECT, INSERT, UPDATE, DELETE on all tables
+# ✅ USAGE on sequences (for auto-increment IDs)
+# ❌ NO CREATE/ALTER/DROP tables (DDL requires migrations as postgres)
+# ❌ NO TRUNCATE (test reset scripts use postgres)
 ```
 
 **CI/CD Pipeline (GitHub Actions):**
