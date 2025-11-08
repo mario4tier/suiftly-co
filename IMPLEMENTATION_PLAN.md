@@ -639,6 +639,63 @@ customer_id,encrypted_key,rate_limit,tier,service_type
 - Monitoring endpoints
 **Test:** Full E2E suite passes
 
+## Pending Implementation Tasks
+
+Incremental improvements identified during development (not full phases):
+
+### 3. Wire up Burst Toggle
+**Status:** UI exists, backend wired, needs integration
+**Files:**
+- apps/webapp/src/components/services/SealInteractiveForm.tsx
+- apps/api/src/routes/seal.ts
+
+**Task:** Connect burst toggle switch to `seal.updateConfig` endpoint
+- Add `onBurstChange` handler prop to SealInteractiveForm
+- Call `seal.updateConfig` mutation with updated `burst_limit` in config
+- Apply same loading state pattern as service toggle
+- Update UI to reflect new burst state after success
+
+### 4. Implement IP Allowlist Updates
+**Status:** UI exists, backend ready, needs integration
+**Files:**
+- apps/webapp/src/components/services/SealInteractiveForm.tsx
+- apps/api/src/routes/seal.ts
+
+**Task:** Add live IP allowlist editing with debounced API calls
+- Add debounced input handler (e.g., 500ms delay after typing stops)
+- Call `seal.updateConfig` mutation with updated `ip_allowlist` array
+- Show loading indicator during save
+- Handle validation errors (invalid IP format, exceeding tier limit)
+- Display success feedback after save
+
+### 5. Implement Plan Change
+**Status:** UI button exists, functionality not implemented
+**Files:**
+- apps/webapp/src/components/services/SealInteractiveForm.tsx
+- apps/api/src/routes/services.ts
+
+**Task:** Add tier upgrade/downgrade functionality
+- Create modal/dialog for plan selection (reuse SealConfigForm tier selector)
+- Add `services.changeTier` endpoint with balance/limit validation
+- Calculate price difference (prorated refund/charge)
+- Show confirmation with price breakdown
+- Update service instance tier on success
+- Refetch usage stats to update limits
+
+### 6. Calculate API Key Charges
+**Status:** Hardcoded, needs dynamic calculation
+**Files:**
+- apps/webapp/src/components/services/SealInteractiveForm.tsx
+- apps/api/src/routes/seal.ts (new endpoint or enhance getUsageStats)
+
+**Task:** Replace hardcoded API key charges with actual usage-based calculation
+- Fetch actual API key count from `api_keys` table
+- Calculate charge: `(used_keys - included_keys) * cost_per_additional_key`
+- Tier limits: Starter (2 included), Pro (5 included), Enterprise (10 included)
+- Cost per additional key: $5/month (from UI_DESIGN.md pricing)
+- Update monthly charges table to show dynamic calculation
+- Add tooltip explaining calculation breakdown
+
 ## Testing Strategy
 
 Each phase must maintain:

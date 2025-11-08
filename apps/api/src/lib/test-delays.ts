@@ -8,6 +8,7 @@
 interface DelayConfig {
   validateSubscription?: number; // ms
   subscribe?: number; // ms
+  sealFormMutation?: number; // ms - applies to all seal form mutations (toggle, config update, etc.)
   // Add more endpoints as needed
 }
 

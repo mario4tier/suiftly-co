@@ -19,9 +19,25 @@ export const Route = createLazyFileRoute('/services/seal/overview')({
 
 function SealOverviewPage() {
   const [tierSelected, setTierSelected] = useState(false);
+  const [isToggling, setIsToggling] = useState(false);
 
   // Fetch services using React Query hook
-  const { data: services, isLoading } = trpc.services.list.useQuery();
+  const { data: services, isLoading, refetch } = trpc.services.list.useQuery();
+
+  // Toggle service mutation
+  const toggleServiceMutation = trpc.services.toggleService.useMutation({
+    onSuccess: () => {
+      // Refetch services to get updated state
+      refetch();
+      setIsToggling(false);
+    },
+    onError: (error) => {
+      console.error('Toggle service error:', error);
+      setIsToggling(false);
+      // Refetch to reset UI to actual server state
+      refetch();
+    },
+  });
 
   // Find seal service
   const sealService = services?.find(s => s.serviceType === 'seal');
@@ -57,14 +73,8 @@ function SealOverviewPage() {
           message: 'Service is subscribed but currently disabled. Enable to start serving traffic.',
         };
       case 'enabled':
-        return {
-          icon: CheckCircle,
-          bgColor: 'bg-green-50 dark:bg-green-900/20',
-          borderColor: 'border-green-200 dark:border-green-900',
-          iconColor: 'text-green-600 dark:text-green-500',
-          textColor: 'text-green-900 dark:text-green-200',
-          message: 'Service is active and serving traffic.',
-        };
+        // No banner when service is active - reserve banners for errors or actionable states
+        return null;
       case 'suspended_maintenance':
         return {
           icon: AlertTriangle,
@@ -89,6 +99,14 @@ function SealOverviewPage() {
   };
 
   const banner = getStatusBanner();
+
+  const handleToggleService = async (enabled: boolean) => {
+    setIsToggling(true);
+    toggleServiceMutation.mutate({
+      serviceType: 'seal',
+      enabled,
+    });
+  };
 
   return (
     <DashboardLayout>
@@ -120,7 +138,8 @@ function SealOverviewPage() {
             serviceState={serviceState}
             tier={tier}
             isEnabled={isEnabled}
-            onToggleService={(enabled) => console.log('Toggle service:', enabled)}
+            isToggling={isToggling}
+            onToggleService={handleToggleService}
             onChangePlan={() => console.log('Change plan')}
           />
         )}

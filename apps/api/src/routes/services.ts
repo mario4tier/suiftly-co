@@ -14,6 +14,7 @@ import type { ValidationResult, ValidationError, ValidationWarning } from '@suif
 import { testDelayManager } from '../lib/test-delays';
 import { getTierPriceUsdCents } from '../lib/config-cache';
 import { getSuiService } from '../services/sui/index.js';
+import { storeApiKey } from '../lib/api-keys';
 
 // Zod schemas for input validation
 const serviceTypeSchema = z.enum([SERVICE_TYPE.SEAL, SERVICE_TYPE.GRPC, SERVICE_TYPE.GRAPHQL]);
@@ -283,10 +284,21 @@ export const servicesRouter = router({
           createdAt: new Date(),
         });
 
-        // 9. Return service (now ready to enable)
+        // 9. Generate initial API key for the service
+        const { plainKey, record: apiKeyRecord } = await storeApiKey({
+          customerId: ctx.user!.customerId,
+          serviceType: input.serviceType,
+          metadata: {
+            generatedAt: 'subscription',
+            instanceId: service.instanceId,
+          },
+        });
+
+        // 10. Return service with API key (show key only once!)
         return {
           ...service,
           subscriptionChargePending: false,
+          apiKey: plainKey, // Include API key in response (only time it's visible)
         };
 
       } catch (chargeError) {
@@ -360,6 +372,10 @@ export const servicesRouter = router({
       enabled: z.boolean(),
     }))
     .mutation(async ({ ctx, input }) => {
+      // Apply test delay if configured
+      const { testDelayManager } = await import('../lib/test-delays.js');
+      await testDelayManager.applyDelay('sealFormMutation');
+
       if (!ctx.user) {
         throw new TRPCError({
           code: 'UNAUTHORIZED',

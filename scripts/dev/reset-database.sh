@@ -90,7 +90,7 @@ echo "   ✅ TimescaleDB extension installed"
 
 # Step 4: Apply migrations (as postgres Unix user for peer auth)
 echo "4️⃣  Applying migrations..."
-SCRIPT_DIR="$(dirname "$0")"
+# Reuse SCRIPT_DIR from top of file (already calculated as absolute path)
 DB_DIR="$(cd "$SCRIPT_DIR/../../packages/database" && pwd)"
 # Use Unix socket with explicit socket directory for peer auth
 # PostgreSQL default socket is in /var/run/postgresql

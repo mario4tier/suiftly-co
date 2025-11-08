@@ -16,6 +16,7 @@ import { config, logConfig } from './lib/config';
 import { initializeFrontendConfig } from './lib/init-config';
 import { initializeConfigCache } from './lib/config-cache';
 import { verifyDatabasePermissions } from './lib/db-permissions-check';
+import { testDelayManager } from './lib/test-delays';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -80,7 +81,13 @@ server.get('/health', {
 if (config.NODE_ENV !== 'production') {
   // Import test utilities
   const { testDelayManager } = await import('./lib/test-delays.js');
-  const { resetCustomerTestData, getCustomerTestData } = await import('./lib/test-data.js');
+  const {
+    resetCustomerTestData,
+    getCustomerTestData,
+    getApiKeysTestData,
+    getSealKeysTestData,
+    getServiceInstanceTestData
+  } = await import('./lib/test-data.js');
 
   // Get test configuration - allows tests to verify server config
   server.get('/test/config', {
@@ -137,6 +144,37 @@ if (config.NODE_ENV !== 'production') {
     const query = request.query as any;
     const walletAddress = query.walletAddress || undefined;
     const result = await getCustomerTestData(walletAddress);
+    reply.send(result);
+  });
+
+  // Get API keys test data
+  server.get('/test/data/api-keys', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    const query = request.query as any;
+    const walletAddress = query.walletAddress || undefined;
+    const result = await getApiKeysTestData(walletAddress);
+    reply.send(result);
+  });
+
+  // Get seal keys test data
+  server.get('/test/data/seal-keys', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    const query = request.query as any;
+    const walletAddress = query.walletAddress || undefined;
+    const result = await getSealKeysTestData(walletAddress);
+    reply.send(result);
+  });
+
+  // Get service instance test data
+  server.get('/test/data/service-instance', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    const query = request.query as any;
+    const serviceType = query.serviceType || 'seal';
+    const walletAddress = query.walletAddress || undefined;
+    const result = await getServiceInstanceTestData(serviceType, walletAddress);
     reply.send(result);
   });
 

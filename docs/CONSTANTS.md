@@ -108,6 +108,42 @@ API keys use 32-bit fingerprints derived from the first 7 Base32 characters of t
 
 ---
 
+## API Secret Key (Encryption & Authentication)
+
+**Model:** 32-byte (256-bit) secret key for AES-128-CTR encryption and HMAC-SHA256 authentication
+
+**Test/Development Key (hardcoded):**
+```
+8776c4c0e84428c6e86fca4647abe16459649aa78fe4c72e7643dc3a14343337
+```
+
+**Usage:**
+- **Test/Dev Servers:** Hardcoded in code (shared with walrus/system.conf)
+- **Production:** Loaded from KVCrypt (to be implemented)
+- Can override with `API_SECRET_KEY` environment variable if needed
+
+**Key Properties:**
+- **Length:** 32 bytes (64 hex characters)
+- **AES-128:** First 16 bytes used for encryption key
+- **HMAC-SHA256:** Full 32 bytes used for authentication
+- **CRITICAL:** Never rotate in production (invalidates all customer API keys)
+
+**Implementation:**
+```typescript
+// apps/api/src/lib/api-keys.ts
+const TEST_SECRET_KEY = '8776c4c0e84428c6e86fca4647abe16459649aa78fe4c72e7643dc3a14343337';
+const SECRET_KEY_HEX = process.env.API_SECRET_KEY || TEST_SECRET_KEY;
+const SECRET_KEY = Buffer.from(SECRET_KEY_HEX, 'hex');
+```
+
+**Security Notes:**
+- Test key is public knowledge and only used in non-production environments
+- Safe to commit to version control (test environments only)
+- Production key must be kept secret and loaded from secure storage (KVCrypt)
+- See [API_KEY_DESIGN.md](./API_KEY_DESIGN.md) for full encryption specification
+
+---
+
 ## Minimum Balance Requirements
 
 | Constant | Value | Description |

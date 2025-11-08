@@ -158,3 +158,108 @@ export async function getCustomerTestData(walletAddress: string = MOCK_WALLET_AD
     sealKeysCount: sealKeysData.length,
   };
 }
+
+/**
+ * Get all API keys for current mock wallet user
+ */
+export async function getApiKeysTestData(walletAddress: string = MOCK_WALLET_ADDRESS) {
+  const customer = await db.query.customers.findFirst({
+    where: eq(customers.walletAddress, walletAddress),
+  });
+
+  if (!customer) {
+    return {
+      found: false,
+      message: `Customer not found with wallet: ${walletAddress}`,
+      apiKeys: [],
+    };
+  }
+
+  const keys = await db.query.apiKeys.findMany({
+    where: eq(apiKeys.customerId, customer.customerId),
+  });
+
+  return {
+    found: true,
+    customerId: customer.customerId,
+    apiKeys: keys.map(k => ({
+      apiKeyId: k.apiKeyId,
+      serviceType: k.serviceType,
+      metadata: k.metadata,
+      isActive: k.isActive,
+      createdAt: k.createdAt,
+      revokedAt: k.revokedAt,
+    })),
+  };
+}
+
+/**
+ * Get all seal keys for current mock wallet user
+ */
+export async function getSealKeysTestData(walletAddress: string = MOCK_WALLET_ADDRESS) {
+  const customer = await db.query.customers.findFirst({
+    where: eq(customers.walletAddress, walletAddress),
+  });
+
+  if (!customer) {
+    return {
+      found: false,
+      message: `Customer not found with wallet: ${walletAddress}`,
+      sealKeys: [],
+    };
+  }
+
+  const keys = await db.query.sealKeys.findMany({
+    where: eq(sealKeys.customerId, customer.customerId),
+    with: {
+      packages: true,
+    },
+  });
+
+  return {
+    found: true,
+    customerId: customer.customerId,
+    sealKeys: keys.map(k => ({
+      sealKeyId: k.sealKeyId,
+      publicKey: k.publicKey,
+      isActive: k.isActive,
+      createdAt: k.createdAt,
+      packages: k.packages,
+    })),
+  };
+}
+
+/**
+ * Get service instance by type for current mock wallet user
+ */
+export async function getServiceInstanceTestData(
+  serviceType: string,
+  walletAddress: string = MOCK_WALLET_ADDRESS
+) {
+  const customer = await db.query.customers.findFirst({
+    where: eq(customers.walletAddress, walletAddress),
+  });
+
+  if (!customer) {
+    return {
+      found: false,
+      message: `Customer not found with wallet: ${walletAddress}`,
+    };
+  }
+
+  const service = await db.query.serviceInstances.findFirst({
+    where: eq(serviceInstances.customerId, customer.customerId),
+  });
+
+  if (!service) {
+    return {
+      found: false,
+      message: `Service not found for customer ${customer.customerId}`,
+    };
+  }
+
+  return {
+    found: true,
+    ...service,
+  };
+}

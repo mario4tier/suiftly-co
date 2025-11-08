@@ -34,11 +34,13 @@ import {
 } from "@/lib/config";
 import { SealKeysSection } from "./SealKeysSection";
 import { ApiKeysSection } from "./ApiKeysSection";
+import { trpc } from "@/lib/trpc";
 
 interface SealInteractiveFormProps {
   serviceState: ServiceState;
   tier: ServiceTier;
   isEnabled: boolean;
+  isToggling?: boolean;
   onToggleService?: (enabled: boolean) => void;
   onChangePlan?: () => void;
 }
@@ -47,12 +49,15 @@ export function SealInteractiveForm({
   serviceState,
   tier,
   isEnabled,
+  isToggling = false,
   onToggleService,
   onChangePlan,
 }: SealInteractiveFormProps) {
-  const [localEnabled, setLocalEnabled] = useState(isEnabled);
   const [burstEnabled, setBurstEnabled] = useState(tier !== "starter");
   const [ipAllowlist, setIpAllowlist] = useState("");
+
+  // Fetch usage statistics from database
+  const { data: usageStats } = trpc.seal.getUsageStats.useQuery();
 
   // Determine if service is cancelled or suspended
   const isCancelled = serviceState === "suspended_maintenance" || serviceState === "suspended_no_payment";
@@ -85,16 +90,17 @@ export function SealInteractiveForm({
     sealKeys: 0, // 1 of 1 used (included)
     ipv4Allowlist: 0, // 1 of 1 used (included for Pro/Enterprise)
     packagesPerKey: 0, // Using 3 of 3 included
+    apiKeys: 0, // 1 of 2 used (included)
   };
 
   const totalMonthlyFee =
     monthlyCharges.guaranteedBandwidth +
     monthlyCharges.sealKeys +
     monthlyCharges.ipv4Allowlist +
-    monthlyCharges.packagesPerKey;
+    monthlyCharges.packagesPerKey +
+    monthlyCharges.apiKeys;
 
   const handleToggleService = (checked: boolean) => {
-    setLocalEnabled(checked);
     onToggleService?.(checked);
   };
 
@@ -119,12 +125,12 @@ export function SealInteractiveForm({
           </Label>
           <Switch
             id="service-toggle"
-            checked={localEnabled}
+            checked={isEnabled}
             onCheckedChange={handleToggleService}
-            disabled={isReadOnly}
+            disabled={isReadOnly || isToggling}
           />
           <span className="text-sm font-medium text-gray-600 dark:text-gray-400">
-            {localEnabled ? "ON" : "OFF"}
+            {isToggling ? "..." : (isEnabled ? "ON" : "OFF")}
           </span>
         </div>
       </div>
@@ -205,7 +211,7 @@ export function SealInteractiveForm({
                       </div>
                     </td>
                     <td className="px-4 py-3 text-sm text-gray-600 dark:text-gray-400">
-                      1 of {fskey_incl}
+                      {usageStats?.sealKeys.used ?? 0} of {usageStats?.sealKeys.total ?? fskey_incl}
                     </td>
                     <td className="px-4 py-3 text-center">
                       <Button variant="outline" size="sm" disabled={isReadOnly}>
@@ -227,7 +233,7 @@ export function SealInteractiveForm({
                         </div>
                       </td>
                       <td className="px-4 py-3 text-sm text-gray-600 dark:text-gray-400">
-                        0 of 2
+                        {usageStats?.allowlist.used ?? 0} of {usageStats?.allowlist.total ?? 2}
                       </td>
                       <td className="px-4 py-3 text-center">
                         <Button variant="outline" size="sm" disabled={isReadOnly}>
@@ -249,7 +255,7 @@ export function SealInteractiveForm({
                       </div>
                     </td>
                     <td className="px-4 py-3 text-sm text-gray-600 dark:text-gray-400">
-                      {fskey_pkg_incl} of {fskey_pkg_incl}
+                      {usageStats?.packages.reduce((sum, pkg) => sum + pkg.used, 0) ?? 0}
                     </td>
                     <td className="px-4 py-3 text-center">
                       <Button variant="outline" size="sm" disabled={isReadOnly}>
@@ -259,6 +265,27 @@ export function SealInteractiveForm({
                     </td>
                     <td className="px-4 py-3 text-right text-sm font-medium text-gray-900 dark:text-gray-100">
                       ${monthlyCharges.packagesPerKey.toFixed(2)}
+                    </td>
+                  </tr>
+
+                  {/* API Keys */}
+                  <tr>
+                    <td className="px-4 py-3">
+                      <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                        API Keys
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-sm text-gray-600 dark:text-gray-400">
+                      {usageStats?.apiKeys.used ?? 0} of {usageStats?.apiKeys.total ?? 2}
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <Button variant="outline" size="sm" disabled={isReadOnly}>
+                        <Plus className="h-3 w-3 mr-1" />
+                        Add More
+                      </Button>
+                    </td>
+                    <td className="px-4 py-3 text-right text-sm font-medium text-gray-900 dark:text-gray-100">
+                      ${monthlyCharges.apiKeys.toFixed(2)}
                     </td>
                   </tr>
 
