@@ -107,19 +107,25 @@ export function getTRPCLinks() {
               }
             } else {
               // Refresh failed (refresh token expired/revoked)
-              console.log('[TRPC] Refresh failed, clearing auth state');
+              console.log('[TRPC] Refresh failed, clearing auth state and redirecting to login');
               useAuthStore.getState().clearAuth();
+
+              // Redirect to login when refresh token expires
+              // This is an exception to the "no navigation in API layer" rule
+              // When refresh token expires, immediate redirect is required
+              window.location.href = '/login';
             }
 
-            // IMPORTANT: Never use window.location.href here!
-            // API calls should ONLY update state, not navigate
-            // Let React components handle navigation based on state changes
-            // Violating this principle causes page reloads and loss of user context
+            // Note: window.location.href is used above for refresh token expiry
+            // This causes immediate logout + redirect (desired behavior)
+            // For normal token refresh, we update state without navigation
           } catch (error) {
             console.error('[TRPC] Refresh error:', error);
             // Clear auth state when refresh fails (refresh token expired/revoked)
-            // This will trigger redirect to /login via routing guards
             useAuthStore.getState().clearAuth();
+
+            // Redirect to login when refresh fails
+            window.location.href = '/login';
           }
         }
 

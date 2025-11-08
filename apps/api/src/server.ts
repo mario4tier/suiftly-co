@@ -14,6 +14,7 @@ import { appRouter } from './routes';
 import { registerAuthRoutes } from './routes/rest-auth';
 import { config, logConfig } from './lib/config';
 import { initializeFrontendConfig } from './lib/init-config';
+import { initializeConfigCache } from './lib/config-cache';
 import { verifyDatabasePermissions } from './lib/db-permissions-check';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -189,6 +190,11 @@ if (config.NODE_ENV !== 'production') {
   }, async (request, reply) => {
     const query = request.query as any;
     const walletAddress = query.walletAddress || '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+
+    // Prevent caching to ensure fresh balance data
+    reply.header('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    reply.header('Pragma', 'no-cache');
+    reply.header('Expires', '0');
 
     const account = await suiService.getAccount(walletAddress);
     if (!account) {
@@ -473,6 +479,9 @@ async function start() {
 
     // Initialize frontend configuration in database before starting server
     await initializeFrontendConfig();
+
+    // Load configuration cache for fast backend access
+    await initializeConfigCache();
 
     await server.listen({ port: parseInt(config.PORT), host: config.HOST });
 

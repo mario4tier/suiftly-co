@@ -56,6 +56,8 @@ Infrastructure (HAProxy, Seal servers, control plane) handled by **walrus** proj
 **ORM:** Drizzle ORM (TypeScript-first, identity columns, SQL-like)
 **Migrations:** Drizzle Kit
 
+**Config Caching:** `config_global` table loaded into memory at server startup (`apps/api/src/lib/config-cache.ts`). Retries for 60s if DB unavailable, then exits (fail-fast for production monitoring). All config reads use O(1) cache lookups (zero DB queries). Tier pricing, bandwidth limits accessed via `getTierPriceUsdCents()`, `getConfig()`. Config updates require server restart.
+
 **Why PostgreSQL 17:**
 - 30% better throughput vs PG 16 (1,575 vs 1,238 RPS)
 - Improved vacuum memory management (critical for HAProxy log ingestion)
@@ -429,6 +431,20 @@ npm install
 # API will use deploy user from DATABASE_URL in packages/database/.env
 # DATABASE_URL=postgresql://deploy:deploy_password_change_me@localhost/suiftly_dev
 ```
+
+**Development Ports (Fixed - No Port Hopping):**
+
+| Service | Port | Configuration File | Notes |
+|---------|------|-------------------|-------|
+| **API Server** | **3000** | `apps/api/.env` (PORT=3000) | tRPC + REST endpoints |
+| **Web App (Vite)** | **5173** | `apps/webapp/vite.config.ts` (default) | Frontend SPA |
+| **Global Manager** | **3001** | `services/global-manager/.env` | Optional in dev |
+
+**Port Enforcement:**
+- Playwright config uses `baseURL: 'http://localhost:5173'` (see [playwright.config.ts](../playwright.config.ts))
+- Vite should NOT auto-increment ports - always use 5173
+- If port 5173 is occupied, kill the process: `lsof -ti:5173 | xargs kill`
+- Test files should use `page.goto(BASE_URL)` from playwright `baseURL`, NOT hardcoded ports
 
 **Daily Development Workflow:**
 

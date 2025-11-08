@@ -37,10 +37,10 @@ test.describe('Service State Transitions', () => {
     // Should show onboarding form (State 1 UI)
     await expect(page.locator('h3:has-text("Guaranteed Bandwidth")')).toBeVisible();
 
-    // Should see tier selection cards
-    await expect(page.locator('text=STARTER')).toBeVisible();
-    await expect(page.locator('text=PRO')).toBeVisible();
-    await expect(page.locator('text=ENTERPRISE')).toBeVisible();
+    // Should see tier selection cards (use heading to avoid strict mode violations)
+    await expect(page.locator('h4:has-text("STARTER")')).toBeVisible();
+    await expect(page.locator('h4:has-text("PRO")')).toBeVisible();
+    await expect(page.locator('h4:has-text("ENTERPRISE")')).toBeVisible();
 
     // Should see Subscribe button (disabled until terms accepted)
     const subscribeButton = page.locator('button:has-text("Subscribe to Service")');

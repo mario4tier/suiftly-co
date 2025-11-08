@@ -4,9 +4,7 @@
  */
 
 import { router, publicProcedure } from '../lib/trpc';
-import { db } from '@suiftly/database';
-import { configGlobal } from '@suiftly/database/schema';
-import { like } from 'drizzle-orm';
+import { getAllConfig } from '../lib/config-cache';
 
 const MOCK_AUTH = process.env.MOCK_AUTH === 'true';
 
@@ -14,17 +12,18 @@ export const configRouter = router({
   /**
    * Get all frontend configuration values (f* keys)
    * Public endpoint - no authentication required
+   * Uses in-memory cache for fast access (no database query)
    */
   getFrontendConfig: publicProcedure.query(async () => {
-    const feConfigs = await db
-      .select()
-      .from(configGlobal)
-      .where(like(configGlobal.key, 'f%'));
+    // Get all config from cache (O(1) lookup, no database query)
+    const allConfig = getAllConfig();
 
-    // Convert array to object for easier access
+    // Filter to frontend keys (f* prefix)
     const configObj: Record<string, string> = {};
-    for (const config of feConfigs) {
-      configObj[config.key] = config.value;
+    for (const [key, value] of Object.entries(allConfig)) {
+      if (key.startsWith('f')) {
+        configObj[key] = value;
+      }
     }
 
     // Add mockAuth flag so frontend knows if Mock Wallet should be shown
@@ -36,17 +35,18 @@ export const configRouter = router({
   /**
    * Get backend configuration values (b* keys)
    * Protected in production - used by backend services
+   * Uses in-memory cache for fast access (no database query)
    */
   getBackendConfig: publicProcedure.query(async () => {
-    const beConfigs = await db
-      .select()
-      .from(configGlobal)
-      .where(like(configGlobal.key, 'b%'));
+    // Get all config from cache (O(1) lookup, no database query)
+    const allConfig = getAllConfig();
 
-    // Convert array to object for easier access
+    // Filter to backend keys (b* prefix)
     const configObj: Record<string, string> = {};
-    for (const config of beConfigs) {
-      configObj[config.key] = config.value;
+    for (const [key, value] of Object.entries(allConfig)) {
+      if (key.startsWith('b')) {
+        configObj[key] = value;
+      }
     }
 
     return configObj;

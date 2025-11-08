@@ -48,12 +48,13 @@ test.describe('Dashboard Navigation', () => {
     // Navigate to Billing
     await page.click('text=Billing');
     await page.waitForURL('/billing');
-    await expect(page.locator('h2:has-text("Billing & Payments")')).toBeVisible();
+    await expect(page.locator('h2:has-text("Billing")')).toBeVisible();
 
-    // Navigate back to Seal (clicking Seal navigates to first child: /services/seal/config)
+    // Navigate back to Seal (clicking Seal navigates to first child: /services/seal/overview)
     await page.click('text=Seal');
-    await page.waitForURL('/services/seal/config');
-    await expect(page.locator('h1:has-text("Seal")')).toBeVisible();
+    await page.waitForURL('/services/seal/overview');
+    // Page shows "Configure Seal Service" for new users or "Seal" for existing services
+    await expect(page.locator('h1')).toBeVisible();
   });
 
   test('header is visible on all pages', async ({ page }) => {
@@ -75,9 +76,9 @@ test.describe('Dashboard Navigation', () => {
   test('active navigation item is highlighted', async ({ page }) => {
     // Navigate to Seal first
     await page.click('text=Seal');
-    await page.waitForURL('/services/seal/config');
+    await page.waitForURL('/services/seal/overview');
 
-    // On /services/seal/config, the Seal section should be highlighted
+    // On /services/seal/overview, the Seal section should be highlighted
     // The Seal collapsible wrapper div should have the active class
     const sealSection = page.locator('aside div.group:has-text("Seal")');
     await expect(sealSection).toHaveClass(/bg-blue-50/);

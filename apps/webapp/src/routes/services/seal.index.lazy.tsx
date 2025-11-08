@@ -9,5 +9,5 @@ export const Route = createLazyFileRoute('/services/seal/')({
 });
 
 function SealIndexPage() {
-  return <Navigate to="/services/seal/config" replace />;
+  return <Navigate to="/services/seal/overview" replace />;
 }

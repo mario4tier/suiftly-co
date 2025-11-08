@@ -15,6 +15,7 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    strictPort: true, // Fail if port is already in use (no auto-increment)
     proxy: {
       // Proxy internal endpoints to backend (same-origin)
       '/i': {

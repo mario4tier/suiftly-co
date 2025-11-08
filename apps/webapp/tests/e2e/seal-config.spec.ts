@@ -62,21 +62,21 @@ test.describe('Seal Service Onboarding Form', () => {
     await expect(proCard).toHaveClass(/border-\[#f38020\]/);
     await expect(page.locator('text=SELECTED')).toBeVisible();
 
-    // Subscribe button should show PRO price ($40)
-    await expect(page.locator('button:has-text("$40.00/month")')).toBeVisible();
+    // Subscribe button should show PRO price ($29)
+    await expect(page.locator('button:has-text("$29.00/month")')).toBeVisible();
 
     console.log('✅ PRO tier is selected by default with correct price');
   });
 
   test('selecting different tier updates price on subscribe button', async ({ page }) => {
-    // Initially PRO ($40)
-    await expect(page.locator('button:has-text("$40.00/month")')).toBeVisible();
+    // Initially PRO ($29)
+    await expect(page.locator('button:has-text("$29.00/month")')).toBeVisible();
 
     // Click STARTER tier
     await page.getByRole('heading', { name: 'STARTER' }).click();
 
-    // Price should update to $20
-    await expect(page.locator('button:has-text("$20.00/month")')).toBeVisible();
+    // Price should update to $9
+    await expect(page.locator('button:has-text("$9.00/month")')).toBeVisible();
 
     // SELECTED badge should move to STARTER
     await expect(page.locator('text=SELECTED')).toBeVisible();
@@ -84,8 +84,8 @@ test.describe('Seal Service Onboarding Form', () => {
     // Click ENTERPRISE tier
     await page.getByRole('heading', { name: 'ENTERPRISE' }).click();
 
-    // Price should update to $80
-    await expect(page.locator('button:has-text("$80.00/month")')).toBeVisible();
+    // Price should update to $185
+    await expect(page.locator('button:has-text("$185.00/month")')).toBeVisible();
 
     console.log('✅ Tier selection updates subscribe button price correctly');
   });

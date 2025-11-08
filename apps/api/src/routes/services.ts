@@ -12,6 +12,8 @@ import { eq, and, sql } from 'drizzle-orm';
 import { SERVICE_TYPE, SERVICE_TIER, SERVICE_STATE, BALANCE_LIMITS } from '@suiftly/shared/constants';
 import type { ValidationResult, ValidationError, ValidationWarning } from '@suiftly/shared/types';
 import { testDelayManager } from '../lib/test-delays';
+import { getTierPriceUsdCents } from '../lib/config-cache';
+import { getSuiService } from '../services/sui/index.js';
 
 // Zod schemas for input validation
 const serviceTypeSchema = z.enum([SERVICE_TYPE.SEAL, SERVICE_TYPE.GRPC, SERVICE_TYPE.GRAPHQL]);
@@ -22,23 +24,6 @@ const subscribeInputSchema = z.object({
   tier: serviceTierSchema,
   config: z.any().optional(),
 });
-
-/**
- * Get tier pricing configuration
- * TODO: Move to database config table when implemented
- */
-function getTierPriceUsdCents(tier: string): number {
-  switch (tier) {
-    case SERVICE_TIER.STARTER:
-      return 2000; // $20.00
-    case SERVICE_TIER.PRO:
-      return 4000; // $40.00
-    case SERVICE_TIER.ENTERPRISE:
-      return 8000; // $80.00
-    default:
-      throw new Error(`Invalid tier: ${tier}`);
-  }
-}
 
 /**
  * Shared validation logic
@@ -86,46 +71,40 @@ async function validateSubscription(
     };
   }
 
-  // 3. Get tier price
+  // 3. Get tier price (from in-memory cache - O(1) lookup, no database query)
   const priceUsdCents = getTierPriceUsdCents(tier);
 
-  // 4. Check balance
+  // 4. Get balance info for warnings only
+  // NOTE: Balance/spending limit enforcement happens at charge time (service-first pattern)
   const currentBalance = customer.currentBalanceUsdCents ?? 0;
   const required = priceUsdCents;
-
-  if (currentBalance < required) {
-    return {
-      valid: false,
-      errors: [{
-        code: 'INSUFFICIENT_BALANCE',
-        message: `Insufficient balance. Need $${required / 100}, have $${currentBalance / 100}`,
-        details: {
-          required: required / 100,
-          current: currentBalance / 100,
-          shortfall: (required - currentBalance) / 100,
-        },
-      }],
-    };
-  }
-
-  // 5. Check 28-day spending limit
   const currentPeriodCharged = customer.currentMonthChargedUsdCents ?? 0;
   const spendingLimit = customer.maxMonthlyUsdCents ?? 25000; // $250 default
 
-  if (currentPeriodCharged + required > spendingLimit) {
-    return {
-      valid: false,
-      errors: [{
-        code: 'SPENDING_LIMIT_EXCEEDED',
-        message: `Would exceed spending limit of $${spendingLimit / 100}`,
-        details: {
-          limit: spendingLimit / 100,
-          currentSpent: currentPeriodCharged / 100,
-          additionalCharge: required / 100,
-          total: (currentPeriodCharged + required) / 100,
-        },
-      }],
-    };
+  // 5. Add warnings for low balance or spending limit concerns
+  if (currentBalance < required) {
+    warnings.push({
+      code: 'INSUFFICIENT_BALANCE_WARNING',
+      message: `Balance may be insufficient. Need $${required / 100}, have $${currentBalance / 100}. Service will be created but may fail to charge.`,
+      details: {
+        required: required / 100,
+        current: currentBalance / 100,
+        shortfall: (required - currentBalance) / 100,
+      },
+    });
+  }
+
+  if (spendingLimit > 0 && currentPeriodCharged + required > spendingLimit) {
+    warnings.push({
+      code: 'SPENDING_LIMIT_WARNING',
+      message: `May exceed spending limit of $${spendingLimit / 100}. Service will be created but may fail to charge.`,
+      details: {
+        limit: spendingLimit / 100,
+        currentSpent: currentPeriodCharged / 100,
+        additionalCharge: required / 100,
+        total: (currentPeriodCharged + required) / 100,
+      },
+    });
   }
 
   // 6. Check remaining balance after charge
@@ -160,32 +139,9 @@ async function validateSubscription(
  */
 export const servicesRouter = router({
   /**
-   * Validate subscription before execution
-   * Fast, read-only check for immediate user feedback
-   */
-  validateSubscription: protectedProcedure
-    .input(subscribeInputSchema)
-    .mutation(async ({ ctx, input }) => {
-      if (!ctx.user) {
-        throw new TRPCError({
-          code: 'UNAUTHORIZED',
-          message: 'Not authenticated',
-        });
-      }
-
-      // Apply test delay if configured
-      await testDelayManager.applyDelay('validateSubscription');
-
-      return await validateSubscription(
-        ctx.user.customerId,
-        input.serviceType,
-        input.tier
-      );
-    }),
-
-  /**
    * Subscribe to a service
-   * Atomic transaction: validate + create service + charge balance
+   * Service-First pattern: Create service → Charge → Update pending flag
+   * This ensures audit trail exists before any payment attempt
    */
   subscribe: protectedProcedure
     .input(subscribeInputSchema)
@@ -200,9 +156,27 @@ export const servicesRouter = router({
       // Apply test delay if configured
       await testDelayManager.applyDelay('subscribe');
 
-      // Execute in transaction
-      return await db.transaction(async (tx) => {
-        // 1. Lock customer row and get data
+      // 1. Validate subscription
+      const validation = await validateSubscription(
+        ctx.user!.customerId,
+        input.serviceType,
+        input.tier
+      );
+
+      if (!validation.valid) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: validation.errors![0].message,
+          cause: validation.errors,
+        });
+      }
+
+      // 2. Get tier price (from in-memory cache - O(1) lookup, no database query)
+      const priceUsdCents = getTierPriceUsdCents(input.tier);
+
+      // 3. Create service FIRST in transaction (with subscription_charge_pending=true)
+      const service = await db.transaction(async (tx) => {
+        // Lock customer row and get data
         const [customer] = await tx
           .select()
           .from(customers)
@@ -217,22 +191,7 @@ export const servicesRouter = router({
           });
         }
 
-        // 2. Re-validate with locked data (race condition protection)
-        const validation = await validateSubscription(
-          ctx.user!.customerId,
-          input.serviceType,
-          input.tier
-        );
-
-        if (!validation.valid) {
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: validation.errors![0].message,
-            cause: validation.errors,
-          });
-        }
-
-        // 3. Check if service already exists (idempotency check)
+        // Check if service already exists (idempotency check)
         const existing = await tx.query.serviceInstances.findFirst({
           where: and(
             eq(serviceInstances.customerId, ctx.user!.customerId),
@@ -244,13 +203,6 @@ export const servicesRouter = router({
           // Already subscribed - return existing instance (idempotent)
           return existing;
         }
-
-        // 4. Get tier price
-        const priceUsdCents = getTierPriceUsdCents(input.tier);
-
-        // 5. Create service in PROVISIONING state
-        // Note: This state is transient. We immediately transition to DISABLED after payment.
-        // The PROVISIONING state is reserved for future async payment flows (on-chain, etc.)
 
         // Initialize config with defaults based on tier
         const defaultConfig = {
@@ -265,30 +217,65 @@ export const servicesRouter = router({
           ipAllowlist: [],
         };
 
-        const [service] = await tx
+        // Create service in DISABLED state with subscription_charge_pending=true
+        // This creates an audit trail BEFORE attempting any payment
+        const [newService] = await tx
           .insert(serviceInstances)
           .values({
             customerId: ctx.user!.customerId,
             serviceType: input.serviceType,
             tier: input.tier,
-            state: SERVICE_STATE.PROVISIONING,
+            state: SERVICE_STATE.DISABLED,
             config: input.config || defaultConfig,
-            isEnabled: false, // Start disabled
+            isEnabled: false,
+            subscriptionChargePending: true, // Payment not confirmed yet
           })
           .returning();
 
-        // 6. Deduct balance
-        await tx
-          .update(customers)
-          .set({
-            currentBalanceUsdCents: sql`${customers.currentBalanceUsdCents} - ${priceUsdCents}`,
-            currentMonthChargedUsdCents: sql`${customers.currentMonthChargedUsdCents} + ${priceUsdCents}`,
-            updatedAt: new Date(),
-          })
-          .where(eq(customers.customerId, ctx.user!.customerId));
+        return newService;
+      });
 
-        // 7. Record charge in ledger
-        await tx.insert(ledgerEntries).values({
+      // 4. Transaction committed - service exists in database now
+      // This ensures we always have an audit trail before charging
+
+      // 5. Get customer for charge (non-transaction read)
+      const customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, ctx.user!.customerId),
+      });
+
+      if (!customer) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Customer not found',
+        });
+      }
+
+      // 6. Attempt charge (OUTSIDE transaction)
+      const suiService = getSuiService();
+
+      try {
+        const chargeResult = await suiService.charge({
+          userAddress: customer.walletAddress,
+          amountUsdCents: priceUsdCents,
+          description: `${input.serviceType} ${input.tier} tier subscription`,
+        });
+
+        if (!chargeResult.success) {
+          // Charge failed - service exists but can't be enabled
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: chargeResult.error || 'Payment failed. Service created but cannot be enabled until payment succeeds.',
+          });
+        }
+
+        // 7. Charge succeeded - update pending flag
+        await db
+          .update(serviceInstances)
+          .set({ subscriptionChargePending: false })
+          .where(eq(serviceInstances.instanceId, service.instanceId));
+
+        // 8. Record charge in ledger
+        await db.insert(ledgerEntries).values({
           customerId: ctx.user!.customerId,
           type: 'charge',
           amountUsdCents: BigInt(priceUsdCents),
@@ -296,17 +283,28 @@ export const servicesRouter = router({
           createdAt: new Date(),
         });
 
-        // 8. Immediately transition to DISABLED state (payment complete)
-        const [updatedService] = await tx
-          .update(serviceInstances)
-          .set({
-            state: SERVICE_STATE.DISABLED,
-          })
-          .where(eq(serviceInstances.instanceId, service.instanceId))
-          .returning();
+        // 9. Return service (now ready to enable)
+        return {
+          ...service,
+          subscriptionChargePending: false,
+        };
 
-        return updatedService;
-      });
+      } catch (chargeError) {
+        // Charge failed or errored
+        // Service exists but subscriptionChargePending=true
+        // User will see service but can't enable it
+        console.error('[SUBSCRIBE] Charge failed:', chargeError);
+
+        // Re-throw if it's already a TRPCError
+        if (chargeError instanceof TRPCError) {
+          throw chargeError;
+        }
+
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Service created but payment failed. Please contact support.',
+        });
+      }
     }),
 
   /**
@@ -380,6 +378,14 @@ export const servicesRouter = router({
         throw new TRPCError({
           code: 'NOT_FOUND',
           message: 'Service not found',
+        });
+      }
+
+      // Check if subscription charge is pending
+      if (service.subscriptionChargePending && input.enabled) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Cannot enable service: subscription payment pending. Please contact support if this persists.',
         });
       }
 

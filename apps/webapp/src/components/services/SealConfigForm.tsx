@@ -53,8 +53,15 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
   const queryClient = useQueryClient();
 
   // React Query mutations
-  const validateMutation = trpc.services.validateSubscription.useMutation();
-  const subscribeMutation = trpc.services.subscribe.useMutation();
+  const subscribeMutation = trpc.services.subscribe.useMutation({
+    onSuccess: () => {
+      toast.success('Subscription successful!');
+      queryClient.invalidateQueries({ queryKey: ['services'] });
+    },
+    onError: (error) => {
+      toast.error(error.message || 'Subscription failed. Please try again.');
+    },
+  });
 
   const handleTierSelect = (tier: Tier) => {
     setSelectedTier(tier);
@@ -97,67 +104,13 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
     return parseFloat(cost.toPrecision(8));
   }, []);
 
-  const handleSubscribe = async () => {
-    // Step 1: Validate subscription
-    try {
-      const validation = await validateMutation.mutateAsync({
-        serviceType: 'seal',
-        tier: selectedTier,
-      });
-
-      if (!validation.valid) {
-        // Show error message with toast
-        toast.error(validation.errors![0].message);
-        return;
-      }
-
-      // Show warnings if any (requires user confirmation)
-      if (validation.warnings && validation.warnings.length > 0) {
-        // For warnings requiring confirmation, use a promise-based approach
-        const warning = validation.warnings[0].message;
-        let userConfirmed = false;
-
-        // Show warning toast with action button
-        toast.warning(warning, {
-          duration: Infinity, // Keep visible until user acts
-          action: {
-            label: 'Continue',
-            onClick: () => {
-              userConfirmed = true;
-              handleContinueSubscription();
-            }
-          },
-          cancel: {
-            label: 'Cancel',
-            onClick: () => {
-              userConfirmed = false;
-            }
-          }
-        });
-        return; // Exit - continuation will be handled by action callback
-      }
-
-      // No warnings - proceed directly
-      await handleContinueSubscription();
-    } catch (error: any) {
-      toast.error(error.message || 'Subscription failed. Please try again.');
-    }
-  };
-
-  const handleContinueSubscription = async () => {
-    try {
-      // Step 2: Execute subscription
-      const service = await subscribeMutation.mutateAsync({
-        serviceType: 'seal',
-        tier: selectedTier,
-      });
-
-      // Success! Invalidate queries to refresh UI
-      toast.success('Subscription successful!');
-      await queryClient.invalidateQueries({ queryKey: ['services'] });
-    } catch (error: any) {
-      toast.error(error.message || 'Subscription failed. Please try again.');
-    }
+  const handleSubscribe = () => {
+    // Execute subscription - backend validates and returns errors if any
+    // Success/error handling is in the mutation callbacks above
+    subscribeMutation.mutate({
+      serviceType: 'seal',
+      tier: selectedTier,
+    });
   };
 
   const handleDownloadPDF = () => {
@@ -401,22 +354,15 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
       <Button
         size="lg"
         className="w-full bg-[#f38020] hover:bg-[#d97019] text-white font-semibold"
-        disabled={!termsAccepted || validateMutation.isPending || subscribeMutation.isPending}
+        disabled={!termsAccepted || subscribeMutation.isPending}
         onClick={handleSubscribe}
       >
-        {validateMutation.isPending && (
-          <>
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            Validating...
-          </>
-        )}
-        {subscribeMutation.isPending && (
+        {subscribeMutation.isPending ? (
           <>
             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
             Processing your subscription...
           </>
-        )}
-        {!validateMutation.isPending && !subscribeMutation.isPending && (
+        ) : (
           <>Subscribe to Service for ${monthlyFee.toFixed(2)}/month</>
         )}
       </Button>

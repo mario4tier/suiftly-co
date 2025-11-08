@@ -71,11 +71,11 @@ export async function resetCustomerTestData(options: TestDataResetOptions = {}) 
     await tx.delete(ledgerEntries).where(eq(ledgerEntries.customerId, customerId));
 
     // 5. Reset customer balance and limits
-    // Also clear escrowContractId to simulate no escrow account
+    // NOTE: We do NOT clear escrowContractId - once created, it persists (like blockchain)
     await tx
       .update(customers)
       .set({
-        escrowContractId: null,
+        // escrowContractId preserved - only cleared on full database reset
         currentBalanceUsdCents: balanceUsdCents,
         maxMonthlyUsdCents: spendingLimitUsdCents,
         currentMonthChargedUsdCents: 0,
