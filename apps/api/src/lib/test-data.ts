@@ -17,6 +17,7 @@ interface TestDataResetOptions {
   walletAddress?: string;
   balanceUsdCents?: number;
   spendingLimitUsdCents?: number;
+  clearEscrowAccount?: boolean; // If true, removes escrowContractId (for testing "no account" state)
 }
 
 /**
@@ -26,11 +27,13 @@ interface TestDataResetOptions {
  * - Deletes all Seal keys
  * - Resets balance and limits
  * - Clears monthly charges
+ * - Optionally clears escrow account (for testing "no account exists" scenarios)
  */
 export async function resetCustomerTestData(options: TestDataResetOptions = {}) {
   const walletAddress = options.walletAddress || MOCK_WALLET_ADDRESS;
   const balanceUsdCents = options.balanceUsdCents ?? DEFAULT_BALANCE_USD_CENTS;
   const spendingLimitUsdCents = options.spendingLimitUsdCents ?? DEFAULT_SPENDING_LIMIT_USD_CENTS;
+  const clearEscrowAccount = options.clearEscrowAccount ?? false;
 
   // Find customer
   const customer = await db.query.customers.findFirst({
@@ -71,17 +74,24 @@ export async function resetCustomerTestData(options: TestDataResetOptions = {}) 
     await tx.delete(ledgerEntries).where(eq(ledgerEntries.customerId, customerId));
 
     // 5. Reset customer balance and limits
-    // NOTE: We do NOT clear escrowContractId - once created, it persists (like blockchain)
+    // NOTE: By default we do NOT clear escrowContractId - once created, it persists (like blockchain)
+    // However, tests can request to clear it via clearEscrowAccount flag
+    const updateData: any = {
+      currentBalanceUsdCents: balanceUsdCents,
+      maxMonthlyUsdCents: spendingLimitUsdCents,
+      currentMonthChargedUsdCents: 0,
+      currentMonthStart: new Date(),
+      updatedAt: new Date(),
+    };
+
+    // Conditionally clear escrowContractId (test-only for "no account" scenarios)
+    if (clearEscrowAccount) {
+      updateData.escrowContractId = null;
+    }
+
     await tx
       .update(customers)
-      .set({
-        // escrowContractId preserved - only cleared on full database reset
-        currentBalanceUsdCents: balanceUsdCents,
-        maxMonthlyUsdCents: spendingLimitUsdCents,
-        currentMonthChargedUsdCents: 0,
-        currentMonthStart: new Date(),
-        updatedAt: new Date(),
-      })
+      .set(updateData)
       .where(eq(customers.customerId, customerId));
 
     console.log(`[TEST DATA] Reset customer ${customerId}:`);
@@ -142,6 +152,7 @@ export async function getCustomerTestData(walletAddress: string = MOCK_WALLET_AD
       tier: s.tier,
       state: s.state,
       isEnabled: s.isEnabled,
+      subscriptionChargePending: s.subscriptionChargePending,
     })),
     apiKeysCount: keys.length,
     sealKeysCount: sealKeysData.length,

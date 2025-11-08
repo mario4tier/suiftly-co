@@ -13,6 +13,7 @@ export interface ResetCustomerOptions {
   walletAddress?: string;
   balanceUsdCents?: number;
   spendingLimitUsdCents?: number;
+  clearEscrowAccount?: boolean; // If true, removes escrowContractId (for testing "no account" state)
 }
 
 /**
@@ -20,6 +21,7 @@ export interface ResetCustomerOptions {
  * - Deletes all services, API keys, Seal keys, ledger entries
  * - Resets balance and spending limit
  * - Keeps customer record
+ * - Optionally clears escrow account (for testing "no account exists" scenarios)
  */
 export async function resetCustomer(
   request: APIRequestContext,

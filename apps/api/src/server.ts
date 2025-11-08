@@ -153,17 +153,19 @@ if (config.NODE_ENV !== 'production') {
         await tx.execute(sql`SET CONSTRAINTS ALL DEFERRED`);
 
         // Truncate all tables (CASCADE handles foreign keys)
+        // Note: Only truncate core tables that tests use
         await tx.execute(sql`
           TRUNCATE TABLE
             customers,
             api_keys,
-            escrow_accounts,
+            escrow_transactions,
             ledger_entries,
-            activity_logs,
-            services,
-            service_endpoints,
+            user_activity_logs,
             service_instances,
-            seal_keys
+            seal_keys,
+            auth_nonces,
+            refresh_tokens,
+            billing_records
           CASCADE
         `);
       });
@@ -173,9 +175,11 @@ if (config.NODE_ENV !== 'production') {
         message: 'All tables truncated successfully',
       });
     } catch (error: any) {
+      console.error('[TRUNCATE ERROR]', error);
       reply.code(500).send({
         success: false,
-        error: error.message,
+        error: error.message || String(error),
+        details: error.toString(),
       });
     }
   });

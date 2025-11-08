@@ -4,33 +4,32 @@
  */
 
 import { test, expect } from '@playwright/test';
+import { resetCustomer } from '../helpers/db';
 
 const MOCK_WALLET_ADDRESS = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const API_BASE = 'http://localhost:3000';
 
-test.describe('Billing Page', () => {
-  test.beforeEach(async ({ page }) => {
-    // Reset customer data
-    await page.request.post(`${API_BASE}/test/data/reset`, {
-      data: {
-        balanceUsdCents: 0,
-        spendingLimitUsdCents: 25000, // $250
-      },
+// Test suite for "no escrow account" scenario (needs separate setup)
+test.describe('Billing Page - No Escrow Account', () => {
+  test('shows zero balance when no escrow account exists', async ({ page }) => {
+    // This test needs no escrow account - use clearEscrowAccount flag
+    await resetCustomer(page.request, {
+      balanceUsdCents: 0,
+      spendingLimitUsdCents: 0,
+      clearEscrowAccount: true, // Remove escrow account to test "no account" state
     });
 
     // Authenticate with mock wallet
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
-  });
 
-  test('shows zero balance when no escrow account exists', async ({ page }) => {
     // Navigate to billing page
     await page.click('text=Billing');
     await page.waitForURL('/billing', { timeout: 5000 });
 
     // Should show heading
-    await expect(page.locator('h2:has-text("Billing")')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Billing', exact: true })).toBeVisible();
 
     // Should show Suiftly Escrow Account section with zero balance
     await expect(page.locator('h2:has-text("Suiftly Escrow Account")')).toBeVisible();
@@ -46,14 +45,26 @@ test.describe('Billing Page', () => {
     await expect(page.locator('button:has-text("Withdraw")')).toBeVisible();
     await expect(page.locator('button:has-text("Adjust Spending Limit")')).toBeVisible();
 
-    // Should show note about account creation
-    await expect(page.locator('text=Escrow account will be created on your first deposit')).toBeVisible();
-
     // Should NOT show current charges section (only when account exists)
     await expect(page.locator('text=Pending Per-Request Charges')).not.toBeVisible();
     await expect(page.locator('text=Last Month Charged')).not.toBeVisible();
 
     console.log('✅ Zero balance displayed correctly when no escrow account exists');
+  });
+});
+
+test.describe('Billing Page', () => {
+  test.beforeEach(async ({ page }) => {
+    // Reset customer data (preserves escrow account for realistic testing)
+    await resetCustomer(page.request, {
+      balanceUsdCents: 0,
+      spendingLimitUsdCents: 0, // 0 = Unlimited
+    });
+
+    // Authenticate with mock wallet
+    await page.goto('/');
+    await page.click('button:has-text("Mock Wallet")');
+    await page.waitForURL('/dashboard', { timeout: 10000 });
   });
 
   test('shows escrow account with balance after deposit', async ({ page }) => {

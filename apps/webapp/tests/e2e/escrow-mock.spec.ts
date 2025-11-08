@@ -353,16 +353,25 @@ test.describe('Subscription Charge Architecture - Critical Business Logic', () =
     // Wait for redirect to overview page (subscription successful)
     await page.waitForURL(/\/services\/seal\/overview/, { timeout: 10000 });
 
+    // Navigate to billing page to check balance
+    await page.click('text=Billing');
+    await page.waitForURL('/billing', { timeout: 5000 });
+
     // Verify balance decreased from $100 to $71
-    const balanceAfterFirst = await page.locator('text=/\\$\\d+\\.\\d{2}/').first().textContent();
+    // Look for balance in the Suiftly Escrow Account card
+    const balanceAfterFirst = await page.locator('text=Balance').locator('..').locator('text=/\\$\\d+\\.\\d{2}/').textContent();
     expect(balanceAfterFirst).toBe('$71.00');
 
-    // Try to subscribe again by navigating back
-    await page.goto('/services/seal');
+    // Try to subscribe again by navigating back to Seal
+    await page.click('text=Seal');
     await page.waitForURL(/\/services\/seal\/overview/, { timeout: 5000 }); // Should redirect to overview
 
+    // Navigate back to billing to verify balance
+    await page.click('text=Billing');
+    await page.waitForURL('/billing', { timeout: 5000 });
+
     // Verify balance stayed $71 (no double charge)
-    const balanceAfterRetry = await page.locator('text=/\\$\\d+\\.\\d{2}/').first().textContent();
+    const balanceAfterRetry = await page.locator('text=Balance').locator('..').locator('text=/\\$\\d+\\.\\d{2}/').textContent();
     expect(balanceAfterRetry).toBe('$71.00');
 
     console.log('✅ Idempotent subscription - no double charge on retry');

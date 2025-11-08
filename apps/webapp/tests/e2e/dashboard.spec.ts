@@ -48,7 +48,7 @@ test.describe('Dashboard Navigation', () => {
     // Navigate to Billing
     await page.click('text=Billing');
     await page.waitForURL('/billing');
-    await expect(page.locator('h2:has-text("Billing")')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Billing', exact: true })).toBeVisible();
 
     // Navigate back to Seal (clicking Seal navigates to first child: /services/seal/overview)
     await page.click('text=Seal');
@@ -78,17 +78,16 @@ test.describe('Dashboard Navigation', () => {
     await page.click('text=Seal');
     await page.waitForURL('/services/seal/overview');
 
-    // On /services/seal/overview, the Seal section should be highlighted
-    // The Seal collapsible wrapper div should have the active class
-    const sealSection = page.locator('aside div.group:has-text("Seal")');
-    await expect(sealSection).toHaveClass(/bg-blue-50/);
+    // On /services/seal/overview, the Overview child link should be highlighted
+    const overviewLink = page.locator('aside a:has-text("Overview")').first();
+    await expect(overviewLink).toHaveClass(/bg-\[#dbeafe\]/);
 
     // Navigate to gRPC
     await page.click('text=gRPC');
     await page.waitForURL('/services/grpc');
 
-    // gRPC should now be highlighted
+    // gRPC should now be highlighted with the active class
     const grpcLink = page.locator('aside a:has-text("gRPC")');
-    await expect(grpcLink).toHaveClass(/bg-blue-50/);
+    await expect(grpcLink).toHaveClass(/bg-\[#dbeafe\]/);
   });
 });

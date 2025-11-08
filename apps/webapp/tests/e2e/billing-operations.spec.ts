@@ -4,6 +4,7 @@
  */
 
 import { test, expect } from '@playwright/test';
+import { resetCustomer } from '../helpers/db';
 
 const MOCK_WALLET_ADDRESS = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const API_BASE = 'http://localhost:3000';
@@ -11,11 +12,9 @@ const API_BASE = 'http://localhost:3000';
 test.describe('Billing Operations', () => {
   test.beforeEach(async ({ page }) => {
     // Reset customer data to clean state
-    await page.request.post(`${API_BASE}/test/data/reset`, {
-      data: {
-        balanceUsdCents: 0,
-        spendingLimitUsdCents: 0, // Unlimited (tests that need a specific limit will set it via deposit)
-      },
+    await resetCustomer(page.request, {
+      balanceUsdCents: 0,
+      spendingLimitUsdCents: 0, // Unlimited (tests that need a specific limit will set it via deposit)
     });
 
     // Authenticate with mock wallet
@@ -315,11 +314,9 @@ test.describe('Billing Operations', () => {
 test.describe('Billing Validation Edge Cases', () => {
   test.beforeEach(async ({ page }) => {
     // Reset customer data and deposit some funds
-    await page.request.post(`${API_BASE}/test/data/reset`, {
-      data: {
-        balanceUsdCents: 0,
-        spendingLimitUsdCents: 0, // Unlimited
-      },
+    await resetCustomer(page.request, {
+      balanceUsdCents: 0,
+      spendingLimitUsdCents: 0, // Unlimited
     });
 
     await page.request.post(`${API_BASE}/test/wallet/deposit`, {
