@@ -229,7 +229,7 @@ export class MockSuiService implements ISuiService {
       return {
         digest: this.generateMockTxDigest(),
         success: false,
-        error: `Insufficient balance: have ${currentBalance / 100} USD, need ${amountUsdcCents / 100} USD`,
+        error: `Insufficient balance. Need $${amountUsdcCents / 100}, have $${currentBalance / 100}`,
         accountCreated,
       };
     }
@@ -304,7 +304,7 @@ export class MockSuiService implements ISuiService {
       return {
         digest: this.generateMockTxDigest(),
         success: false,
-        error: `Insufficient balance: have ${currentBalance / 100} USD, need ${amountUsdCents / 100} USD`,
+        error: `Insufficient balance. Need $${amountUsdCents / 100}, have $${currentBalance / 100}`,
       };
     }
 

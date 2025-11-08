@@ -1,6 +1,7 @@
 /**
  * Service State Transitions E2E Test
- * Tests the service state machine: NotProvisioned → Provisioning → Disabled
+ * Tests the service state machine: NotProvisioned → Disabled → Enabled
+ * Note: Provisioning state is reserved for future use - services go directly to disabled state
  * See docs/UI_DESIGN.md for complete state machine documentation
  */
 
@@ -57,15 +58,7 @@ test.describe('Service State Transitions', () => {
     console.log('✅ State 1 (NotProvisioned): Onboarding form displayed correctly');
   });
 
-  test('State 1 → 2: Clicking Subscribe transitions to Provisioning state', async ({ page }) => {
-    // Configure test delays to slow down API (1 second each)
-    await page.request.post('http://localhost:3000/test/delays', {
-      data: {
-        validateSubscription: 1000,
-        subscribe: 1000,
-      },
-    });
-
+  test('State 1 → 3: Clicking Subscribe transitions directly to Disabled state', async ({ page }) => {
     // Accept terms to enable subscribe button
     await page.locator('label:has-text("Agree to")').click();
 
@@ -76,101 +69,87 @@ test.describe('Service State Transitions', () => {
     // Click subscribe button
     await subscribeButton.click();
 
-    // Should transition to State 2 (Provisioning)
-    // Expect loading overlay with "Processing your subscription..." banner
-    await expect(page.locator('text=/Processing your subscription/i')).toBeVisible({ timeout: 5000 });
+    // Wait for success toast (subscription completes immediately - no provisioning state)
+    await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
 
-    // Onboarding form should still be visible but disabled
-    await expect(page.locator('h3:has-text("Guaranteed Bandwidth")')).toBeVisible();
+    // Should transition directly to State 3 (Disabled) - service management UI
+    // Onboarding form should disappear
+    await expect(page.locator('h3:has-text("Guaranteed Bandwidth")')).not.toBeVisible();
 
-    // Form should be disabled (tier cards should not be clickable)
-    const starterCard = page.locator('text=STARTER').first();
-    // The card should have disabled styling or overlay
-    const formContainer = page.locator('form, div').filter({ has: starterCard });
-    await expect(formContainer.or(page.locator('[aria-disabled="true"]'))).toBeVisible();
+    // Should see service state banner (disabled state)
+    await expect(page.locator('text=/Service is subscribed but currently disabled/i')).toBeVisible({ timeout: 5000 });
 
-    console.log('✅ State 1 → 2 transition: Service moved to Provisioning state');
+    console.log('✅ State 1 → 3 transition: Service created in Disabled state (no provisioning state)');
   });
 
-  test('State 2 → 3: Payment confirmation transitions to Disabled state', async ({ page }) => {
+  test('State 3: After subscription, service is in Disabled state', async ({ page }) => {
     // Accept terms and subscribe
     await page.locator('label:has-text("Agree to")').click();
     await page.locator('button:has-text("Subscribe to Service")').click();
 
-    // Wait for Provisioning state
-    await expect(page.locator('text=/Processing your subscription/i')).toBeVisible({ timeout: 5000 });
+    // Wait for success toast
+    await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
 
-    // Simulate payment confirmation (in real flow, this would be backend processing)
-    // For MVP, we'll simulate this by waiting for the state to update
-    // In production, this would involve:
-    // 1. Backend detects payment
-    // 2. Updates service_instances.state to 'disabled'
-    // 3. Frontend polls or receives update
-    // 4. UI transitions to State 3 (tab-based layout)
-
-    // For this test, we'll mock the payment confirmation
-    // In real implementation, this would be triggered by backend
-    // For now, we expect the UI to poll or listen for state changes
-
-    // TODO: Once backend payment flow is implemented, update this test to:
-    // 1. Trigger mock payment confirmation
-    // 2. Wait for state update
-    // 3. Verify State 3 UI appears
+    // Service should now be in State 3 (Disabled)
+    // Note: There is no State 2 (Provisioning) - services go directly from not_provisioned → disabled
 
     // Expected State 3 UI indicators:
     // - Banner: "Service is subscribed but currently disabled. Enable to start serving traffic."
+    await expect(page.locator('text=/Service is subscribed but currently disabled/i')).toBeVisible({ timeout: 5000 });
+
+    // - Onboarding form should be gone
+    await expect(page.locator('h3:has-text("Guaranteed Bandwidth")')).not.toBeVisible();
+
+    // TODO: Once service management UI is implemented, verify:
     // - Toggle switch visible: [OFF] ⟳ ON
     // - Tabs visible: Config / Keys
     // - Configuration tab is editable
 
-    // For now, add a placeholder assertion that this will be implemented
-    console.log('⚠️  State 2 → 3 transition: Backend payment flow to be implemented');
-    console.log('   Expected: Payment confirmation updates state to "disabled"');
-    console.log('   Expected: UI transitions to tab-based layout (Config/Keys)');
-    console.log('   Expected: Banner shows "Service is subscribed but currently disabled"');
+    console.log('✅ State 3 (Disabled): Service created in disabled state after subscription');
   });
 
-  test('State 3: Disabled state shows correct UI elements', async ({ page }) => {
-    // This test will verify State 3 UI once we can set up a service in Disabled state
-    // For now, this is a placeholder for the expected behavior
+  test('State 3: Service management UI elements', async ({ page }) => {
+    // Subscribe to create service in disabled state
+    await page.locator('label:has-text("Agree to")').click();
+    await page.locator('button:has-text("Subscribe to Service")').click();
+    await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
 
-    // Expected UI in State 3 (Disabled):
-    // 1. Tab-based layout (Config / Keys tabs)
-    // 2. Toggle switch visible: [OFF] ⟳ ON
-    // 3. Banner: "Service is subscribed but currently disabled. Enable to start serving traffic."
-    // 4. Configuration is editable (tier, burst, etc.)
-    // 5. Keys tab shows API keys and Seal keys (can create/revoke)
-    // 6. All keys return 503 when called (backend behavior)
+    // Verify State 3 UI elements:
+    // 1. Banner shows service is disabled
+    await expect(page.locator('text=/Service is subscribed but currently disabled/i')).toBeVisible();
 
-    // TODO: Implement test once we have:
-    // 1. Test helper to create service in Disabled state
-    // 2. Backend returns service state from API
-    // 3. Frontend renders State 3 UI based on state
+    // 2. Onboarding form is hidden
+    await expect(page.locator('h3:has-text("Guaranteed Bandwidth")')).not.toBeVisible();
 
-    console.log('⚠️  State 3 (Disabled): Test to be implemented');
-    console.log('   Expected: Tab-based layout with Config/Keys tabs');
-    console.log('   Expected: Toggle switch [OFF] ⟳ ON');
-    console.log('   Expected: Banner about disabled service');
-    console.log('   Expected: Configuration is editable');
+    // TODO: Once service management UI is fully implemented, verify:
+    // - Tab-based layout (Config / Keys tabs)
+    // - Toggle switch visible: [OFF] ⟳ ON
+    // - Configuration is editable (tier, burst, etc.)
+    // - Keys tab shows API keys and Seal keys (can create/revoke)
+
+    console.log('✅ State 3 (Disabled): Basic UI elements verified');
   });
 
   test('Database: Service state is persisted correctly', async ({ page }) => {
     // This test verifies that the service state is correctly stored in the database
 
     // TODO: Implement test that:
-    // 1. Subscribes to service (State 1 → 2)
-    // 2. Queries database directly to verify state = 'provisioning'
-    // 3. Simulates payment confirmation
-    // 4. Queries database to verify state = 'disabled'
+    // 1. Initially no service exists (state: not_provisioned conceptually)
+    // 2. Subscribe to service (State 1 → 3)
+    // 3. Query database directly to verify state = 'disabled'
+    // 4. Verify subscriptionChargePending = false (charge succeeded)
+
+    // Note: There is no 'provisioning' state in the implementation
+    // Services go directly from not existing → disabled state
 
     // This requires:
     // - Database query helper in test utils
     // - Backend API endpoint to check service state (or direct DB access)
 
     console.log('⚠️  Database persistence test: To be implemented');
-    console.log('   Expected: service_instances.state = "not_provisioned" initially');
-    console.log('   Expected: service_instances.state = "provisioning" after subscribe');
-    console.log('   Expected: service_instances.state = "disabled" after payment');
+    console.log('   Expected: No service exists initially');
+    console.log('   Expected: service_instances.state = "disabled" after subscribe');
+    console.log('   Expected: subscriptionChargePending = false after payment succeeds');
   });
 });
 
@@ -191,35 +170,45 @@ test.describe('Service State - Edge Cases', () => {
     await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
   });
 
-  test('Cannot modify tier selection during Provisioning state', async ({ page }) => {
+  test('Cannot modify tier after subscription', async ({ page }) => {
     // Accept terms and subscribe
     await page.locator('label:has-text("Agree to")').click();
     await page.locator('button:has-text("Subscribe to Service")').click();
 
-    // Wait for Provisioning state
-    await expect(page.locator('text=/Processing your subscription/i')).toBeVisible({ timeout: 5000 });
+    // Wait for success
+    await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
 
-    // Tier cards should be disabled/non-interactive
-    // User should not be able to change tier during payment processing
+    // Service should now be in disabled state
+    // Onboarding form should be hidden
+    await expect(page.locator('h3:has-text("Guaranteed Bandwidth")')).not.toBeVisible();
 
-    // TODO: Verify tier cards are not clickable or have disabled styling
-    console.log('⚠️  Provisioning state tier lock: To be implemented');
+    // Tier cards should not be visible (service management UI shown instead)
+    await expect(page.locator('h4:has-text("STARTER")')).not.toBeVisible();
+
+    // TODO: Verify service management UI allows tier changes through plan upgrade/downgrade feature
+    console.log('✅ After subscription: Onboarding form hidden, service management UI shown');
   });
 
-  test('Page refresh during Provisioning maintains state', async ({ page }) => {
+  test('Page refresh after subscription maintains service state', async ({ page }) => {
     // Accept terms and subscribe
     await page.locator('label:has-text("Agree to")').click();
     await page.locator('button:has-text("Subscribe to Service")').click();
 
-    // Wait for Provisioning state
-    await expect(page.locator('text=/Processing your subscription/i')).toBeVisible({ timeout: 5000 });
+    // Wait for success
+    await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
+
+    // Should be in disabled state (service management UI shown)
+    await expect(page.locator('text=/Service is subscribed but currently disabled/i')).toBeVisible();
 
     // Refresh page
     await page.reload();
 
-    // Should still be in Provisioning state (loading overlay visible)
-    await expect(page.locator('text=/Processing your subscription/i')).toBeVisible({ timeout: 5000 });
+    // Should still be in disabled state (not back to onboarding)
+    await expect(page.locator('text=/Service is subscribed but currently disabled/i')).toBeVisible({ timeout: 5000 });
 
-    console.log('✅ Provisioning state persists across page refresh');
+    // Onboarding form should not reappear
+    await expect(page.locator('h3:has-text("Guaranteed Bandwidth")')).not.toBeVisible();
+
+    console.log('✅ Service state (disabled) persists across page refresh');
   });
 });

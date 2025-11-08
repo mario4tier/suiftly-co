@@ -10,11 +10,91 @@
  * Run with: MOCK_AUTH=true npm run dev (in apps/api)
  */
 
-import { test, expect, describe } from 'vitest';
+import { test, expect, describe, beforeAll } from 'vitest';
+import { spawn } from 'child_process';
 
 const API_URL = 'http://localhost:3000';
 
+/**
+ * Wait for server to be ready by polling health endpoint
+ */
+async function waitForServer(maxAttempts = 30, delayMs = 500): Promise<void> {
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      const response = await fetch(`${API_URL}/health`);
+      if (response.ok) {
+        return;
+      }
+    } catch (error) {
+      // Server not ready yet
+    }
+    await new Promise(resolve => setTimeout(resolve, delayMs));
+  }
+  throw new Error(`Server not ready after ${maxAttempts} attempts`);
+}
+
+/**
+ * Restart server if it's running with short JWT expiry
+ */
+async function ensureNormalJWTConfig(): Promise<void> {
+  try {
+    // Check current server config
+    const configResponse = await fetch(`${API_URL}/test/config`);
+    if (!configResponse.ok) {
+      console.log('[TEST SETUP] Server not running or config endpoint unavailable');
+      return;
+    }
+
+    const serverConfig = await configResponse.json();
+
+    if (serverConfig.shortJWTExpiry) {
+      console.log('[TEST SETUP] Server running with short JWT expiry - restarting with normal config...');
+
+      // Shutdown server
+      try {
+        await fetch(`${API_URL}/test/shutdown`, { method: 'POST' });
+        console.log('[TEST SETUP] Shutdown request sent');
+      } catch (error) {
+        // Expected - server is shutting down
+      }
+
+      // Wait for server to stop (health endpoint should fail)
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
+      // Start server with normal config (no SHORT_JWT_EXPIRY)
+      console.log('[TEST SETUP] Starting server with normal JWT expiry...');
+      const serverProcess = spawn('npm', ['run', 'dev'], {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          MOCK_AUTH: 'true',
+          SHORT_JWT_EXPIRY: undefined, // Ensure not set
+        },
+        stdio: 'ignore',
+        detached: true,
+      });
+
+      // Don't wait for the process
+      serverProcess.unref();
+
+      // Wait for server to be ready
+      console.log('[TEST SETUP] Waiting for server to be ready...');
+      await waitForServer();
+      console.log('[TEST SETUP] Server ready with normal JWT expiry');
+    } else {
+      console.log('[TEST SETUP] Server already running with normal JWT expiry');
+    }
+  } catch (error) {
+    console.warn('[TEST SETUP] Could not verify/fix server config:', error);
+    // Continue anyway - let tests fail with proper error if config is wrong
+  }
+}
+
 describe('Cookie Security Attributes', () => {
+  // Ensure server is running with normal JWT config before tests
+  beforeAll(async () => {
+    await ensureNormalJWTConfig();
+  });
   test('POST /i/auth/verify should set httpOnly and sameSite=lax', async () => {
     // Step 1: Get nonce
     const connectResponse = await fetch(`${API_URL}/i/auth/connect`, {
@@ -62,6 +142,11 @@ describe('Cookie Security Attributes', () => {
   });
 
   test('cookie should have Max-Age set for expiry', async () => {
+    // Check server's actual configuration
+    const configResponse = await fetch(`${API_URL}/test/config`);
+    const serverConfig = await configResponse.json();
+    const shortJWTExpiry = serverConfig.shortJWTExpiry;
+
     // Get nonce
     const connectResponse = await fetch(`${API_URL}/i/auth/connect`, {
       method: 'POST',
@@ -95,13 +180,14 @@ describe('Cookie Security Attributes', () => {
 
     const maxAge = parseInt(maxAgeMatch![1]);
     console.log('[TEST] Cookie Max-Age:', maxAge, 'seconds');
+    console.log('[TEST] Server shortJWTExpiry:', shortJWTExpiry);
 
     // Max-Age should be positive
     expect(maxAge).toBeGreaterThan(0);
 
     // In test mode (short expiry), should be ~10 seconds
     // In normal mode, should be ~30 days (2592000 seconds)
-    if (process.env.ENABLE_SHORT_JWT_EXPIRY === 'true') {
+    if (shortJWTExpiry) {
       expect(maxAge).toBeLessThan(30); // Test mode: very short
     } else {
       expect(maxAge).toBeGreaterThan(3600); // Production: at least 1 hour

@@ -41,7 +41,8 @@ function SealOverviewPage() {
   const isEnabled = sealService?.isEnabled ?? false;
 
   // Determine which form to show based on service state
-  const showOnboardingForm = serviceState === 'not_provisioned' || serviceState === 'provisioning';
+  // Note: 'provisioning' state is reserved for future use and not currently set by backend
+  const showOnboardingForm = serviceState === 'not_provisioned';
   const showInteractiveForm = !showOnboardingForm;
 
   const getStatusBanner = () => {

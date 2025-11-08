@@ -14,6 +14,9 @@ test.describe('Subscription Pricing Validation', () => {
 
     // Wait for redirect to /dashboard after auth
     await page.waitForURL('/dashboard', { timeout: 10000 });
+
+    // Wait for authentication toast to disappear before starting tests
+    await page.waitForTimeout(3000);
   });
 
   test('all three tiers show correct prices when balance is insufficient', async ({ page }) => {
@@ -49,6 +52,14 @@ test.describe('Subscription Pricing Validation', () => {
 
     console.log('✅ STARTER tier shows correct price: $9');
 
+    // Reset data (subscription creates service record even if payment fails)
+    await page.request.post('http://localhost:3000/test/data/reset', {
+      data: {
+        balanceUsdCents: 0, // $0
+        spendingLimitUsdCents: 25000, // $250
+      },
+    });
+
     // Dismiss toast and test PRO tier - $29
     await page.waitForTimeout(2000); // Wait for toast to auto-dismiss
     await page.getByRole('heading', { name: 'PRO' }).click();
@@ -63,6 +74,14 @@ test.describe('Subscription Pricing Validation', () => {
     await expect(toast).toContainText('have $0');
 
     console.log('✅ PRO tier shows correct price: $29');
+
+    // Reset data (subscription creates service record even if payment fails)
+    await page.request.post('http://localhost:3000/test/data/reset', {
+      data: {
+        balanceUsdCents: 0, // $0
+        spendingLimitUsdCents: 25000, // $250
+      },
+    });
 
     // Dismiss toast and test ENTERPRISE tier - $185
     await page.waitForTimeout(2000); // Wait for toast to auto-dismiss
@@ -128,15 +147,13 @@ test.describe('Subscription Pricing Validation', () => {
     await subscribeButton.click();
 
     // Wait for validation and subscription to complete
-    await page.waitForTimeout(1000);
+    await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
 
-    // Should see success toast (not error)
-    const toast = page.locator('[data-sonner-toast]').last();
-    await expect(toast).toContainText('Subscription successful');
+    // Should redirect away from onboarding form - wait for service state banner
+    await expect(page.locator('text=/Service is subscribed but currently disabled/i')).toBeVisible({ timeout: 5000 });
 
-    // Should redirect away from onboarding form
     // The page should now show the service management interface
-    await expect(page.locator('text=Guaranteed Bandwidth')).not.toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Guaranteed Bandwidth' })).not.toBeVisible();
 
     console.log('✅ PRO tier subscription succeeds with exactly $29 balance');
   });
@@ -190,14 +207,13 @@ test.describe('Subscription Pricing Validation', () => {
     await subscribeButton.click();
 
     // Wait for validation and subscription to complete
-    await page.waitForTimeout(1000);
+    await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
 
-    // Should see success toast (not error)
-    const toast = page.locator('[data-sonner-toast]').last();
-    await expect(toast).toContainText('Subscription successful');
+    // Should redirect away from onboarding form - wait for service state banner
+    await expect(page.locator('text=/Service is subscribed but currently disabled/i')).toBeVisible({ timeout: 5000 });
 
     // Should redirect away from onboarding form
-    await expect(page.locator('text=Guaranteed Bandwidth')).not.toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Guaranteed Bandwidth' })).not.toBeVisible();
 
     console.log('✅ STARTER tier subscription succeeds with exactly $9 balance');
   });
@@ -251,14 +267,13 @@ test.describe('Subscription Pricing Validation', () => {
     await subscribeButton.click();
 
     // Wait for validation and subscription to complete
-    await page.waitForTimeout(1000);
+    await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
 
-    // Should see success toast (not error)
-    const toast = page.locator('[data-sonner-toast]').last();
-    await expect(toast).toContainText('Subscription successful');
+    // Should redirect away from onboarding form - wait for service state banner
+    await expect(page.locator('text=/Service is subscribed but currently disabled/i')).toBeVisible({ timeout: 5000 });
 
     // Should redirect away from onboarding form
-    await expect(page.locator('text=Guaranteed Bandwidth')).not.toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Guaranteed Bandwidth' })).not.toBeVisible();
 
     console.log('✅ ENTERPRISE tier subscription succeeds with exactly $185 balance');
   });

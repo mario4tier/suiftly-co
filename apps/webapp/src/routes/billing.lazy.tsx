@@ -55,7 +55,7 @@ function BillingPage() {
     const amount = parseFloat(depositAmount);
 
     if (isNaN(amount) || amount <= 0) {
-      setError('Please enter a valid amount greater than 0');
+      setError('Please enter a valid amount');
       return;
     }
 
@@ -82,7 +82,7 @@ function BillingPage() {
     const amount = parseFloat(withdrawAmount);
 
     if (isNaN(amount) || amount <= 0) {
-      setError('Please enter a valid amount greater than 0');
+      setError('Please enter a valid amount');
       return;
     }
 
@@ -120,7 +120,7 @@ function BillingPage() {
     }
 
     if (limit > 0 && limit < 10) {
-      setError('Spending limit must be at least $10 or 0 (unlimited)');
+      setError('Spending limit must be at least $10');
       return;
     }
 
@@ -419,7 +419,7 @@ function BillingPage() {
             </Button>
             <Button
               onClick={handleDeposit}
-              disabled={depositMutation.isPending || !depositAmount || parseFloat(depositAmount) <= 0 || isNaN(parseFloat(depositAmount))}
+              disabled={depositMutation.isPending}
             >
               {depositMutation.isPending ? 'Processing...' : 'Deposit'}
             </Button>
@@ -480,7 +480,7 @@ function BillingPage() {
             </Button>
             <Button
               onClick={handleWithdraw}
-              disabled={withdrawMutation.isPending || !withdrawAmount || parseFloat(withdrawAmount) <= 0 || isNaN(parseFloat(withdrawAmount))}
+              disabled={withdrawMutation.isPending}
             >
               {withdrawMutation.isPending ? 'Processing...' : 'Withdraw'}
             </Button>
@@ -543,13 +543,7 @@ function BillingPage() {
             </Button>
             <Button
               onClick={handleUpdateSpendingLimit}
-              disabled={
-                updateSpendingLimitMutation.isPending ||
-                !newSpendingLimitInput ||
-                isNaN(parseFloat(newSpendingLimitInput)) ||
-                parseFloat(newSpendingLimitInput) < 0 ||
-                (parseFloat(newSpendingLimitInput) > 0 && parseFloat(newSpendingLimitInput) < 10)
-              }
+              disabled={updateSpendingLimitMutation.isPending}
             >
               {updateSpendingLimitMutation.isPending ? 'Updating...' : 'Update Limit'}
             </Button>

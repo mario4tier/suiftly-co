@@ -23,16 +23,16 @@ function LogsPage() {
     limit: PAGE_SIZE,
   });
 
-  const handleNext = () => {
+  const handleLoadMore = () => {
     setOffset(prev => prev + PAGE_SIZE);
   };
 
-  const handlePrevious = () => {
-    setOffset(prev => Math.max(0, prev - PAGE_SIZE));
+  const handleBackToTop = () => {
+    setOffset(0);
   };
 
-  const canGoPrevious = offset > 0;
-  const canGoNext = data?.hasMore ?? false;
+  const isAtTop = offset === 0;
+  const hasMore = data?.hasMore ?? false;
 
   return (
     <DashboardLayout>
@@ -105,25 +105,27 @@ function LogsPage() {
                       </div>
 
                       <div className="flex gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={handlePrevious}
-                          disabled={!canGoPrevious}
-                        >
-                          <ChevronLeft className="h-4 w-4 mr-1" />
-                          Previous
-                        </Button>
+                        {!isAtTop && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={handleBackToTop}
+                          >
+                            <ChevronLeft className="h-4 w-4 mr-1" />
+                            Back to Top
+                          </Button>
+                        )}
 
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={handleNext}
-                          disabled={!canGoNext}
-                        >
-                          Next
-                          <ChevronRight className="h-4 w-4 ml-1" />
-                        </Button>
+                        {hasMore && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={handleLoadMore}
+                          >
+                            Load More
+                            <ChevronRight className="h-4 w-4 ml-1" />
+                          </Button>
+                        )}
                       </div>
                     </div>
                   </div>

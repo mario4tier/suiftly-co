@@ -10,7 +10,6 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { trpc } from "@/lib/trpc";
-import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   Popover,
@@ -50,13 +49,14 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
   const [selectedTier, setSelectedTier] = useState<Tier>("pro");
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [tosModalOpen, setTosModalOpen] = useState(false);
-  const queryClient = useQueryClient();
+  const utils = trpc.useUtils();
 
   // React Query mutations
   const subscribeMutation = trpc.services.subscribe.useMutation({
     onSuccess: () => {
       toast.success('Subscription successful!');
-      queryClient.invalidateQueries({ queryKey: ['services'] });
+      // Invalidate services list to refetch and show updated UI
+      utils.services.list.invalidate();
     },
     onError: (error) => {
       toast.error(error.message || 'Subscription failed. Please try again.');
