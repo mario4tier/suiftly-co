@@ -11,6 +11,7 @@ export const apiKeys = pgTable('api_keys', {
   isActive: boolean('is_active').notNull().default(true),
   createdAt: timestamp('created_at').notNull().defaultNow(),
   revokedAt: timestamp('revoked_at'),
+  deletedAt: timestamp('deleted_at'),
 }, (table) => ({
   idxCustomerService: index('idx_customer_service').on(table.customerId, table.serviceType, table.isActive),
   idxApiKeyFp: index('idx_api_key_fp').on(table.apiKeyFp).where(sql`${table.isActive} = true`),

@@ -8,7 +8,7 @@
  * - Field-level actions with immediate effect
  */
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Info, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -35,6 +35,7 @@ import {
 import { SealKeysSection } from "./SealKeysSection";
 import { ApiKeysSection } from "./ApiKeysSection";
 import { trpc } from "@/lib/trpc";
+import { useSearch } from "@tanstack/react-router";
 
 interface SealInteractiveFormProps {
   serviceState: ServiceState;
@@ -55,9 +56,63 @@ export function SealInteractiveForm({
 }: SealInteractiveFormProps) {
   const [burstEnabled, setBurstEnabled] = useState(tier !== "starter");
   const [ipAllowlist, setIpAllowlist] = useState("");
+  const utils = trpc.useUtils();
+
+  // Read tab from URL query parameter for deep linking
+  const searchParams = useSearch({ strict: false }) as { tab?: string };
+  const validTabs = ["configuration", "x-api-key", "seal-keys"];
+  const defaultTab = validTabs.includes(searchParams.tab || "") ? searchParams.tab! : "configuration";
 
   // Fetch usage statistics from database
   const { data: usageStats } = trpc.seal.getUsageStats.useQuery();
+
+  // Fetch API keys
+  const { data: apiKeys, isLoading: apiKeysLoading } = trpc.seal.listApiKeys.useQuery();
+
+  // API Key mutations
+  const createApiKeyMutation = trpc.seal.createApiKey.useMutation({
+    onSuccess: () => {
+      utils.seal.listApiKeys.invalidate();
+      utils.seal.getUsageStats.invalidate();
+      console.log("API key created successfully");
+    },
+    onError: (error) => {
+      console.error("Failed to create API key:", error.message);
+    },
+  });
+
+  const revokeApiKeyMutation = trpc.seal.revokeApiKey.useMutation({
+    onSuccess: () => {
+      utils.seal.listApiKeys.invalidate();
+      utils.seal.getUsageStats.invalidate();
+      console.log("API key revoked successfully");
+    },
+    onError: (error) => {
+      console.error("Failed to revoke API key:", error.message);
+    },
+  });
+
+  const reEnableApiKeyMutation = trpc.seal.reEnableApiKey.useMutation({
+    onSuccess: () => {
+      utils.seal.listApiKeys.invalidate();
+      utils.seal.getUsageStats.invalidate();
+      console.log("API key re-enabled successfully");
+    },
+    onError: (error) => {
+      console.error("Failed to re-enable API key:", error.message);
+    },
+  });
+
+  const deleteApiKeyMutation = trpc.seal.deleteApiKey.useMutation({
+    onSuccess: () => {
+      utils.seal.listApiKeys.invalidate();
+      utils.seal.getUsageStats.invalidate();
+      console.log("API key deleted successfully");
+    },
+    onError: (error) => {
+      console.error("Failed to delete API key:", error.message);
+    },
+  });
 
   // Determine if service is cancelled or suspended
   const isCancelled = serviceState === "suspended_maintenance" || serviceState === "suspended_no_payment";
@@ -115,31 +170,58 @@ export function SealInteractiveForm({
     // TODO: Debounced API call to update IP allowlist
   };
 
+  // API Key handlers
+  const handleAddApiKey = async () => {
+    await createApiKeyMutation.mutateAsync({});
+  };
+
+  const handleCopyApiKey = (keyId: string) => {
+    navigator.clipboard.writeText(keyId);
+    console.log("Copied API key to clipboard:", keyId);
+  };
+
+  const handleRevokeApiKey = async (keyId: string) => {
+    await revokeApiKeyMutation.mutateAsync({ apiKeyId: keyId });
+  };
+
+  const handleReEnableApiKey = async (keyId: string) => {
+    await reEnableApiKeyMutation.mutateAsync({ apiKeyId: keyId });
+  };
+
+  const handleDeleteApiKey = async (keyId: string) => {
+    await deleteApiKeyMutation.mutateAsync({ apiKeyId: keyId });
+  };
+
+  // Helper function to format relative time
+  const formatRelativeTime = (date: Date): string => {
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+    const diffMinutes = Math.floor(diffMs / (1000 * 60));
+
+    if (diffDays > 0) return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
+    if (diffHours > 0) return `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
+    if (diffMinutes > 0) return `${diffMinutes} minute${diffMinutes > 1 ? 's' : ''} ago`;
+    return 'just now';
+  };
+
+  // Format API keys for display
+  const formattedApiKeys = apiKeys?.map(key => ({
+    id: key.apiKeyId,
+    key: key.keyPreview,
+    isRevoked: !key.isActive,
+    createdAt: formatRelativeTime(new Date(key.createdAt)),
+  })) || [];
+
   return (
     <div className="max-w-5xl mx-auto space-y-4 py-4">
-      {/* Service Enable/Disable Toggle */}
-      <div className="flex items-center justify-between pb-4 border-b border-gray-200 dark:border-gray-800">
-        <div className="flex items-center gap-3">
-          <Label htmlFor="service-toggle" className="text-base font-semibold text-gray-900 dark:text-gray-100">
-            Enable Service
-          </Label>
-          <Switch
-            id="service-toggle"
-            checked={isEnabled}
-            onCheckedChange={handleToggleService}
-            disabled={isReadOnly || isToggling}
-          />
-          <span className="text-sm font-medium text-gray-600 dark:text-gray-400">
-            {isToggling ? "..." : (isEnabled ? "ON" : "OFF")}
-          </span>
-        </div>
-      </div>
-
-      {/* Tabs: Configuration & Keys */}
-      <Tabs defaultValue="configuration" className="w-full">
+      {/* Tabs: Configuration, X-API-Key, Seal Keys */}
+      <Tabs defaultValue={defaultTab} className="w-full">
         <TabsList>
           <TabsTrigger value="configuration">Configuration</TabsTrigger>
-          <TabsTrigger value="keys">Keys</TabsTrigger>
+          <TabsTrigger value="x-api-key">X-API-Key</TabsTrigger>
+          <TabsTrigger value="seal-keys">Seal Keys</TabsTrigger>
         </TabsList>
 
         {/* Configuration Tab */}
@@ -320,28 +402,26 @@ export function SealInteractiveForm({
 
           {/* Burst Allowed */}
           <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Label htmlFor="burst-toggle" className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                  Burst Allowed
-                </Label>
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <button className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">
-                      <Info className="h-4 w-4" />
-                    </button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-80">
-                    <p className="text-sm text-gray-600 dark:text-gray-300">
-                      Allow temporary traffic bursts beyond guaranteed bandwidth. Billed per-request for burst traffic.
-                    </p>
-                  </PopoverContent>
-                </Popover>
-              </div>
+            <div className="flex items-center gap-3">
+              <Label htmlFor="burst-toggle" className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                Burst Allowed
+              </Label>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <button className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">
+                    <Info className="h-4 w-4" />
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent className="w-80">
+                  <p className="text-sm text-gray-600 dark:text-gray-300">
+                    Allow temporary traffic bursts beyond guaranteed bandwidth. Billed per-request for burst traffic.
+                  </p>
+                </PopoverContent>
+              </Popover>
               {tier === "starter" ? (
                 <span className="text-sm text-gray-500 dark:text-gray-400">Pro/Enterprise feature</span>
               ) : (
-                <div className="flex items-center gap-2">
+                <>
                   <Switch
                     id="burst-toggle"
                     checked={burstEnabled}
@@ -351,7 +431,7 @@ export function SealInteractiveForm({
                   <span className="text-sm font-medium text-gray-600 dark:text-gray-400">
                     {burstEnabled ? "ON" : "OFF"}
                   </span>
-                </div>
+                </>
               )}
             </div>
           </div>
@@ -400,9 +480,26 @@ export function SealInteractiveForm({
           </div>
         </TabsContent>
 
-        {/* Keys Tab */}
-        <TabsContent value="keys" className="space-y-6">
-          {/* Seal Keys & Packages */}
+        {/* X-API-Key Tab */}
+        <TabsContent value="x-api-key" className="space-y-6">
+          {apiKeysLoading ? (
+            <div className="text-center py-4 text-gray-500">Loading API keys...</div>
+          ) : (
+            <ApiKeysSection
+              apiKeys={formattedApiKeys}
+              maxApiKeys={usageStats?.apiKeys.total ?? 2}
+              isReadOnly={isReadOnly}
+              onCopyKey={handleCopyApiKey}
+              onRevokeKey={handleRevokeApiKey}
+              onReEnableKey={handleReEnableApiKey}
+              onDeleteKey={handleDeleteApiKey}
+              onAddKey={handleAddApiKey}
+            />
+          )}
+        </TabsContent>
+
+        {/* Seal Keys Tab */}
+        <TabsContent value="seal-keys" className="space-y-6">
           <SealKeysSection
             sealKeys={[
               {
@@ -428,20 +525,6 @@ export function SealInteractiveForm({
             onEditPackage={(keyId, pkgId) => console.log("Edit package:", keyId, pkgId)}
             onDeletePackage={(keyId, pkgId) => console.log("Delete package:", keyId, pkgId)}
             onCopyObjectId={(objId) => console.log("Copied object ID:", objId)}
-          />
-
-          {/* API Keys */}
-          <ApiKeysSection
-            apiKeys={[
-              { id: "1", key: "key_abc123...", isRevoked: false, createdAt: "2 days ago" },
-              { id: "2", key: "key_def456...", isRevoked: true, createdAt: "1 week ago" },
-            ]}
-            maxApiKeys={2}
-            isReadOnly={isReadOnly}
-            onCopyKey={(keyId) => console.log("Copy key:", keyId)}
-            onToggleKey={(keyId, revoke) => console.log("Toggle key:", keyId, revoke)}
-            onDeleteKey={(keyId) => console.log("Delete key:", keyId)}
-            onAddKey={() => console.log("Add API key")}
           />
         </TabsContent>
       </Tabs>

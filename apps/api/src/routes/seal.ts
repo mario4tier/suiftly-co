@@ -8,9 +8,9 @@ import { TRPCError } from '@trpc/server';
 import { router, protectedProcedure } from '../lib/trpc';
 import { db } from '@suiftly/database';
 import { sealKeys, sealPackages, serviceInstances, apiKeys } from '@suiftly/database/schema';
-import { eq, and, sql } from 'drizzle-orm';
+import { eq, and, sql, isNull } from 'drizzle-orm';
 import { SERVICE_TYPE } from '@suiftly/shared/constants';
-import { storeApiKey, getApiKeys, revokeApiKey, deleteApiKey, type SealType } from '../lib/api-keys';
+import { storeApiKey, getApiKeys, revokeApiKey, deleteApiKey, reEnableApiKey, type SealType } from '../lib/api-keys';
 
 export const sealRouter = router({
   /**
@@ -310,14 +310,15 @@ export const sealRouter = router({
         eq(sealKeys.isActive, true)
       ));
 
-    // Count active API keys
-    const activeApiKeys = await db
+    // Count API keys (includes both active and revoked, excludes deleted)
+    // Business rule: Revoked keys count as "used" slots
+    const usedApiKeys = await db
       .select({ count: sql<number>`count(*)::int` })
       .from(apiKeys)
       .where(and(
         eq(apiKeys.customerId, ctx.user.customerId),
         eq(apiKeys.serviceType, SERVICE_TYPE.SEAL),
-        eq(apiKeys.isActive, true)
+        isNull(apiKeys.deletedAt)
       ));
 
     // Get package counts per seal key
@@ -345,7 +346,7 @@ export const sealRouter = router({
         purchased: config.purchasedSealKeys || 0,
       },
       apiKeys: {
-        used: activeApiKeys[0]?.count || 0,
+        used: usedApiKeys[0]?.count || 0,
         total: config.totalApiKeys || 2,
         included: 2, // Base tier includes 2
         purchased: config.purchasedApiKeys || 0,
@@ -403,13 +404,14 @@ export const sealRouter = router({
       const config = service.config as any || {};
       const maxApiKeys = config.totalApiKeys || 2;
 
-      // Check current count
-      const currentKeys = await getApiKeys(ctx.user.customerId, SERVICE_TYPE.SEAL, false);
+      // Check current count (includes both active and revoked keys, excludes deleted)
+      // Business rule: Revoked keys count as "used" slots
+      const currentKeys = await getApiKeys(ctx.user.customerId, SERVICE_TYPE.SEAL, true);
 
       if (currentKeys.length >= maxApiKeys) {
         throw new TRPCError({
           code: 'BAD_REQUEST',
-          message: `Maximum API key limit reached (${maxApiKeys})`,
+          message: `Maximum API key limit reached (${maxApiKeys}). Delete a revoked key to free up a slot.`,
         });
       }
 
@@ -441,7 +443,7 @@ export const sealRouter = router({
       });
     }
 
-    const keys = await getApiKeys(ctx.user.customerId, SERVICE_TYPE.SEAL, false);
+    const keys = await getApiKeys(ctx.user.customerId, SERVICE_TYPE.SEAL, true);
 
     // Return keys with truncated IDs (don't show full keys after creation)
     return keys.map(key => ({
@@ -482,7 +484,34 @@ export const sealRouter = router({
     }),
 
   /**
-   * Delete an API key permanently
+   * Re-enable a revoked API key
+   */
+  reEnableApiKey: protectedProcedure
+    .input(z.object({
+      apiKeyId: z.string(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.user) {
+        throw new TRPCError({
+          code: 'UNAUTHORIZED',
+          message: 'Not authenticated',
+        });
+      }
+
+      const success = await reEnableApiKey(input.apiKeyId, ctx.user.customerId);
+
+      if (!success) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'API key not found or cannot be re-enabled',
+        });
+      }
+
+      return { success: true };
+    }),
+
+  /**
+   * Delete an API key (soft delete - irreversible from UI)
    */
   deleteApiKey: protectedProcedure
     .input(z.object({

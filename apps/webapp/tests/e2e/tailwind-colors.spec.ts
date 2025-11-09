@@ -25,20 +25,36 @@ function expectColorMatch(actual: string, expectedRgb: string, expectedOklch: st
 }
 
 test.describe('Tailwind Color System', () => {
-  test.beforeEach(async ({ page }) => {
+  test.beforeEach(async ({ page, request }) => {
+    // Reset DB to ensure fresh state (no existing services)
+    await request.post('http://localhost:3000/test/data/reset', {
+      data: {
+        balanceUsdCents: 0,
+        spendingLimitUsdCents: 0,
+        clearEscrowAccount: true,
+      },
+    });
+
+    // Clear cookies for clean auth state (prevents test pollution)
+    await page.context().clearCookies();
+
     // Authenticate with mock wallet
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet")');
+    await page.waitForTimeout(500);
 
     // Wait for redirect to /dashboard after auth
     await page.waitForURL('/dashboard', { timeout: 10000 });
 
-    // Navigate to seal service page to test colors
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
+    // Stay on dashboard to test header colors (wallet button exists here)
+    // Seal service page is used only for specific tests that need onboarding form
   });
 
   test('custom Cloudflare colors are applied correctly', async ({ page }) => {
+    // Navigate to Seal service page to access subscribe button
+    await page.click('text=Seal');
+    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
+
     // Test the orange (#f38020) branding color on subscribe button
     const subscribeButton = page.locator('button:has-text("Subscribe to Service")');
     await expect(subscribeButton).toBeVisible();
@@ -71,6 +87,10 @@ test.describe('Tailwind Color System', () => {
   });
 
   test('standard Tailwind amber colors are applied correctly', async ({ page }) => {
+    // Navigate to Seal service page to access Guaranteed Bandwidth section
+    await page.click('text=Seal');
+    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
+
     // Click an info icon to open tooltip with amber background
     const infoButton = page.locator('h3:has-text("Guaranteed Bandwidth")').locator('..').locator('button').first();
     await infoButton.click();
@@ -116,10 +136,10 @@ test.describe('Tailwind Color System', () => {
 
   test('dark mode switches colors correctly', async ({ page }) => {
     // Get initial background color of wallet button in light mode
-    const walletButton = page.locator('button').filter({ hasText: /0x[0-9a-f]{4}\.\.\.[0-9a-f]{4}/ }).first();
-    await expect(walletButton).toBeVisible();
+    const walletButtonLight = page.locator('button').filter({ hasText: /0x[0-9a-f]{4}\.\.\.[0-9a-f]{4}/ }).first();
+    await expect(walletButtonLight).toBeVisible();
 
-    const lightBgColor = await walletButton.evaluate((el) => {
+    const lightBgColor = await walletButtonLight.evaluate((el) => {
       return window.getComputedStyle(el).backgroundColor;
     });
 
@@ -128,13 +148,7 @@ test.describe('Tailwind Color System', () => {
 
     console.log('✅ Light mode: wallet button has white background');
 
-    // Switch to dark mode by clicking the theme toggle
-    const themeToggle = page.locator('button[aria-label*="theme"]').or(page.locator('button').filter({ has: page.locator('svg') }).filter({ hasText: '' })).first();
-
-    // Look for theme toggle button - it might be in the header or sidebar
-    const toggleButton = page.locator('button').filter({ has: page.locator('svg[class*="lucide"]') }).locator('..').filter({ hasNot: page.locator('span') }).first();
-
-    // If we can't find a theme toggle, manually add dark class to html
+    // Switch to dark mode by manually adding dark class to html
     await page.evaluate(() => {
       document.documentElement.classList.add('dark');
     });
@@ -142,7 +156,11 @@ test.describe('Tailwind Color System', () => {
     // Wait for theme change to take effect
     await page.waitForTimeout(300);
 
-    const darkBgColor = await walletButton.evaluate((el) => {
+    // Re-query the wallet button after dark mode switch (element may have re-rendered)
+    const walletButtonDark = page.locator('button').filter({ hasText: /0x[0-9a-f]{4}\.\.\.[0-9a-f]{4}/ }).first();
+    await expect(walletButtonDark).toBeVisible();
+
+    const darkBgColor = await walletButtonDark.evaluate((el) => {
       return window.getComputedStyle(el).backgroundColor;
     });
 
@@ -214,6 +232,10 @@ test.describe('Tailwind Color System', () => {
   });
 
   test('popover dark mode colors switch correctly', async ({ page }) => {
+    // Navigate to Seal service page to access Guaranteed Bandwidth section
+    await page.click('text=Seal');
+    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
+
     // Switch to dark mode first
     await page.evaluate(() => {
       document.documentElement.classList.add('dark');

@@ -176,7 +176,7 @@ export const servicesRouter = router({
       const priceUsdCents = getTierPriceUsdCents(input.tier);
 
       // 3. Create service FIRST in transaction (with subscription_charge_pending=true)
-      const service = await db.transaction(async (tx) => {
+      const { service, apiKey } = await db.transaction(async (tx) => {
         // Lock customer row and get data
         const [customer] = await tx
           .select()
@@ -202,7 +202,8 @@ export const servicesRouter = router({
 
         if (existing) {
           // Already subscribed - return existing instance (idempotent)
-          return existing;
+          // Note: API key was already created, won't be returned again
+          return { service: existing, apiKey: null };
         }
 
         // Initialize config with defaults based on tier
@@ -233,7 +234,18 @@ export const servicesRouter = router({
           })
           .returning();
 
-        return newService;
+        // Generate initial API key immediately (part of service creation)
+        const { plainKey, record: apiKeyRecord } = await storeApiKey({
+          customerId: ctx.user!.customerId,
+          serviceType: input.serviceType,
+          metadata: {
+            generatedAt: 'subscription',
+            instanceId: newService.instanceId,
+          },
+          tx, // Pass transaction object to avoid deadlock
+        });
+
+        return { service: newService, apiKey: plainKey };
       });
 
       // 4. Transaction committed - service exists in database now
@@ -263,9 +275,16 @@ export const servicesRouter = router({
 
         if (!chargeResult.success) {
           // Charge failed - service exists but can't be enabled
+          // Translate technical errors to user-friendly, actionable messages
+          let userMessage = chargeResult.error || 'Payment failed. Service created but cannot be enabled until payment succeeds.';
+
+          if (chargeResult.error?.includes('Account does not exist')) {
+            userMessage = 'Deposit funds to proceed. See Billing page to add funds to your account.';
+          }
+
           throw new TRPCError({
             code: 'BAD_REQUEST',
-            message: chargeResult.error || 'Payment failed. Service created but cannot be enabled until payment succeeds.',
+            message: userMessage,
           });
         }
 
@@ -284,21 +303,12 @@ export const servicesRouter = router({
           createdAt: new Date(),
         });
 
-        // 9. Generate initial API key for the service
-        const { plainKey, record: apiKeyRecord } = await storeApiKey({
-          customerId: ctx.user!.customerId,
-          serviceType: input.serviceType,
-          metadata: {
-            generatedAt: 'subscription',
-            instanceId: service.instanceId,
-          },
-        });
-
-        // 10. Return service with API key (show key only once!)
+        // 9. Return service with API key (show key only once!)
+        // Note: API key was already created in the transaction
         return {
           ...service,
           subscriptionChargePending: false,
-          apiKey: plainKey, // Include API key in response (only time it's visible)
+          apiKey: apiKey, // Include API key in response (only time it's visible)
         };
 
       } catch (chargeError) {
@@ -399,6 +409,35 @@ export const servicesRouter = router({
 
       // Check if subscription charge is pending
       if (service.subscriptionChargePending && input.enabled) {
+        // Get customer to check account status
+        const customer = await db.query.customers.findFirst({
+          where: eq(customers.customerId, ctx.user.customerId),
+        });
+
+        console.log('[TOGGLE] Customer:', customer?.customerId, 'escrowContractId:', customer?.escrowContractId);
+
+        if (customer) {
+          // Check escrow account status
+          const suiService = getSuiService();
+          const account = await suiService.getAccount(customer.walletAddress);
+          const tierPrice = getTierPriceUsdCents(service.tier);
+
+          console.log('[TOGGLE] Account:', account ? {
+            balance: account.balanceUsdcCents,
+            tierPrice,
+            hasAccount: !!account
+          } : 'null');
+
+          // If no account exists or insufficient balance, guide to deposit
+          if (!account || (account.balanceUsdcCents < tierPrice)) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'Deposit funds to proceed. See Billing page.',
+            });
+          }
+        }
+
+        // Account exists with funds but charge still pending - something else went wrong
         throw new TRPCError({
           code: 'BAD_REQUEST',
           message: 'Cannot enable service: subscription payment pending. Please contact support if this persists.',

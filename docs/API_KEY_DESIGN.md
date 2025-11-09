@@ -18,6 +18,43 @@ This document defines the API key architecture for authenticating service reques
 
 **Note**: For the Seal service, API keys authenticate requests and identify which Seal Key to use for signing operations. A customer with multiple Seal Keys will have separate API keys for each Seal Key.
 
+## API Key Lifecycle
+
+### Key States
+
+API keys can exist in three states:
+
+1. **Active** (`isActive: true`, `deletedAt: null`) - Key is working and can authenticate requests
+2. **Revoked** (`isActive: false`, `deletedAt: null`) - Key is disabled but can be re-enabled
+3. **Deleted** (`deletedAt: not null`) - Soft deleted, invisible in UI but preserved for audit
+
+### Slot Management
+
+**Business Rule: Revoked keys count as "used" slots**
+
+- Each tier includes a maximum number of API keys (e.g., 2 for base tier)
+- **Used slots** = Total keys - Deleted keys = Active keys + Revoked keys
+- Users cannot create new keys when `usedSlots >= maxKeys`
+- To free up a slot, users must **delete** a revoked key (not just revoke it)
+
+**Example:**
+- Tier includes 2 API keys maximum
+- User has 1 active key, 1 revoked key → 2 of 2 used → Cannot create new key
+- User deletes the revoked key → 1 of 2 used → Can create new key
+
+### Lifecycle Operations
+
+1. **Create** - New API key created in Active state, counts as used slot
+2. **Revoke** - Set `isActive: false`, `revokedAt: timestamp`. Key stops working but still counts as used
+3. **Re-enable** - Set `isActive: true`, `revokedAt: null`. Revoked key becomes active again
+4. **Delete** - Set `deletedAt: timestamp`. Soft delete, removes from UI and frees up slot
+
+### Enforcement
+
+- **Backend** - `createApiKey` checks count with `getApiKeys(customerId, serviceType, includeInactive: true)`
+- **Frontend** - `getUsageStats` returns `used` count excluding deleted keys only
+- **Both** - Create button disabled when `apiKeys.length >= maxApiKeys`
+
 ## API Key Structure
 
 ### Format

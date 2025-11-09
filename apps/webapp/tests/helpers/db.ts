@@ -74,3 +74,80 @@ export async function getCustomerData(
 
   return response.json();
 }
+
+/**
+ * Ensure the test wallet has a specific balance
+ * - Deposits or withdraws as needed to reach the target balance
+ * - Creates escrow account if it doesn't exist
+ * - Idempotent: can be called multiple times safely
+ */
+export async function ensureTestBalance(
+  request: APIRequestContext,
+  targetBalanceUsd: number,
+  options?: {
+    walletAddress?: string;
+    spendingLimitUsd?: number;
+  }
+): Promise<void> {
+  const walletAddress = options?.walletAddress || '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+
+  // Get current balance
+  const balanceResponse = await request.get(`${API_BASE}/test/wallet/balance`, {
+    params: { walletAddress },
+  });
+
+  const balanceData = await balanceResponse.json();
+
+  if (!balanceData.found) {
+    // Account doesn't exist, create it with deposit
+    const depositResponse = await request.post(`${API_BASE}/test/wallet/deposit`, {
+      data: {
+        walletAddress,
+        amountUsd: targetBalanceUsd,
+        initialSpendingLimitUsd: options?.spendingLimitUsd || 250,
+      },
+    });
+
+    const depositData = await depositResponse.json();
+    if (!depositData.success) {
+      throw new Error(`Failed to create escrow account: ${depositData.error}`);
+    }
+    return;
+  }
+
+  const currentBalance = balanceData.balanceUsd;
+  const diff = targetBalanceUsd - currentBalance;
+
+  if (Math.abs(diff) < 0.01) {
+    // Already at target balance (within 1 cent)
+    return;
+  }
+
+  if (diff > 0) {
+    // Need to deposit
+    const depositResponse = await request.post(`${API_BASE}/test/wallet/deposit`, {
+      data: {
+        walletAddress,
+        amountUsd: diff,
+      },
+    });
+
+    const depositData = await depositResponse.json();
+    if (!depositData.success) {
+      throw new Error(`Failed to deposit: ${depositData.error}`);
+    }
+  } else {
+    // Need to withdraw
+    const withdrawResponse = await request.post(`${API_BASE}/test/wallet/withdraw`, {
+      data: {
+        walletAddress,
+        amountUsd: Math.abs(diff),
+      },
+    });
+
+    const withdrawData = await withdrawResponse.json();
+    if (!withdrawData.success) {
+      throw new Error(`Failed to withdraw: ${withdrawData.error}`);
+    }
+  }
+}

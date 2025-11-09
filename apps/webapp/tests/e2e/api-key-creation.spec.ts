@@ -178,7 +178,7 @@ test.describe('API Key Creation on Subscription', () => {
     await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
 
     // Wait for page to show disabled state
-    await expect(page.locator('text=/Service is subscribed but currently disabled/i')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('text=/Service is currently OFF/i')).toBeVisible({ timeout: 5000 });
     console.log('✅ Service shows as disabled after subscription');
 
     // Query service state from API

@@ -14,16 +14,10 @@ import { test, expect } from '@playwright/test';
 
 test.describe('Service Toggle - Enable/Disable', () => {
   test.beforeEach(async ({ page, request }) => {
-    // Clear any lingering test delays from previous tests
+    // Step 1: Clear any lingering test delays from previous tests
     await request.post('http://localhost:3000/test/delays/clear');
 
-    // Authenticate with mock wallet
-    await page.goto('/');
-    await page.click('button:has-text("Mock Wallet")');
-    await page.waitForURL('/dashboard', { timeout: 10000 });
-    await page.waitForTimeout(3000); // Wait for auth toast
-
-    // Reset database
+    // Step 2: Reset database (BEFORE auth to ensure clean state)
     await request.post('http://localhost:3000/test/data/reset', {
       data: {
         balanceUsdCents: 0,
@@ -31,7 +25,7 @@ test.describe('Service Toggle - Enable/Disable', () => {
       },
     });
 
-    // Create escrow account and deposit funds
+    // Step 3: Create escrow account and deposit funds
     await request.post('http://localhost:3000/test/wallet/deposit', {
       data: {
         walletAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
@@ -40,7 +34,16 @@ test.describe('Service Toggle - Enable/Disable', () => {
       },
     });
 
-    // Subscribe to seal service
+    // Step 4: Clear cookies for clean auth state (prevents test pollution)
+    await page.context().clearCookies();
+
+    // Step 5: Authenticate with mock wallet
+    await page.goto('/');
+    await page.click('button:has-text("Mock Wallet")');
+    await page.waitForTimeout(500);
+    await page.waitForURL('/dashboard', { timeout: 10000 });
+
+    // Step 6: Subscribe to seal service to create test service instance
     await page.click('text=Seal');
     await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
     await page.locator('label:has-text("Agree to")').click();
@@ -86,7 +89,7 @@ test.describe('Service Toggle - Enable/Disable', () => {
     console.log('✅ UI shows service as ON');
 
     // Verify disabled banner is hidden (no banner shown when enabled)
-    await expect(page.locator('text=/Service is subscribed but currently disabled/i')).not.toBeVisible();
+    await expect(page.locator('text=/Service is currently OFF/i')).not.toBeVisible();
     console.log('✅ Disabled banner is hidden (no banner when service is active)');
   });
 
@@ -113,11 +116,10 @@ test.describe('Service Toggle - Enable/Disable', () => {
 
     // Verify UI updated
     await expect(page.locator('#service-toggle')).not.toBeChecked();
-    await expect(page.locator('text=OFF')).toBeVisible();
-    console.log('✅ UI shows service as OFF');
+    console.log('✅ UI shows service as OFF (toggle unchecked)');
 
     // Verify banner changed back
-    await expect(page.locator('text=/Service is subscribed but currently disabled/i')).toBeVisible();
+    await expect(page.locator('text=/Service is currently OFF/i')).toBeVisible();
     console.log('✅ Banner shows service disabled');
   });
 

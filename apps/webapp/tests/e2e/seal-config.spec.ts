@@ -15,9 +15,13 @@ test.describe('Seal Service Onboarding Form', () => {
       },
     });
 
+    // Clear cookies for clean auth state (prevents test pollution)
+    await page.context().clearCookies();
+
     // Authenticate with mock wallet
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet")');
+    await page.waitForTimeout(500);
 
     // Wait for redirect to /dashboard after auth
     await page.waitForURL('/dashboard', { timeout: 10000 });
@@ -175,45 +179,26 @@ test.describe('Seal Service Onboarding Form', () => {
     // Enable subscribe button
     await page.locator('label:has-text("Agree to")').click();
 
-    // Check default PRO tier
-    let subscribeButton = page.locator('button:has-text("Subscribe to Service for $40.00/month")');
+    // Check default PRO tier ($29/month)
+    let subscribeButton = page.locator('button:has-text("Subscribe to Service for $29.00/month")');
     await expect(subscribeButton).toBeVisible();
 
-    // Switch to STARTER
+    // Switch to STARTER ($9/month)
     await page.getByRole('heading', { name: 'STARTER' }).click();
-    subscribeButton = page.locator('button:has-text("Subscribe to Service for $20.00/month")');
+    subscribeButton = page.locator('button:has-text("Subscribe to Service for $9.00/month")');
     await expect(subscribeButton).toBeVisible();
 
-    // Switch to ENTERPRISE
+    // Switch to ENTERPRISE ($185/month)
     await page.getByRole('heading', { name: 'ENTERPRISE' }).click();
-    subscribeButton = page.locator('button:has-text("Subscribe to Service for $80.00/month")');
+    subscribeButton = page.locator('button:has-text("Subscribe to Service for $185.00/month")');
     await expect(subscribeButton).toBeVisible();
 
     console.log('✅ Subscribe button displays correct tier and price');
   });
 
-  test('subscribe button click logs to console (placeholder)', async ({ page }) => {
-    // Enable subscribe button
-    await page.locator('label:has-text("Agree to")').click();
-
-    // Listen for console messages
-    const consoleLogs: string[] = [];
-    page.on('console', (msg) => {
-      consoleLogs.push(msg.text());
-    });
-
-    // Click subscribe button
-    await page.locator('button:has-text("Subscribe to Service")').click();
-
-    // Should see console log (placeholder implementation)
-    // Wait a bit for console log to appear
-    await page.waitForTimeout(100);
-
-    const hasSubscribeLog = consoleLogs.some((log) => log.includes('Subscribe to'));
-    expect(hasSubscribeLog).toBe(true);
-
-    console.log('✅ Subscribe button click triggers placeholder action');
-  });
+  // Note: "subscribe button click logs to console (placeholder)" test removed
+  // Subscription is now fully implemented with real API calls.
+  // See service-state-transitions.spec.ts for comprehensive subscription tests.
 
   test('included features are displayed correctly', async ({ page }) => {
     // Should see all included features

@@ -129,11 +129,21 @@ test.describe('Subscription Pricing Validation', () => {
   });
 
   test('PRO tier subscription succeeds when balance is exactly $29', async ({ page }) => {
-    // Reset with exactly $29 balance
+    // Reset and create escrow account with exactly $29 balance
     await page.request.post('http://localhost:3000/test/data/reset', {
       data: {
-        balanceUsdCents: 2900, // $29.00
+        balanceUsdCents: 0,
         spendingLimitUsdCents: 25000, // $250
+        clearEscrowAccount: true,
+      },
+    });
+
+    // Create escrow account with $29 balance
+    await page.request.post('http://localhost:3000/test/wallet/deposit', {
+      data: {
+        walletAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        amountUsd: 29,
+        initialSpendingLimitUsd: 250,
       },
     });
 
@@ -149,10 +159,10 @@ test.describe('Subscription Pricing Validation', () => {
     // Wait for validation and subscription to complete
     await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
 
-    // Should redirect away from onboarding form - wait for service state banner
-    await expect(page.locator('text=/Service is subscribed but currently disabled/i')).toBeVisible({ timeout: 5000 });
+    // Should show service state banner (disabled state)
+    await expect(page.locator('text=/Service is currently OFF/i')).toBeVisible({ timeout: 5000 });
 
-    // The page should now show the service management interface
+    // The page should now show the service management interface (Configuration tab)
     await expect(page.getByRole('heading', { name: 'Guaranteed Bandwidth' })).not.toBeVisible();
 
     console.log('✅ PRO tier subscription succeeds with exactly $29 balance');
@@ -188,11 +198,21 @@ test.describe('Subscription Pricing Validation', () => {
   });
 
   test('STARTER tier subscription succeeds when balance is exactly $9', async ({ page }) => {
-    // Reset with exactly $9 balance
+    // Reset and create escrow account with exactly $9 balance
     await page.request.post('http://localhost:3000/test/data/reset', {
       data: {
-        balanceUsdCents: 900, // $9.00
+        balanceUsdCents: 0,
         spendingLimitUsdCents: 25000, // $250
+        clearEscrowAccount: true,
+      },
+    });
+
+    // Create escrow account with $9 balance
+    await page.request.post('http://localhost:3000/test/wallet/deposit', {
+      data: {
+        walletAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        amountUsd: 9,
+        initialSpendingLimitUsd: 250,
       },
     });
 
@@ -209,8 +229,8 @@ test.describe('Subscription Pricing Validation', () => {
     // Wait for validation and subscription to complete
     await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
 
-    // Should redirect away from onboarding form - wait for service state banner
-    await expect(page.locator('text=/Service is subscribed but currently disabled/i')).toBeVisible({ timeout: 5000 });
+    // Should show service state banner (disabled state)
+    await expect(page.locator('text=/Service is currently OFF/i')).toBeVisible({ timeout: 5000 });
 
     // Should redirect away from onboarding form
     await expect(page.getByRole('heading', { name: 'Guaranteed Bandwidth' })).not.toBeVisible();
@@ -248,11 +268,21 @@ test.describe('Subscription Pricing Validation', () => {
   });
 
   test('ENTERPRISE tier subscription succeeds when balance is exactly $185', async ({ page }) => {
-    // Reset with exactly $185 balance
+    // Reset and create escrow account with exactly $185 balance
     await page.request.post('http://localhost:3000/test/data/reset', {
       data: {
-        balanceUsdCents: 18500, // $185.00
+        balanceUsdCents: 0,
         spendingLimitUsdCents: 25000, // $250
+        clearEscrowAccount: true,
+      },
+    });
+
+    // Create escrow account with $185 balance
+    await page.request.post('http://localhost:3000/test/wallet/deposit', {
+      data: {
+        walletAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        amountUsd: 185,
+        initialSpendingLimitUsd: 250,
       },
     });
 
@@ -269,8 +299,8 @@ test.describe('Subscription Pricing Validation', () => {
     // Wait for validation and subscription to complete
     await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
 
-    // Should redirect away from onboarding form - wait for service state banner
-    await expect(page.locator('text=/Service is subscribed but currently disabled/i')).toBeVisible({ timeout: 5000 });
+    // Should show service state banner (disabled state)
+    await expect(page.locator('text=/Service is currently OFF/i')).toBeVisible({ timeout: 5000 });
 
     // Should redirect away from onboarding form
     await expect(page.getByRole('heading', { name: 'Guaranteed Bandwidth' })).not.toBeVisible();

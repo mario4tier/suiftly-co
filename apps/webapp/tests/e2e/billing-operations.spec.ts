@@ -4,7 +4,7 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { resetCustomer } from '../helpers/db';
+import { resetCustomer, ensureTestBalance } from '../helpers/db';
 
 const MOCK_WALLET_ADDRESS = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const API_BASE = 'http://localhost:3000';
@@ -17,9 +17,16 @@ test.describe('Billing Operations', () => {
       spendingLimitUsdCents: 0, // Unlimited (tests that need a specific limit will set it via deposit)
     });
 
+    // Clear cookies for clean auth state (prevents test pollution)
+    await page.context().clearCookies();
+
     // Authenticate with mock wallet
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet")');
+
+    // Wait a bit for auth to process (helps with test isolation)
+    await page.waitForTimeout(500);
+
     await page.waitForURL('/dashboard', { timeout: 10000 });
 
     // Navigate to billing page
@@ -327,9 +334,13 @@ test.describe('Billing Validation Edge Cases', () => {
       },
     });
 
+    // Clear cookies for clean auth state (prevents test pollution)
+    await page.context().clearCookies();
+
     // Authenticate and navigate to billing
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet")');
+    await page.waitForTimeout(500);
     await page.waitForURL('/dashboard', { timeout: 10000 });
     await page.click('text=Billing');
     await page.waitForURL('/billing', { timeout: 5000 });
@@ -459,6 +470,11 @@ test.describe('Billing Validation Edge Cases', () => {
   });
 
   test('decimal amounts are handled correctly', async ({ page }) => {
+    // Ensure we have exactly $100 balance (adjust from previous test state)
+    await ensureTestBalance(page.request, 100);
+    await page.reload();
+    await page.waitForTimeout(500);
+
     // Test deposit with decimals
     await page.click('button:has-text("Deposit")');
     await page.waitForTimeout(300);

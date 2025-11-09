@@ -3,8 +3,9 @@
  * List of API keys with Copy, Revoke/Enable, Delete actions
  */
 
-import { Copy, Ban, Trash2, Plus } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Copy, Ban, Trash2 } from "lucide-react";
+import { InlineButton } from "@/components/ui/inline-button";
+import { AddButton } from "@/components/ui/add-button";
 
 interface ApiKey {
   id: string;
@@ -18,7 +19,8 @@ interface ApiKeysSectionProps {
   maxApiKeys: number;
   isReadOnly?: boolean;
   onCopyKey?: (keyId: string) => void;
-  onToggleKey?: (keyId: string, revoke: boolean) => void;
+  onRevokeKey?: (keyId: string) => void;
+  onReEnableKey?: (keyId: string) => void;
   onDeleteKey?: (keyId: string) => void;
   onAddKey?: () => void;
 }
@@ -28,7 +30,8 @@ export function ApiKeysSection({
   maxApiKeys,
   isReadOnly = false,
   onCopyKey,
-  onToggleKey,
+  onRevokeKey,
+  onReEnableKey,
   onDeleteKey,
   onAddKey,
 }: ApiKeysSectionProps) {
@@ -39,6 +42,24 @@ export function ApiKeysSection({
     console.log("Copied API key:", keyId);
   };
 
+  const handleRevokeKey = (keyId: string, keyDisplay: string) => {
+    const confirmed = window.confirm(
+      `Revoke this API key?\n\n${keyDisplay}\n\nThe key will stop working immediately but can be re-enabled later.`
+    );
+    if (confirmed) {
+      onRevokeKey?.(keyId);
+    }
+  };
+
+  const handleDeleteKey = (keyId: string, keyDisplay: string) => {
+    const confirmed = window.confirm(
+      `Delete this API key?\n\n${keyDisplay}\n\nThis action is IRREVERSIBLE.`
+    );
+    if (confirmed) {
+      onDeleteKey?.(keyId);
+    }
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -47,77 +68,101 @@ export function ApiKeysSection({
         </h3>
       </div>
 
-      {/* API Keys List */}
-      <div className="space-y-3">
-        {apiKeys.map((apiKey) => (
-          <div
-            key={apiKey.id}
-            className="flex items-center justify-between p-4 rounded-lg border border-gray-200 dark:border-gray-700"
-          >
-            <div className="flex items-center gap-3">
-              <code className="text-sm font-mono text-gray-900 dark:text-gray-100">
-                {apiKey.key}
-              </code>
-              {apiKey.isRevoked && (
-                <span className="px-2 py-0.5 text-xs font-semibold rounded bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400">
-                  REVOKED
-                </span>
-              )}
-              {apiKey.createdAt && (
-                <span className="text-xs text-gray-500 dark:text-gray-400">
-                  Created {apiKey.createdAt}
-                </span>
-              )}
-            </div>
-
-            {/* API Key Actions */}
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => handleCopyKey(apiKey.id, apiKey.key)}
-                disabled={isReadOnly || apiKey.isRevoked}
-              >
-                <Copy className="h-3 w-3 mr-1" />
-                Copy
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => onToggleKey?.(apiKey.id, !apiKey.isRevoked)}
-                disabled={isReadOnly}
-              >
-                <Ban className="h-3 w-3 mr-1" />
-                {apiKey.isRevoked ? "Enable" : "Revoke"}
-              </Button>
-              {apiKey.isRevoked && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => onDeleteKey?.(apiKey.id)}
-                  disabled={isReadOnly}
-                  className="text-red-600 hover:text-red-700 dark:text-red-400"
-                >
-                  <Trash2 className="h-3 w-3 mr-1" />
-                  Delete
-                </Button>
-              )}
-            </div>
-          </div>
-        ))}
+      {/* API Keys Table */}
+      <div className="rounded-lg border border-gray-200 dark:border-gray-700">
+        <table className="w-full">
+          <thead className="bg-gray-50 dark:bg-gray-800/50">
+            <tr>
+              <th className="px-3 py-2 text-left text-sm font-semibold text-gray-900 dark:text-gray-100">
+                API Key
+              </th>
+              <th className="px-3 py-2 text-left text-sm font-semibold text-gray-900 dark:text-gray-100">
+                Created
+              </th>
+              <th className="px-3 py-2 text-left text-sm font-semibold text-gray-900 dark:text-gray-100">
+                Status
+              </th>
+              <th className="px-3 py-2 text-right text-sm font-semibold text-gray-900 dark:text-gray-100">
+                Actions
+              </th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+            {apiKeys.map((apiKey) => (
+              <tr key={apiKey.id}>
+                <td className="px-3 py-3">
+                  <code className="text-sm font-mono text-gray-900 dark:text-gray-100">
+                    {apiKey.key}
+                  </code>
+                </td>
+                <td className="px-3 py-3 text-sm text-gray-500 dark:text-gray-400">
+                  {apiKey.createdAt}
+                </td>
+                <td className="px-3 py-3">
+                  {apiKey.isRevoked ? (
+                    <span className="inline-flex items-center rounded-full px-2 py-1 text-xs font-medium bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-400">
+                      Revoked
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center rounded-full px-2 py-1 text-xs font-medium bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400">
+                      Active
+                    </span>
+                  )}
+                </td>
+                <td className="px-3 py-3">
+                  <div className="flex items-center justify-end gap-1.5">
+                    {!apiKey.isRevoked && (
+                      <>
+                        <InlineButton
+                          onClick={() => handleCopyKey(apiKey.id, apiKey.key)}
+                          disabled={isReadOnly}
+                        >
+                          <Copy className="h-3 w-3" />
+                          Copy
+                        </InlineButton>
+                        <InlineButton
+                          onClick={() => handleRevokeKey(apiKey.id, apiKey.key)}
+                          disabled={isReadOnly}
+                        >
+                          <Ban className="h-3 w-3" />
+                          Revoke
+                        </InlineButton>
+                      </>
+                    )}
+                    {apiKey.isRevoked && (
+                      <>
+                        <InlineButton
+                          onClick={() => onReEnableKey?.(apiKey.id)}
+                          disabled={isReadOnly}
+                        >
+                          Re-enable
+                        </InlineButton>
+                        <InlineButton
+                          variant="danger"
+                          onClick={() => handleDeleteKey(apiKey.id, apiKey.key)}
+                          disabled={isReadOnly}
+                        >
+                          <Trash2 className="h-3 w-3" />
+                          Delete
+                        </InlineButton>
+                      </>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
 
       {/* Add New API Key Button */}
       {apiKeys.length < maxApiKeys && (
-        <Button
-          variant="outline"
+        <AddButton
           onClick={onAddKey}
           disabled={isReadOnly}
-          className="w-full"
         >
-          <Plus className="h-4 w-4 mr-2" />
           Add New API Key
-        </Button>
+        </AddButton>
       )}
     </div>
   );

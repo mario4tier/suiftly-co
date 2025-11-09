@@ -14,7 +14,7 @@
 import { randomBytes, createCipheriv, createDecipheriv, createHmac, createHash } from 'crypto';
 import { db } from '@suiftly/database';
 import { apiKeys } from '@suiftly/database/schema';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, isNull } from 'drizzle-orm';
 
 /**
  * API_SECRET_KEY - 32-byte key for AES-128-CTR encryption and HMAC-SHA256
@@ -413,6 +413,7 @@ export async function storeApiKey(options: {
   sealType?: SealType;
   procGroup?: number;
   metadata?: Record<string, any>;
+  tx?: any; // Optional transaction object
 }) {
   const plainKey = generateApiKey(
     options.customerId,
@@ -426,7 +427,10 @@ export async function storeApiKey(options: {
   const fingerprint = createApiKeyFingerprint(plainKey);
   const decoded = decodeApiKey(plainKey);
 
-  const [record] = await db
+  // Use transaction object if provided, otherwise use global db
+  const dbOrTx = options.tx || db;
+
+  const [record] = await dbOrTx
     .insert(apiKeys)
     .values({
       apiKeyId: plainKey,
@@ -488,11 +492,15 @@ export async function revokeApiKey(apiKeyId: string, customerId: number): Promis
 }
 
 /**
- * Delete an API key permanently
+ * Delete an API key (soft delete - marks as deleted but keeps in database)
+ * This is irreversible from the UI but preserves data for debugging/audit
  */
 export async function deleteApiKey(apiKeyId: string, customerId: number): Promise<boolean> {
   const result = await db
-    .delete(apiKeys)
+    .update(apiKeys)
+    .set({
+      deletedAt: new Date(),
+    })
     .where(
       and(
         eq(apiKeys.apiKeyId, apiKeyId),
@@ -505,7 +513,31 @@ export async function deleteApiKey(apiKeyId: string, customerId: number): Promis
 }
 
 /**
+ * Re-enable a revoked API key
+ * Can only re-enable keys that are revoked but not deleted
+ */
+export async function reEnableApiKey(apiKeyId: string, customerId: number): Promise<boolean> {
+  const result = await db
+    .update(apiKeys)
+    .set({
+      isActive: true,
+      revokedAt: null,
+    })
+    .where(
+      and(
+        eq(apiKeys.apiKeyId, apiKeyId),
+        eq(apiKeys.customerId, customerId),
+        eq(apiKeys.isActive, false) // Only re-enable if currently revoked
+      )
+    )
+    .returning();
+
+  return result.length > 0;
+}
+
+/**
  * Get all API keys for a customer and service
+ * Always excludes deleted keys (deletedAt IS NOT NULL)
  */
 export async function getApiKeys(
   customerId: number,
@@ -515,6 +547,7 @@ export async function getApiKeys(
   const conditions = [
     eq(apiKeys.customerId, customerId),
     eq(apiKeys.serviceType, serviceType),
+    isNull(apiKeys.deletedAt), // Exclude deleted keys
   ];
 
   if (!includeInactive) {

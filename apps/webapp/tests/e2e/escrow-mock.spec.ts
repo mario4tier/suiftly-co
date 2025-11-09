@@ -27,9 +27,16 @@ test.describe('Escrow Mock - Wallet Operations', () => {
       },
     });
 
+    // Clear cookies for clean auth state (prevents test pollution)
+    await page.context().clearCookies();
+
     // Authenticate with mock wallet
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet")');
+
+    // Wait a bit for auth to process (helps with test isolation)
+    await page.waitForTimeout(500);
+
     await page.waitForURL('/dashboard', { timeout: 10000 });
   });
 
@@ -194,9 +201,16 @@ test.describe('Escrow Mock - Service Subscription Scenarios', () => {
       },
     });
 
-    // Authenticate
+    // Clear cookies for clean auth state (prevents test pollution)
+    await page.context().clearCookies();
+
+    // Authenticate with mock wallet
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet")');
+
+    // Wait a bit for auth to process (helps with test isolation)
+    await page.waitForTimeout(500);
+
     await page.waitForURL('/dashboard', { timeout: 10000 });
   });
 
@@ -280,7 +294,17 @@ test.describe('Escrow Mock - Service Subscription Scenarios', () => {
   });
 
   test('cannot exceed 28-day spending limit', async ({ page }) => {
-    // Deposit $1000 (more than enough balance) with LOW $50 spending limit
+    // IMPORTANT: Clear escrow account first, then create with $50 limit
+    // beforeEach already set limit to $250, so we need to start fresh
+    await page.request.post(`${API_BASE}/test/data/reset`, {
+      data: {
+        balanceUsdCents: 0,
+        spendingLimitUsdCents: 0,
+        clearEscrowAccount: true, // Remove escrow account to start fresh
+      },
+    });
+
+    // Now create escrow account with $1000 balance but LOW $50 spending limit
     await page.request.post(`${API_BASE}/test/wallet/deposit`, {
       data: {
         walletAddress: MOCK_WALLET_ADDRESS,
@@ -306,13 +330,28 @@ test.describe('Escrow Mock - Service Subscription Scenarios', () => {
     // Try to subscribe - should fail because $185 > $50 limit
     await page.locator('button:has-text("Subscribe to Service")').click();
 
-    // Wait for subscription request to complete and error toast to appear
+    // Wait for subscription request to complete
     await page.waitForTimeout(2000);
 
-    // Should see error toast (there may be multiple toasts - auth success + subscription error)
-    // Wait for a toast that contains the spending limit error
-    const errorToast = page.locator('[data-sonner-toast]').filter({ hasText: /exceed.*spending limit/i });
-    await expect(errorToast).toBeVisible({ timeout: 5000 });
+    // Verify spending limit was enforced (service-first architecture):
+    // Service IS created with subscriptionChargePending=true when charge fails
+    const customerData = await page.request.get(`${API_BASE}/test/data/customer`, {
+      params: { walletAddress: MOCK_WALLET_ADDRESS },
+    });
+    const customerInfo = await customerData.json();
+
+    // 1. Service was created (for audit trail)
+    expect(customerInfo.services).toHaveLength(1);
+
+    // 2. But charge is pending (failed due to spending limit)
+    expect(customerInfo.services[0].subscriptionChargePending).toBe(true);
+    expect(customerInfo.services[0].state).toBe('disabled');
+    expect(customerInfo.services[0].tier).toBe('enterprise');
+
+    // 3. Balance unchanged - charge was rejected
+    expect(customerInfo.customer.balanceUsd).toBe(1000);
+
+    console.log('✅ Spending limit enforced - service created with pending=true, charge blocked');
   });
 });
 
@@ -326,9 +365,13 @@ test.describe('Subscription Charge Architecture - Critical Business Logic', () =
       },
     });
 
+    // Clear cookies for clean auth state (prevents test pollution)
+    await page.context().clearCookies();
+
     // Authenticate
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet")');
+    await page.waitForTimeout(500);
     await page.waitForURL('/dashboard', { timeout: 10000 });
 
     // Deposit $100 to create mock wallet account (needed for charges to work)

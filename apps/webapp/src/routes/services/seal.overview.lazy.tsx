@@ -8,10 +8,12 @@ import { useState } from 'react';
 import { DashboardLayout } from '../../components/layout/DashboardLayout';
 import { SealConfigForm } from '../../components/services/SealConfigForm';
 import { SealInteractiveForm } from '../../components/services/SealInteractiveForm';
+import { Switch } from '../../components/ui/switch';
 import { AlertCircle, CheckCircle, PauseCircle, AlertTriangle } from 'lucide-react';
 import { type ServiceStatus } from '@suiftly/shared/schemas';
 import { type ServiceState, type ServiceTier } from '@suiftly/shared/constants';
 import { trpc } from '../../lib/trpc';
+import { toast } from 'sonner';
 
 export const Route = createLazyFileRoute('/services/seal/overview')({
   component: SealOverviewPage,
@@ -33,6 +35,7 @@ function SealOverviewPage() {
     },
     onError: (error) => {
       console.error('Toggle service error:', error);
+      toast.error(error.message || 'Failed to toggle service');
       setIsToggling(false);
       // Refetch to reset UI to actual server state
       refetch();
@@ -70,7 +73,7 @@ function SealOverviewPage() {
           borderColor: 'border-amber-200 dark:border-amber-900',
           iconColor: 'text-amber-600 dark:text-amber-500',
           textColor: 'text-amber-900 dark:text-amber-200',
-          message: 'Service is subscribed but currently disabled. Enable to start serving traffic.',
+          message: 'Service is currently OFF. Switch to ON to start serving traffic.',
         };
       case 'enabled':
         // No banner when service is active - reserve banners for errors or actionable states
@@ -111,12 +114,33 @@ function SealOverviewPage() {
   return (
     <DashboardLayout>
       <div className="space-y-4">
-        {/* Page Header */}
-        <div className="pb-4 border-b border-gray-200 dark:border-gray-800">
-          <h1 className="text-2xl font-semibold text-gray-900 dark:text-gray-50">
-            {showOnboardingForm ? 'Configure Seal Service' : 'Seal'}
-          </h1>
-        </div>
+        {/* Conditional Header based on state */}
+        {showOnboardingForm ? (
+          /* Onboarding: Show page title */
+          <div className="pb-4 border-b border-gray-200 dark:border-gray-800">
+            <h1 className="text-2xl font-semibold text-gray-900 dark:text-gray-50">
+              Configure Seal Service
+            </h1>
+          </div>
+        ) : (
+          /* Interactive: Show service toggle at top */
+          <div className="flex items-center justify-between pb-4 border-b border-gray-200 dark:border-gray-800">
+            <h1 className="text-2xl font-semibold text-gray-900 dark:text-gray-50">
+              Seal Service
+            </h1>
+            <div className="flex items-center gap-3">
+              <Switch
+                id="service-toggle"
+                checked={isEnabled}
+                onCheckedChange={handleToggleService}
+                disabled={isToggling}
+              />
+              <span className="text-sm font-medium text-gray-600 dark:text-gray-400">
+                {isToggling ? "..." : (isEnabled ? "ON" : "OFF")}
+              </span>
+            </div>
+          </div>
+        )}
 
         {/* Status Banner - Show for State 3+ */}
         {banner && (

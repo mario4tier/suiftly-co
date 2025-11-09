@@ -8,14 +8,27 @@
 import { test, expect } from '@playwright/test';
 
 test.describe('Service State Transitions', () => {
-  test.beforeEach(async ({ page }) => {
+  test.beforeEach(async ({ page, request }) => {
     // Reset customer test data (delete all services, reset balance)
-    await page.request.post('http://localhost:3000/test/data/reset', {
+    await request.post('http://localhost:3000/test/data/reset', {
       data: {
-        balanceUsdCents: 100000, // $1000
+        balanceUsdCents: 0, // Will be set via deposit
         spendingLimitUsdCents: 25000, // $250
       },
     });
+
+    // Create escrow account and deposit funds
+    const depositResponse = await request.post('http://localhost:3000/test/wallet/deposit', {
+      data: {
+        walletAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        amountUsd: 1000, // $1000
+        initialSpendingLimitUsd: 250, // $250
+      },
+    });
+    const depositData = await depositResponse.json();
+    if (!depositData.success) {
+      throw new Error('Failed to create escrow account');
+    }
 
     // Authenticate with mock wallet
     await page.goto('/');
@@ -51,9 +64,10 @@ test.describe('Service State Transitions', () => {
     // Should NOT see service toggle (only in State 3+)
     await expect(page.locator('role=switch[name=/enable|disable/i]')).not.toBeVisible();
 
-    // Should NOT see tabs (Config/Keys - only in State 3+)
+    // Should NOT see tabs (Config/X-API-Key/Seal Keys - only in State 3+)
     await expect(page.locator('role=tab[name="Configuration"]')).not.toBeVisible();
-    await expect(page.locator('role=tab[name="Keys"]')).not.toBeVisible();
+    await expect(page.locator('role=tab[name="X-API-Key"]')).not.toBeVisible();
+    await expect(page.locator('role=tab[name="Seal Keys"]')).not.toBeVisible();
 
     console.log('✅ State 1 (NotProvisioned): Onboarding form displayed correctly');
   });
@@ -77,7 +91,7 @@ test.describe('Service State Transitions', () => {
     await expect(page.locator('h3:has-text("Guaranteed Bandwidth")')).not.toBeVisible();
 
     // Should see service state banner (disabled state)
-    await expect(page.locator('text=/Service is subscribed but currently disabled/i')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('text=/Service is currently OFF/i')).toBeVisible({ timeout: 5000 });
 
     console.log('✅ State 1 → 3 transition: Service created in Disabled state (no provisioning state)');
   });
@@ -94,15 +108,15 @@ test.describe('Service State Transitions', () => {
     // Note: There is no State 2 (Provisioning) - services go directly from not_provisioned → disabled
 
     // Expected State 3 UI indicators:
-    // - Banner: "Service is subscribed but currently disabled. Enable to start serving traffic."
-    await expect(page.locator('text=/Service is subscribed but currently disabled/i')).toBeVisible({ timeout: 5000 });
+    // - Banner: "Service is currently OFF. Switch to ON to start serving traffic."
+    await expect(page.locator('text=/Service is currently OFF/i')).toBeVisible({ timeout: 5000 });
 
     // - Onboarding form should be gone
     await expect(page.locator('h3:has-text("Guaranteed Bandwidth")')).not.toBeVisible();
 
     // TODO: Once service management UI is implemented, verify:
     // - Toggle switch visible: [OFF] ⟳ ON
-    // - Tabs visible: Config / Keys
+    // - Tabs visible: Config / X-API-Key / Seal Keys
     // - Configuration tab is editable
 
     console.log('✅ State 3 (Disabled): Service created in disabled state after subscription');
@@ -116,16 +130,17 @@ test.describe('Service State Transitions', () => {
 
     // Verify State 3 UI elements:
     // 1. Banner shows service is disabled
-    await expect(page.locator('text=/Service is subscribed but currently disabled/i')).toBeVisible();
+    await expect(page.locator('text=/Service is currently OFF/i')).toBeVisible();
 
     // 2. Onboarding form is hidden
     await expect(page.locator('h3:has-text("Guaranteed Bandwidth")')).not.toBeVisible();
 
     // TODO: Once service management UI is fully implemented, verify:
-    // - Tab-based layout (Config / Keys tabs)
+    // - Tab-based layout (Config / X-API-Key / Seal Keys tabs)
     // - Toggle switch visible: [OFF] ⟳ ON
     // - Configuration is editable (tier, burst, etc.)
-    // - Keys tab shows API keys and Seal keys (can create/revoke)
+    // - X-API-Key tab shows API keys (can create/revoke)
+    // - Seal Keys tab shows Seal keys (can create/revoke)
 
     console.log('✅ State 3 (Disabled): Basic UI elements verified');
   });
@@ -154,14 +169,28 @@ test.describe('Service State Transitions', () => {
 });
 
 test.describe('Service State - Edge Cases', () => {
-  test.beforeEach(async ({ page }) => {
-    // Reset customer test data (delete all services, reset balance)
-    await page.request.post('http://localhost:3000/test/data/reset', {
+  test.beforeEach(async ({ page, request }) => {
+    // Reset customer test data (delete all services, reset balance, clear escrow)
+    await request.post('http://localhost:3000/test/data/reset', {
       data: {
-        balanceUsdCents: 100000, // $1000
+        balanceUsdCents: 0, // Will be set via deposit
         spendingLimitUsdCents: 25000, // $250
+        clearEscrowAccount: true, // Ensure fresh start
       },
     });
+
+    // Create escrow account and deposit funds
+    const depositResponse = await request.post('http://localhost:3000/test/wallet/deposit', {
+      data: {
+        walletAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        amountUsd: 1000, // $1000
+        initialSpendingLimitUsd: 250, // $250
+      },
+    });
+    const depositData = await depositResponse.json();
+    if (!depositData.success) {
+      throw new Error('Failed to create escrow account');
+    }
 
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet")');
@@ -198,13 +227,13 @@ test.describe('Service State - Edge Cases', () => {
     await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
 
     // Should be in disabled state (service management UI shown)
-    await expect(page.locator('text=/Service is subscribed but currently disabled/i')).toBeVisible();
+    await expect(page.locator('text=/Service is currently OFF/i')).toBeVisible();
 
     // Refresh page
     await page.reload();
 
     // Should still be in disabled state (not back to onboarding)
-    await expect(page.locator('text=/Service is subscribed but currently disabled/i')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('text=/Service is currently OFF/i')).toBeVisible({ timeout: 5000 });
 
     // Onboarding form should not reappear
     await expect(page.locator('h3:has-text("Guaranteed Bandwidth")')).not.toBeVisible();
