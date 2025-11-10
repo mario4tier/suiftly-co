@@ -2,13 +2,13 @@
  * Seal Service Interactive Form
  * For Service State >= 3 (Disabled, Enabled, Suspended)
  * Features:
- * - Tab-based layout (Configuration / Keys)
+ * - Tab-based layout (Overview / X-API-Key / Seal Keys / More Settings)
  * - Service enable/disable toggle
  * - Monthly charges breakdown
  * - Field-level actions with immediate effect
  */
 
-import { useState, useMemo } from "react";
+import { useState } from "react";
 import { Info, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -60,8 +60,8 @@ export function SealInteractiveForm({
 
   // Read tab from URL query parameter for deep linking
   const searchParams = useSearch({ strict: false }) as { tab?: string };
-  const validTabs = ["configuration", "x-api-key", "seal-keys"];
-  const defaultTab = validTabs.includes(searchParams.tab || "") ? searchParams.tab! : "configuration";
+  const validTabs = ["overview", "x-api-key", "seal-keys", "more-settings"];
+  const defaultTab = validTabs.includes(searchParams.tab || "") ? searchParams.tab! : "overview";
 
   // Fetch usage statistics from database
   const { data: usageStats } = trpc.seal.getUsageStats.useQuery();
@@ -176,7 +176,8 @@ export function SealInteractiveForm({
   };
 
   const handleCopyApiKey = (keyId: string) => {
-    navigator.clipboard.writeText(keyId);
+    // Note: ApiKeysSection already handles clipboard.writeText()
+    // This callback is only for side effects (logging, analytics, etc.)
     console.log("Copied API key to clipboard:", keyId);
   };
 
@@ -216,16 +217,17 @@ export function SealInteractiveForm({
 
   return (
     <div className="max-w-5xl mx-auto space-y-4 py-4">
-      {/* Tabs: Configuration, X-API-Key, Seal Keys */}
+      {/* Tabs: Overview, X-API-Key, Seal Keys, More Settings */}
       <Tabs defaultValue={defaultTab} className="w-full">
         <TabsList>
-          <TabsTrigger value="configuration">Configuration</TabsTrigger>
+          <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="x-api-key">X-API-Key</TabsTrigger>
           <TabsTrigger value="seal-keys">Seal Keys</TabsTrigger>
+          <TabsTrigger value="more-settings">More Settings</TabsTrigger>
         </TabsList>
 
-        {/* Configuration Tab */}
-        <TabsContent value="configuration" className="space-y-6">
+        {/* Overview Tab */}
+        <TabsContent value="overview" className="space-y-6">
           {/* Monthly Charges Section */}
           <div className="space-y-4">
             <div className="flex items-center justify-between">
@@ -399,7 +401,58 @@ export function SealInteractiveForm({
               See Details
             </Button>
           </div>
+        </TabsContent>
 
+        {/* X-API-Key Tab */}
+        <TabsContent value="x-api-key" className="space-y-6">
+          {apiKeysLoading ? (
+            <div className="text-center py-4 text-gray-500">Loading API keys...</div>
+          ) : (
+            <ApiKeysSection
+              apiKeys={formattedApiKeys}
+              maxApiKeys={usageStats?.apiKeys.total ?? 2}
+              isReadOnly={isReadOnly}
+              onCopyKey={handleCopyApiKey}
+              onRevokeKey={handleRevokeApiKey}
+              onReEnableKey={handleReEnableApiKey}
+              onDeleteKey={handleDeleteApiKey}
+              onAddKey={handleAddApiKey}
+            />
+          )}
+        </TabsContent>
+
+        {/* Seal Keys Tab */}
+        <TabsContent value="seal-keys" className="space-y-6">
+          <SealKeysSection
+            sealKeys={[
+              {
+                id: "1",
+                key: "seal_xyz789...",
+                objectId: "0xabcde...",
+                isDisabled: false,
+                packages: [
+                  { id: "1", address: "0x1234...abcd", name: "package-1" },
+                  { id: "2", address: "0x5678...efgh", name: "package-2" },
+                  { id: "3", address: "0x9abc...ijkl", name: "package-3" },
+                ],
+              },
+            ]}
+            maxSealKeys={fskey_incl}
+            maxPackagesPerKey={fskey_pkg_incl}
+            isReadOnly={isReadOnly}
+            onExportKey={(keyId) => console.log("Export key:", keyId)}
+            onToggleKey={(keyId, disable) => console.log("Toggle key:", keyId, disable)}
+            onDeleteKey={(keyId) => console.log("Delete key:", keyId)}
+            onAddKey={() => console.log("Add key")}
+            onAddPackage={(keyId) => console.log("Add package to key:", keyId)}
+            onEditPackage={(keyId, pkgId) => console.log("Edit package:", keyId, pkgId)}
+            onDeletePackage={(keyId, pkgId) => console.log("Delete package:", keyId, pkgId)}
+            onCopyObjectId={(objId) => console.log("Copied object ID:", objId)}
+          />
+        </TabsContent>
+
+        {/* More Settings Tab */}
+        <TabsContent value="more-settings" className="space-y-6">
           {/* Burst Allowed */}
           <div className="space-y-3">
             <div className="flex items-center gap-3">
@@ -478,54 +531,6 @@ export function SealInteractiveForm({
               />
             )}
           </div>
-        </TabsContent>
-
-        {/* X-API-Key Tab */}
-        <TabsContent value="x-api-key" className="space-y-6">
-          {apiKeysLoading ? (
-            <div className="text-center py-4 text-gray-500">Loading API keys...</div>
-          ) : (
-            <ApiKeysSection
-              apiKeys={formattedApiKeys}
-              maxApiKeys={usageStats?.apiKeys.total ?? 2}
-              isReadOnly={isReadOnly}
-              onCopyKey={handleCopyApiKey}
-              onRevokeKey={handleRevokeApiKey}
-              onReEnableKey={handleReEnableApiKey}
-              onDeleteKey={handleDeleteApiKey}
-              onAddKey={handleAddApiKey}
-            />
-          )}
-        </TabsContent>
-
-        {/* Seal Keys Tab */}
-        <TabsContent value="seal-keys" className="space-y-6">
-          <SealKeysSection
-            sealKeys={[
-              {
-                id: "1",
-                key: "seal_xyz789...",
-                objectId: "0xabcde...",
-                isDisabled: false,
-                packages: [
-                  { id: "1", address: "0x1234...abcd", name: "package-1" },
-                  { id: "2", address: "0x5678...efgh", name: "package-2" },
-                  { id: "3", address: "0x9abc...ijkl", name: "package-3" },
-                ],
-              },
-            ]}
-            maxSealKeys={fskey_incl}
-            maxPackagesPerKey={fskey_pkg_incl}
-            isReadOnly={isReadOnly}
-            onExportKey={(keyId) => console.log("Export key:", keyId)}
-            onToggleKey={(keyId, disable) => console.log("Toggle key:", keyId, disable)}
-            onDeleteKey={(keyId) => console.log("Delete key:", keyId)}
-            onAddKey={() => console.log("Add key")}
-            onAddPackage={(keyId) => console.log("Add package to key:", keyId)}
-            onEditPackage={(keyId, pkgId) => console.log("Edit package:", keyId, pkgId)}
-            onDeletePackage={(keyId, pkgId) => console.log("Delete package:", keyId, pkgId)}
-            onCopyObjectId={(objId) => console.log("Copied object ID:", objId)}
-          />
         </TabsContent>
       </Tabs>
     </div>

@@ -64,10 +64,11 @@ test.describe('Service State Transitions', () => {
     // Should NOT see service toggle (only in State 3+)
     await expect(page.locator('role=switch[name=/enable|disable/i]')).not.toBeVisible();
 
-    // Should NOT see tabs (Config/X-API-Key/Seal Keys - only in State 3+)
-    await expect(page.locator('role=tab[name="Configuration"]')).not.toBeVisible();
+    // Should NOT see tabs (Overview/X-API-Key/Seal Keys/More Settings - only in State 3+)
+    await expect(page.locator('role=tab[name="Overview"]')).not.toBeVisible();
     await expect(page.locator('role=tab[name="X-API-Key"]')).not.toBeVisible();
     await expect(page.locator('role=tab[name="Seal Keys"]')).not.toBeVisible();
+    await expect(page.locator('role=tab[name="More Settings"]')).not.toBeVisible();
 
     console.log('✅ State 1 (NotProvisioned): Onboarding form displayed correctly');
   });
@@ -116,8 +117,8 @@ test.describe('Service State Transitions', () => {
 
     // TODO: Once service management UI is implemented, verify:
     // - Toggle switch visible: [OFF] ⟳ ON
-    // - Tabs visible: Config / X-API-Key / Seal Keys
-    // - Configuration tab is editable
+    // - Tabs visible: Overview / X-API-Key / Seal Keys / More Settings
+    // - Overview tab is editable
 
     console.log('✅ State 3 (Disabled): Service created in disabled state after subscription');
   });
@@ -136,9 +137,10 @@ test.describe('Service State Transitions', () => {
     await expect(page.locator('h3:has-text("Guaranteed Bandwidth")')).not.toBeVisible();
 
     // TODO: Once service management UI is fully implemented, verify:
-    // - Tab-based layout (Config / X-API-Key / Seal Keys tabs)
+    // - Tab-based layout (Overview / X-API-Key / Seal Keys / More Settings tabs)
     // - Toggle switch visible: [OFF] ⟳ ON
-    // - Configuration is editable (tier, burst, etc.)
+    // - Overview is editable (tier, charges, etc.)
+    // - More Settings tab is editable (burst, allowlist, etc.)
     // - X-API-Key tab shows API keys (can create/revoke)
     // - Seal Keys tab shows Seal keys (can create/revoke)
 

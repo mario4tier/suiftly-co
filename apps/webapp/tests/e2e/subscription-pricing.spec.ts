@@ -162,7 +162,7 @@ test.describe('Subscription Pricing Validation', () => {
     // Should show service state banner (disabled state)
     await expect(page.locator('text=/Service is currently OFF/i')).toBeVisible({ timeout: 5000 });
 
-    // The page should now show the service management interface (Configuration tab)
+    // The page should now show the service management interface (Overview tab)
     await expect(page.getByRole('heading', { name: 'Guaranteed Bandwidth' })).not.toBeVisible();
 
     console.log('✅ PRO tier subscription succeeds with exactly $29 balance');
