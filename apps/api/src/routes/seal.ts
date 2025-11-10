@@ -7,10 +7,11 @@ import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import { router, protectedProcedure } from '../lib/trpc';
 import { db } from '@suiftly/database';
-import { sealKeys, sealPackages, serviceInstances, apiKeys } from '@suiftly/database/schema';
+import { sealKeys, sealPackages, serviceInstances, apiKeys, configGlobal } from '@suiftly/database/schema';
 import { eq, and, sql, isNull } from 'drizzle-orm';
 import { SERVICE_TYPE } from '@suiftly/shared/constants';
 import { storeApiKey, getApiKeys, revokeApiKey, deleteApiKey, reEnableApiKey, type SealType } from '../lib/api-keys';
+import { parseIpAddressList, ipAllowlistUpdateSchema } from '@suiftly/shared/schemas';
 
 export const sealRouter = router({
   /**
@@ -273,8 +274,8 @@ export const sealRouter = router({
     }),
 
   /**
-   * Get usage statistics for seal service
-   * Returns counts for seal keys, API keys, allowlist entries, and packages
+   * Get service configuration and resource usage for seal service
+   * Returns usage counts, limits, pricing, and configuration
    */
   getUsageStats: protectedProcedure.query(async ({ ctx }) => {
     if (!ctx.user) {
@@ -301,6 +302,23 @@ export const sealRouter = router({
 
     const config = service.config as any || {};
 
+    // Get configuration from configGlobal
+    const globalConfigRows = await db
+      .select()
+      .from(configGlobal);
+
+    const configMap = new Map(globalConfigRows.map(c => [c.key, c.value]));
+
+    const getConfigInt = (key: string, defaultValue: number): number => {
+      const value = configMap.get(key);
+      return value ? parseInt(value, 10) : defaultValue;
+    };
+
+    const getConfigNumber = (key: string, defaultValue: number): number => {
+      const value = configMap.get(key);
+      return value ? parseFloat(value) : defaultValue;
+    };
+
     // Count active seal keys
     const activeSealKeys = await db
       .select({ count: sql<number>`count(*)::int` })
@@ -321,48 +339,46 @@ export const sealRouter = router({
         isNull(apiKeys.deletedAt)
       ));
 
-    // Get package counts per seal key
-    const packageCounts = await db
-      .select({
-        sealKeyId: sealPackages.sealKeyId,
-        count: sql<number>`count(*)::int`,
-      })
-      .from(sealPackages)
-      .innerJoin(sealKeys, eq(sealPackages.sealKeyId, sealKeys.sealKeyId))
-      .where(and(
-        eq(sealKeys.instanceId, service.instanceId),
-        eq(sealPackages.isActive, true)
-      ))
-      .groupBy(sealPackages.sealKeyId);
-
     // Count allowlist entries (from config)
     const allowlistEntries = (config.ipAllowlist || []).length;
+
+    // Get limits and pricing from configGlobal
+    const sealKeysIncluded = getConfigInt('fskey_incl', 1);
+    const packagesIncluded = getConfigInt('fskey_pkg_incl', 3);
+    const apiKeysIncluded = getConfigInt('fapikey_incl', 2);
+    const ipv4Included = getConfigInt('fipv4_incl', 2);
+
+    const sealKeyPrice = getConfigNumber('fadd_skey_usd', 5);
+    const packagePrice = getConfigNumber('fadd_pkg_usd', 1);
+    const apiKeyPrice = getConfigNumber('fadd_apikey_usd', 1);
+    const ipv4Price = getConfigNumber('fadd_ipv4_usd', 0);
 
     return {
       sealKeys: {
         used: activeSealKeys[0]?.count || 0,
-        total: config.totalSealKeys || 1,
-        included: 1, // Base tier includes 1
+        total: config.totalSealKeys || sealKeysIncluded,
+        included: sealKeysIncluded,
         purchased: config.purchasedSealKeys || 0,
+        pricePerAdditional: sealKeyPrice,
       },
       apiKeys: {
         used: usedApiKeys[0]?.count || 0,
-        total: config.totalApiKeys || 2,
-        included: 2, // Base tier includes 2
+        total: config.totalApiKeys || apiKeysIncluded,
+        included: apiKeysIncluded,
         purchased: config.purchasedApiKeys || 0,
+        pricePerAdditional: apiKeyPrice,
       },
       allowlist: {
         used: allowlistEntries,
-        total: service.tier === 'starter' ? 0 : 2, // Only Pro/Enterprise
-        included: service.tier === 'starter' ? 0 : 2,
+        total: service.tier === 'starter' ? 0 : (config.totalIpv4Allowlist || ipv4Included),
+        included: service.tier === 'starter' ? 0 : ipv4Included,
+        pricePerAdditional: ipv4Price,
       },
-      packages: packageCounts.map(pc => ({
-        sealKeyId: pc.sealKeyId,
-        used: pc.count,
-        total: config.packagesPerSealKey || 3,
-        included: 3, // Base tier includes 3
-        purchased: config.purchasedPackages || 0,
-      })),
+      packagesPerKey: {
+        max: config.packagesPerSealKey || packagesIncluded,
+        included: packagesIncluded,
+        pricePerAdditional: packagePrice,
+      },
     };
   }),
 
@@ -536,4 +552,179 @@ export const sealRouter = router({
 
       return { success: true };
     }),
+
+  /**
+   * Update burst setting for seal service
+   */
+  updateBurstSetting: protectedProcedure
+    .input(z.object({
+      enabled: z.boolean(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.user) {
+        throw new TRPCError({
+          code: 'UNAUTHORIZED',
+          message: 'Not authenticated',
+        });
+      }
+
+      // Get service instance
+      const service = await db.query.serviceInstances.findFirst({
+        where: and(
+          eq(serviceInstances.customerId, ctx.user.customerId),
+          eq(serviceInstances.serviceType, SERVICE_TYPE.SEAL)
+        ),
+      });
+
+      if (!service) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Seal service not found',
+        });
+      }
+
+      // Starter tier doesn't support burst
+      if (service.tier === 'starter') {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Burst is only available for Pro and Enterprise tiers',
+        });
+      }
+
+      // Update config
+      const config = service.config as any || {};
+      config.burstEnabled = input.enabled;
+
+      await db
+        .update(serviceInstances)
+        .set({ config })
+        .where(eq(serviceInstances.instanceId, service.instanceId));
+
+      return { success: true, burstEnabled: input.enabled };
+    }),
+
+  /**
+   * Update IP allowlist for seal service
+   *
+   * Independent operations:
+   * - Toggle ON/OFF: Send { enabled: true/false } without entries
+   * - Save IP list: Send { enabled: current_state, entries: "ip1, ip2" }
+   */
+  updateIpAllowlist: protectedProcedure
+    .input(ipAllowlistUpdateSchema)
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.user) {
+        throw new TRPCError({
+          code: 'UNAUTHORIZED',
+          message: 'Not authenticated',
+        });
+      }
+
+      // Get service instance
+      const service = await db.query.serviceInstances.findFirst({
+        where: and(
+          eq(serviceInstances.customerId, ctx.user.customerId),
+          eq(serviceInstances.serviceType, SERVICE_TYPE.SEAL)
+        ),
+      });
+
+      if (!service) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Seal service not found',
+        });
+      }
+
+      // Starter tier doesn't support IP allowlist
+      if (service.tier === 'starter') {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'IP Allowlist is only available for Pro and Enterprise tiers',
+        });
+      }
+
+      // Create a new config object so Drizzle detects changes
+      const config = { ...(service.config as any || {}) };
+
+      // If entries are provided, validate and update the IP list
+      if (input.entries !== undefined) {
+        const { ips, errors } = parseIpAddressList(input.entries);
+
+        if (errors.length > 0) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: `Invalid IP addresses:\n${errors.map(e => `• ${e.ip}: ${e.error}`).join('\n')}`,
+          });
+        }
+
+        // Get actual tier limit from configGlobal
+        // This ensures customers with purchased additional capacity aren't blocked
+        const globalConfigRows = await db.select().from(configGlobal);
+        const configMap = new Map(globalConfigRows.map(c => [c.key, c.value]));
+        const ipv4Included = parseInt(configMap.get('fipv4_incl') || '2', 10);
+
+        // Use customer-specific limit or fall back to default
+        const maxIpv4 = config.totalIpv4Allowlist || ipv4Included;
+
+        if (ips.length > maxIpv4) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: `Maximum ${maxIpv4} IPv4 addresses allowed for your configuration. You provided ${ips.length}.`,
+          });
+        }
+
+        // Update IP list
+        config.ipAllowlist = ips;
+      }
+
+      // Always update the enabled flag (independent of IP list changes)
+      config.ipAllowlistEnabled = input.enabled;
+
+      await db
+        .update(serviceInstances)
+        .set({ config })
+        .where(eq(serviceInstances.instanceId, service.instanceId));
+
+      return {
+        success: true,
+        enabled: input.enabled,
+        entries: config.ipAllowlist || [], // Return current IPs (may be unchanged)
+        errors: [],
+      };
+    }),
+
+  /**
+   * Get More Settings configuration
+   */
+  getMoreSettings: protectedProcedure.query(async ({ ctx }) => {
+    if (!ctx.user) {
+      throw new TRPCError({
+        code: 'UNAUTHORIZED',
+        message: 'Not authenticated',
+      });
+    }
+
+    // Get service instance
+    const service = await db.query.serviceInstances.findFirst({
+      where: and(
+        eq(serviceInstances.customerId, ctx.user.customerId),
+        eq(serviceInstances.serviceType, SERVICE_TYPE.SEAL)
+      ),
+    });
+
+    if (!service) {
+      throw new TRPCError({
+        code: 'NOT_FOUND',
+        message: 'Seal service not found',
+      });
+    }
+
+    const config = service.config as any || {};
+
+    return {
+      burstEnabled: config.burstEnabled ?? (service.tier !== 'starter'),
+      ipAllowlistEnabled: config.ipAllowlistEnabled ?? false,
+      ipAllowlist: config.ipAllowlist || [],
+    };
+  }),
 });

@@ -8,8 +8,8 @@
  * - Field-level actions with immediate effect
  */
 
-import { useState } from "react";
-import { Info, Plus } from "lucide-react";
+import { useState, useEffect, useMemo } from "react";
+import { Info, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -35,7 +35,14 @@ import {
 import { SealKeysSection } from "./SealKeysSection";
 import { ApiKeysSection } from "./ApiKeysSection";
 import { trpc } from "@/lib/trpc";
-import { useSearch } from "@tanstack/react-router";
+import { useSearch, useNavigate } from "@tanstack/react-router";
+import { LinkButton } from "@/components/ui/link-button";
+import { toast } from "sonner";
+import {
+  parseIpAddressList,
+  formatIpAddressListForDisplay,
+  areIpListsEqual,
+} from "@suiftly/shared/schemas";
 
 interface SealInteractiveFormProps {
   serviceState: ServiceState;
@@ -55,13 +62,28 @@ export function SealInteractiveForm({
   onChangePlan,
 }: SealInteractiveFormProps) {
   const [burstEnabled, setBurstEnabled] = useState(tier !== "starter");
-  const [ipAllowlist, setIpAllowlist] = useState("");
+  const [ipAllowlistEnabled, setIpAllowlistEnabled] = useState(false);
+
+  // IP Allowlist state management
+  const [savedIpList, setSavedIpList] = useState<string[]>([]); // Server state
+  const [editingIpText, setEditingIpText] = useState("");      // User input
+  const [validationErrors, setValidationErrors] = useState<Array<{ ip: string; error: string }>>([]);
+
   const utils = trpc.useUtils();
+  const navigate = useNavigate();
 
   // Read tab from URL query parameter for deep linking
   const searchParams = useSearch({ strict: false }) as { tab?: string };
   const validTabs = ["overview", "x-api-key", "seal-keys", "more-settings"];
-  const defaultTab = validTabs.includes(searchParams.tab || "") ? searchParams.tab! : "overview";
+  const currentTab = validTabs.includes(searchParams.tab || "") ? searchParams.tab! : "overview";
+
+  // Handle tab change by updating URL
+  const handleTabChange = (tab: string) => {
+    navigate({
+      to: "/services/seal/overview",
+      search: { tab },
+    });
+  };
 
   // Fetch usage statistics from database
   const { data: usageStats } = trpc.seal.getUsageStats.useQuery();
@@ -114,6 +136,53 @@ export function SealInteractiveForm({
     },
   });
 
+  // Fetch More Settings
+  const { data: moreSettings } = trpc.seal.getMoreSettings.useQuery();
+
+  // Burst mutation
+  const updateBurstMutation = trpc.seal.updateBurstSetting.useMutation({
+    onSuccess: (data) => {
+      toast.success(`Burst ${data.burstEnabled ? 'enabled' : 'disabled'}`);
+    },
+    onError: (error) => {
+      toast.error(error.message || 'Failed to update burst setting');
+      // Revert UI state on error
+      setBurstEnabled(!burstEnabled);
+    },
+  });
+
+  // IP Allowlist mutation
+  const updateIpAllowlistMutation = trpc.seal.updateIpAllowlist.useMutation({
+    onSuccess: (data) => {
+      utils.seal.getUsageStats.invalidate();
+      utils.seal.getMoreSettings.invalidate();
+
+      // Update saved state with server response
+      setSavedIpList(data.entries);
+      setEditingIpText(formatIpAddressListForDisplay(data.entries));
+      setValidationErrors([]);
+
+      // Toast messages are handled by individual action handlers
+      // (handleToggleIpAllowlist or handleSaveIpAllowlist)
+    },
+    onError: (error) => {
+      toast.error(error.message || 'Failed to update IP allowlist');
+    },
+  });
+
+  // Load settings from backend on mount
+  useEffect(() => {
+    if (moreSettings) {
+      setBurstEnabled(moreSettings.burstEnabled);
+      setIpAllowlistEnabled(moreSettings.ipAllowlistEnabled);
+
+      // Load and format IP list
+      const ipList = moreSettings.ipAllowlist || [];
+      setSavedIpList(ipList);
+      setEditingIpText(formatIpAddressListForDisplay(ipList));
+    }
+  }, [moreSettings]);
+
   // Determine if service is cancelled or suspended
   const isCancelled = serviceState === "suspended_maintenance" || serviceState === "suspended_no_payment";
   const isReadOnly = isCancelled;
@@ -161,14 +230,85 @@ export function SealInteractiveForm({
 
   const handleToggleBurst = (checked: boolean) => {
     setBurstEnabled(checked);
-    console.log("Burst toggled:", checked);
-    // TODO: API call to update burst setting
+    updateBurstMutation.mutate({ enabled: checked });
   };
 
-  const handleIpAllowlistChange = (value: string) => {
-    setIpAllowlist(value);
-    // TODO: Debounced API call to update IP allowlist
+  // IP Allowlist handlers
+  const handleToggleIpAllowlist = async (checked: boolean) => {
+    setIpAllowlistEnabled(checked);
+
+    try {
+      // Toggle ON/OFF without modifying the IP list
+      // This operation is independent of editing/saving IPs
+      await updateIpAllowlistMutation.mutateAsync({
+        enabled: checked,
+        // Don't send entries - only toggle the enabled flag
+      });
+
+      // Show appropriate message for toggle action
+      toast.success(checked ? 'IP Allowlist enabled' : 'IP Allowlist disabled');
+    } catch (error) {
+      // Error already handled by mutation's onError
+      // Revert UI state
+      setIpAllowlistEnabled(!checked);
+    }
   };
+
+  const handleIpTextChange = (value: string) => {
+    setEditingIpText(value);
+
+    // Run client-side validation in real-time
+    const { ips, errors } = parseIpAddressList(value);
+    setValidationErrors(errors);
+  };
+
+  const handleSaveIpAllowlist = async () => {
+    const { ips, errors } = parseIpAddressList(editingIpText);
+
+    if (errors.length > 0) {
+      toast.error("Please fix validation errors before saving");
+      return;
+    }
+
+    // Check tier limit from actual usage stats
+    // This ensures customers with purchased additional capacity aren't blocked
+    const maxIpv4 = usageStats?.allowlist.total ?? 2;
+    if (ips.length > maxIpv4) {
+      toast.error(`Maximum ${maxIpv4} IPv4 addresses allowed for your configuration`);
+      return;
+    }
+
+    try {
+      await updateIpAllowlistMutation.mutateAsync({
+        enabled: ipAllowlistEnabled,
+        entries: editingIpText,
+      });
+
+      // Show success message for saving changes
+      toast.success('IP Allowlist saved successfully');
+    } catch (error) {
+      // Error already handled by mutation's onError
+    }
+  };
+
+  const handleCancelIpChanges = () => {
+    // Revert to saved state
+    setEditingIpText(formatIpAddressListForDisplay(savedIpList));
+    setValidationErrors([]);
+  };
+
+  // Detect if there are unsaved changes
+  // Include validation errors so invalid edits also surface Save/Cancel buttons
+  const hasUnsavedIpChanges = useMemo(() => {
+    // If there are validation errors, user has made changes that need to be addressed
+    if (validationErrors.length > 0) {
+      return true;
+    }
+
+    // Otherwise, compare the valid parsed IPs to the saved list
+    const { ips } = parseIpAddressList(editingIpText);
+    return !areIpListsEqual(savedIpList, ips);
+  }, [editingIpText, savedIpList, validationErrors]);
 
   // API Key handlers
   const handleAddApiKey = async () => {
@@ -218,7 +358,7 @@ export function SealInteractiveForm({
   return (
     <div className="max-w-5xl mx-auto space-y-4 py-4">
       {/* Tabs: Overview, X-API-Key, Seal Keys, More Settings */}
-      <Tabs defaultValue={defaultTab} className="w-full">
+      <Tabs value={currentTab} onValueChange={handleTabChange} className="w-full">
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="x-api-key">X-API-Key</TabsTrigger>
@@ -249,16 +389,16 @@ export function SealInteractiveForm({
               <table className="w-full">
                 <thead className="bg-gray-50 dark:bg-gray-800/50">
                   <tr>
-                    <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
+                    <th className="px-4 py-1.5 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
                       Description
                     </th>
-                    <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
+                    <th className="px-4 py-1.5 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
                       Usage/Count
                     </th>
-                    <th className="px-4 py-3 text-center text-sm font-semibold text-gray-700 dark:text-gray-300">
-                      Action
+                    <th className="py-1.5 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
+                      {/* Action header removed */}
                     </th>
-                    <th className="px-4 py-3 text-right text-sm font-semibold text-gray-700 dark:text-gray-300">
+                    <th className="px-4 py-1.5 text-right text-sm font-semibold text-gray-700 dark:text-gray-300">
                       Monthly Price
                     </th>
                   </tr>
@@ -266,7 +406,7 @@ export function SealInteractiveForm({
                 <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
                   {/* Guaranteed Bandwidth */}
                   <tr>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-1.5">
                       <div>
                         <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
                           Guaranteed Bandwidth
@@ -276,109 +416,112 @@ export function SealInteractiveForm({
                         </div>
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-sm text-gray-600 dark:text-gray-400">
-                      {currentTier.reqPerRegion * freg_count} req/s globally
+                    <td className="px-4 py-1.5 text-sm text-gray-600 dark:text-gray-400">
+                      ~{currentTier.reqPerRegion * freg_count} req/s globally
                     </td>
-                    <td className="px-4 py-3 text-center">
-                      <span className="text-xs text-gray-500 dark:text-gray-400">Included</span>
+                    <td className="py-1.5">
+                      {/* No action for Guaranteed Bandwidth */}
                     </td>
-                    <td className="px-4 py-3 text-right text-sm font-medium text-gray-900 dark:text-gray-100">
+                    <td className="px-4 py-1.5 text-right text-sm font-medium text-gray-900 dark:text-gray-100">
                       ${monthlyCharges.guaranteedBandwidth.toFixed(2)}
+                    </td>
+                  </tr>
+
+                  {/* API Keys */}
+                  <tr>
+                    <td className="px-4 py-1.5">
+                      <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                        API Keys
+                      </div>
+                    </td>
+                    <td className="px-4 py-1.5 text-sm text-gray-600 dark:text-gray-400">
+                      {usageStats?.apiKeys.used ?? 0} of {usageStats?.apiKeys.total ?? 2}
+                    </td>
+                    <td className="py-1.5">
+                      <LinkButton
+                        to="/services/seal/overview"
+                        search={{ tab: "x-api-key" }}
+                      >
+                        Manage
+                      </LinkButton>
+                    </td>
+                    <td className="px-4 py-1.5 text-right text-sm font-medium text-gray-900 dark:text-gray-100">
+                      ${monthlyCharges.apiKeys.toFixed(2)}
                     </td>
                   </tr>
 
                   {/* Seal Keys */}
                   <tr>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-1.5">
                       <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
                         Seal Keys
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-sm text-gray-600 dark:text-gray-400">
+                    <td className="px-4 py-1.5 text-sm text-gray-600 dark:text-gray-400">
                       {usageStats?.sealKeys.used ?? 0} of {usageStats?.sealKeys.total ?? fskey_incl}
                     </td>
-                    <td className="px-4 py-3 text-center">
-                      <Button variant="outline" size="sm" disabled={isReadOnly}>
-                        <Plus className="h-3 w-3 mr-1" />
-                        Add More
-                      </Button>
+                    <td className="py-1.5">
+                      <LinkButton
+                        to="/services/seal/overview"
+                        search={{ tab: "seal-keys" }}
+                      >
+                        Manage
+                      </LinkButton>
                     </td>
-                    <td className="px-4 py-3 text-right text-sm font-medium text-gray-900 dark:text-gray-100">
+                    <td className="px-4 py-1.5 text-right text-sm font-medium text-gray-900 dark:text-gray-100">
                       ${monthlyCharges.sealKeys.toFixed(2)}
+                    </td>
+                  </tr>
+
+                  {/* Packages per Key */}
+                  <tr>
+                    <td className="px-4 py-1.5">
+                      <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                        Packages
+                      </div>
+                    </td>
+                    <td className="px-4 py-1.5 text-sm text-gray-600 dark:text-gray-400">
+                      {usageStats?.packagesPerKey?.max ?? fskey_pkg_incl} per key
+                    </td>
+                    <td className="py-1.5">
+                      {/* No action for Packages per Key */}
+                    </td>
+                    <td className="px-4 py-1.5 text-right text-sm font-medium text-gray-900 dark:text-gray-100">
+                      ${monthlyCharges.packagesPerKey.toFixed(2)}
                     </td>
                   </tr>
 
                   {/* IPv4 Allowlist */}
                   {tier !== "starter" && (
                     <tr>
-                      <td className="px-4 py-3">
+                      <td className="px-4 py-1.5">
                         <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
                           IPv4 Allowlist
                         </div>
                       </td>
-                      <td className="px-4 py-3 text-sm text-gray-600 dark:text-gray-400">
+                      <td className="px-4 py-1.5 text-sm text-gray-600 dark:text-gray-400">
                         {usageStats?.allowlist.used ?? 0} of {usageStats?.allowlist.total ?? 2}
                       </td>
-                      <td className="px-4 py-3 text-center">
-                        <Button variant="outline" size="sm" disabled={isReadOnly}>
-                          <Plus className="h-3 w-3 mr-1" />
-                          Add More
-                        </Button>
+                      <td className="py-1.5">
+                        <LinkButton
+                          to="/services/seal/overview"
+                          search={{ tab: "more-settings" }}
+                        >
+                          Manage
+                        </LinkButton>
                       </td>
-                      <td className="px-4 py-3 text-right text-sm font-medium text-gray-900 dark:text-gray-100">
+                      <td className="px-4 py-1.5 text-right text-sm font-medium text-gray-900 dark:text-gray-100">
                         ${monthlyCharges.ipv4Allowlist.toFixed(2)}
                       </td>
                     </tr>
                   )}
 
-                  {/* Packages per Key */}
-                  <tr>
-                    <td className="px-4 py-3">
-                      <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                        Packages per Key
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-sm text-gray-600 dark:text-gray-400">
-                      {usageStats?.packages.reduce((sum, pkg) => sum + pkg.used, 0) ?? 0}
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      <Button variant="outline" size="sm" disabled={isReadOnly}>
-                        <Plus className="h-3 w-3 mr-1" />
-                        Add More
-                      </Button>
-                    </td>
-                    <td className="px-4 py-3 text-right text-sm font-medium text-gray-900 dark:text-gray-100">
-                      ${monthlyCharges.packagesPerKey.toFixed(2)}
-                    </td>
-                  </tr>
-
-                  {/* API Keys */}
-                  <tr>
-                    <td className="px-4 py-3">
-                      <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                        API Keys
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-sm text-gray-600 dark:text-gray-400">
-                      {usageStats?.apiKeys.used ?? 0} of {usageStats?.apiKeys.total ?? 2}
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      <Button variant="outline" size="sm" disabled={isReadOnly}>
-                        <Plus className="h-3 w-3 mr-1" />
-                        Add More
-                      </Button>
-                    </td>
-                    <td className="px-4 py-3 text-right text-sm font-medium text-gray-900 dark:text-gray-100">
-                      ${monthlyCharges.apiKeys.toFixed(2)}
-                    </td>
-                  </tr>
-
                   {/* Total Row */}
                   <tr className="bg-gray-50 dark:bg-gray-800/50">
-                    <td colSpan={3} className="px-4 py-3 text-right text-sm font-semibold text-gray-900 dark:text-gray-100">
+                    <td colSpan={3} className="px-4 py-1.5 text-right text-sm font-semibold text-gray-900 dark:text-gray-100">
                       Total Monthly Fee
                     </td>
-                    <td className="px-4 py-3 text-right text-lg font-bold text-gray-900 dark:text-gray-100">
+                    <td className="px-4 py-1.5 text-right text-lg font-bold text-gray-900 dark:text-gray-100">
                       ${totalMonthlyFee.toFixed(2)}
                     </td>
                   </tr>
@@ -455,80 +598,147 @@ export function SealInteractiveForm({
         <TabsContent value="more-settings" className="space-y-6">
           {/* Burst Allowed */}
           <div className="space-y-3">
-            <div className="flex items-center gap-3">
-              <Label htmlFor="burst-toggle" className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                Burst Allowed
-              </Label>
-              <Popover>
-                <PopoverTrigger asChild>
-                  <button className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">
-                    <Info className="h-4 w-4" />
-                  </button>
-                </PopoverTrigger>
-                <PopoverContent className="w-80">
-                  <p className="text-sm text-gray-600 dark:text-gray-300">
-                    Allow temporary traffic bursts beyond guaranteed bandwidth. Billed per-request for burst traffic.
-                  </p>
-                </PopoverContent>
-              </Popover>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Label htmlFor="burst-toggle" className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                  Burst Allowed
+                </Label>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <button className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">
+                      <Info className="h-4 w-4" />
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-80">
+                    <p className="text-sm text-gray-600 dark:text-gray-300">
+                      Allow temporary traffic bursts beyond guaranteed bandwidth. Billed per-request for burst traffic.
+                    </p>
+                  </PopoverContent>
+                </Popover>
+              </div>
               {tier === "starter" ? (
                 <span className="text-sm text-gray-500 dark:text-gray-400">Pro/Enterprise feature</span>
               ) : (
-                <>
+                <div className="flex items-center gap-3">
                   <Switch
                     id="burst-toggle"
                     checked={burstEnabled}
                     onCheckedChange={handleToggleBurst}
                     disabled={isReadOnly}
                   />
-                  <span className="text-sm font-medium text-gray-600 dark:text-gray-400">
+                  <span className="text-sm font-medium text-gray-600 dark:text-gray-400 min-w-[32px]">
                     {burstEnabled ? "ON" : "OFF"}
                   </span>
-                </>
+                </div>
               )}
             </div>
           </div>
 
           {/* IP Allowlist */}
           <div className="space-y-3">
-            <div className="flex items-center gap-2">
-              <Label htmlFor="ip-allowlist" className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                IP Allowlist
-              </Label>
-              <Popover>
-                <PopoverTrigger asChild>
-                  <button className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">
-                    <Info className="h-4 w-4" />
-                  </button>
-                </PopoverTrigger>
-                <PopoverContent className="w-80">
-                  <p className="text-sm text-gray-600 dark:text-gray-300">
-                    Restrict API access to specific IP addresses or CIDR ranges. Leave empty to allow all IPs.
-                    <br /><br />
-                    Format: One per line, space, or comma-separated.
-                    {tier === "enterprise" && (
-                      <>
-                        <br /><br />
-                        <strong>Pro:</strong> Up to 2 IPv4 addresses
-                        <br />
-                        <strong>Enterprise:</strong> Up to 2 IPv4 addresses + 2 CIDR ranges
-                      </>
-                    )}
-                  </p>
-                </PopoverContent>
-              </Popover>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Label htmlFor="ip-allowlist-toggle" className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                  IP Allowlist
+                </Label>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <button className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">
+                      <Info className="h-4 w-4" />
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-80">
+                    <p className="text-sm text-gray-600 dark:text-gray-300">
+                      Restrict API access to specific IPv4 addresses. When OFF, all IPs are allowed.
+                      <br /><br />
+                      <strong>Format:</strong> Separate with newlines, commas, or spaces.
+                      <br />
+                      <strong>Example:</strong> 192.168.1.1, 10.0.0.1
+                      <br /><br />
+                      <strong>Limit:</strong> Up to 2 IPv4 addresses for Pro tier
+                      <br /><br />
+                      <strong>Note:</strong> IPv6 and CIDR ranges (except /32) are not supported yet.
+                    </p>
+                  </PopoverContent>
+                </Popover>
+                {tier !== "starter" && (
+                  <span className="text-xs text-gray-500 dark:text-gray-400">
+                    {usageStats?.allowlist.used ?? 0} of {usageStats?.allowlist.total ?? 2} used
+                  </span>
+                )}
+              </div>
+              {tier === "starter" ? (
+                <span className="text-sm text-gray-500 dark:text-gray-400">Pro/Enterprise feature</span>
+              ) : (
+                <div className="flex items-center gap-3">
+                  <Switch
+                    id="ip-allowlist-toggle"
+                    checked={ipAllowlistEnabled}
+                    onCheckedChange={handleToggleIpAllowlist}
+                    disabled={isReadOnly}
+                  />
+                  <span className="text-sm font-medium text-gray-600 dark:text-gray-400 min-w-[32px]">
+                    {ipAllowlistEnabled ? "ON" : "OFF"}
+                  </span>
+                </div>
+              )}
             </div>
-            {tier === "starter" ? (
-              <p className="text-sm text-gray-500 dark:text-gray-400">Pro/Enterprise feature</p>
-            ) : (
-              <Textarea
-                id="ip-allowlist"
-                placeholder="192.168.1.100, 10.0.0.0/24"
-                value={ipAllowlist}
-                onChange={(e) => handleIpAllowlistChange(e.target.value)}
-                disabled={isReadOnly}
-                className="min-h-[100px]"
-              />
+
+            {/* IP Allowlist Editor (Pro/Enterprise only) */}
+            {tier !== "starter" && (
+              <>
+                <Textarea
+                  id="ip-allowlist"
+                  value={editingIpText}
+                  onChange={(e) => handleIpTextChange(e.target.value)}
+                  disabled={isReadOnly}
+                  rows={2}
+                  className="resize-none font-mono text-sm"
+                  placeholder="192.168.1.1, 10.0.0.1"
+                />
+
+                {/* Validation Errors */}
+                {validationErrors.length > 0 && (
+                  <div className="rounded-md bg-red-50 dark:bg-red-900/20 p-3 border border-red-200 dark:border-red-900">
+                    <div className="flex gap-2">
+                      <AlertCircle className="h-5 w-5 text-red-600 dark:text-red-500 flex-shrink-0" />
+                      <div className="space-y-1">
+                        <p className="text-sm font-medium text-red-800 dark:text-red-200">
+                          Validation Errors:
+                        </p>
+                        <ul className="text-sm text-red-700 dark:text-red-300 space-y-1">
+                          {validationErrors.map((error, idx) => (
+                            <li key={idx} className="font-mono">
+                              • <span className="font-bold">{error.ip}</span>: {error.error}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Save/Cancel Buttons */}
+                {hasUnsavedIpChanges && (
+                  <div className="flex gap-2 pt-2">
+                    <Button
+                      onClick={handleSaveIpAllowlist}
+                      disabled={validationErrors.length > 0 || updateIpAllowlistMutation.isPending}
+                      size="sm"
+                    >
+                      {updateIpAllowlistMutation.isPending ? "Saving..." : "Save Changes"}
+                    </Button>
+                    <Button
+                      onClick={handleCancelIpChanges}
+                      disabled={updateIpAllowlistMutation.isPending}
+                      variant="outline"
+                      size="sm"
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                )}
+              </>
             )}
           </div>
         </TabsContent>

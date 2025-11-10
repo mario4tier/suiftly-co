@@ -4,13 +4,13 @@
  */
 
 import { createLazyFileRoute } from '@tanstack/react-router';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { DashboardLayout } from '../../components/layout/DashboardLayout';
 import { SealConfigForm } from '../../components/services/SealConfigForm';
 import { SealInteractiveForm } from '../../components/services/SealInteractiveForm';
 import { Switch } from '../../components/ui/switch';
 import { TextRoute } from '../../components/ui/text-route';
-import { AlertCircle, CheckCircle, PauseCircle, AlertTriangle } from 'lucide-react';
+import { AlertCircle, CheckCircle, PauseCircle, AlertTriangle, Loader2 } from 'lucide-react';
 import { type ServiceStatus } from '@suiftly/shared/schemas';
 import { type ServiceState, type ServiceTier } from '@suiftly/shared/constants';
 import { trpc } from '../../lib/trpc';
@@ -23,6 +23,7 @@ export const Route = createLazyFileRoute('/services/seal/overview')({
 function SealOverviewPage() {
   const [tierSelected, setTierSelected] = useState(false);
   const [isToggling, setIsToggling] = useState(false);
+  const [localIsEnabled, setLocalIsEnabled] = useState(false);
 
   // Fetch services using React Query hook
   const { data: services, isLoading, refetch } = trpc.services.list.useQuery();
@@ -46,6 +47,13 @@ function SealOverviewPage() {
   // Find seal service
   const sealService = services?.find(s => s.serviceType === 'seal');
 
+  // Sync local toggle state with server state
+  const isEnabled = sealService?.isEnabled ?? false;
+
+  useEffect(() => {
+    setLocalIsEnabled(isEnabled);
+  }, [isEnabled]);
+
   if (isLoading) {
     return (
       <DashboardLayout>
@@ -58,7 +66,6 @@ function SealOverviewPage() {
 
   const serviceState: ServiceState = (sealService?.state as ServiceState) ?? 'not_provisioned';
   const tier: ServiceTier = (sealService?.tier as ServiceTier) ?? 'pro';
-  const isEnabled = sealService?.isEnabled ?? false;
   const subscriptionChargePending = sealService?.subscriptionChargePending ?? false;
 
   // Determine which form to show based on service state
@@ -122,7 +129,10 @@ function SealOverviewPage() {
   const banner = getStatusBanner();
 
   const handleToggleService = async (enabled: boolean) => {
+    // Update local state immediately for smooth visual feedback
+    setLocalIsEnabled(enabled);
     setIsToggling(true);
+
     toggleServiceMutation.mutate({
       serviceType: 'seal',
       enabled,
@@ -131,7 +141,7 @@ function SealOverviewPage() {
 
   return (
     <DashboardLayout>
-      <div className="space-y-4">
+      <div className="space-y-2">
         {/* Conditional Header based on state */}
         {showOnboardingForm ? (
           /* Onboarding: Show page title */
@@ -147,14 +157,16 @@ function SealOverviewPage() {
               Seal Service
             </h1>
             <div className="flex items-center gap-3">
+              <div className="w-4 h-4 flex items-center justify-center">
+                {isToggling && <Loader2 className="h-3 w-3 animate-spin text-gray-500 dark:text-gray-400" />}
+              </div>
               <Switch
                 id="service-toggle"
-                checked={isEnabled}
+                checked={localIsEnabled}
                 onCheckedChange={handleToggleService}
-                disabled={isToggling}
               />
               <span className="text-sm font-medium text-gray-600 dark:text-gray-400">
-                {isToggling ? "..." : (isEnabled ? "ON" : "OFF")}
+                {localIsEnabled ? "ON" : "OFF"}
               </span>
             </div>
           </div>
@@ -162,7 +174,7 @@ function SealOverviewPage() {
 
         {/* Status Banner - Show for State 3+ */}
         {banner && (
-          <div className={`${banner.bgColor} border ${banner.borderColor} rounded-lg p-3 flex gap-3`}>
+          <div className={`${banner.bgColor} border ${banner.borderColor} rounded-lg px-3 py-2 flex gap-3`}>
             <banner.icon className={`h-5 w-5 ${banner.iconColor} flex-shrink-0 mt-0.5`} />
             <div className="flex-1">
               <div className={`text-sm ${banner.textColor}`}>
