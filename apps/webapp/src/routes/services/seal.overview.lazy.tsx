@@ -9,6 +9,7 @@ import { DashboardLayout } from '../../components/layout/DashboardLayout';
 import { SealConfigForm } from '../../components/services/SealConfigForm';
 import { SealInteractiveForm } from '../../components/services/SealInteractiveForm';
 import { Switch } from '../../components/ui/switch';
+import { TextRoute } from '../../components/ui/text-route';
 import { AlertCircle, CheckCircle, PauseCircle, AlertTriangle } from 'lucide-react';
 import { type ServiceStatus } from '@suiftly/shared/schemas';
 import { type ServiceState, type ServiceTier } from '@suiftly/shared/constants';
@@ -58,6 +59,7 @@ function SealOverviewPage() {
   const serviceState: ServiceState = (sealService?.state as ServiceState) ?? 'not_provisioned';
   const tier: ServiceTier = (sealService?.tier as ServiceTier) ?? 'pro';
   const isEnabled = sealService?.isEnabled ?? false;
+  const subscriptionChargePending = sealService?.subscriptionChargePending ?? false;
 
   // Determine which form to show based on service state
   // Note: 'provisioning' state is reserved for future use and not currently set by backend
@@ -65,6 +67,22 @@ function SealOverviewPage() {
   const showInteractiveForm = !showOnboardingForm;
 
   const getStatusBanner = () => {
+    // Priority: Show payment pending banner first if applicable
+    if (subscriptionChargePending) {
+      return {
+        icon: AlertCircle,
+        bgColor: 'bg-orange-50 dark:bg-orange-900/20',
+        borderColor: 'border-orange-200 dark:border-orange-900',
+        iconColor: 'text-orange-600 dark:text-orange-500',
+        textColor: 'text-orange-900 dark:text-orange-200',
+        message: (
+          <>
+            Subscription payment pending. Add funds via <TextRoute to="/billing">Billing</TextRoute>.
+          </>
+        ),
+      };
+    }
+
     switch (serviceState) {
       case 'disabled':
         return {
@@ -164,7 +182,10 @@ function SealOverviewPage() {
             isEnabled={isEnabled}
             isToggling={isToggling}
             onToggleService={handleToggleService}
-            onChangePlan={() => console.log('Change plan')}
+            onChangePlan={() => {
+              // TODO: Implement plan change functionality
+              toast.info('Plan changes will be available soon');
+            }}
           />
         )}
       </div>

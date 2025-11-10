@@ -11,6 +11,7 @@ import { Card } from '../components/ui/card';
 import { ActionButton } from '../components/ui/action-button';
 import { OKButton } from '../components/ui/ok-button';
 import { CancelButton } from '../components/ui/cancel-button';
+import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/dialog';
@@ -22,6 +23,7 @@ export const Route = createLazyFileRoute('/billing')({
 });
 
 function BillingPage() {
+  const utils = trpc.useUtils();
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const [nextPaymentExpanded, setNextPaymentExpanded] = useState(false);
   const [howItWorksExpanded, setHowItWorksExpanded] = useState(false);
@@ -67,6 +69,14 @@ function BillingPage() {
       });
 
       toast.success(`Deposited $${amount.toFixed(2)} successfully`);
+
+      // If pending subscription charges were reconciled, show additional toast and refresh services
+      if (result.reconciledCharges && result.reconciledCharges > 0) {
+        toast.success(`${result.reconciledCharges} pending subscription charge${result.reconciledCharges > 1 ? 's' : ''} processed`);
+        // Invalidate services to update UI (remove payment pending banners)
+        utils.services.list.invalidate();
+      }
+
       setDepositModalOpen(false);
       setDepositAmount('');
       refetchBalance();

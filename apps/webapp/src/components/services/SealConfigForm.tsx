@@ -53,10 +53,17 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
 
   // React Query mutations
   const subscribeMutation = trpc.services.subscribe.useMutation({
-    onSuccess: () => {
-      toast.success('Subscription successful!');
-      // Invalidate services list to refetch and show updated UI
+    onSuccess: (data) => {
+      // Service was created successfully
+      // Always invalidate to trigger UI transition
       utils.services.list.invalidate();
+
+      // Only show success toast if payment actually succeeded
+      // If payment is pending, the banner message will inform the user
+      if (!data.paymentPending) {
+        toast.success('Subscription successful!');
+      }
+      // Note: No toast for payment pending - the banner message is sufficient
     },
     onError: (error) => {
       toast.error(error.message || 'Subscription failed. Please try again.');

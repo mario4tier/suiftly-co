@@ -275,17 +275,18 @@ export const servicesRouter = router({
 
         if (!chargeResult.success) {
           // Charge failed - service exists but can't be enabled
-          // Translate technical errors to user-friendly, actionable messages
-          let userMessage = chargeResult.error || 'Payment failed. Service created but cannot be enabled until payment succeeds.';
+          // Return SUCCESS (service was created) but with subscriptionChargePending=true
+          console.log('[SUBSCRIBE] Charge failed, returning service with pending payment:', chargeResult.error);
 
-          if (chargeResult.error?.includes('Account does not exist')) {
-            userMessage = 'Deposit funds to proceed. See Billing page to add funds to your account.';
-          }
-
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: userMessage,
-          });
+          return {
+            ...service,
+            subscriptionChargePending: true,
+            apiKey: apiKey, // Include API key even if payment pending
+            paymentPending: true, // Flag to inform frontend
+            paymentError: chargeResult.error?.includes('Account does not exist')
+              ? 'NO_ESCROW_ACCOUNT'
+              : 'PAYMENT_FAILED',
+          };
         }
 
         // 7. Charge succeeded - update pending flag
@@ -309,23 +310,22 @@ export const servicesRouter = router({
           ...service,
           subscriptionChargePending: false,
           apiKey: apiKey, // Include API key in response (only time it's visible)
+          paymentPending: false,
         };
 
       } catch (chargeError) {
-        // Charge failed or errored
+        // Unexpected error during charge
         // Service exists but subscriptionChargePending=true
-        // User will see service but can't enable it
-        console.error('[SUBSCRIBE] Charge failed:', chargeError);
+        console.error('[SUBSCRIBE] Unexpected charge error:', chargeError);
 
-        // Re-throw if it's already a TRPCError
-        if (chargeError instanceof TRPCError) {
-          throw chargeError;
-        }
-
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: 'Service created but payment failed. Please contact support.',
-        });
+        // Return SUCCESS (service was created) with pending payment
+        return {
+          ...service,
+          subscriptionChargePending: true,
+          apiKey: apiKey,
+          paymentPending: true,
+          paymentError: 'UNEXPECTED_ERROR',
+        };
       }
     }),
 

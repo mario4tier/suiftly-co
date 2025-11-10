@@ -11,6 +11,7 @@ import { db, logActivity } from '@suiftly/database';
 import { ledgerEntries, customers } from '@suiftly/database/schema';
 import { eq, desc, sql } from 'drizzle-orm';
 import { SPENDING_LIMIT } from '@suiftly/shared/constants';
+import { reconcilePayments } from '../lib/reconcile-payments';
 
 export const billingRouter = router({
   /**
@@ -230,6 +231,11 @@ export const billingRouter = router({
         message: `Deposited $${input.amountUsd.toFixed(2)} to escrow account`,
       });
 
+      // Reconcile pending subscription charges
+      // This will retry any failed subscription charges now that funds are available
+      const reconcileResult = await reconcilePayments(customer.customerId);
+      console.log(`[DEPOSIT] Reconciled ${reconcileResult.chargesSucceeded} pending charges after deposit`);
+
       // Get new balance
       const account = await suiService.getAccount(ctx.user.walletAddress);
 
@@ -238,6 +244,7 @@ export const billingRouter = router({
         newBalanceUsd: account ? account.balanceUsdcCents / 100 : 0,
         accountCreated: result.accountCreated || false,
         txHash: result.digest,
+        reconciledCharges: reconcileResult.chargesSucceeded, // Return how many pending charges were cleared
       };
     }),
 
