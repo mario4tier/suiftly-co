@@ -1,17 +1,19 @@
 /**
- * Add Button - Full blue background with + icon
- * Used for primary "add" actions
+ * OK Button - Primary action button for dialogs/modals
+ * Used for confirmative actions like "OK", "Save", "Confirm", "Submit"
+ *
+ * Visual hierarchy: Prominent (solid blue) - draws user's attention
+ * Semantically correct: Uses <button> for actions
  */
 
-import { Plus } from "lucide-react";
 import { ButtonHTMLAttributes, forwardRef } from "react";
 import { cn } from "@/lib/utils";
 
-export interface AddButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+export interface OKButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   children: React.ReactNode;
 }
 
-export const AddButton = forwardRef<HTMLButtonElement, AddButtonProps>(
+export const OKButton = forwardRef<HTMLButtonElement, OKButtonProps>(
   ({ className, children, disabled, ...props }, ref) => {
     return (
       <button
@@ -31,11 +33,10 @@ export const AddButton = forwardRef<HTMLButtonElement, AddButtonProps>(
         )}
         {...props}
       >
-        <Plus className="h-4 w-4" />
         {children}
       </button>
     );
   }
 );
 
-AddButton.displayName = "AddButton";
+OKButton.displayName = "OKButton";

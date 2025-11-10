@@ -36,7 +36,7 @@ export const InlineButton = forwardRef<HTMLButtonElement, InlineButtonProps>(
             "dark:hover:bg-red-900/20 dark:hover:border-red-700",
           ],
           "focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1",
-          "disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white dark:disabled:hover:bg-gray-800",
+          "disabled:opacity-50 disabled:cursor-default disabled:hover:bg-white dark:disabled:hover:bg-gray-800",
           "dark:focus:ring-offset-gray-900",
           className
         )}

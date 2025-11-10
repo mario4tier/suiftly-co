@@ -8,7 +8,9 @@ import { useState } from 'react';
 import { trpc } from '../lib/trpc';
 import { DashboardLayout } from '../components/layout/DashboardLayout';
 import { Card } from '../components/ui/card';
-import { Button } from '../components/ui/button';
+import { ActionButton } from '../components/ui/action-button';
+import { OKButton } from '../components/ui/ok-button';
+import { CancelButton } from '../components/ui/cancel-button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/dialog';
@@ -254,21 +256,32 @@ function BillingPage() {
           <div>
             <div className="text-sm text-gray-500">Spending Limit Protection</div>
             <div className="text-2xl font-bold">
-              {!spendingLimit ? 'Unlimited' : `$${spendingLimit.toFixed(2)} per 28-days`}
+              {!spendingLimit ? (
+                'Unlimited'
+              ) : (
+                <>
+                  ${spendingLimit.toFixed(2)}{' '}
+                  <span className="text-sm font-normal">per 28-days</span>
+                </>
+              )}
             </div>
           </div>
         </div>
 
         <div className="flex gap-3">
-          <Button variant="outline" onClick={() => setDepositModalOpen(true)}>
+          <ActionButton onClick={() => setDepositModalOpen(true)}>
             Deposit
-          </Button>
-          <Button variant="outline" onClick={() => setWithdrawModalOpen(true)}>
+          </ActionButton>
+          <ActionButton onClick={() => setWithdrawModalOpen(true)} disabled={balance === 0}>
             Withdraw
-          </Button>
-          <Button variant="outline" onClick={() => setSpendingLimitModalOpen(true)}>
+          </ActionButton>
+          <ActionButton onClick={() => {
+            // Pre-fill with current value (null/undefined means unlimited = 0)
+            setNewSpendingLimitInput(spendingLimit != null ? spendingLimit.toString() : '0');
+            setSpendingLimitModalOpen(true);
+          }}>
             Adjust Spending Limit
-          </Button>
+          </ActionButton>
         </div>
         <p className="text-xs text-gray-500 mt-3">
           {!found
@@ -370,7 +383,19 @@ function BillingPage() {
       )}
 
       {/* Deposit Modal */}
-      <Dialog open={depositModalOpen} onOpenChange={setDepositModalOpen}>
+      <Dialog
+        open={depositModalOpen}
+        onOpenChange={(open) => {
+          // Prevent closing while mutation is pending
+          if (!depositMutation.isPending) {
+            setDepositModalOpen(open);
+            if (!open) {
+              setDepositAmount('');
+              setError('');
+            }
+          }
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Deposit Funds</DialogTitle>
@@ -407,8 +432,8 @@ function BillingPage() {
           </div>
 
           <DialogFooter>
-            <Button
-              variant="outline"
+            <CancelButton
+              disabled={depositMutation.isPending}
               onClick={() => {
                 setDepositModalOpen(false);
                 setDepositAmount('');
@@ -416,19 +441,36 @@ function BillingPage() {
               }}
             >
               Cancel
-            </Button>
-            <Button
+            </CancelButton>
+            <OKButton
               onClick={handleDeposit}
-              disabled={depositMutation.isPending}
+              disabled={
+                depositMutation.isPending ||
+                !depositAmount ||
+                isNaN(parseFloat(depositAmount)) ||
+                parseFloat(depositAmount) <= 0
+              }
             >
               {depositMutation.isPending ? 'Processing...' : 'Deposit'}
-            </Button>
+            </OKButton>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
       {/* Withdraw Modal */}
-      <Dialog open={withdrawModalOpen} onOpenChange={setWithdrawModalOpen}>
+      <Dialog
+        open={withdrawModalOpen}
+        onOpenChange={(open) => {
+          // Prevent closing while mutation is pending
+          if (!withdrawMutation.isPending) {
+            setWithdrawModalOpen(open);
+            if (!open) {
+              setWithdrawAmount('');
+              setError('');
+            }
+          }
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Withdraw Funds</DialogTitle>
@@ -468,8 +510,8 @@ function BillingPage() {
           </div>
 
           <DialogFooter>
-            <Button
-              variant="outline"
+            <CancelButton
+              disabled={withdrawMutation.isPending}
               onClick={() => {
                 setWithdrawModalOpen(false);
                 setWithdrawAmount('');
@@ -477,19 +519,37 @@ function BillingPage() {
               }}
             >
               Cancel
-            </Button>
-            <Button
+            </CancelButton>
+            <OKButton
               onClick={handleWithdraw}
-              disabled={withdrawMutation.isPending}
+              disabled={
+                withdrawMutation.isPending ||
+                !withdrawAmount ||
+                isNaN(parseFloat(withdrawAmount)) ||
+                parseFloat(withdrawAmount) <= 0 ||
+                parseFloat(withdrawAmount) > balance
+              }
             >
               {withdrawMutation.isPending ? 'Processing...' : 'Withdraw'}
-            </Button>
+            </OKButton>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
       {/* Spending Limit Modal */}
-      <Dialog open={spendingLimitModalOpen} onOpenChange={setSpendingLimitModalOpen}>
+      <Dialog
+        open={spendingLimitModalOpen}
+        onOpenChange={(open) => {
+          // Prevent closing while mutation is pending
+          if (!updateSpendingLimitMutation.isPending) {
+            setSpendingLimitModalOpen(open);
+            if (!open) {
+              setNewSpendingLimitInput('');
+              setError('');
+            }
+          }
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Adjust Spending Limit</DialogTitle>
@@ -531,8 +591,8 @@ function BillingPage() {
           </div>
 
           <DialogFooter>
-            <Button
-              variant="outline"
+            <CancelButton
+              disabled={updateSpendingLimitMutation.isPending}
               onClick={() => {
                 setSpendingLimitModalOpen(false);
                 setNewSpendingLimitInput('');
@@ -540,13 +600,19 @@ function BillingPage() {
               }}
             >
               Cancel
-            </Button>
-            <Button
+            </CancelButton>
+            <OKButton
               onClick={handleUpdateSpendingLimit}
-              disabled={updateSpendingLimitMutation.isPending}
+              disabled={
+                updateSpendingLimitMutation.isPending ||
+                !newSpendingLimitInput ||
+                isNaN(parseFloat(newSpendingLimitInput)) ||
+                parseFloat(newSpendingLimitInput) < 0 ||
+                (parseFloat(newSpendingLimitInput) > 0 && parseFloat(newSpendingLimitInput) < 10)
+              }
             >
               {updateSpendingLimitMutation.isPending ? 'Updating...' : 'Update Limit'}
-            </Button>
+            </OKButton>
           </DialogFooter>
         </DialogContent>
       </Dialog>

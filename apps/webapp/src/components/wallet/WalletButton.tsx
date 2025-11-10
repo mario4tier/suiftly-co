@@ -5,7 +5,7 @@
 
 import { useCurrentAccount, useConnectWallet, useDisconnectWallet, useWallets } from '@mysten/dapp-kit';
 import { useState, useEffect, useRef } from 'react';
-import { useNavigate } from '@tanstack/react-router';
+import { Link, useNavigate } from '@tanstack/react-router';
 import { connectMockWallet, disconnectMockWallet } from '../../lib/mockWallet';
 import { useAuth } from '../../lib/auth';
 import {
@@ -135,14 +135,14 @@ export function WalletButton() {
                 </div>
 
                 {/* Billing */}
-                <a
-                  href="/billing"
+                <Link
+                  to="/billing"
                   onClick={() => setShowAccountMenu(false)}
                   className="flex items-center gap-2.5 px-3 py-2 hover:bg-gray-50 rounded text-sm text-gray-700 transition"
                 >
                   <CreditCard className="h-4 w-4 text-gray-400" />
                   <span>Billing & Balance</span>
-                </a>
+                </Link>
 
                 {/* Copy Address */}
                 <button

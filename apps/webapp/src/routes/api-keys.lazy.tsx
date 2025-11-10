@@ -3,10 +3,10 @@
  * Global view of all API keys across services
  */
 
-import { createLazyFileRoute, useNavigate } from '@tanstack/react-router';
+import { createLazyFileRoute } from '@tanstack/react-router';
 import { DashboardLayout } from '../components/layout/DashboardLayout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { ActionButton } from '@/components/ui/action-button';
+import { LinkButton } from '@/components/ui/link-button';
 import { trpc } from '@/lib/trpc';
 
 export const Route = createLazyFileRoute('/api-keys')({
@@ -28,27 +28,12 @@ function formatRelativeTime(date: Date): string {
 }
 
 function ApiKeysPage() {
-  const navigate = useNavigate();
-
   // Fetch Seal services and API keys
   const { data: services, isLoading: servicesLoading } = trpc.services.list.useQuery();
   const { data: apiKeys, isLoading: apiKeysLoading } = trpc.seal.listApiKeys.useQuery();
 
   // Find first Seal service for Manage button
   const sealService = services?.find(s => s.serviceType === 'seal');
-
-  const handleManageSeal = () => {
-    navigate({
-      to: '/services/seal/overview',
-      search: { tab: 'x-api-key' }
-    });
-  };
-
-  const handleSubscribeToSeal = () => {
-    navigate({
-      to: '/services/seal/overview'
-    });
-  };
 
   const isLoading = servicesLoading || apiKeysLoading;
   const isSealSubscribed = !!sealService;
@@ -75,9 +60,9 @@ function ApiKeysPage() {
               <CardHeader className="flex flex-row items-center gap-3 space-y-0 p-4">
                 <CardTitle className="text-lg font-semibold">Seal</CardTitle>
                 {isSealSubscribed && (
-                  <ActionButton onClick={handleManageSeal}>
+                  <LinkButton to="/services/seal/overview" search={{ tab: 'x-api-key' }}>
                     Manage
-                  </ActionButton>
+                  </LinkButton>
                 )}
               </CardHeader>
               <CardContent className="p-4 pt-0">
@@ -122,9 +107,9 @@ function ApiKeysPage() {
                   </p>
                 ) : (
                   <div>
-                    <ActionButton onClick={handleSubscribeToSeal}>
+                    <LinkButton to="/services/seal/overview">
                       Subscribe To Seal Service
-                    </ActionButton>
+                    </LinkButton>
                   </div>
                 )}
               </CardContent>

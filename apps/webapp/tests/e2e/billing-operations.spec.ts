@@ -34,6 +34,24 @@ test.describe('Billing Operations', () => {
     await page.waitForURL('/billing', { timeout: 5000 });
   });
 
+  test('withdraw button is disabled when balance is zero', async ({ page }) => {
+    // Verify balance is $0.00
+    await expect(page.locator('text=$0.00').first()).toBeVisible();
+
+    // Withdraw button should be visible but disabled
+    const withdrawButton = page.locator('button:has-text("Withdraw")');
+    await expect(withdrawButton).toBeVisible();
+    await expect(withdrawButton).toBeDisabled();
+
+    // Deposit button should be enabled
+    await expect(page.locator('button:has-text("Deposit")')).toBeEnabled();
+
+    // Adjust Spending Limit button should be enabled
+    await expect(page.locator('button:has-text("Adjust Spending Limit")')).toBeEnabled();
+
+    console.log('✅ Withdraw button correctly disabled at zero balance');
+  });
+
   test('deposit flow - opens modal, validates input, processes deposit', async ({ page }) => {
     // Click deposit button
     await page.click('button:has-text("Deposit")');
@@ -64,6 +82,9 @@ test.describe('Billing Operations', () => {
     await page.waitForTimeout(500);
     const balanceSection = page.locator('text=Balance').locator('..');
     await expect(balanceSection).toContainText('100');
+
+    // After deposit, Withdraw button should now be enabled
+    await expect(page.locator('button:has-text("Withdraw")')).toBeEnabled();
 
     console.log('✅ Deposit flow works correctly');
   });
@@ -235,8 +256,9 @@ test.describe('Billing Operations', () => {
 
     await page.reload();
     await expect(page.locator('text=$100.00').first()).toBeVisible();
-    // Check for spending limit - displayed as "$50.00 per 28-days"
-    await expect(page.locator('text=$50.00 per 28-days')).toBeVisible();
+    // Check for spending limit
+    await expect(page.locator('text=$50.00')).toBeVisible();
+    await expect(page.locator('text=per 28-days')).toBeVisible();
 
     // Try to charge $60 (should exceed spending limit)
     const chargeResponse = await page.request.post(`${API_BASE}/test/wallet/charge`, {

@@ -1376,6 +1376,186 @@ User changes tier: Pro ($40) → Starter ($20)
 
 ---
 
+## UI Component Guidelines
+
+### Disabled Button States
+
+**IMPORTANT: Do NOT use `cursor: not-allowed` for disabled buttons.**
+
+**Best Practice (2025):**
+- Use `cursor: default` (normal arrow cursor) for disabled interactive elements
+- Let visual styling communicate the disabled state (opacity, colors, no hover)
+
+**Why avoid `cursor: not-allowed`?**
+1. **Semantic mismatch**: `not-allowed` cursor is for drag-and-drop invalid zones, not disabled UI
+2. **Over-communication**: Visual state already shows "disabled" - cursor shouldn't repeat it
+3. **Mobile-first**: Touch devices have no cursor - design shouldn't rely on cursor hints
+4. **Accessibility**: Screen readers and keyboard users don't see cursors
+5. **User psychology**: "Stop" cursor feels accusatory/aggressive rather than informative
+
+**Correct Implementation:**
+```css
+/* ✅ CORRECT - Modern best practice */
+.button:disabled {
+  opacity: 0.5;
+  cursor: default;
+  /* Visual state clearly communicates disabled */
+}
+
+/* ❌ WRONG - Outdated pattern */
+.button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  /* Redundant and poor UX */
+}
+```
+
+**Visual Indicators for Disabled State:**
+- Reduced opacity (50%)
+- Desaturated/grayed colors
+- No hover effects
+- Clear context (e.g., "Withdraw" button disabled at $0 balance)
+
+**Reference Implementation:**
+See `apps/webapp/src/components/ui/action-button.tsx` for the correct pattern.
+
+### Navigation vs Action Buttons
+
+**IMPORTANT: Use the correct element for the interaction type.**
+
+| Interaction Type | Element | Component | Example |
+|-----------------|---------|-----------|---------|
+| Navigation (goes to page) | `<a>` | `LinkButton` | "Manage", "View Details" |
+| Action (triggers function) | `<button>` | `ActionButton`, `AddButton` | "Deposit", "Withdraw", "Subscribe", "Save" |
+| Sidebar navigation | `<a>` | Standard link | Dashboard, Billing, API Keys |
+
+**Why This Matters:**
+
+1. **User Experience**
+   - Links support Cmd/Ctrl+Click (open in new tab)
+   - Right-click shows "Open in new tab"
+   - Middle-click opens in new tab
+   - Hover shows destination URL
+   - Can be bookmarked
+
+2. **Semantics & Accessibility**
+   - Screen readers announce correctly ("link" vs "button")
+   - Browser history works properly
+   - Search engines can crawl links
+   - Keyboard navigation differs (links vs buttons)
+
+3. **Hover Affordances**
+   - **Links:** Underline on hover (navigation affordance)
+   - **Buttons:** Background/border change (action affordance)
+   - Different visual cues help users understand what will happen
+
+**Correct Implementation:**
+
+```tsx
+// ✅ CORRECT - Navigation uses LinkButton (renders <a>)
+// Always shows discrete → arrow for visual navigation hint
+<LinkButton to="/services/seal/overview" search={{ tab: 'x-api-key' }}>
+  Manage
+</LinkButton>
+// Renders: Manage →
+
+// ✅ CORRECT - Action uses ActionButton (renders <button>)
+<ActionButton onClick={() => setModalOpen(true)}>
+  Deposit
+</ActionButton>
+
+// ❌ WRONG - Don't use button for navigation
+<ActionButton onClick={() => navigate('/somewhere')}>
+  Go to Page
+</ActionButton>
+
+// ❌ WRONG - Don't use link for actions
+<a onClick={handleSubmit}>Submit Form</a>
+```
+
+**Reference Components:**
+- `apps/webapp/src/components/ui/link-button.tsx` - Navigation links styled as buttons (always shows → arrow)
+- `apps/webapp/src/components/ui/action-button.tsx` - Action buttons
+
+### Dialog/Modal Buttons
+
+**IMPORTANT: Use the correct visual hierarchy for dialog actions.**
+
+| Action Type | Component | Visual Style | Example Use Cases |
+|-------------|-----------|--------------|-------------------|
+| Primary/Confirmative | `OKButton` | Solid blue (prominent) | "OK", "Save", "Confirm", "Submit", "Deposit" |
+| Secondary/Dismissive | `CancelButton` | Gray outline (subtle) | "Cancel", "Close", "Nevermind" |
+
+**Why Visual Hierarchy Matters:**
+
+1. **Primary Action (OKButton)**
+   - Solid blue background with white text
+   - Draws user's attention as the expected/recommended action
+   - Used for confirmative actions that move the workflow forward
+   - Should be disabled when validation fails
+
+2. **Secondary Action (CancelButton)**
+   - Gray outline with minimal styling
+   - Less prominent - allows user to dismiss without pressure
+   - Used for actions that abort/close without changes
+   - **IMPORTANT**: Disable during pending operations to prevent mid-operation cancellation
+
+3. **Button Order**
+   - In `DialogFooter`: Cancel first, OK second (left to right)
+   - This matches user reading pattern and platform conventions
+
+**Correct Implementation:**
+
+```tsx
+// ✅ CORRECT - Dialog with proper button hierarchy and pending state handling
+import { OKButton } from '@/components/ui/ok-button';
+import { CancelButton } from '@/components/ui/cancel-button';
+
+// Prevent closing dialog while operation is pending
+<Dialog
+  open={modalOpen}
+  onOpenChange={(open) => {
+    if (!isPending) {
+      setModalOpen(open);
+      if (!open) {
+        // Clean up form state when closing
+        setFormData('');
+        setError('');
+      }
+    }
+  }}
+>
+  <DialogContent>
+    {/* ... dialog content ... */}
+    <DialogFooter>
+      <CancelButton disabled={isPending} onClick={() => setModalOpen(false)}>
+        Cancel
+      </CancelButton>
+      <OKButton onClick={handleSubmit} disabled={isPending || !isValid}>
+        {isPending ? 'Saving...' : 'Save'}
+      </OKButton>
+    </DialogFooter>
+  </DialogContent>
+</Dialog>
+
+// ❌ WRONG - Don't use same visual weight for both actions
+<DialogFooter>
+  <ActionButton onClick={handleCancel}>Cancel</ActionButton>
+  <ActionButton onClick={handleSave}>Save</ActionButton>
+</DialogFooter>
+
+// ❌ WRONG - Don't allow closing during pending operations
+<Dialog open={modalOpen} onOpenChange={setModalOpen}>
+  {/* User can close dialog mid-operation - confusing UX */}
+</Dialog>
+```
+
+**Reference Components:**
+- `apps/webapp/src/components/ui/ok-button.tsx` - Primary dialog action button
+- `apps/webapp/src/components/ui/cancel-button.tsx` - Secondary dialog action button
+
+---
+
 ## Component Inventory
 
 ### Layout Components
@@ -1449,11 +1629,17 @@ User changes tier: Pro ($40) → Starter ($20)
 | `FAQAccordion` | Collapsible FAQ items | `components/support/` |
 | `CommunityLinks` | Discord invite, community links | `components/support/` |
 
-### UI Components (shadcn/ui)
+### UI Components (shadcn/ui + Custom)
 
 | Component | Usage |
 |-----------|-------|
-| `Button` | All buttons (primary/secondary/ghost) |
+| `LinkButton` | Navigation styled as button ("Manage", "View Details") - renders `<a>` - always shows discrete → arrow |
+| `ActionButton` | Secondary action button (outline style) - renders `<button>` |
+| `AddButton` | Primary action with + icon (solid blue) - renders `<button>` |
+| `OKButton` | Primary action in dialogs (solid blue, prominent) - "OK", "Save", "Confirm" - renders `<button>` |
+| `CancelButton` | Secondary action in dialogs (gray outline, subtle) - "Cancel", "Close" - renders `<button>` |
+| `InlineButton` | Small table row actions ("Copy", "Revoke") - renders `<button>` |
+| `Button` | Generic button (use specific button types above instead) |
 | `Card` | Config cards, pricing cards |
 | `Modal` | Edit config, deposit/withdraw, add keys, "Connect Wallet Required" |
 | `Tabs` | Service page tabs (Config/Keys/Stats/Logs) |

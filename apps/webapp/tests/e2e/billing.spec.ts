@@ -36,14 +36,21 @@ test.describe('Billing Page - No Escrow Account', () => {
     await expect(page.locator('text=Balance')).toBeVisible();
     await expect(page.locator('text=$0.00').first()).toBeVisible();
 
-    // Should show spending limit as Unlimited (since no account/limit set yet)
+    // Should show default spending limit of $250 (SPENDING_LIMIT_DEFAULT_USD)
     await expect(page.locator('text=Spending Limit Protection')).toBeVisible();
-    await expect(page.locator('text=Unlimited')).toBeVisible();
+    // Check for both parts of the spending limit text
+    await expect(page.locator('text=$250.00')).toBeVisible();
+    await expect(page.locator('text=per 28-days')).toBeVisible();
 
-    // Should show deposit button (disabled for now, but visible)
+    // Should show action buttons
     await expect(page.locator('button:has-text("Deposit")')).toBeVisible();
+    await expect(page.locator('button:has-text("Deposit")')).toBeEnabled();
+
     await expect(page.locator('button:has-text("Withdraw")')).toBeVisible();
+    await expect(page.locator('button:has-text("Withdraw")')).toBeDisabled(); // Disabled when balance is 0
+
     await expect(page.locator('button:has-text("Adjust Spending Limit")')).toBeVisible();
+    await expect(page.locator('button:has-text("Adjust Spending Limit")')).toBeEnabled();
 
     // Should NOT show current charges section (only when account exists)
     await expect(page.locator('text=Pending Per-Request Charges')).not.toBeVisible();

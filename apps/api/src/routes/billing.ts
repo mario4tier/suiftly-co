@@ -9,7 +9,7 @@ import { router, protectedProcedure } from '../lib/trpc';
 import { getSuiService } from '../services/sui';
 import { db, logActivity } from '@suiftly/database';
 import { ledgerEntries, customers } from '@suiftly/database/schema';
-import { eq, desc } from 'drizzle-orm';
+import { eq, desc, sql } from 'drizzle-orm';
 import { SPENDING_LIMIT } from '@suiftly/shared/constants';
 
 export const billingRouter = router({
@@ -29,13 +29,13 @@ export const billingRouter = router({
     const account = await suiService.getAccount(ctx.user.walletAddress);
 
     if (!account) {
-      // No escrow account yet - return zeros
+      // No escrow account yet - return zeros but with default spending limit
       return {
         found: false,
         balanceUsd: 0,
-        spendingLimitUsd: 0,
+        spendingLimitUsd: SPENDING_LIMIT.DEFAULT_USD, // $250 default
         currentPeriodChargedUsd: 0,
-        currentPeriodRemainingUsd: 0,
+        currentPeriodRemainingUsd: SPENDING_LIMIT.DEFAULT_USD, // Full default limit available
         periodEndsAt: null,
         message: 'No escrow account created yet',
       };
@@ -112,9 +112,9 @@ export const billingRouter = router({
         offset,
       });
 
-      // Count total
-      const totalResult = await db
-        .select({ count: ledgerEntries.customerId })
+      // Count total (using SQL COUNT aggregate for performance)
+      const [{ count: total }] = await db
+        .select({ count: sql<number>`count(*)::int` })
         .from(ledgerEntries)
         .where(eq(ledgerEntries.customerId, customer.customerId));
 
@@ -127,8 +127,8 @@ export const billingRouter = router({
           txHash: entry.txHash,
           createdAt: entry.createdAt.toISOString(),
         })),
-        total: totalResult.length,
-        hasMore: offset + entries.length < totalResult.length,
+        total,
+        hasMore: offset + entries.length < total,
       };
     }),
 

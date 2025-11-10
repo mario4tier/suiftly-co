@@ -137,15 +137,15 @@ export function Sidebar() {
           onOpenChange={() => sectionKey && toggleSection(sectionKey)}
         >
           <div className="flex items-center h-[42px] text-[14px] font-normal relative">
-            <div
+            <button
               onClick={handleParentClick}
-              className="sidebar-hover flex items-center flex-1 cursor-pointer transition-all hover:bg-[#e0f2f1] hover:rounded-l-full text-gray-900 dark:text-gray-100 absolute inset-0 group"
+              className="sidebar-hover flex items-center flex-1 cursor-pointer transition-all hover:bg-[#e0f2f1] hover:rounded-l-full text-gray-900 dark:text-gray-100 absolute inset-0 group border-0 bg-transparent text-left"
             >
               <div className="w-[55px] h-5 flex items-center justify-center flex-shrink-0">
                 <Icon className="w-5 h-5 text-[rgb(0,81,195)] dark:text-blue-400" />
               </div>
               <span className="flex-1 group-hover:underline group-hover:decoration-dotted group-hover:decoration-1 group-hover:underline-offset-2">{item.label}</span>
-            </div>
+            </button>
             <CollapsibleTrigger asChild>
               <button className="relative z-20 flex items-center justify-center w-9 h-9 ml-auto cursor-pointer transition-colors hover:bg-gray-100 dark:hover:bg-gray-800 rounded border-0 bg-transparent">
                 <ChevronUp
