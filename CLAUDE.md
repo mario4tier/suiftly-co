@@ -122,6 +122,47 @@ When adding new routes:
 
 See [docs/ROUTE_SECURITY.md](docs/ROUTE_SECURITY.md) for complete details.
 
+## Development Server Management
+
+**ALWAYS use the provided scripts to start/stop servers** - they are more robust than manual commands.
+
+### Starting Servers
+```bash
+./scripts/dev/start-dev.sh
+```
+
+**Benefits:**
+- Aggressive cleanup of stale processes (multiple passes)
+- Port verification before starting
+- Health checks for API readiness
+- PID tracking for clean shutdown
+- Logging to `/tmp/suiftly-api.log` and `/tmp/suiftly-webapp.log`
+- Sets correct environment (MOCK_AUTH=true, DATABASE_URL, etc.)
+
+### Stopping Servers
+```bash
+./scripts/dev/stop-dev.sh
+```
+
+**What it does:**
+- Kills by saved PIDs first (cleanest)
+- Fallback: kills by process name
+- Fallback: kills by port
+- Removes PID files
+
+### Quick Restart
+```bash
+./scripts/dev/stop-dev.sh && ./scripts/dev/start-dev.sh
+```
+
+**When NOT to use these scripts:**
+- Running E2E tests (Playwright manages its own servers)
+- Using `npm run dev` for Turborepo hot-reload during development
+
+**Logs location:**
+- API: `/tmp/suiftly-api.log`
+- Webapp: `/tmp/suiftly-webapp.log`
+
 ## CRITICAL: Process Management
 
 **NEVER use `killall -9 node` or similar commands!** This kills the AI agent process itself.

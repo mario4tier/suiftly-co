@@ -694,7 +694,6 @@ export function SealInteractiveForm({
                   disabled={isReadOnly}
                   rows={2}
                   className="resize-none font-mono text-sm"
-                  placeholder="192.168.1.1, 10.0.0.1"
                 />
 
                 {/* Validation Errors */}

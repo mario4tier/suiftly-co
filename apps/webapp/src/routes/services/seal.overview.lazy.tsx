@@ -39,7 +39,9 @@ function SealOverviewPage() {
       console.error('Toggle service error:', error);
       toast.error(error.message || 'Failed to toggle service');
       setIsToggling(false);
-      // Refetch to reset UI to actual server state
+      // Revert optimistic UI update immediately
+      setLocalIsEnabled(isEnabled);
+      // Also refetch to ensure consistency
       refetch();
     },
   });

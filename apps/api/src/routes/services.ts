@@ -407,34 +407,38 @@ export const servicesRouter = router({
         });
       }
 
-      // Check if subscription charge is pending
+      // Check if subscription charge is pending when trying to enable
+      // Only validate funds when payment is still pending (not yet paid)
       if (service.subscriptionChargePending && input.enabled) {
         // Get customer to check account status
         const customer = await db.query.customers.findFirst({
           where: eq(customers.customerId, ctx.user.customerId),
         });
 
-        console.log('[TOGGLE] Customer:', customer?.customerId, 'escrowContractId:', customer?.escrowContractId);
+        if (!customer) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'Customer not found',
+          });
+        }
 
-        if (customer) {
-          // Check escrow account status
-          const suiService = getSuiService();
-          const account = await suiService.getAccount(customer.walletAddress);
-          const tierPrice = getTierPriceUsdCents(service.tier);
+        // Check escrow account balance
+        const suiService = getSuiService();
+        const account = await suiService.getAccount(customer.walletAddress);
+        const tierPrice = getTierPriceUsdCents(service.tier);
 
-          console.log('[TOGGLE] Account:', account ? {
-            balance: account.balanceUsdcCents,
-            tierPrice,
-            hasAccount: !!account
-          } : 'null');
+        console.log('[TOGGLE] Validating funds for pending charge - Account:', account ? {
+          balance: account.balanceUsdcCents,
+          tierPrice,
+          hasAccount: !!account
+        } : 'null');
 
-          // If no account exists or insufficient balance, guide to deposit
-          if (!account || (account.balanceUsdcCents < tierPrice)) {
-            throw new TRPCError({
-              code: 'BAD_REQUEST',
-              message: 'Deposit funds to proceed. See Billing page.',
-            });
-          }
+        // If no account exists or insufficient balance, guide to deposit
+        if (!account || account.balanceUsdcCents < tierPrice) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Insufficient funds. Deposit to proceed via Billing page.',
+          });
         }
 
         // Account exists with funds but charge still pending - something else went wrong
