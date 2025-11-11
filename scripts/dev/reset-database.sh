@@ -61,6 +61,49 @@ if [ "$DB_HOST" != "localhost" ] && [ "$DB_HOST" != "127.0.0.1" ]; then
 fi
 
 # ============================================================================
+# POSTGRESQL AUTHENTICATION CHECK
+# ============================================================================
+
+# Check if pg_hba.conf has trust authentication for localhost
+# This is required for migrations to run without password prompts
+PG_HBA="/etc/postgresql/17/main/pg_hba.conf"
+
+if [ -f "$PG_HBA" ]; then
+  # Check if trust rules exist for localhost postgres/deploy users
+  if ! sudo grep -q "127.0.0.1/32.*trust" "$PG_HBA" 2>/dev/null; then
+    echo "⚠️  PostgreSQL authentication needs configuration for local development"
+    echo ""
+    echo "📋 Required: Trust authentication for localhost connections"
+    echo "   This allows migrations to run without password prompts."
+    echo ""
+    echo "   Why this is safe:"
+    echo "   • Only localhost (127.0.0.1) can connect without password"
+    echo "   • Remote hosts still require authentication"
+    echo "   • Standard practice for local development"
+    echo ""
+    echo "🔧 Automatically fix pg_hba.conf? (recommended)"
+    echo "   Press Enter to auto-fix, or Ctrl+C to cancel and fix manually..."
+    read -r
+
+    # Backup current config
+    echo "📋 Creating backup..."
+    sudo cp "$PG_HBA" "$PG_HBA.backup.$(date +%Y%m%d_%H%M%S)"
+    echo "   ✅ Backup created"
+
+    # Add trust rules for localhost at the beginning (before other rules)
+    echo "📝 Adding trust rules for localhost..."
+    sudo sed -i '0,/^# TYPE/s/^# TYPE/# Local development: Trust localhost connections\nhost    all             postgres        127.0.0.1\/32            trust\nhost    all             deploy          127.0.0.1\/32            trust\n\n# TYPE/' "$PG_HBA"
+    echo "   ✅ Rules added"
+
+    # Reload PostgreSQL to apply changes
+    echo "🔄 Reloading PostgreSQL..."
+    sudo systemctl reload postgresql
+    echo "   ✅ PostgreSQL reloaded"
+    echo ""
+  fi
+fi
+
+# ============================================================================
 # DEVELOPMENT RESET
 # ============================================================================
 
