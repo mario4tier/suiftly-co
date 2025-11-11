@@ -90,16 +90,29 @@ echo "   ✅ TimescaleDB extension installed"
 
 # Step 4: Apply migrations (as postgres Unix user for peer auth)
 echo "4️⃣  Applying migrations..."
-# Reuse SCRIPT_DIR from top of file (already calculated as absolute path)
-DB_DIR="$(cd "$SCRIPT_DIR/../../packages/database" && pwd)"
+# Calculate absolute paths
+REPO_ROOT="$SCRIPT_DIR/../.."
+DB_DIR="$REPO_ROOT/packages/database"
+MIGRATE_SCRIPT="$DB_DIR/src/migrate.ts"
+TIMESCALE_SCRIPT="$DB_DIR/src/timescale-setup.ts"
+
+# Verify paths exist
+if [ ! -f "$MIGRATE_SCRIPT" ]; then
+  echo "❌ ERROR: Migration script not found at: $MIGRATE_SCRIPT"
+  exit 1
+fi
+
+# Run node directly with absolute paths (no cd required)
 # Use Unix socket with explicit socket directory for peer auth
 # PostgreSQL default socket is in /var/run/postgresql
-sudo -u postgres sh -c "cd '$DB_DIR' && DATABASE_URL='postgresql://postgres@%2Fvar%2Frun%2Fpostgresql:5432/$DB_NAME' node --import tsx src/migrate.ts"
+sudo -u postgres env "DATABASE_URL=postgresql://postgres@%2Fvar%2Frun%2Fpostgresql:5432/$DB_NAME" \
+  node --import tsx "$MIGRATE_SCRIPT"
 echo "   ✅ Migrations applied"
 
 # Step 5: Setup TimescaleDB hypertables
 echo "5️⃣  Setting up TimescaleDB hypertables..."
-sudo -u postgres sh -c "cd '$DB_DIR' && DATABASE_URL='postgresql://postgres@%2Fvar%2Frun%2Fpostgresql:5432/$DB_NAME' node --import tsx src/timescale-setup.ts"
+sudo -u postgres env "DATABASE_URL=postgresql://postgres@%2Fvar%2Frun%2Fpostgresql:5432/$DB_NAME" \
+  node --import tsx "$TIMESCALE_SCRIPT"
 echo "   ✅ TimescaleDB configured"
 
 # Step 6: Grant permissions to deploy user (DML + TRUNCATE for test resets)
