@@ -1,1 +1,0 @@
-ALTER TABLE "service_instances" ADD COLUMN "subscription_charge_pending" boolean DEFAULT true NOT NULL;

@@ -176,7 +176,7 @@ function SealOverviewPage() {
 
         {/* Status Banner - Show for State 3+ */}
         {banner && (
-          <div className={`${banner.bgColor} border ${banner.borderColor} rounded-lg px-3 py-2 flex gap-3`}>
+          <div data-testid="banner-section" className={`${banner.bgColor} border ${banner.borderColor} rounded-lg px-3 py-2 flex gap-3`}>
             <banner.icon className={`h-5 w-5 ${banner.iconColor} flex-shrink-0 mt-0.5`} />
             <div className="flex-1">
               <div className={`text-sm ${banner.textColor}`}>

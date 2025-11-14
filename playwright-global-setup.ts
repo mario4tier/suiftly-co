@@ -9,6 +9,7 @@ import {
   ensureCorrectServer,
   shutdownServer,
   waitForServer,
+  waitForPortFree,
   ExpectedConfig,
 } from './playwright-test-utils';
 
@@ -16,13 +17,21 @@ let apiServer: ChildProcess | null = null;
 let webappServer: ChildProcess | null = null;
 
 async function globalSetup(config: FullConfig) {
-  // Detect which project is running
-  const isShortExpiryRun = process.argv.includes('--project=short-expiry') ||
-                           process.argv.includes('short-expiry');
-  const isNormalExpiryRun = process.argv.includes('--project=normal-expiry') ||
-                           process.argv.includes('normal-expiry');
-  const isChromiumRun = process.argv.includes('--project=chromium') ||
-                       process.argv.includes('chromium');
+  // Detect which project is ACTUALLY running by checking CLI args
+  // Playwright passes all configured projects to globalSetup, not just the one being run
+  const cliArgs = process.argv.join(' ');
+
+  // Check what project was explicitly requested via --project flag
+  const isShortExpiryRun = cliArgs.includes('--project=short-expiry') || cliArgs.includes('--project short-expiry');
+  const isNormalExpiryRun = cliArgs.includes('--project=normal-expiry') || cliArgs.includes('--project normal-expiry');
+  const isChromiumRun = cliArgs.includes('--project=chromium') || cliArgs.includes('--project chromium');
+
+  // If no explicit project specified, default to chromium (normal expiry)
+  const noProjectSpecified = !isShortExpiryRun && !isNormalExpiryRun && !isChromiumRun;
+  const shouldUseNormalExpiry = isNormalExpiryRun || isChromiumRun || noProjectSpecified;
+
+  // Additional check: ensure at least one valid project is detected
+  const hasValidProject = isShortExpiryRun || isNormalExpiryRun || isChromiumRun || noProjectSpecified;
 
   if (isShortExpiryRun) {
     console.log('🧪 Setting up for short-expiry tests (2s access, 10s refresh)...');
@@ -44,6 +53,7 @@ async function globalSetup(config: FullConfig) {
     if (apiStatus.needsRestart) {
       console.log(`🔄 API server needs restart: ${apiStatus.reason}`);
       await shutdownServer('http://localhost:3000', 3000, 'API server');
+      await waitForPortFree(3000);
 
       // Start test API server with short JWT expiry
       console.log('🚀 Starting API server with short JWT expiry...');
@@ -70,6 +80,7 @@ async function globalSetup(config: FullConfig) {
     } catch {
       console.log('🔄 Webapp needs restart');
       await shutdownServer('http://localhost:5173', 5173, 'Webapp');
+      await waitForPortFree(5173);
 
       console.log('🚀 Starting webapp...');
       webappServer = spawn('npm', ['run', 'dev'], {
@@ -83,7 +94,7 @@ async function globalSetup(config: FullConfig) {
 
     console.log('✅ Test servers ready with short JWT expiry');
 
-  } else if (isNormalExpiryRun || isChromiumRun) {
+  } else if (shouldUseNormalExpiry) {
     console.log('ℹ️  Setting up for normal tests (15m access, 30d refresh)...');
 
     const expectedConfig: ExpectedConfig = {
@@ -103,6 +114,7 @@ async function globalSetup(config: FullConfig) {
     if (apiStatus.needsRestart) {
       console.log(`🔄 API server needs restart: ${apiStatus.reason}`);
       await shutdownServer('http://localhost:3000', 3000, 'API server');
+      await waitForPortFree(3000);
 
       // Start API server with normal JWT expiry
       console.log('🚀 Starting API server with normal JWT expiry...');
@@ -128,6 +140,7 @@ async function globalSetup(config: FullConfig) {
     } catch {
       console.log('🔄 Webapp needs restart');
       await shutdownServer('http://localhost:5173', 5173, 'Webapp');
+      await waitForPortFree(5173);
 
       console.log('🚀 Starting webapp...');
       webappServer = spawn('npm', ['run', 'dev'], {
@@ -141,8 +154,21 @@ async function globalSetup(config: FullConfig) {
 
     console.log('✅ Dev servers ready with normal JWT expiry');
 
-  } else {
-    console.log('ℹ️  Skipping global setup (no specific project detected)');
+  } else if (!hasValidProject) {
+    console.error('\n❌ ERROR: Tests must be run properly from the project root!\n');
+    console.error('CLI args:', cliArgs);
+    console.error('\n📋 To run ALL tests:');
+    console.error('  npm run test:all');
+    console.error('\n🎯 To run a specific test file:');
+    console.error('  npx playwright test <test-file> --project=chromium');
+    console.error('\n🎯 To run a specific test case:');
+    console.error('  npx playwright test <test-file>:<line> --project=chromium');
+    console.error('\n📝 Examples:');
+    console.error('  npm run test:all                                               # Run all tests');
+    console.error('  npx playwright test billing-operations.spec.ts --project=chromium  # Run entire file');
+    console.error('  npx playwright test billing-operations.spec.ts:246 --project=chromium  # Run specific test');
+    console.error('  npx playwright test token-refresh.spec.ts --project=short-expiry  # Token refresh tests\n');
+    throw new Error('Test must be run with --project=chromium|normal-expiry|short-expiry from project root, or use npm run test:all');
   }
 }
 

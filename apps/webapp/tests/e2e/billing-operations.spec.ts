@@ -5,17 +5,16 @@
 
 import { test, expect } from '@playwright/test';
 import { resetCustomer, ensureTestBalance } from '../helpers/db';
+import { waitAfterMutation } from '../helpers/wait-utils';
 
 const MOCK_WALLET_ADDRESS = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const API_BASE = 'http://localhost:3000';
 
 test.describe('Billing Operations', () => {
   test.beforeEach(async ({ page }) => {
-    // Reset customer data to clean state
-    await resetCustomer(page.request, {
-      balanceUsdCents: 0,
-      spendingLimitUsdCents: 0, // Unlimited (tests that need a specific limit will set it via deposit)
-    });
+    // Delete customer - will be recreated with production defaults on auth
+    // Production defaults: balance=$0, spending limit=$250
+    await resetCustomer(page.request);
 
     // Clear cookies for clean auth state (prevents test pollution)
     await page.context().clearCookies();
@@ -24,8 +23,8 @@ test.describe('Billing Operations', () => {
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet")');
 
-    // Wait a bit for auth to process (helps with test isolation)
-    await page.waitForTimeout(500);
+    // Wait for auth to process (smart wait - returns as soon as network idle)
+    await waitAfterMutation(page);
 
     await page.waitForURL('/dashboard', { timeout: 10000 });
 
@@ -56,30 +55,30 @@ test.describe('Billing Operations', () => {
     // Click deposit button
     await page.click('button:has-text("Deposit")');
 
-    // Wait for modal to open with animation
-    await page.waitForTimeout(300);
+    // Wait for modal to open (Playwright auto-retries toBeVisible)
     await expect(page.locator('text=Deposit Funds')).toBeVisible();
 
-    // Try to deposit with empty input (should show error)
+    // Verify deposit button is disabled with empty input (client-side validation)
     const submitButton = page.locator('button:has-text("Deposit")').last();
-    await submitButton.click();
-    await page.waitForTimeout(100);
-    await expect(page.locator('text=Please enter a valid amount')).toBeVisible();
+    await expect(submitButton).toBeDisabled();
+    console.log('✅ Deposit button correctly disabled with empty input');
 
     // Enter valid amount
     await page.fill('input[id="depositAmount"]', '100');
 
+    // Button should now be enabled
+    await expect(submitButton).toBeEnabled();
+
     // Submit deposit
     await submitButton.click();
 
-    // Wait for success (toast or modal to close)
-    await page.waitForTimeout(1000);
+    // Wait for mutation to complete (smart wait - returns as soon as network idle)
+    await waitAfterMutation(page);
 
-    // Modal should close
+    // Modal should close (Playwright auto-retries)
     await expect(page.locator('text=Deposit Funds')).not.toBeVisible();
 
-    // Balance should update
-    await page.waitForTimeout(500);
+    // Balance should update (Playwright auto-retries toContainText)
     const balanceSection = page.locator('text=Balance').locator('..');
     await expect(balanceSection).toContainText('100');
 
@@ -110,16 +109,20 @@ test.describe('Billing Operations', () => {
     await expect(page.getByRole('heading', { name: 'Withdraw Funds' })).toBeVisible();
     await expect(page.locator('text=Available balance: $200.00')).toBeVisible();
 
-    // Try to withdraw more than balance (should show error)
+    // Try to withdraw more than balance - button should be disabled (client-side validation)
     await page.fill('input[id="withdrawAmount"]', '250');
-    await page.locator('button:has-text("Withdraw")').last().click();
-    await expect(page.locator('text=Insufficient balance')).toBeVisible();
+    const withdrawButton = page.locator('button:has-text("Withdraw")').last();
+    await expect(withdrawButton).toBeDisabled();
+    console.log('✅ Withdraw button correctly disabled when amount exceeds balance');
 
     // Enter valid amount
     await page.fill('input[id="withdrawAmount"]', '50');
 
+    // Button should now be enabled
+    await expect(withdrawButton).toBeEnabled();
+
     // Submit withdrawal
-    await page.locator('button:has-text("Withdraw")').last().click();
+    await withdrawButton.click();
 
     // Wait for success toast
     await expect(page.locator('text=Withdrew $50.00 successfully')).toBeVisible({ timeout: 5000 });
@@ -134,8 +137,9 @@ test.describe('Billing Operations', () => {
   });
 
   test('adjust spending limit flow', async ({ page }) => {
-    // Spending limit should initially be Unlimited
-    await expect(page.locator('text=Spending Limit Protection').locator('..').locator('text=Unlimited')).toBeVisible();
+    // Spending limit should initially be $250.00 (default)
+    await expect(page.locator('text=Spending Limit Protection')).toBeVisible();
+    await expect(page.locator('text=250.00')).toBeVisible();
 
     // Click adjust spending limit button
     await page.click('button:has-text("Adjust Spending Limit")');
@@ -144,16 +148,20 @@ test.describe('Billing Operations', () => {
     await expect(page.getByRole('heading', { name: 'Adjust Spending Limit' })).toBeVisible();
     await expect(page.locator('text=Set a 28-day spending limit')).toBeVisible();
 
-    // Try to set limit below minimum (should show error)
+    // Try to set limit below minimum - button should be disabled (client-side validation)
     await page.fill('input[id="spendingLimit"]', '5');
-    await page.click('button:has-text("Update Limit")');
-    await expect(page.locator('text=Spending limit must be at least $10')).toBeVisible();
+    const updateButton = page.locator('button:has-text("Update Limit")');
+    await expect(updateButton).toBeDisabled();
+    console.log('✅ Update Limit button correctly disabled for value below $10');
 
     // Enter valid limit
     await page.fill('input[id="spendingLimit"]', '100');
 
+    // Button should now be enabled
+    await expect(updateButton).toBeEnabled();
+
     // Submit update
-    await page.click('button:has-text("Update Limit")');
+    await updateButton.click();
 
     // Wait for success toast
     await expect(page.locator('text=Updated spending limit to $100.00')).toBeVisible({ timeout: 5000 });
@@ -204,11 +212,10 @@ test.describe('Billing Operations', () => {
 
     // Expand billing history
     await page.getByRole('button', { name: 'Billing History' }).click();
-    await page.waitForTimeout(500);
 
-    // Should see deposit and charge in history
+    // Should see deposit and charge in history (Playwright auto-retries)
     await expect(page.locator('text=deposit').first()).toBeVisible();
-    await expect(page.locator('.text-sm.capitalize:has-text("charge")').first()).toBeVisible();
+    await expect(page.locator('text=charge').first()).toBeVisible();
     await expect(page.locator('text=Seal Service - Starter Plan')).toBeVisible();
 
     // Simulate a refund
@@ -228,9 +235,8 @@ test.describe('Billing Operations', () => {
 
     // Expand billing history again
     await page.getByRole('button', { name: 'Billing History' }).click();
-    await page.waitForTimeout(500);
 
-    // Should see credit (refund) in history
+    // Should see credit (refund) in history (Playwright auto-retries)
     await expect(page.locator('text=credit')).toBeVisible();
     await expect(page.locator('text=Partial refund')).toBeVisible();
 
@@ -238,20 +244,9 @@ test.describe('Billing Operations', () => {
   });
 
   test('spending limit enforcement', async ({ page }) => {
-    // Reset with $50 spending limit first (deposit won't update limit for existing customers)
-    await page.request.post(`${API_BASE}/test/data/reset`, {
-      data: {
-        balanceUsdCents: 0,
-        spendingLimitUsdCents: 5000, // $50
-      },
-    });
-
-    // Deposit $100
-    await page.request.post(`${API_BASE}/test/wallet/deposit`, {
-      data: {
-        walletAddress: MOCK_WALLET_ADDRESS,
-        amountUsd: 100,
-      },
+    // Set up $100 balance and $50 spending limit
+    await ensureTestBalance(page.request, 100, {
+      spendingLimitUsd: 50,
     });
 
     await page.reload();
@@ -313,15 +308,15 @@ test.describe('Billing Operations', () => {
 
   test('error handling - network errors', async ({ page }) => {
     // This test would require mocking network failures
-    // For now, just verify error display works
+    // For now, verify button is disabled for negative amounts (client-side validation)
     await page.click('button:has-text("Deposit")');
     await page.fill('input[id="depositAmount"]', '-100');
-    await page.locator('button:has-text("Deposit")').last().click();
 
-    // Should show validation error
-    await expect(page.locator('text=Please enter a valid amount')).toBeVisible();
+    // Button should be disabled for negative amount
+    const depositButton = page.locator('button:has-text("Deposit")').last();
+    await expect(depositButton).toBeDisabled();
 
-    console.log('✅ Error handling displays correctly');
+    console.log('✅ Error handling displays correctly - button disabled for negative amount');
   });
 
   test('modal cancel buttons work correctly', async ({ page }) => {
@@ -342,127 +337,103 @@ test.describe('Billing Operations', () => {
 
 test.describe('Billing Validation Edge Cases', () => {
   test.beforeEach(async ({ page }) => {
-    // Reset customer data and deposit some funds
-    await resetCustomer(page.request, {
-      balanceUsdCents: 0,
-      spendingLimitUsdCents: 0, // Unlimited
-    });
-
-    await page.request.post(`${API_BASE}/test/wallet/deposit`, {
-      data: {
-        walletAddress: MOCK_WALLET_ADDRESS,
-        amountUsd: 100,
-        initialSpendingLimitUsd: 250,
-      },
-    });
+    // Reset to production defaults
+    await resetCustomer(page.request);
 
     // Clear cookies for clean auth state (prevents test pollution)
     await page.context().clearCookies();
 
-    // Authenticate and navigate to billing
+    // Authenticate (this recreates the customer with production defaults)
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet")');
-    await page.waitForTimeout(500);
+    await waitAfterMutation(page);
     await page.waitForURL('/dashboard', { timeout: 10000 });
+
+    // Now set $100 balance (customer exists after auth)
+    await ensureTestBalance(page.request, 100);
+
+    // Navigate to billing
     await page.click('text=Billing');
     await page.waitForURL('/billing', { timeout: 5000 });
   });
 
   test('deposit - button correctly validates inputs', async ({ page }) => {
     await page.click('button:has-text("Deposit")');
-    await page.waitForTimeout(300);
 
     const submitButton = page.locator('button:has-text("Deposit")').last();
 
-    // Empty input - clicking should show error
-    await submitButton.click();
-    await expect(page.locator('text=Please enter a valid amount')).toBeVisible();
+    // Empty input - button should be disabled (client-side validation)
+    await expect(submitButton).toBeDisabled();
 
-    // Negative amount - clicking should show error
+    // Negative amount - button should be disabled
     await page.fill('input[id="depositAmount"]', '-50');
-    await submitButton.click();
-    await expect(page.locator('text=Please enter a valid amount')).toBeVisible();
+    await expect(submitButton).toBeDisabled();
 
-    // Zero - clicking should show error
+    // Zero - button should be disabled
     await page.fill('input[id="depositAmount"]', '0');
-    await submitButton.click();
-    await expect(page.locator('text=Please enter a valid amount')).toBeVisible();
+    await expect(submitButton).toBeDisabled();
 
-    // Valid amount - should work
+    // Valid amount - button should be enabled
     await page.fill('input[id="depositAmount"]', '50');
     await expect(submitButton).toBeEnabled();
 
-    console.log('✅ Deposit button correctly validates inputs');
+    console.log('✅ Deposit button correctly validates inputs via client-side validation');
   });
 
   test('withdraw - button correctly validates inputs', async ({ page }) => {
     await page.reload();
-    await page.waitForTimeout(500);
 
     await page.click('button:has-text("Withdraw")');
-    await page.waitForTimeout(300);
 
     const submitButton = page.locator('button:has-text("Withdraw")').last();
 
-    // Empty input - clicking should show error
-    await submitButton.click();
-    await expect(page.locator('text=Please enter a valid amount')).toBeVisible();
+    // Empty input - button should be disabled (client-side validation)
+    await expect(submitButton).toBeDisabled();
 
-    // Negative amount - clicking should show error
+    // Negative amount - button should be disabled
     await page.fill('input[id="withdrawAmount"]', '-10');
-    await submitButton.click();
-    await expect(page.locator('text=Please enter a valid amount')).toBeVisible();
+    await expect(submitButton).toBeDisabled();
 
-    // Zero - clicking should show error
+    // Zero - button should be disabled
     await page.fill('input[id="withdrawAmount"]', '0');
-    await submitButton.click();
-    await expect(page.locator('text=Please enter a valid amount')).toBeVisible();
+    await expect(submitButton).toBeDisabled();
 
     // Valid amount - button should be enabled
     await page.fill('input[id="withdrawAmount"]', '50');
     await expect(submitButton).toBeEnabled();
 
-    console.log('✅ Withdraw button correctly validates inputs');
+    console.log('✅ Withdraw button correctly validates inputs via client-side validation');
   });
 
   test('withdraw - shows error when exceeding balance', async ({ page }) => {
     await page.reload();
-    await page.waitForTimeout(500);
 
     await page.click('button:has-text("Withdraw")');
-    await page.waitForTimeout(300);
 
-    // Try to withdraw more than balance
+    // Try to withdraw more than balance - button should be disabled (client-side validation)
     await page.fill('input[id="withdrawAmount"]', '150');
     const submitButton = page.locator('button:has-text("Withdraw")').last();
-    await submitButton.click();
+    await expect(submitButton).toBeDisabled();
 
-    // Should show insufficient balance error
-    await expect(page.locator('text=Insufficient balance')).toBeVisible({ timeout: 2000 });
-    await expect(page.locator('text=You have $100.00 available')).toBeVisible();
-
-    console.log('✅ Withdraw correctly shows error when exceeding balance');
+    console.log('✅ Withdraw button correctly disabled when amount exceeds balance');
   });
 
   test('spending limit - button correctly validates inputs', async ({ page }) => {
     await page.click('button:has-text("Adjust Spending Limit")');
-    await page.waitForTimeout(300);
 
     const submitButton = page.locator('button:has-text("Update Limit")');
 
-    // Empty input - clicking should show error
-    await submitButton.click();
-    await expect(page.locator('text=Please enter a valid limit')).toBeVisible();
+    // Clear the pre-filled value, then verify button is disabled for empty input
+    await page.fill('input[id="spendingLimit"]', '');
+    await expect(submitButton).toBeDisabled();
 
-    // Negative amount - clicking should show error
+    // Negative amount - button should be disabled
     await page.fill('input[id="spendingLimit"]', '-50');
-    await submitButton.click();
-    await expect(page.locator('text=Please enter a valid limit')).toBeVisible();
+    await expect(submitButton).toBeDisabled();
 
-    // Below minimum (but not zero) - clicking should show error
+    // Below minimum (but not zero) - button should be disabled
     await page.fill('input[id="spendingLimit"]', '5');
-    await submitButton.click();
-    await expect(page.locator('text=Spending limit must be at least $10')).toBeVisible();
+    await expect(submitButton).toBeDisabled();
 
     // Zero (unlimited) - button should be enabled
     await page.fill('input[id="spendingLimit"]', '0');
@@ -472,45 +443,39 @@ test.describe('Billing Validation Edge Cases', () => {
     await page.fill('input[id="spendingLimit"]', '100');
     await expect(submitButton).toBeEnabled();
 
-    console.log('✅ Spending limit button correctly validates inputs');
+    console.log('✅ Spending limit button correctly validates inputs via client-side validation');
   });
 
   test('spending limit - shows error for amount between 1 and 9', async ({ page }) => {
     await page.click('button:has-text("Adjust Spending Limit")');
-    await page.waitForTimeout(300);
 
     const submitButton = page.locator('button:has-text("Update Limit")');
 
-    // Try amount below minimum
+    // Try amount below minimum - button should be disabled (client-side validation)
     await page.fill('input[id="spendingLimit"]', '5');
+    await expect(submitButton).toBeDisabled();
 
-    // Click submit - should show error
-    await submitButton.click();
-    await expect(page.locator('text=Spending limit must be at least $10')).toBeVisible();
-
-    console.log('✅ Spending limit correctly prevents values below minimum');
+    console.log('✅ Spending limit button correctly disabled for values below minimum');
   });
 
   test('decimal amounts are handled correctly', async ({ page }) => {
     // Ensure we have exactly $100 balance (adjust from previous test state)
     await ensureTestBalance(page.request, 100);
     await page.reload();
-    await page.waitForTimeout(500);
 
     // Test deposit with decimals
     await page.click('button:has-text("Deposit")');
-    await page.waitForTimeout(300);
 
     await page.fill('input[id="depositAmount"]', '25.50');
     const depositButton = page.locator('button:has-text("Deposit")').last();
     await expect(depositButton).toBeEnabled();
     await depositButton.click();
 
-    await page.waitForTimeout(1000);
+    // Wait for mutation to complete (smart wait)
+    await waitAfterMutation(page);
     await expect(page.locator('text=Deposit Funds')).not.toBeVisible();
 
-    // Balance should update to $125.50 (100 + 25.50)
-    await page.waitForTimeout(500);
+    // Balance should update to $125.50 (100 + 25.50) - Playwright auto-retries
     const balanceSection = page.locator('text=Balance').locator('..');
     await expect(balanceSection).toContainText('125.5');
 
@@ -519,7 +484,6 @@ test.describe('Billing Validation Edge Cases', () => {
 
   test('very small amounts (cents) are accepted', async ({ page }) => {
     await page.click('button:has-text("Deposit")');
-    await page.waitForTimeout(300);
 
     await page.fill('input[id="depositAmount"]', '0.01');
     const submitButton = page.locator('button:has-text("Deposit")').last();

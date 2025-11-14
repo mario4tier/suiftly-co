@@ -190,7 +190,9 @@ describe('API Key Generation and Decoding', () => {
       const fp2 = createApiKeyFingerprint(apiKey);
 
       expect(fp1).toBe(fp2);
-      expect(fp1).toHaveLength(64); // SHA256 hex = 64 chars
+      expect(typeof fp1).toBe('number'); // INTEGER fingerprint
+      expect(fp1).toBeGreaterThanOrEqual(-2147483648); // Signed 32-bit range
+      expect(fp1).toBeLessThanOrEqual(2147483647);
     });
 
     it('should generate different fingerprints for different keys', () => {
@@ -200,6 +202,8 @@ describe('API Key Generation and Decoding', () => {
       const fp2 = createApiKeyFingerprint(key2);
 
       expect(fp1).not.toBe(fp2);
+      expect(typeof fp1).toBe('number');
+      expect(typeof fp2).toBe('number');
     });
   });
 
@@ -304,6 +308,101 @@ describe('API Key Generation and Decoding', () => {
       const avgTime = elapsed / keys.length;
 
       expect(avgTime).toBeLessThan(10);
+    });
+  });
+
+  describe('Fingerprint Calculation Verification', () => {
+    it('should extract correct 32-bit fingerprint from first 7 Base32 chars', () => {
+      // Generate multiple keys and verify fingerprint extraction
+      for (let i = 0; i < 100; i++) {
+        const apiKey = generateApiKey(12345 + i, 'seal');
+        const fp = createApiKeyFingerprint(apiKey);
+
+        // Verify fingerprint is within signed 32-bit range
+        expect(fp).toBeGreaterThanOrEqual(-2147483648);
+        expect(fp).toBeLessThanOrEqual(2147483647);
+
+        // Verify fingerprint is deterministic for same key
+        expect(createApiKeyFingerprint(apiKey)).toBe(fp);
+      }
+    });
+
+    it('should handle fingerprints in positive range (< 2^31)', () => {
+      // Generate keys until we get one with positive fingerprint
+      let foundPositive = false;
+      for (let i = 0; i < 100 && !foundPositive; i++) {
+        const apiKey = generateApiKey(i + 1, 'seal');
+        const fp = createApiKeyFingerprint(apiKey);
+        if (fp >= 0) {
+          foundPositive = true;
+          expect(fp).toBeLessThanOrEqual(2147483647);
+          expect(fp).toBeGreaterThanOrEqual(0);
+        }
+      }
+      expect(foundPositive).toBe(true);
+    });
+
+    it('should handle fingerprints in negative range (>= 2^31 as unsigned)', () => {
+      // Probability calculation:
+      // - Each key has ~50% chance of negative fingerprint
+      // - P(no negative in n attempts) = (0.5)^n
+      // - After 10 attempts: 0.098% failure rate
+      // - After 100 attempts: ~10^-30 failure rate (essentially zero)
+      // Strategy: Try 100 attempts (10x the 10 needed for 99.9% confidence)
+
+      let foundNegative = false;
+      const maxAttempts = 100;
+
+      for (let i = 0; i < maxAttempts && !foundNegative; i++) {
+        const apiKey = generateApiKey(10000 + i, 'seal');
+        const fp = createApiKeyFingerprint(apiKey);
+        if (fp < 0) {
+          foundNegative = true;
+          expect(fp).toBeGreaterThanOrEqual(-2147483648);
+          expect(fp).toBeLessThan(0);
+        }
+      }
+
+      // CRITICAL: Assert that we found at least one negative fingerprint
+      expect(foundNegative).toBe(true);
+    });
+
+    it('should produce unique fingerprints for different keys', () => {
+      const fingerprints = new Set<number>();
+      const numKeys = 1000;
+
+      for (let i = 0; i < numKeys; i++) {
+        const apiKey = generateApiKey(i + 1, 'seal');
+        const fp = createApiKeyFingerprint(apiKey);
+        fingerprints.add(fp);
+      }
+
+      // Due to random IVs, all fingerprints should be unique in small sample
+      // (collision probability is ~0.014% at 600K keys, negligible at 1K keys)
+      expect(fingerprints.size).toBe(numKeys);
+    });
+
+    it('should extract fingerprint from Base32 positions (skipping hex)', () => {
+      const apiKey = generateApiKey(12345, 'seal');
+
+      // API key format: <service><interleaved_36_chars>
+      // Service prefix: 1 char (S, R, G)
+      // Fingerprint uses 7 Base32 chars from positions: 1-2, 4-8
+      // (Skips position 3 which contains hex HMAC character)
+      expect(apiKey.length).toBe(37);
+      expect(apiKey[0]).toBe('S');
+
+      const fp = createApiKeyFingerprint(apiKey);
+      expect(typeof fp).toBe('number');
+
+      // Changing position 1 (part of fingerprint) should change the fingerprint
+      const chars = apiKey.split('');
+      // Change to a different Base32 character
+      chars[1] = chars[1] === 'A' ? 'B' : 'A';
+      const modifiedKey = chars.join('');
+
+      const fpModified = createApiKeyFingerprint(modifiedKey);
+      expect(fpModified).not.toBe(fp);
     });
   });
 });

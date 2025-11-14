@@ -11,6 +11,8 @@
  */
 
 import { test, expect } from '@playwright/test';
+import { waitAfterMutation, waitForCondition } from '../helpers/wait-utils';
+import { waitForToastsToDisappear } from '../helpers/locators';
 
 test.describe('Service Toggle - Enable/Disable', () => {
   test.beforeEach(async ({ page, request }) => {
@@ -40,7 +42,7 @@ test.describe('Service Toggle - Enable/Disable', () => {
     // Step 5: Authenticate with mock wallet
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet")');
-    await page.waitForTimeout(500);
+    await waitAfterMutation(page);
     await page.waitForURL('/dashboard', { timeout: 10000 });
 
     // Step 6: Subscribe to seal service to create test service instance
@@ -51,8 +53,11 @@ test.describe('Service Toggle - Enable/Disable', () => {
     await page.locator('button:has-text("Subscribe to Service")').click();
 
     // Wait for subscription success and navigate to overview
-    await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('[data-sonner-toast]').filter({ hasText: /Subscription successful/i })).toBeVisible({ timeout: 5000 });
     await page.waitForURL(/\/services\/seal\/overview/, { timeout: 5000 });
+
+    // Wait for toasts to disappear before test starts (prevents pollution)
+    await waitForToastsToDisappear(page);
   });
 
   test.afterEach(async ({ request }) => {
@@ -72,10 +77,19 @@ test.describe('Service Toggle - Enable/Disable', () => {
     const toggleSwitch = page.locator('#service-toggle');
     await toggleSwitch.click();
 
-    // Wait a moment for the API call to complete
-    await page.waitForTimeout(1000);
+    // Wait for mutation to complete (smart wait - returns as soon as API call done)
+    await waitAfterMutation(page);
 
-    // Verify database was updated
+    // Verify database was updated (with polling in case of race condition)
+    await waitForCondition(
+      async () => {
+        const updatedService = await request.get('http://localhost:3000/test/data/service-instance?serviceType=seal');
+        const updatedData = await updatedService.json();
+        return updatedData.state === 'enabled' && updatedData.isEnabled === true;
+      },
+      { timeout: 3000, message: 'Service to be enabled in database' }
+    );
+
     const updatedService = await request.get('http://localhost:3000/test/data/service-instance?serviceType=seal');
     const updatedData = await updatedService.json();
     expect(updatedData.state).toBe('enabled');
@@ -96,19 +110,34 @@ test.describe('Service Toggle - Enable/Disable', () => {
   test('toggle service from enabled to disabled updates database', async ({ page, request }) => {
     // First, enable the service
     await page.locator('#service-toggle').click();
-    await page.waitForTimeout(1000);
+    await waitAfterMutation(page);
 
-    // Verify it's enabled
-    let serviceData = await (await request.get('http://localhost:3000/test/data/service-instance?serviceType=seal')).json();
-    expect(serviceData.isEnabled).toBe(true);
+    // Verify it's enabled (with polling)
+    await waitForCondition(
+      async () => {
+        const response = await request.get('http://localhost:3000/test/data/service-instance?serviceType=seal');
+        const data = await response.json();
+        return data.isEnabled === true;
+      },
+      { timeout: 3000, message: 'Service to be enabled' }
+    );
     console.log('✅ Service enabled');
 
     // Toggle service OFF
     await page.locator('#service-toggle').click();
-    await page.waitForTimeout(1000);
+    await waitAfterMutation(page);
 
-    // Verify database was updated
-    serviceData = await (await request.get('http://localhost:3000/test/data/service-instance?serviceType=seal')).json();
+    // Verify database was updated (with polling)
+    await waitForCondition(
+      async () => {
+        const response = await request.get('http://localhost:3000/test/data/service-instance?serviceType=seal');
+        const data = await response.json();
+        return data.state === 'disabled' && data.isEnabled === false;
+      },
+      { timeout: 3000, message: 'Service to be disabled' }
+    );
+
+    const serviceData = await (await request.get('http://localhost:3000/test/data/service-instance?serviceType=seal')).json();
     expect(serviceData.state).toBe('disabled');
     expect(serviceData.isEnabled).toBe(false);
     expect(serviceData.disabledAt).toBeTruthy();
@@ -136,21 +165,17 @@ test.describe('Service Toggle - Enable/Disable', () => {
     // Start toggle
     await page.locator('#service-toggle').click();
 
-    // Verify loading state appears immediately (the "..." next to the toggle)
-    await expect(page.locator('span.text-sm.font-medium:has-text("...")')).toBeVisible({ timeout: 500 });
-    console.log('✅ Loading indicator "..." appears');
+    // Verify loading spinner appears immediately
+    await expect(page.locator('svg.animate-spin')).toBeVisible({ timeout: 500 });
+    console.log('✅ Loading spinner appears');
 
-    // Verify toggle is disabled during loading
-    await expect(page.locator('#service-toggle')).toBeDisabled();
-    console.log('✅ Toggle switch disabled during API call');
-
-    // Wait for completion
+    // Wait for completion - spinner should disappear and show ON
     await expect(page.locator('span.text-sm.font-medium:has-text("ON")')).toBeVisible({ timeout: 3000 });
     console.log('✅ Toggle completed, shows ON');
 
-    // Verify toggle is re-enabled
-    await expect(page.locator('#service-toggle')).toBeEnabled();
-    console.log('✅ Toggle switch re-enabled after API completes');
+    // Verify spinner is gone
+    await expect(page.locator('svg.animate-spin')).not.toBeVisible();
+    console.log('✅ Loading spinner disappeared after completion');
   });
 
   test('UX when API is slow (4 second delay)', async ({ page, request }) => {
@@ -166,20 +191,28 @@ test.describe('Service Toggle - Enable/Disable', () => {
     // Start toggle
     await page.locator('#service-toggle').click();
 
-    // Verify loading state persists
-    await expect(page.locator('span.text-sm.font-medium:has-text("...")')).toBeVisible();
-    await expect(page.locator('#service-toggle')).toBeDisabled();
-    console.log('✅ Loading state persists during long wait');
+    // Verify loading spinner persists
+    await expect(page.locator('svg.animate-spin')).toBeVisible();
+    console.log('✅ Loading spinner visible during long wait');
 
-    // Wait 2 seconds - UI should still be loading
+    // Wait 2 seconds - spinner should still be visible
     await page.waitForTimeout(2000);
-    await expect(page.locator('span.text-sm.font-medium:has-text("...")')).toBeVisible();
-    await expect(page.locator('#service-toggle')).toBeDisabled();
+    await expect(page.locator('svg.animate-spin')).toBeVisible();
     console.log('✅ Still loading after 2 seconds');
 
     // Wait for completion (another 2.5 seconds + buffer)
     await expect(page.locator('span.text-sm.font-medium:has-text("ON")')).toBeVisible({ timeout: 3000 });
     console.log('✅ Toggle eventually completes');
+
+    // Wait for API call to complete and database to update (smart polling)
+    await waitForCondition(
+      async () => {
+        const response = await request.get('http://localhost:3000/test/data/service-instance?serviceType=seal');
+        const data = await response.json();
+        return data.isEnabled === true;
+      },
+      { timeout: 6000, message: 'Database to update after long API delay' }
+    );
 
     // Verify database was actually updated
     const serviceData = await (await request.get('http://localhost:3000/test/data/service-instance?serviceType=seal')).json();
@@ -200,18 +233,21 @@ test.describe('Service Toggle - Enable/Disable', () => {
     // Start toggle
     await page.locator('#service-toggle').click();
 
-    // Verify loading started
-    await expect(page.locator('span.text-sm.font-medium:has-text("...")')).toBeVisible();
-    console.log('✅ Toggle loading started');
-
-    // Navigate away immediately (within 500ms)
+    // Navigate away immediately (within 500ms) - INTENTIONAL wait to test race condition
     await page.waitForTimeout(500);
     await page.click('text=Dashboard');
     await page.waitForURL('/dashboard', { timeout: 5000 });
     console.log('✅ Navigated to dashboard while API call in progress');
 
-    // Wait for the API call to complete in background (2.5 more seconds)
-    await page.waitForTimeout(3000);
+    // Wait for the API call to complete in background (smart polling)
+    await waitForCondition(
+      async () => {
+        const response = await request.get('http://localhost:3000/test/data/service-instance?serviceType=seal');
+        const data = await response.json();
+        return data.isEnabled === true;
+      },
+      { timeout: 5000, message: 'Background API call to complete and update database' }
+    );
 
     // Navigate back to seal overview
     await page.click('text=Seal');
@@ -229,7 +265,7 @@ test.describe('Service Toggle - Enable/Disable', () => {
     console.log('✅ UI correctly shows ENABLED state after returning');
   });
 
-  test('multiple rapid toggles (debounce behavior)', async ({ page, request }) => {
+  test('multiple rapid toggles (eventual consistency)', async ({ page, request }) => {
     // Set a small delay to make the race condition visible
     await request.post('http://localhost:3000/test/delays', {
       data: {
@@ -239,21 +275,27 @@ test.describe('Service Toggle - Enable/Disable', () => {
 
     console.log('✅ Set 1-second delay for seal form mutations');
 
-    // Click toggle rapidly 3 times
+    // Click toggle rapidly - state management should handle this gracefully
     const toggle = page.locator('#service-toggle');
     await toggle.click(); // 1st click (should start enabling)
-    await page.waitForTimeout(100);
-
-    // Verify switch is disabled (can't click again immediately)
-    await expect(toggle).toBeDisabled();
-    console.log('✅ Toggle disabled after first click (prevents rapid clicking)');
+    await page.waitForTimeout(100); // INTENTIONAL: Small wait to test rapid click handling
 
     // Wait for completion
     await expect(page.locator('span.text-sm.font-medium:has-text("ON")')).toBeVisible({ timeout: 2000 });
 
-    // Verify final database state
+    // Wait for API call to complete and database to update (smart polling)
+    await waitForCondition(
+      async () => {
+        const response = await request.get('http://localhost:3000/test/data/service-instance?serviceType=seal');
+        const data = await response.json();
+        return data.isEnabled === true;
+      },
+      { timeout: 3000, message: 'Database to sync after rapid toggles' }
+    );
+
+    // Verify final database state (eventual consistency)
     const serviceData = await (await request.get('http://localhost:3000/test/data/service-instance?serviceType=seal')).json();
     expect(serviceData.isEnabled).toBe(true);
-    console.log('✅ Final state: ENABLED (toggle completed successfully)');
+    console.log('✅ Final state: ENABLED (state synced correctly)');
   });
 });

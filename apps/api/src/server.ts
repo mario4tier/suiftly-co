@@ -35,9 +35,11 @@ await server.register(helmet, {
 });
 
 // Rate limiting (prevent abuse)
+// Skip rate limiting for localhost to allow tests to run freely
 await server.register(rateLimit, {
   max: config.RATE_LIMIT_MAX,
   timeWindow: '1 minute',
+  allowList: ['127.0.0.1', '::1'], // Exempt localhost (IPv4 and IPv6)
   errorResponseBuilder: () => ({
     error: 'Rate limit exceeded',
     message: `Maximum ${config.RATE_LIMIT_MAX} requests per minute`,

@@ -8,6 +8,7 @@
  */
 
 import { test, expect } from '@playwright/test';
+import { getBanner } from '../helpers/locators';
 
 test.describe('Subscription Without Funds', () => {
   test.beforeEach(async ({ page, request }) => {
@@ -50,7 +51,8 @@ test.describe('Subscription Without Funds', () => {
     await expect(page.locator('h3:has-text("Guaranteed Bandwidth")')).not.toBeVisible({ timeout: 5000 });
 
     // Should show payment pending banner (not the normal disabled state banner)
-    await expect(page.locator('text=/Subscription payment pending.*Deposit funds/i')).toBeVisible({ timeout: 5000 });
+    await expect(getBanner(page)).toContainText('Subscription payment pending', { timeout: 5000 });
+    await expect(getBanner(page)).toContainText('Add funds via');
 
     // Should see the service toggle (interactive form is shown)
     await expect(page.locator('#service-toggle')).toBeVisible({ timeout: 5000 });
@@ -67,7 +69,7 @@ test.describe('Subscription Without Funds', () => {
     // Verify service was created by checking that interactive form is shown
     // (which only happens if service exists in database)
     await expect(page.locator('#service-toggle')).toBeVisible({ timeout: 5000 });
-    await expect(page.locator('text=/Subscription payment pending/i')).toBeVisible();
+    await expect(getBanner(page)).toContainText('Subscription payment pending');
 
     console.log('✅ Service created in database with subscriptionChargePending=true');
   });
@@ -79,13 +81,13 @@ test.describe('Subscription Without Funds', () => {
     await page.waitForTimeout(2000);
 
     // Should be showing interactive form with payment pending banner
-    await expect(page.locator('text=/Subscription payment pending/i')).toBeVisible({ timeout: 5000 });
+    await expect(getBanner(page)).toContainText('Subscription payment pending', { timeout: 5000 });
 
     // Refresh page
     await page.reload();
 
     // Should still show interactive form with payment pending banner (not revert to onboarding)
-    await expect(page.locator('text=/Subscription payment pending/i')).toBeVisible({ timeout: 5000 });
+    await expect(getBanner(page)).toContainText('Subscription payment pending', { timeout: 5000 });
     await expect(page.locator('h3:has-text("Guaranteed Bandwidth")')).not.toBeVisible();
 
     console.log('✅ Interactive form state persists across page refresh');
@@ -108,7 +110,7 @@ test.describe('Subscription Without Funds', () => {
     await toggle.click();
 
     // Should show error toast about needing to deposit funds
-    await expect(page.locator('[data-sonner-toast]').filter({ hasText: /Deposit funds/i })).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('[data-sonner-toast]').filter({ hasText: /Insufficient funds.*Deposit/i })).toBeVisible({ timeout: 5000 });
 
     // Service should remain OFF
     await expect(toggle).not.toBeChecked();
@@ -131,7 +133,7 @@ test.describe('Subscription Without Funds', () => {
     await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
 
     // Should show interactive form with payment pending banner (not onboarding)
-    await expect(page.locator('text=/Subscription payment pending/i')).toBeVisible({ timeout: 5000 });
+    await expect(getBanner(page)).toContainText('Subscription payment pending', { timeout: 5000 });
     await expect(page.locator('h3:has-text("Guaranteed Bandwidth")')).not.toBeVisible();
 
     console.log('✅ After navigating away and back, interactive form is shown');

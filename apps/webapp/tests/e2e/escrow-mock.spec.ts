@@ -13,6 +13,7 @@
  */
 
 import { test, expect } from '@playwright/test';
+import { waitAfterMutation, waitForCondition } from '../helpers/wait-utils';
 
 const MOCK_WALLET_ADDRESS = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const API_BASE = 'http://localhost:3000';
@@ -34,8 +35,8 @@ test.describe('Escrow Mock - Wallet Operations', () => {
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet")');
 
-    // Wait a bit for auth to process (helps with test isolation)
-    await page.waitForTimeout(500);
+    // Wait for auth to process (smart wait - returns as soon as network idle)
+    await waitAfterMutation(page);
 
     await page.waitForURL('/dashboard', { timeout: 10000 });
   });
@@ -208,8 +209,8 @@ test.describe('Escrow Mock - Service Subscription Scenarios', () => {
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet")');
 
-    // Wait a bit for auth to process (helps with test isolation)
-    await page.waitForTimeout(500);
+    // Wait for auth to process (smart wait - returns as soon as network idle)
+    await waitAfterMutation(page);
 
     await page.waitForURL('/dashboard', { timeout: 10000 });
   });
@@ -280,8 +281,8 @@ test.describe('Escrow Mock - Service Subscription Scenarios', () => {
     await subscribeButton.click();
 
     // Backend should reject with insufficient balance error
-    // Wait for error message to appear
-    await page.waitForTimeout(2000); // Give time for API call
+    // Wait for API call to complete (smart wait - returns as soon as network idle)
+    await waitAfterMutation(page);
 
     console.log('✅ Subscription correctly rejected - insufficient balance');
 
@@ -330,8 +331,20 @@ test.describe('Escrow Mock - Service Subscription Scenarios', () => {
     // Try to subscribe - should fail because $185 > $50 limit
     await page.locator('button:has-text("Subscribe to Service")').click();
 
-    // Wait for subscription request to complete
-    await page.waitForTimeout(2000);
+    // Wait for subscription request to complete (smart wait - returns as soon as network idle)
+    await waitAfterMutation(page);
+
+    // Wait for service to be created in database (with polling)
+    await waitForCondition(
+      async () => {
+        const response = await page.request.get(`${API_BASE}/test/data/customer`, {
+          params: { walletAddress: MOCK_WALLET_ADDRESS },
+        });
+        const data = await response.json();
+        return data.services && data.services.length === 1;
+      },
+      { timeout: 3000, message: 'Service to be created in database' }
+    );
 
     // Verify spending limit was enforced (service-first architecture):
     // Service IS created with subscriptionChargePending=true when charge fails
@@ -371,7 +384,7 @@ test.describe('Subscription Charge Architecture - Critical Business Logic', () =
     // Authenticate
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet")');
-    await page.waitForTimeout(500);
+    await waitAfterMutation(page);
     await page.waitForURL('/dashboard', { timeout: 10000 });
 
     // Deposit $100 to create mock wallet account (needed for charges to work)
@@ -436,13 +449,16 @@ test.describe('Subscription Charge Architecture - Critical Business Logic', () =
     // Accept terms
     await page.locator('label:has-text("Agree to")').click();
 
-    // Subscribe with default PRO tier ($29) - should fail with insufficient balance
+    // Subscribe with default PRO tier ($29) - should succeed with pending=true
     const subscribeButton = page.locator('button:has-text("Subscribe to Service")');
     await subscribeButton.click();
 
-    // Should see error toast
-    const errorToast = page.locator('[data-sonner-toast]').filter({ hasText: /insufficient balance/i });
-    await expect(errorToast).toBeVisible({ timeout: 5000 });
+    // Wait for subscription to complete (service-first architecture: returns success with pending=true)
+    await waitAfterMutation(page);
+
+    // Should see warning banner about pending payment (not an error toast)
+    const pendingBanner = page.locator('[data-testid="banner-section"]').getByText('Subscription payment pending');
+    await expect(pendingBanner).toBeVisible({ timeout: 5000 });
 
     // CRITICAL: Verify service was created in DISABLED state with pending=true
     const customerData = await page.request.get(`${API_BASE}/test/data/customer`, {

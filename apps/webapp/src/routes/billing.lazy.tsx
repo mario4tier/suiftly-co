@@ -266,7 +266,7 @@ function BillingPage() {
           <div>
             <div className="text-sm text-gray-500">Spending Limit Protection</div>
             <div className="text-2xl font-bold">
-              {!spendingLimit ? (
+              {spendingLimit == null ? (
                 'Unlimited'
               ) : (
                 <>

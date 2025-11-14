@@ -15,6 +15,7 @@ import { randomBytes, createCipheriv, createDecipheriv, createHmac, createHash }
 import { db } from '@suiftly/database';
 import { apiKeys } from '@suiftly/database/schema';
 import { eq, and, isNull } from 'drizzle-orm';
+import { encryptSecret, decryptSecret } from './encryption';
 
 /**
  * API_SECRET_KEY - 32-byte key for AES-128-CTR encryption and HMAC-SHA256
@@ -397,15 +398,57 @@ export function decodeApiKey(apiKey: string): DecodedApiKey {
 // ============================================================================
 
 /**
- * Create API key fingerprint for database lookups
- * Uses SHA256 hash of the full API key
+ * Convert unsigned 32-bit integer to signed (for PostgreSQL storage)
+ * Values >= 2^31 become negative via two's complement
  */
-export function createApiKeyFingerprint(apiKey: string): string {
-  return createHash('sha256').update(apiKey).digest('hex');
+function toSigned32(unsigned: number): number {
+  return unsigned > 0x7FFFFFFF ? unsigned - 0x100000000 : unsigned;
+}
+
+/**
+ * Convert signed 32-bit integer to unsigned (for fingerprint calculation)
+ * Negative values become values >= 2^31
+ */
+function toUnsigned32(signed: number): number {
+  return signed < 0 ? signed + 0x100000000 : signed;
+}
+
+/**
+ * Create API key fingerprint for database lookups
+ * Extracts 7 Base32 characters from interleaved string (skipping hex HMAC positions)
+ * Returns signed INTEGER for PostgreSQL storage
+ */
+export function createApiKeyFingerprint(apiKey: string): number {
+  if (apiKey.length !== 37) {
+    throw new Error('Invalid API key length');
+  }
+
+  // Interleaving swaps hex HMAC characters into Base32 payload:
+  //   interleaved[2] ↔ tag[0] (hex) → apiKey[3]
+  //   interleaved[8] ↔ tag[3] (hex) → apiKey[9]
+  //   interleaved[15] ↔ tag[2] (hex) → apiKey[16]
+  //   interleaved[23] ↔ tag[1] (hex) → apiKey[24]
+  //
+  // Extract 7 Base32 chars (skip service prefix at 0, skip hex positions):
+  // Positions: 1, 2, 4, 5, 6, 7, 8 (all guaranteed Base32)
+  const fingerprintChars =
+    apiKey.slice(1, 3) +  // Positions 1-2
+    apiKey.slice(4, 9);   // Positions 4-8 (skip 3 which is hex)
+
+  // Decode Base32 to get 32-bit unsigned integer
+  // 7 Base32 chars encode 35 bits, but we only use 32 bits
+  const decoded = base32Decode(fingerprintChars);
+
+  // Read as 32-bit unsigned big-endian integer
+  const unsigned = decoded.readUInt32BE(0);
+
+  // Convert to signed for PostgreSQL INTEGER storage
+  return toSigned32(unsigned);
 }
 
 /**
  * Store a new API key in the database
+ * Implements collision retry on api_key_fp (32-bit fingerprint can collide)
  */
 export async function storeApiKey(options: {
   customerId: number;
@@ -415,43 +458,67 @@ export async function storeApiKey(options: {
   metadata?: Record<string, any>;
   tx?: any; // Optional transaction object
 }) {
-  const plainKey = generateApiKey(
-    options.customerId,
-    options.serviceType,
-    {
-      sealType: options.sealType,
-      procGroup: options.procGroup,
-    }
-  );
-
-  const fingerprint = createApiKeyFingerprint(plainKey);
-  const decoded = decodeApiKey(plainKey);
-
-  // Use transaction object if provided, otherwise use global db
+  const MAX_RETRIES = 10;
   const dbOrTx = options.tx || db;
 
-  const [record] = await dbOrTx
-    .insert(apiKeys)
-    .values({
-      apiKeyId: plainKey,
-      apiKeyFp: fingerprint,
-      customerId: options.customerId,
-      serviceType: options.serviceType,
-      metadata: {
-        ...options.metadata,
-        version: decoded.metadata.version,
-        sealType: decoded.metadata.sealType,
-        procGroup: decoded.metadata.procGroup,
-      },
-      isActive: true,
-      createdAt: new Date(),
-    })
-    .returning();
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    // Generate new API key on each attempt (not just new fingerprint)
+    const plainKey = generateApiKey(
+      options.customerId,
+      options.serviceType,
+      {
+        sealType: options.sealType,
+        procGroup: options.procGroup,
+      }
+    );
 
-  return {
-    record,
-    plainKey, // Return this to show user (only once!)
-  };
+    const fingerprint = createApiKeyFingerprint(plainKey);
+    const decoded = decodeApiKey(plainKey);
+
+    try {
+      // Encrypt API key before storing (AES-256-GCM with random IV)
+      const encryptedKey = encryptSecret(plainKey);
+
+      const [record] = await dbOrTx
+        .insert(apiKeys)
+        .values({
+          apiKeyId: encryptedKey, // Store encrypted
+          apiKeyFp: fingerprint,
+          customerId: options.customerId,
+          serviceType: options.serviceType,
+          metadata: {
+            ...options.metadata,
+            version: decoded.metadata.version,
+            sealType: decoded.metadata.sealType,
+            procGroup: decoded.metadata.procGroup,
+          },
+          isActive: true,
+          createdAt: new Date(),
+        })
+        .returning();
+
+      return {
+        record,
+        plainKey, // Return this to show user (only once!)
+      };
+    } catch (error: any) {
+      // Check if it's a primary key collision on api_key_fp
+      if (error.code === '23505' && error.constraint === 'api_keys_pkey') {
+        // Collision on fingerprint - retry with new API key
+        if (attempt === MAX_RETRIES - 1) {
+          throw new Error('Failed to generate unique API key fingerprint after multiple attempts');
+        }
+        // Continue to next iteration
+        continue;
+      }
+
+      // Different error - rethrow
+      throw error;
+    }
+  }
+
+  // Should never reach here due to throw in loop, but TypeScript needs this
+  throw new Error('Failed to generate unique API key fingerprint');
 }
 
 /**
@@ -472,8 +539,13 @@ export async function verifyApiKey(apiKey: string) {
 
 /**
  * Revoke an API key (soft delete)
+ * @param apiKey - The plain (unencrypted) API key string
+ * @param customerId - Customer ID for security verification
  */
-export async function revokeApiKey(apiKeyId: string, customerId: number): Promise<boolean> {
+export async function revokeApiKey(apiKey: string, customerId: number): Promise<boolean> {
+  // Calculate fingerprint for lookup (api_key_id is encrypted, can't be used in WHERE)
+  const fingerprint = createApiKeyFingerprint(apiKey);
+
   const result = await db
     .update(apiKeys)
     .set({
@@ -482,7 +554,7 @@ export async function revokeApiKey(apiKeyId: string, customerId: number): Promis
     })
     .where(
       and(
-        eq(apiKeys.apiKeyId, apiKeyId),
+        eq(apiKeys.apiKeyFp, fingerprint),
         eq(apiKeys.customerId, customerId)
       )
     )
@@ -494,8 +566,13 @@ export async function revokeApiKey(apiKeyId: string, customerId: number): Promis
 /**
  * Delete an API key (soft delete - marks as deleted but keeps in database)
  * This is irreversible from the UI but preserves data for debugging/audit
+ * @param apiKey - The plain (unencrypted) API key string
+ * @param customerId - Customer ID for security verification
  */
-export async function deleteApiKey(apiKeyId: string, customerId: number): Promise<boolean> {
+export async function deleteApiKey(apiKey: string, customerId: number): Promise<boolean> {
+  // Calculate fingerprint for lookup (api_key_id is encrypted, can't be used in WHERE)
+  const fingerprint = createApiKeyFingerprint(apiKey);
+
   const result = await db
     .update(apiKeys)
     .set({
@@ -503,7 +580,7 @@ export async function deleteApiKey(apiKeyId: string, customerId: number): Promis
     })
     .where(
       and(
-        eq(apiKeys.apiKeyId, apiKeyId),
+        eq(apiKeys.apiKeyFp, fingerprint),
         eq(apiKeys.customerId, customerId)
       )
     )
@@ -515,8 +592,13 @@ export async function deleteApiKey(apiKeyId: string, customerId: number): Promis
 /**
  * Re-enable a revoked API key
  * Can only re-enable keys that are revoked but not deleted
+ * @param apiKey - The plain (unencrypted) API key string
+ * @param customerId - Customer ID for security verification
  */
-export async function reEnableApiKey(apiKeyId: string, customerId: number): Promise<boolean> {
+export async function reEnableApiKey(apiKey: string, customerId: number): Promise<boolean> {
+  // Calculate fingerprint for lookup (api_key_id is encrypted, can't be used in WHERE)
+  const fingerprint = createApiKeyFingerprint(apiKey);
+
   const result = await db
     .update(apiKeys)
     .set({
@@ -525,7 +607,7 @@ export async function reEnableApiKey(apiKeyId: string, customerId: number): Prom
     })
     .where(
       and(
-        eq(apiKeys.apiKeyId, apiKeyId),
+        eq(apiKeys.apiKeyFp, fingerprint),
         eq(apiKeys.customerId, customerId),
         eq(apiKeys.isActive, false) // Only re-enable if currently revoked
       )

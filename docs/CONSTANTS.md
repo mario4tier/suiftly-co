@@ -160,6 +160,86 @@ export const BALANCE_LIMITS = {
 
 ---
 
+## Database Field Length Limits
+
+**Model:** TypeScript constants defining VARCHAR length constraints for database fields
+
+All database VARCHAR field lengths are defined as constants to ensure consistency between:
+- Database schema definitions (Drizzle ORM)
+- Validation schemas (Zod)
+- Tests and mock data
+- Documentation
+
+**Implementation:**
+```typescript
+// packages/shared/src/constants/index.ts
+export const FIELD_LIMITS = {
+  // Sui blockchain identifiers
+  SUI_ADDRESS: 66,          // Wallet addresses, package addresses, contract IDs
+  SUI_TX_DIGEST: 64,        // Transaction digests/hashes
+  SUI_PUBLIC_KEY: 66,       // Public keys
+
+  // API Keys (encrypted storage)
+  API_KEY_ID: 150,          // Encrypted: IV:authTag:ciphertext (~102 chars actual)
+
+  // Authentication & Security
+  AUTH_NONCE: 64,           // Challenge nonces
+  TOKEN_HASH: 64,           // Session token hashes
+
+  // Service identifiers
+  SERVICE_TYPE: 20,         // 'seal', 'grpc', 'graphql'
+  SERVICE_STATE: 30,        // 'not_provisioned', 'enabled', 'suspended_*', etc.
+  SERVICE_TIER: 20,         // 'starter', 'pro', 'enterprise'
+
+  // Status fields
+  CUSTOMER_STATUS: 20,      // 'active', 'suspended', 'closed'
+  TRANSACTION_TYPE: 20,     // 'deposit', 'withdraw', 'charge', 'credit'
+  BILLING_STATUS: 20,       // 'pending', 'paid', 'failed'
+
+  // User-provided names
+  PACKAGE_NAME: 100,        // Seal package names
+
+  // Business identifiers
+  INVOICE_ID: 50,           // Invoice references
+
+  // System versioning
+  VAULT_VERSION: 64,        // MA/MM vault version hashes
+} as const;
+```
+
+**Usage in Database Schema:**
+```typescript
+// packages/database/src/schema/api_keys.ts
+import { FIELD_LIMITS } from '@suiftly/shared/constants';
+
+export const apiKeys = pgTable('api_keys', {
+  apiKeyId: varchar('api_key_id', { length: FIELD_LIMITS.API_KEY_ID }).notNull(),
+  // ... other fields
+});
+```
+
+**Usage in Validation Schema:**
+```typescript
+// packages/shared/src/schemas/api-key.ts
+import { FIELD_LIMITS } from '../constants';
+
+export const apiKeySchema = z.object({
+  apiKeyId: z.string().max(FIELD_LIMITS.API_KEY_ID),
+  // ... other fields
+});
+```
+
+**Benefits:**
+- Single source of truth for all VARCHAR lengths
+- Compiler errors if limits change and code isn't updated
+- No magic numbers scattered across codebase
+- Consistent validation across database, API, and frontend
+- Self-documenting field constraints
+
+**Note:** TEXT fields (like `description`, `encrypted_private_key`) don't need constants as they have no practical length limit.
+
+---
+
 ## Usage
 
 **In Documentation:**

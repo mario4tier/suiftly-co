@@ -5,6 +5,7 @@
  */
 
 import { test, expect } from '@playwright/test';
+import { getBanner, waitForToastsToDisappear } from '../helpers/locators';
 
 test.describe('Subscription Pricing Validation', () => {
   test.beforeEach(async ({ page }) => {
@@ -40,7 +41,7 @@ test.describe('Subscription Pricing Validation', () => {
     await subscribeButton.click();
 
     // Should create service and show payment pending banner (no error toast)
-    await expect(page.locator('text=/Subscription payment pending/i')).toBeVisible({ timeout: 5000 });
+    await expect(getBanner(page)).toContainText('Subscription payment pending', { timeout: 5000 });
     await expect(page.locator('#service-toggle')).toBeVisible();
 
     console.log('✅ STARTER tier: Service created with payment pending');
@@ -69,7 +70,7 @@ test.describe('Subscription Pricing Validation', () => {
     await subscribeButton.click();
 
     // Should create service with payment pending banner
-    await expect(page.locator('text=/Subscription payment pending/i')).toBeVisible({ timeout: 5000 });
+    await expect(getBanner(page)).toContainText('Subscription payment pending', { timeout: 5000 });
     await expect(page.locator('#service-toggle')).toBeVisible();
 
     console.log('✅ PRO tier creates service with payment pending when funds insufficient');
@@ -136,7 +137,7 @@ test.describe('Subscription Pricing Validation', () => {
     await subscribeButton.click();
 
     // Should create service with payment pending banner
-    await expect(page.locator('text=/Subscription payment pending/i')).toBeVisible({ timeout: 5000 });
+    await expect(getBanner(page)).toContainText('Subscription payment pending', { timeout: 5000 });
     await expect(page.locator('#service-toggle')).toBeVisible();
 
     console.log('✅ STARTER tier creates service with payment pending when funds insufficient');
@@ -204,7 +205,7 @@ test.describe('Subscription Pricing Validation', () => {
     await subscribeButton.click();
 
     // Should create service with payment pending banner
-    await expect(page.locator('text=/Subscription payment pending/i')).toBeVisible({ timeout: 5000 });
+    await expect(getBanner(page)).toContainText('Subscription payment pending', { timeout: 5000 });
     await expect(page.locator('#service-toggle')).toBeVisible();
 
     console.log('✅ ENTERPRISE tier creates service with payment pending when funds insufficient');

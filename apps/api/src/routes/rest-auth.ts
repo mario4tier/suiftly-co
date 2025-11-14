@@ -13,7 +13,7 @@ import { getJWTConfig, parseExpiryToMs } from '../lib/jwt-config';
 import { db, logActivity } from '@suiftly/database';
 import { customers, authNonces, refreshTokens } from '@suiftly/database/schema';
 import { eq, and, gt } from 'drizzle-orm';
-import { randomBytes, createHash } from 'crypto';
+import { randomBytes, randomInt, createHash } from 'crypto';
 
 const MOCK_AUTH = process.env.MOCK_AUTH === 'true';
 const NONCE_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes (user-friendly, still secure)
@@ -180,7 +180,7 @@ export async function registerAuthRoutes(server: FastifyInstance) {
       let inserted = false;
 
       for (let attempt = 0; attempt < MAX_RETRIES && !inserted; attempt++) {
-        customerId = Math.floor(Math.random() * 2147483647) + 1;
+        customerId = randomInt(1, 2147483648); // Cryptographically secure random [1, 2^31-1]
 
         try {
           await db.insert(customers).values({

@@ -1,14 +1,16 @@
 import { z } from 'zod';
-import { SERVICE_TYPE } from '../constants';
+import { SERVICE_TYPE, FIELD_LIMITS } from '../constants';
 
 /**
  * API Key validation schemas
  * Based on api_keys table in CUSTOMER_SERVICE_SCHEMA.md
  */
 
-// API key fingerprint (4-byte hex, from first 7 Base32 chars)
-export const apiKeyFingerprintSchema = z.string()
-  .regex(/^[a-f0-9]{8}$/, 'Invalid API key fingerprint (must be 8 hex chars)');
+// API key fingerprint (32-bit integer, from first 7 Base32 chars)
+// Stored as signed INTEGER in PostgreSQL (-2^31 to 2^31-1)
+export const apiKeyFingerprintSchema = z.number().int()
+  .min(-2147483648)
+  .max(2147483647);
 
 // Seal-specific metadata (stored in JSONB)
 export const sealApiKeyMetadataSchema = z.object({
@@ -27,7 +29,7 @@ export const apiKeyMetadataSchema = z.union([
 
 // API key schema
 export const apiKeySchema = z.object({
-  apiKeyId: z.string().max(100),
+  apiKeyId: z.string().max(FIELD_LIMITS.API_KEY_ID),
   apiKeyFp: apiKeyFingerprintSchema,
   customerId: z.number().int().positive(),
   serviceType: z.enum([SERVICE_TYPE.SEAL, SERVICE_TYPE.GRPC, SERVICE_TYPE.GRAPHQL]),

@@ -322,15 +322,15 @@ export function SealInteractiveForm({
   };
 
   const handleRevokeApiKey = async (keyId: string) => {
-    await revokeApiKeyMutation.mutateAsync({ apiKeyId: keyId });
+    await revokeApiKeyMutation.mutateAsync({ apiKeyFp: parseInt(keyId, 10) });
   };
 
   const handleReEnableApiKey = async (keyId: string) => {
-    await reEnableApiKeyMutation.mutateAsync({ apiKeyId: keyId });
+    await reEnableApiKeyMutation.mutateAsync({ apiKeyFp: parseInt(keyId, 10) });
   };
 
   const handleDeleteApiKey = async (keyId: string) => {
-    await deleteApiKeyMutation.mutateAsync({ apiKeyId: keyId });
+    await deleteApiKeyMutation.mutateAsync({ apiKeyFp: parseInt(keyId, 10) });
   };
 
   // Helper function to format relative time
@@ -349,7 +349,7 @@ export function SealInteractiveForm({
 
   // Format API keys for display
   const formattedApiKeys = apiKeys?.map(key => ({
-    id: key.apiKeyId,
+    id: key.apiKeyFp.toString(), // Use fingerprint (PRIMARY KEY) for identification
     key: key.keyPreview,
     isRevoked: !key.isActive,
     createdAt: formatRelativeTime(new Date(key.createdAt)),

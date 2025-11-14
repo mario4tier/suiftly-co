@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { FIELD_LIMITS } from '../constants';
 
 /**
  * Authentication validation schemas
@@ -12,7 +13,7 @@ export const walletConnectSchema = z.object({
 
 // Nonce response
 export const nonceResponseSchema = z.object({
-  nonce: z.string().min(32), // Random challenge string
+  nonce: z.string().max(FIELD_LIMITS.AUTH_NONCE), // Random challenge string
   expiresAt: z.string().datetime(),
 });
 
@@ -43,7 +44,7 @@ export const authResponseSchema = z.object({
 export const refreshTokenSchema = z.object({
   id: z.number().int(),
   customerId: z.number().int().positive(),
-  tokenHash: z.string().length(64), // SHA256 hash
+  tokenHash: z.string().max(FIELD_LIMITS.TOKEN_HASH), // SHA256 hash
   expiresAt: z.date().or(z.string().datetime()),
   createdAt: z.date().or(z.string().datetime()),
 });

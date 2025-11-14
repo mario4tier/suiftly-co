@@ -7,6 +7,17 @@
 import { db } from './src/db';
 import { customers, serviceInstances, apiKeys } from './src/schema';
 import { eq } from 'drizzle-orm';
+import { createCipheriv, randomBytes } from 'crypto';
+
+// Mock encryption for test (in production, use proper encryption utility)
+function mockEncryptSecret(plaintext: string): string {
+  // For test purposes, just return a mock encrypted format
+  // Real encryption should use apps/api/src/lib/encryption.ts
+  const iv = randomBytes(16).toString('base64');
+  const authTag = randomBytes(16).toString('base64');
+  const ciphertext = Buffer.from(plaintext).toString('base64');
+  return `${iv}:${authTag}:${ciphertext}`;
+}
 
 async function testDatabase() {
   console.log('🧪 Testing database schema...\n');
@@ -45,9 +56,12 @@ async function testDatabase() {
 
     // Test 4: Insert an API key with JSONB metadata
     console.log('\nTest 4: Creating API key with JSONB metadata...');
+    const plainApiKey = `test_key_${testCustomerId}`;
+    const encryptedApiKey = mockEncryptSecret(plainApiKey);
+
     await db.insert(apiKeys).values({
-      apiKeyId: `test_key_${testCustomerId}`,
-      apiKeyFp: '48656c72', // 4-byte fingerprint
+      apiKeyId: encryptedApiKey, // Store encrypted (IV:authTag:ciphertext format)
+      apiKeyFp: 1214606450, // 32-bit integer fingerprint (0x48656c72)
       customerId: testCustomerId,
       serviceType: 'seal',
       metadata: {
@@ -59,12 +73,22 @@ async function testDatabase() {
       },
       isActive: true,
     });
-    console.log('✓ API key created with metadata');
+    console.log('✓ API key created with encrypted api_key_id and metadata');
 
     // Test 5: Query with JSONB
     console.log('\nTest 5: Querying API key metadata...');
-    const keys = await db.select().from(apiKeys).where(eq(apiKeys.customerId, 12345678));
-    console.log('✓ API key metadata:', keys[0]?.metadata);
+    const keys = await db.select().from(apiKeys).where(eq(apiKeys.customerId, testCustomerId));
+    if (!keys[0]) {
+      throw new Error('API key not found - query returned no results');
+    }
+    console.log('✓ API key metadata:', keys[0].metadata);
+
+    // Validate the metadata structure
+    const metadata = keys[0].metadata as any;
+    if (metadata.key_version !== 1 || metadata.seal_network !== 1) {
+      throw new Error('Metadata validation failed - JSONB not stored correctly');
+    }
+    console.log('✓ JSONB metadata validated successfully');
 
     // Test 6: Verify foreign key constraints work
     console.log('\nTest 6: Testing foreign key constraint...');

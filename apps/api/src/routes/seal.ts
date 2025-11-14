@@ -12,6 +12,7 @@ import { eq, and, sql, isNull } from 'drizzle-orm';
 import { SERVICE_TYPE } from '@suiftly/shared/constants';
 import { storeApiKey, getApiKeys, revokeApiKey, deleteApiKey, reEnableApiKey, type SealType } from '../lib/api-keys';
 import { parseIpAddressList, ipAllowlistUpdateSchema } from '@suiftly/shared/schemas';
+import { decryptSecret } from '../lib/encryption';
 
 export const sealRouter = router({
   /**
@@ -461,15 +462,19 @@ export const sealRouter = router({
 
     const keys = await getApiKeys(ctx.user.customerId, SERVICE_TYPE.SEAL, true);
 
-    // Return keys with truncated IDs (don't show full keys after creation)
-    return keys.map(key => ({
-      apiKeyId: key.apiKeyId,
-      keyPreview: `${key.apiKeyId.slice(0, 8)}...${key.apiKeyId.slice(-4)}`,
-      metadata: key.metadata,
-      isActive: key.isActive,
-      createdAt: key.createdAt,
-      revokedAt: key.revokedAt,
-    }));
+    // Decrypt keys and return with truncated preview
+    // API keys are encrypted in database, but we show a preview based on the decrypted key
+    return keys.map(key => {
+      const plainKey = decryptSecret(key.apiKeyId); // Decrypt the stored key
+      return {
+        apiKeyFp: key.apiKeyFp, // Use fingerprint (PRIMARY KEY) for identification
+        keyPreview: `${plainKey.slice(0, 8)}...${plainKey.slice(-4)}`, // Preview from decrypted key
+        metadata: key.metadata,
+        isActive: key.isActive,
+        createdAt: key.createdAt,
+        revokedAt: key.revokedAt,
+      };
+    });
   }),
 
   /**
@@ -477,7 +482,7 @@ export const sealRouter = router({
    */
   revokeApiKey: protectedProcedure
     .input(z.object({
-      apiKeyId: z.string(),
+      apiKeyFp: z.number().int(),
     }))
     .mutation(async ({ ctx, input }) => {
       if (!ctx.user) {
@@ -487,9 +492,22 @@ export const sealRouter = router({
         });
       }
 
-      const success = await revokeApiKey(input.apiKeyId, ctx.user.customerId);
+      // Revoke by fingerprint (primary key) - no decryption needed
+      const result = await db
+        .update(apiKeys)
+        .set({
+          isActive: false,
+          revokedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(apiKeys.apiKeyFp, input.apiKeyFp),
+            eq(apiKeys.customerId, ctx.user.customerId)
+          )
+        )
+        .returning();
 
-      if (!success) {
+      if (result.length === 0) {
         throw new TRPCError({
           code: 'NOT_FOUND',
           message: 'API key not found or already revoked',
@@ -504,7 +522,7 @@ export const sealRouter = router({
    */
   reEnableApiKey: protectedProcedure
     .input(z.object({
-      apiKeyId: z.string(),
+      apiKeyFp: z.number().int(),
     }))
     .mutation(async ({ ctx, input }) => {
       if (!ctx.user) {
@@ -514,9 +532,23 @@ export const sealRouter = router({
         });
       }
 
-      const success = await reEnableApiKey(input.apiKeyId, ctx.user.customerId);
+      // Re-enable by fingerprint (primary key) - no decryption needed
+      const result = await db
+        .update(apiKeys)
+        .set({
+          isActive: true,
+          revokedAt: null,
+        })
+        .where(
+          and(
+            eq(apiKeys.apiKeyFp, input.apiKeyFp),
+            eq(apiKeys.customerId, ctx.user.customerId),
+            isNull(apiKeys.deletedAt) // Cannot re-enable deleted keys
+          )
+        )
+        .returning();
 
-      if (!success) {
+      if (result.length === 0) {
         throw new TRPCError({
           code: 'NOT_FOUND',
           message: 'API key not found or cannot be re-enabled',
@@ -531,7 +563,7 @@ export const sealRouter = router({
    */
   deleteApiKey: protectedProcedure
     .input(z.object({
-      apiKeyId: z.string(),
+      apiKeyFp: z.number().int(),
     }))
     .mutation(async ({ ctx, input }) => {
       if (!ctx.user) {
@@ -541,9 +573,21 @@ export const sealRouter = router({
         });
       }
 
-      const success = await deleteApiKey(input.apiKeyId, ctx.user.customerId);
+      // Soft delete by fingerprint (primary key) - no decryption needed
+      const result = await db
+        .update(apiKeys)
+        .set({
+          deletedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(apiKeys.apiKeyFp, input.apiKeyFp),
+            eq(apiKeys.customerId, ctx.user.customerId)
+          )
+        )
+        .returning();
 
-      if (!success) {
+      if (result.length === 0) {
         throw new TRPCError({
           code: 'NOT_FOUND',
           message: 'API key not found',

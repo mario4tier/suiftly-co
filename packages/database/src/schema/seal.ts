@@ -2,14 +2,15 @@ import { pgTable, uuid, integer, varchar, text, boolean, timestamp, index } from
 import { relations } from 'drizzle-orm';
 import { customers } from './customers';
 import { serviceInstances } from './services';
+import { FIELD_LIMITS } from '@suiftly/shared/constants';
 
 export const sealKeys = pgTable('seal_keys', {
   sealKeyId: uuid('seal_key_id').primaryKey().defaultRandom(),
   customerId: integer('customer_id').notNull().references(() => customers.customerId),
-  instanceId: uuid('instance_id').references(() => serviceInstances.instanceId, { onDelete: 'cascade' }),
-  publicKey: varchar('public_key', { length: 66 }).notNull(),
+  instanceId: integer('instance_id').references(() => serviceInstances.instanceId, { onDelete: 'cascade' }),
+  publicKey: varchar('public_key', { length: FIELD_LIMITS.SUI_PUBLIC_KEY }).notNull(),
   encryptedPrivateKey: text('encrypted_private_key').notNull(),
-  purchaseTxDigest: varchar('purchase_tx_digest', { length: 64 }),
+  purchaseTxDigest: varchar('purchase_tx_digest', { length: FIELD_LIMITS.SUI_TX_DIGEST }),
   isActive: boolean('is_active').notNull().default(true),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 }, (table) => ({
@@ -20,8 +21,8 @@ export const sealKeys = pgTable('seal_keys', {
 export const sealPackages = pgTable('seal_packages', {
   packageId: uuid('package_id').primaryKey().defaultRandom(),
   sealKeyId: uuid('seal_key_id').notNull().references(() => sealKeys.sealKeyId, { onDelete: 'cascade' }),
-  packageAddress: varchar('package_address', { length: 66 }).notNull(),
-  name: varchar('name', { length: 100 }),
+  packageAddress: varchar('package_address', { length: FIELD_LIMITS.SUI_ADDRESS }).notNull(),
+  name: varchar('name', { length: FIELD_LIMITS.PACKAGE_NAME }),
   isActive: boolean('is_active').notNull().default(true),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 }, (table) => ({

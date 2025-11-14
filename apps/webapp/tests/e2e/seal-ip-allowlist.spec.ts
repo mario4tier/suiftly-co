@@ -11,6 +11,7 @@
  */
 
 import { test, expect } from '@playwright/test';
+import { getToast, waitForToastsToDisappear } from '../helpers/locators';
 
 test.describe('Seal IP Allowlist - Validation & Save/Cancel', () => {
   test.beforeEach(async ({ page, request }) => {
@@ -44,8 +45,11 @@ test.describe('Seal IP Allowlist - Validation & Save/Cancel', () => {
     await page.getByRole('heading', { name: 'PRO' }).click();
     await page.locator('button:has-text("Subscribe to Service")').click();
 
-    await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
+    await expect(getToast(page, /Subscription successful/i)).toBeVisible({ timeout: 5000 });
     await page.waitForURL(/\/services\/seal\/overview/, { timeout: 5000 });
+
+    // Wait for toasts to disappear before navigating (prevents pollution)
+    await waitForToastsToDisappear(page);
 
     // Navigate to More Settings
     await page.click('button[role="tab"]:has-text("More Settings")');
@@ -436,7 +440,7 @@ test.describe('Seal IP Allowlist - Persistence & Reload', () => {
     await page.getByRole('heading', { name: 'PRO' }).click();
     await page.locator('button:has-text("Subscribe to Service")').click();
 
-    await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
+    await expect(getToast(page, /Subscription successful/i)).toBeVisible({ timeout: 5000 });
     await page.waitForURL(/\/services\/seal\/overview/, { timeout: 5000 });
   });
 

@@ -1,14 +1,15 @@
 import { pgTable, bigserial, uuid, integer, varchar, bigint, decimal, timestamp, index, text } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { customers } from './customers';
+import { FIELD_LIMITS } from '@suiftly/shared/constants';
 
 export const escrowTransactions = pgTable('escrow_transactions', {
   txId: bigserial('tx_id', { mode: 'number' }).primaryKey(),
   customerId: integer('customer_id').notNull().references(() => customers.customerId),
-  txDigest: varchar('tx_digest', { length: 64 }).notNull().unique(),
-  txType: varchar('tx_type', { length: 20 }).notNull(),
+  txDigest: varchar('tx_digest', { length: FIELD_LIMITS.SUI_TX_DIGEST }).notNull().unique(),
+  txType: varchar('tx_type', { length: FIELD_LIMITS.TRANSACTION_TYPE }).notNull(),
   amount: decimal('amount', { precision: 20, scale: 8 }).notNull(),
-  assetType: varchar('asset_type', { length: 66 }),
+  assetType: varchar('asset_type', { length: FIELD_LIMITS.SUI_ADDRESS }),
   timestamp: timestamp('timestamp').notNull(),
 }, (table) => ({
   idxEscrowCustomer: index('idx_escrow_customer').on(table.customerId),
@@ -18,13 +19,13 @@ export const escrowTransactions = pgTable('escrow_transactions', {
 export const ledgerEntries = pgTable('ledger_entries', {
   id: uuid('id').primaryKey().defaultRandom(),
   customerId: integer('customer_id').notNull().references(() => customers.customerId),
-  type: varchar('type', { length: 20 }).notNull(),
+  type: varchar('type', { length: FIELD_LIMITS.TRANSACTION_TYPE }).notNull(),
   amountUsdCents: bigint('amount_usd_cents', { mode: 'number' }).notNull(),
   amountSuiMist: bigint('amount_sui_mist', { mode: 'number' }),
   suiUsdRateCents: bigint('sui_usd_rate_cents', { mode: 'number' }),
-  txHash: varchar('tx_hash', { length: 66 }),
+  txHash: varchar('tx_hash', { length: FIELD_LIMITS.SUI_ADDRESS }),
   description: text('description'),
-  invoiceId: varchar('invoice_id', { length: 50 }),
+  invoiceId: varchar('invoice_id', { length: FIELD_LIMITS.INVOICE_ID }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
   idxCustomerCreated: index('idx_customer_created').on(table.customerId, table.createdAt),
@@ -37,9 +38,9 @@ export const billingRecords = pgTable('billing_records', {
   billingPeriodStart: timestamp('billing_period_start').notNull(),
   billingPeriodEnd: timestamp('billing_period_end').notNull(),
   amountUsdCents: bigint('amount_usd_cents', { mode: 'number' }).notNull(),
-  type: varchar('type', { length: 20 }).notNull(),
-  status: varchar('status', { length: 20 }).notNull(),
-  txDigest: varchar('tx_digest', { length: 64 }),
+  type: varchar('type', { length: FIELD_LIMITS.TRANSACTION_TYPE }).notNull(),
+  status: varchar('status', { length: FIELD_LIMITS.BILLING_STATUS }).notNull(),
+  txDigest: varchar('tx_digest', { length: FIELD_LIMITS.SUI_TX_DIGEST }),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 }, (table) => ({
   idxCustomerPeriod: index('idx_customer_period').on(table.customerId, table.billingPeriodStart),

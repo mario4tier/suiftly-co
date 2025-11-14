@@ -11,17 +11,22 @@ const API_BASE = 'http://localhost:3000';
 
 export interface ResetCustomerOptions {
   walletAddress?: string;
-  balanceUsdCents?: number;
-  spendingLimitUsdCents?: number;
-  clearEscrowAccount?: boolean; // If true, removes escrowContractId (for testing "no account" state)
 }
 
 /**
- * Reset a specific customer's data (DELETE-based)
- * - Deletes all services, API keys, Seal keys, ledger entries
- * - Resets balance and spending limit
- * - Keeps customer record
- * - Optionally clears escrow account (for testing "no account exists" scenarios)
+ * Reset customer to production defaults by deleting and recreating
+ *
+ * This ensures tests validate production behavior, not test-specific code paths.
+ *
+ * Process:
+ * - Deletes customer and all related data
+ * - Customer will be recreated with production defaults on next auth
+ *
+ * Production defaults (from auth.ts):
+ * - Balance: $0
+ * - Spending limit: $250
+ *
+ * For tests that need specific balances, use ensureTestBalance() after resetting.
  */
 export async function resetCustomer(
   request: APIRequestContext,
@@ -117,6 +122,21 @@ export async function ensureTestBalance(
 
   const currentBalance = balanceData.balanceUsd;
   const diff = targetBalanceUsd - currentBalance;
+
+  // Update spending limit if specified
+  if (options?.spendingLimitUsd !== undefined) {
+    const updateLimitResponse = await request.post(`${API_BASE}/test/wallet/spending-limit`, {
+      data: {
+        walletAddress,
+        limitUsd: options.spendingLimitUsd,
+      },
+    });
+
+    const updateData = await updateLimitResponse.json();
+    if (!updateData.success) {
+      throw new Error(`Failed to update spending limit: ${updateData.error}`);
+    }
+  }
 
   if (Math.abs(diff) < 0.01) {
     // Already at target balance (within 1 cent)

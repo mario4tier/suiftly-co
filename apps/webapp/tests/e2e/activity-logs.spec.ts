@@ -4,8 +4,15 @@
  */
 
 import { test, expect } from '@playwright/test';
+import { resetCustomer } from '../helpers/db';
+import { waitAfterMutation } from '../helpers/wait-utils';
 
 test.describe('Activity Logs', () => {
+  test.beforeEach(async ({ request }) => {
+    // Reset customer to production defaults (prevents test pollution from previous tests)
+    await resetCustomer(request);
+  });
+
   test('displays login activity after authentication', async ({ page }) => {
     // Authenticate with mock wallet
     await page.goto('/');
@@ -67,8 +74,8 @@ test.describe('Activity Logs', () => {
       // Click "Load More"
       await page.click('button:has-text("Load More")');
 
-      // Wait for new entries to load
-      await page.waitForTimeout(1000);
+      // Wait for new entries to load (smart wait - returns as soon as pagination complete)
+      await waitAfterMutation(page);
 
       // Check the new showing range (should be next page, e.g., "Showing 21 - 40 of...")
       const newShowingText = await page.locator('text=/Showing \\d+ - \\d+ of \\d+/').textContent();
@@ -165,11 +172,11 @@ test.describe('Activity Logs', () => {
     if (hasLoadMore) {
       // Click "Load More"
       await page.click('button:has-text("Load More")');
-      await page.waitForTimeout(1000);
+      await waitAfterMutation(page);
 
       // Click "Back to Top"
       await page.click('button:has-text("Back to Top")');
-      await page.waitForTimeout(500);
+      await waitAfterMutation(page);
 
       // Should be back at the top (showing entries 1-20)
       const countText = await page.locator('text=/Showing \\d+ - \\d+ of \\d+/').textContent();
@@ -192,9 +199,6 @@ test.describe('Activity Logs', () => {
 
     // Navigate to logs page first
     await page.goto('/logs');
-
-    // Wait for initial load
-    await page.waitForTimeout(500);
 
     // Now intercept the next API call and make it fail
     await page.route('**/i/api/activity.getLogs**', route => {

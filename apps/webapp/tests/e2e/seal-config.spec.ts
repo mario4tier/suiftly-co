@@ -4,6 +4,7 @@
  */
 
 import { test, expect } from '@playwright/test';
+import { waitAfterMutation } from '../helpers/wait-utils';
 
 test.describe('Seal Service Onboarding Form', () => {
   test.beforeEach(async ({ page }) => {
@@ -15,15 +16,12 @@ test.describe('Seal Service Onboarding Form', () => {
       },
     });
 
-    // Clear cookies for clean auth state (prevents test pollution)
-    await page.context().clearCookies();
-
     // Authenticate with mock wallet
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet")');
-    await page.waitForTimeout(500);
 
-    // Wait for redirect to /dashboard after auth
+    // Wait for authentication to complete (smart wait - returns as soon as auth complete)
+    await waitAfterMutation(page);
     await page.waitForURL('/dashboard', { timeout: 10000 });
 
     // Navigate to seal service page (should show onboarding form)

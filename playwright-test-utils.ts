@@ -29,7 +29,7 @@ export async function getServerConfig(url: string): Promise<ServerConfig | null>
   try {
     const response = await fetch(`${url}/test/config`, { signal: AbortSignal.timeout(2000) });
     if (!response.ok) return null;
-    return await response.json();
+    return (await response.json()) as ServerConfig;
   } catch {
     return null;
   }
@@ -97,14 +97,68 @@ export async function sigtermPort(port: number): Promise<boolean> {
 export async function forceKillPorts(ports: number[]): Promise<void> {
   for (const port of ports) {
     try {
-      execSync(`lsof -ti:${port} | xargs kill -9 2>/dev/null || true`, { stdio: 'inherit' });
-      console.log(`🧹 Force killed processes on port ${port}`);
+      const pids = execSync(`lsof -ti:${port}`, { encoding: 'utf-8', stdio: 'pipe' }).trim();
+      if (pids) {
+        console.log(`🧹 Force killing processes on port ${port}: PIDs ${pids}`);
+        execSync(`kill -9 ${pids}`, { stdio: 'inherit' });
+        console.log(`✅ Force killed processes on port ${port}`);
+      }
     } catch {
-      // Port was already free
+      // Port was already free or lsof failed
+      console.log(`ℹ️  No processes found on port ${port} (already free)`);
     }
   }
   // Give OS time to release the ports
   await new Promise(resolve => setTimeout(resolve, 2000));
+}
+
+/**
+ * Check if a port is free
+ */
+export function isPortFree(port: number): boolean {
+  try {
+    execSync(`lsof -ti:${port}`, { encoding: 'utf-8', stdio: 'pipe' });
+    // If lsof found something, port is in use
+    return false;
+  } catch {
+    // lsof exits with non-zero when no process found (port is free)
+    return true;
+  }
+}
+
+/**
+ * Wait for port to be free, with force kill fallback
+ */
+export async function waitForPortFree(port: number, timeout = 10000): Promise<void> {
+  const startTime = Date.now();
+  let attempts = 0;
+  while (Date.now() - startTime < timeout) {
+    if (isPortFree(port)) {
+      console.log(`✅ Port ${port} is free`);
+      return;
+    }
+    attempts++;
+    console.log(`⏳ Waiting for port ${port} to be released... (attempt ${attempts})`);
+
+    // After 5 seconds of waiting, try force kill
+    if (attempts === 5) {
+      console.log(`⚠️  Port ${port} still occupied after 5s, attempting force kill...`);
+      await forceKillPorts([port]);
+    }
+
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+
+  // Last resort: one more force kill attempt
+  console.log(`⚠️  Port ${port} still not free, final force kill attempt...`);
+  await forceKillPorts([port]);
+
+  if (isPortFree(port)) {
+    console.log(`✅ Port ${port} is now free after force kill`);
+    return;
+  }
+
+  throw new Error(`Port ${port} did not become free within ${timeout}ms even after force kill`);
 }
 
 /**
@@ -180,7 +234,7 @@ export async function shutdownServer(
   // Try graceful shutdown via endpoint
   console.log('   Attempting graceful shutdown via /test/shutdown...');
   const graceful = await gracefulShutdown(baseUrl);
-  if (graceful) {
+  if (graceful && isPortFree(port)) {
     console.log(`✅ ${name} shutdown gracefully`);
     return;
   }
@@ -188,7 +242,7 @@ export async function shutdownServer(
   // Try SIGTERM
   console.log('   Graceful shutdown failed, trying SIGTERM...');
   const sigterm = await sigtermPort(port);
-  if (sigterm) {
+  if (sigterm && isPortFree(port)) {
     console.log(`✅ ${name} stopped via SIGTERM`);
     return;
   }
@@ -196,5 +250,10 @@ export async function shutdownServer(
   // Last resort: force kill
   console.log('   SIGTERM failed, force killing...');
   await forceKillPorts([port]);
-  console.log(`✅ ${name} force killed`);
+
+  if (isPortFree(port)) {
+    console.log(`✅ ${name} force killed`);
+  } else {
+    console.log(`⚠️  ${name} may still be running (port ${port} still occupied)`);
+  }
 }

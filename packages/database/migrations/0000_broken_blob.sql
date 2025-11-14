@@ -1,12 +1,14 @@
 CREATE TABLE "api_keys" (
-	"api_key_id" varchar(100) PRIMARY KEY NOT NULL,
-	"api_key_fp" varchar(64) NOT NULL,
+	"api_key_fp" integer PRIMARY KEY NOT NULL,
+	"api_key_id" varchar(150) NOT NULL,
 	"customer_id" integer NOT NULL,
 	"service_type" varchar(20) NOT NULL,
 	"metadata" jsonb DEFAULT '{}'::jsonb NOT NULL,
 	"is_active" boolean DEFAULT true NOT NULL,
 	"created_at" timestamp DEFAULT now() NOT NULL,
-	"revoked_at" timestamp
+	"revoked_at" timestamp,
+	"deleted_at" timestamp,
+	CONSTRAINT "api_keys_api_key_id_unique" UNIQUE("api_key_id")
 );
 --> statement-breakpoint
 CREATE TABLE "auth_nonces" (
@@ -78,12 +80,13 @@ CREATE TABLE "ledger_entries" (
 );
 --> statement-breakpoint
 CREATE TABLE "service_instances" (
-	"instance_id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"instance_id" serial PRIMARY KEY NOT NULL,
 	"customer_id" integer NOT NULL,
 	"service_type" varchar(20) NOT NULL,
 	"state" varchar(30) DEFAULT 'not_provisioned' NOT NULL,
 	"tier" varchar(20) NOT NULL,
 	"is_enabled" boolean DEFAULT true NOT NULL,
+	"subscription_charge_pending" boolean DEFAULT true NOT NULL,
 	"config" jsonb,
 	"enabled_at" timestamp,
 	"disabled_at" timestamp,
@@ -93,7 +96,7 @@ CREATE TABLE "service_instances" (
 CREATE TABLE "seal_keys" (
 	"seal_key_id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"customer_id" integer NOT NULL,
-	"instance_id" uuid,
+	"instance_id" integer,
 	"public_key" varchar(66) NOT NULL,
 	"encrypted_private_key" text NOT NULL,
 	"purchase_tx_digest" varchar(64),
@@ -146,6 +149,14 @@ CREATE TABLE "haproxy_raw_logs" (
 	"termination_state" text
 );
 --> statement-breakpoint
+CREATE TABLE "user_activity_logs" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"customer_id" integer NOT NULL,
+	"timestamp" timestamp with time zone DEFAULT now() NOT NULL,
+	"client_ip" "inet" NOT NULL,
+	"message" text NOT NULL
+);
+--> statement-breakpoint
 CREATE TABLE "config_global" (
 	"key" text PRIMARY KEY NOT NULL,
 	"value" text NOT NULL,
@@ -156,24 +167,6 @@ CREATE TABLE "processing_state" (
 	"key" text PRIMARY KEY NOT NULL,
 	"value" text NOT NULL,
 	"updated_at" timestamp DEFAULT now() NOT NULL
-);
---> statement-breakpoint
-CREATE TABLE "service_tier_config" (
-	"id" integer PRIMARY KEY NOT NULL,
-	"starter_req_per_sec_region" integer DEFAULT 20 NOT NULL,
-	"starter_req_per_sec_global" integer DEFAULT 60 NOT NULL,
-	"starter_price" numeric(10, 2) DEFAULT '20.00' NOT NULL,
-	"starter_burst_allowed" boolean DEFAULT false NOT NULL,
-	"pro_req_per_sec_region" integer DEFAULT 300 NOT NULL,
-	"pro_req_per_sec_global" integer DEFAULT 1200 NOT NULL,
-	"pro_price" numeric(10, 2) DEFAULT '100.00' NOT NULL,
-	"pro_burst_allowed" boolean DEFAULT true NOT NULL,
-	"enterprise_req_per_sec_region" integer DEFAULT 1000 NOT NULL,
-	"enterprise_req_per_sec_global" integer DEFAULT 4000 NOT NULL,
-	"enterprise_price" numeric(10, 2) DEFAULT '300.00' NOT NULL,
-	"enterprise_burst_allowed" boolean DEFAULT true NOT NULL,
-	"updated_at" timestamp DEFAULT now() NOT NULL,
-	CONSTRAINT "check_singleton" CHECK ("service_tier_config"."id" = 1)
 );
 --> statement-breakpoint
 CREATE TABLE "system_control" (
@@ -197,8 +190,8 @@ ALTER TABLE "seal_keys" ADD CONSTRAINT "seal_keys_instance_id_service_instances_
 ALTER TABLE "seal_packages" ADD CONSTRAINT "seal_packages_seal_key_id_seal_keys_seal_key_id_fk" FOREIGN KEY ("seal_key_id") REFERENCES "public"."seal_keys"("seal_key_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "usage_records" ADD CONSTRAINT "usage_records_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "haproxy_raw_logs" ADD CONSTRAINT "haproxy_raw_logs_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "user_activity_logs" ADD CONSTRAINT "user_activity_logs_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "idx_customer_service" ON "api_keys" USING btree ("customer_id","service_type","is_active");--> statement-breakpoint
-CREATE INDEX "idx_api_key_fp" ON "api_keys" USING btree ("api_key_fp") WHERE "api_keys"."is_active" = true;--> statement-breakpoint
 CREATE INDEX "idx_created_at" ON "auth_nonces" USING btree ("created_at");--> statement-breakpoint
 CREATE INDEX "idx_refresh_customer" ON "refresh_tokens" USING btree ("customer_id");--> statement-breakpoint
 CREATE INDEX "idx_expires_at" ON "refresh_tokens" USING btree ("expires_at");--> statement-breakpoint
@@ -222,31 +215,4 @@ CREATE INDEX "idx_logs_traffic_type" ON "haproxy_raw_logs" USING btree ("traffic
 CREATE INDEX "idx_logs_event_type" ON "haproxy_raw_logs" USING btree ("event_type","timestamp" DESC NULLS LAST) WHERE "haproxy_raw_logs"."event_type" != 0;--> statement-breakpoint
 CREATE INDEX "idx_logs_status_code" ON "haproxy_raw_logs" USING btree ("status_code","timestamp" DESC NULLS LAST);--> statement-breakpoint
 CREATE INDEX "idx_logs_api_key_fp" ON "haproxy_raw_logs" USING btree ("api_key_fp","timestamp" DESC NULLS LAST) WHERE "haproxy_raw_logs"."api_key_fp" != 0;--> statement-breakpoint
--- Insert initial configuration values
-INSERT INTO "config_global" ("key", "value") VALUES
-  ('fver', '1'),
-  ('freg_count', '3'),
-  ('fbw_sta', '3'),
-  ('fbw_pro', '15'),
-  ('fbw_ent', '100'),
-  ('fsubs_usd_sta', '9'),
-  ('fsubs_usd_pro', '29'),
-  ('fsubs_usd_ent', '185'),
-  ('freqs_usd', '1.00'),
-  ('freqs_count', '10000'),
-  ('fskey_incl', '1'),
-  ('fskey_pkg_incl', '3'),
-  ('fapikey_incl', '2'),
-  ('fipv4_incl', '2'),
-  ('fcidr_incl', '2'),
-  ('fadd_skey_usd', '5'),
-  ('fadd_pkg_usd', '1'),
-  ('fadd_apikey_usd', '1'),
-  ('fadd_ipv4_usd', '0'),
-  ('fadd_cidr_usd', '0'),
-  ('fmax_skey', '10'),
-  ('fmax_pkg', '10'),
-  ('fmax_apikey', '10'),
-  ('fmax_ipv4', '20'),
-  ('fmax_cidr', '20')
-ON CONFLICT ("key") DO NOTHING;
+CREATE INDEX "idx_activity_customer_time" ON "user_activity_logs" USING btree ("customer_id","timestamp" DESC NULLS LAST);

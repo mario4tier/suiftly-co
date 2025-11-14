@@ -1,12 +1,13 @@
-import { pgTable, uuid, integer, varchar, boolean, jsonb, timestamp, unique } from 'drizzle-orm/pg-core';
+import { pgTable, serial, integer, varchar, boolean, jsonb, timestamp, unique } from 'drizzle-orm/pg-core';
 import { customers } from './customers';
+import { FIELD_LIMITS } from '@suiftly/shared/constants';
 
 export const serviceInstances = pgTable('service_instances', {
-  instanceId: uuid('instance_id').primaryKey().defaultRandom(),
+  instanceId: serial('instance_id').primaryKey(),
   customerId: integer('customer_id').notNull().references(() => customers.customerId),
-  serviceType: varchar('service_type', { length: 20 }).notNull(),
-  state: varchar('state', { length: 30 }).notNull().default('not_provisioned'),
-  tier: varchar('tier', { length: 20 }).notNull(),
+  serviceType: varchar('service_type', { length: FIELD_LIMITS.SERVICE_TYPE }).notNull(),
+  state: varchar('state', { length: FIELD_LIMITS.SERVICE_STATE }).notNull().default('not_provisioned'),
+  tier: varchar('tier', { length: FIELD_LIMITS.SERVICE_TIER }).notNull(),
   isEnabled: boolean('is_enabled').notNull().default(true),
   subscriptionChargePending: boolean('subscription_charge_pending').notNull().default(true),
   config: jsonb('config'),

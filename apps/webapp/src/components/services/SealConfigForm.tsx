@@ -58,12 +58,15 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
       // Always invalidate to trigger UI transition
       utils.services.list.invalidate();
 
-      // Only show success toast if payment actually succeeded
-      // If payment is pending, the banner message will inform the user
-      if (!data.paymentPending) {
+      // Show appropriate toast based on payment status
+      if (data.paymentPending) {
+        // Payment pending - show warning with backend message
+        const errorMessage = (data as any).paymentErrorMessage || 'Subscription payment pending. Deposit funds to complete setup.';
+        toast.warning(errorMessage);
+      } else {
+        // Payment succeeded
         toast.success('Subscription successful!');
       }
-      // Note: No toast for payment pending - the banner message is sufficient
     },
     onError: (error) => {
       toast.error(error.message || 'Subscription failed. Please try again.');

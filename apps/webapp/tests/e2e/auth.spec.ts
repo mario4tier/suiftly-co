@@ -4,8 +4,14 @@
  */
 
 import { test, expect } from '@playwright/test';
+import { resetCustomer } from '../helpers/db';
 
 test.describe('Authentication Flow', () => {
+  test.beforeEach(async ({ request }) => {
+    // Reset customer to production defaults (prevents test pollution from previous tests)
+    await resetCustomer(request);
+  });
+
   test('can authenticate with mock wallet and access protected route', async ({ page }) => {
     // Go to home page
     await page.goto('/');

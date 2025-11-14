@@ -16,6 +16,13 @@
 
 import { spawn, ChildProcess, execSync } from 'child_process';
 import { basename } from 'path';
+import { writeFileSync, appendFileSync } from 'fs';
+import {
+  waitForServer,
+  waitForPortFree,
+  isPortFree,
+  shutdownServer,
+} from '../../playwright-test-utils';
 
 interface TestResult {
   name: string;
@@ -24,6 +31,9 @@ interface TestResult {
   duration: number;
   output?: string;
 }
+
+// Create unique summary file
+const SUMMARY_FILE = `/tmp/suiftly-test-summary-${process.pid}-${Date.now()}.txt`;
 
 const COLORS = {
   reset: '\x1b[0m',
@@ -71,6 +81,9 @@ async function runCommand(
   section(`Running: ${name}`);
   console.log(colorize(`Command: ${command} ${args.join(' ')}`, 'cyan'));
 
+  // Log progress to summary file
+  appendFileSync(SUMMARY_FILE, `[STARTED] ${name} at ${new Date().toISOString()}\n`);
+
   const startTime = Date.now();
 
   return new Promise((resolve) => {
@@ -86,8 +99,10 @@ async function runCommand(
 
       if (passed) {
         success(`${name} passed (${(duration / 1000).toFixed(2)}s)`);
+        appendFileSync(SUMMARY_FILE, `[PASSED] ${name} - ${(duration / 1000).toFixed(2)}s\n`);
       } else {
         error(`${name} failed with exit code ${code} (${(duration / 1000).toFixed(2)}s)`);
+        appendFileSync(SUMMARY_FILE, `[FAILED] ${name} - exit code ${code} - ${(duration / 1000).toFixed(2)}s\n`);
       }
 
       resolve({
@@ -101,6 +116,7 @@ async function runCommand(
     proc.on('error', (err) => {
       const duration = Date.now() - startTime;
       error(`${name} error: ${err.message}`);
+      appendFileSync(SUMMARY_FILE, `[ERROR] ${name} - ${err.message}\n`);
 
       resolve({
         name,
@@ -122,22 +138,6 @@ async function checkServerRunning(url: string): Promise<boolean> {
   }
 }
 
-async function waitForServer(url: string, timeout = 30000): Promise<void> {
-  const startTime = Date.now();
-  while (Date.now() - startTime < timeout) {
-    try {
-      const response = await fetch(url);
-      if (response.ok) {
-        return;
-      }
-    } catch (error) {
-      // Server not ready yet
-    }
-    await new Promise(resolve => setTimeout(resolve, 1000));
-  }
-  throw new Error(`Server at ${url} did not start within ${timeout}ms`);
-}
-
 let apiServer: ChildProcess | null = null;
 let webappServer: ChildProcess | null = null;
 let startedServers = false;
@@ -145,8 +145,21 @@ let startedServers = false;
 async function startDevServers(): Promise<void> {
   section('Starting dev servers...');
 
+  // Ensure ports are free (force cleanup if needed)
+  // This uses the robust waitForPortFree which auto-retries with force kill
+  if (!isPortFree(3000)) {
+    warning('Port 3000 is occupied, cleaning up...');
+    await shutdownServer('http://localhost:3000', 3000, 'existing API server');
+    await waitForPortFree(3000);
+  }
+
+  if (!isPortFree(5173)) {
+    warning('Port 5173 is occupied, cleaning up...');
+    await shutdownServer('http://localhost:5173', 5173, 'existing webapp');
+    await waitForPortFree(5173);
+  }
+
   // Start API server
-  // Note: These servers will be killed by short-expiry tests, which is expected
   apiServer = spawn('npx', ['tsx', 'apps/api/src/server.ts'], {
     env: {
       ...process.env,
@@ -182,26 +195,14 @@ async function stopDevServers(): Promise<void> {
 
   section('Stopping dev servers...');
 
-  if (apiServer) {
-    apiServer.kill('SIGTERM');
-    setTimeout(() => {
-      if (apiServer && !apiServer.killed) {
-        apiServer.kill('SIGKILL');
-      }
-    }, 2000);
-  }
+  // Use the robust shutdown infrastructure
+  await shutdownServer('http://localhost:3000', 3000, 'API server');
+  await shutdownServer('http://localhost:5173', 5173, 'Webapp');
 
-  if (webappServer) {
-    webappServer.kill('SIGTERM');
-    setTimeout(() => {
-      if (webappServer && !webappServer.killed) {
-        webappServer.kill('SIGKILL');
-      }
-    }, 2000);
-  }
-
-  // Wait for graceful shutdown
-  await new Promise(resolve => setTimeout(resolve, 3000));
+  // Reset state
+  apiServer = null;
+  webappServer = null;
+  startedServers = false;
 
   success('Dev servers stopped');
 }
@@ -213,19 +214,28 @@ function printSummary(results: TestResult[]): void {
   const failed = results.filter(r => !r.passed);
   const totalDuration = results.reduce((sum, r) => sum + r.duration, 0);
 
+  // Write summary header to file
+  appendFileSync(SUMMARY_FILE, '\n========================================\n');
+  appendFileSync(SUMMARY_FILE, 'FINAL TEST SUMMARY\n');
+  appendFileSync(SUMMARY_FILE, '========================================\n\n');
+
   console.log();
   results.forEach(result => {
     const icon = result.passed ? '✅' : '❌';
     const statusColor = result.passed ? 'green' : 'red';
     const duration = (result.duration / 1000).toFixed(2);
 
+    const line = `${icon} ${result.name} - ${duration}s`;
     console.log(
       `${icon} ${colorize(result.name, statusColor)} - ${duration}s`
     );
+    appendFileSync(SUMMARY_FILE, `${line}\n`);
   });
 
   console.log();
   console.log(colorize('─'.repeat(80), 'cyan'));
+
+  const summaryLine = `Total: ${results.length} test suites | ${passed.length} passed | ${failed.length} failed | ${(totalDuration / 1000).toFixed(2)}s`;
   console.log(
     `${colorize('Total:', 'bright')} ${results.length} test suites | ` +
     `${colorize(`${passed.length} passed`, 'green')} | ` +
@@ -233,20 +243,35 @@ function printSummary(results: TestResult[]): void {
     `${(totalDuration / 1000).toFixed(2)}s`
   );
 
+  appendFileSync(SUMMARY_FILE, '\n' + summaryLine + '\n');
+
   if (failed.length > 0) {
     console.log();
     console.log(colorize('Failed test suites:', 'red'));
+    appendFileSync(SUMMARY_FILE, '\nFailed test suites:\n');
     failed.forEach(result => {
       console.log(`  • ${result.name}`);
       console.log(`    ${colorize(result.command, 'yellow')}`);
+      appendFileSync(SUMMARY_FILE, `  • ${result.name}\n`);
+      appendFileSync(SUMMARY_FILE, `    ${result.command}\n`);
     });
   }
 
   console.log();
+  appendFileSync(SUMMARY_FILE, '\n========================================\n');
+  appendFileSync(SUMMARY_FILE, failed.length === 0 ? 'ALL TESTS PASSED ✅\n' : 'SOME TESTS FAILED ❌\n');
+  appendFileSync(SUMMARY_FILE, '========================================\n');
 }
 
 async function main() {
   header('SUIFTLY TEST RUNNER - Running All Tests');
+
+  // Initialize summary file
+  writeFileSync(SUMMARY_FILE, `Test Summary File: ${SUMMARY_FILE}\n`);
+  writeFileSync(SUMMARY_FILE, `Started at: ${new Date().toISOString()}\n\n`, { flag: 'a' });
+
+  console.log(colorize(`📝 Test summary file: ${SUMMARY_FILE}`, 'cyan'));
+  console.log();
 
   const results: TestResult[] = [];
 
@@ -268,7 +293,7 @@ async function main() {
   }
 
   // 1. API Unit Tests (Vitest)
-  results.push(await runCommand(
+  let result = await runCommand(
     'API Unit Tests',
     'npm',
     ['run', 'test', '--workspace=@suiftly/api', '--', '--run'],
@@ -277,15 +302,33 @@ async function main() {
       MOCK_AUTH: 'true',
       DATABASE_URL: 'postgresql://deploy:deploy_password_change_me@localhost/suiftly_dev',
     }
-  ));
+  );
+  results.push(result);
+
+  // Stop on first failure
+  if (!result.passed) {
+    await stopDevServers();
+    printSummary(results);
+    error('Tests stopped on first failure');
+    process.exit(1);
+  }
 
   // 2. Playwright E2E - Normal Expiry (15m/30d)
   // Uses dev servers (already running or just started)
-  results.push(await runCommand(
+  result = await runCommand(
     'E2E Tests - Normal Expiry (15m/30d)',
     'npx',
     ['playwright', 'test', '--project=normal-expiry']
-  ));
+  );
+  results.push(result);
+
+  // Stop on first failure
+  if (!result.passed) {
+    await stopDevServers();
+    printSummary(results);
+    error('Tests stopped on first failure');
+    process.exit(1);
+  }
 
   // 3. Playwright E2E - Short Expiry (2s/10s)
   // Short-expiry tests need servers with special JWT config
@@ -298,22 +341,40 @@ async function main() {
 
   // Global setup will kill any remaining processes on ports and start test servers
   // Includes robust retry logic for timing-sensitive tests
-  results.push(await runCommand(
+  result = await runCommand(
     'E2E Tests - Short Expiry (2s/10s)',
     'npx',
     ['playwright', 'test', '--project=short-expiry']
-  ));
+  );
+  results.push(result);
+
+  // Stop on first failure
+  if (!result.passed) {
+    await stopDevServers();
+    printSummary(results);
+    error('Tests stopped on first failure');
+    process.exit(1);
+  }
 
   // 4. Other Playwright tests (chromium project)
   // After short-expiry tests, dev servers are stopped, so we need to restart them
   section('Restarting dev servers for chromium tests...');
   await startDevServers();
 
-  results.push(await runCommand(
+  result = await runCommand(
     'E2E Tests - Other',
     'npx',
     ['playwright', 'test', '--project=chromium']
-  ));
+  );
+  results.push(result);
+
+  // Stop on first failure
+  if (!result.passed) {
+    await stopDevServers();
+    printSummary(results);
+    error('Tests stopped on first failure');
+    process.exit(1);
+  }
 
   // Cleanup: Stop servers if we started them
   await stopDevServers();

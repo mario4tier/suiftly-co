@@ -278,6 +278,17 @@ export const servicesRouter = router({
           // Return SUCCESS (service was created) but with subscriptionChargePending=true
           console.log('[SUBSCRIBE] Charge failed, returning service with pending payment:', chargeResult.error);
 
+          // Map errors to user-friendly messages
+          let paymentErrorMessage: string;
+          if (chargeResult.error?.includes('Account does not exist') ||
+              chargeResult.error?.includes('Insufficient balance')) {
+            // No escrow account OR insufficient funds → same message
+            paymentErrorMessage = 'Subscription payment pending. Add funds via Billing';
+          } else {
+            // Other errors (spending limit, etc) → show specific error
+            paymentErrorMessage = chargeResult.error || 'Payment failed';
+          }
+
           return {
             ...service,
             subscriptionChargePending: true,
@@ -286,6 +297,7 @@ export const servicesRouter = router({
             paymentError: chargeResult.error?.includes('Account does not exist')
               ? 'NO_ESCROW_ACCOUNT'
               : 'PAYMENT_FAILED',
+            paymentErrorMessage,
           };
         }
 
@@ -325,6 +337,7 @@ export const servicesRouter = router({
           apiKey: apiKey,
           paymentPending: true,
           paymentError: 'UNEXPECTED_ERROR',
+          paymentErrorMessage: chargeError instanceof Error ? chargeError.message : 'Unexpected error',
         };
       }
     }),

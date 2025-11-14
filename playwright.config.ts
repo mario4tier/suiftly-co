@@ -9,6 +9,7 @@ export default defineConfig({
   reporter: 'line',
   globalSetup: './playwright-global-setup.ts',
   globalTeardown: './playwright-global-teardown.ts',
+  maxFailures: 1, // Stop on first test failure for fast feedback
 
   use: {
     baseURL: 'http://localhost:5173',

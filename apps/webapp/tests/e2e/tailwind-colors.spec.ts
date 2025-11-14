@@ -9,6 +9,7 @@
  */
 
 import { test, expect } from '@playwright/test';
+import { waitAfterMutation } from '../helpers/wait-utils';
 
 /**
  * Helper to check if a color matches expected value (handles both RGB and OKLCH)
@@ -41,7 +42,7 @@ test.describe('Tailwind Color System', () => {
     // Authenticate with mock wallet
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet")');
-    await page.waitForTimeout(500);
+    await waitAfterMutation(page);
 
     // Wait for redirect to /dashboard after auth
     await page.waitForURL('/dashboard', { timeout: 10000 });
@@ -95,10 +96,7 @@ test.describe('Tailwind Color System', () => {
     const infoButton = page.locator('h3:has-text("Guaranteed Bandwidth")').locator('..').locator('button').first();
     await infoButton.click();
 
-    // Wait for popover to appear
-    await page.waitForTimeout(200);
-
-    // Get the popover element
+    // Get the popover element (Playwright auto-retries toBeVisible)
     const popover = page.locator('[role="dialog"]').or(page.locator('.z-50').filter({ hasText: /regions/ })).first();
     await expect(popover).toBeVisible();
 
@@ -117,10 +115,7 @@ test.describe('Tailwind Color System', () => {
     const walletButton = page.locator('button').filter({ hasText: /0x[0-9a-f]{4}\.\.\.[0-9a-f]{4}/ }).first();
     await walletButton.click();
 
-    // Wait for menu to appear
-    await page.waitForTimeout(200);
-
-    // Check red disconnect button (text-red-600)
+    // Check red disconnect button (text-red-600) - Playwright auto-retries toBeVisible
     const disconnectButton = page.locator('button:has-text("Disconnect")');
     await expect(disconnectButton).toBeVisible();
 
@@ -153,8 +148,8 @@ test.describe('Tailwind Color System', () => {
       document.documentElement.classList.add('dark');
     });
 
-    // Wait for theme change to take effect
-    await page.waitForTimeout(300);
+    // Small wait for CSS recomputation (browser needs time to apply dark mode styles)
+    await page.waitForTimeout(200);
 
     // Re-query the wallet button after dark mode switch (element may have re-rendered)
     const walletButtonDark = page.locator('button').filter({ hasText: /0x[0-9a-f]{4}\.\.\.[0-9a-f]{4}/ }).first();
@@ -189,7 +184,8 @@ test.describe('Tailwind Color System', () => {
       document.documentElement.classList.add('dark');
     });
 
-    await page.waitForTimeout(300);
+    // Small wait for CSS recomputation
+    await page.waitForTimeout(200);
 
     const darkTextColor = await walletText.evaluate((el) => {
       return window.getComputedStyle(el).color;
@@ -219,7 +215,8 @@ test.describe('Tailwind Color System', () => {
       document.documentElement.classList.add('dark');
     });
 
-    await page.waitForTimeout(300);
+    // Small wait for CSS recomputation
+    await page.waitForTimeout(200);
 
     const darkBorderColor = await walletButton.evaluate((el) => {
       return window.getComputedStyle(el).borderColor;
@@ -241,15 +238,14 @@ test.describe('Tailwind Color System', () => {
       document.documentElement.classList.add('dark');
     });
 
-    await page.waitForTimeout(300);
+    // Small wait for CSS recomputation
+    await page.waitForTimeout(200);
 
     // Click info icon to open tooltip
     const infoButton = page.locator('h3:has-text("Guaranteed Bandwidth")').locator('..').locator('button').first();
     await infoButton.click();
 
-    await page.waitForTimeout(200);
-
-    // Get the popover element
+    // Get the popover element (Playwright auto-retries toBeVisible)
     const popover = page.locator('[role="dialog"]').or(page.locator('.z-50').filter({ hasText: /regions/ })).first();
     await expect(popover).toBeVisible();
 
@@ -298,7 +294,6 @@ test.describe('Tailwind Color System', () => {
   test('blue colors are applied correctly in active sidebar item', async ({ page }) => {
     // Navigate back to dashboard to see active sidebar item
     await page.goto('/dashboard');
-    await page.waitForTimeout(300);
 
     // Find active sidebar item (should have blue background)
     const activeSidebarItem = page.locator('a.sidebar-active, [class*="sidebar-active"]').first();

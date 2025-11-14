@@ -1,10 +1,11 @@
 import { pgTable, bigserial, integer, varchar, bigint, timestamp, decimal, index } from 'drizzle-orm/pg-core';
 import { customers } from './customers';
+import { FIELD_LIMITS } from '@suiftly/shared/constants';
 
 export const usageRecords = pgTable('usage_records', {
   recordId: bigserial('record_id', { mode: 'number' }).primaryKey(),
   customerId: integer('customer_id').notNull().references(() => customers.customerId),
-  serviceType: varchar('service_type', { length: 20 }).notNull(),
+  serviceType: varchar('service_type', { length: FIELD_LIMITS.SERVICE_TYPE }).notNull(),
   requestCount: bigint('request_count', { mode: 'number' }).notNull(),
   bytesTransferred: bigint('bytes_transferred', { mode: 'number' }),
   windowStart: timestamp('window_start').notNull(),

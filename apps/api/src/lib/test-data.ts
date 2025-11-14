@@ -6,33 +6,41 @@
  */
 
 import { db } from '@suiftly/database';
-import { customers, serviceInstances, ledgerEntries, apiKeys, sealKeys } from '@suiftly/database/schema';
+import {
+  customers, serviceInstances, ledgerEntries, apiKeys, sealKeys,
+  refreshTokens, billingRecords, escrowTransactions, usageRecords,
+  haproxyRawLogs, userActivityLogs
+} from '@suiftly/database/schema';
 import { eq } from 'drizzle-orm';
+import { decryptSecret } from './encryption';
 
 const MOCK_WALLET_ADDRESS = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
-const DEFAULT_BALANCE_USD_CENTS = 100000; // $1000
-const DEFAULT_SPENDING_LIMIT_USD_CENTS = 25000; // $250
 
 interface TestDataResetOptions {
   walletAddress?: string;
   balanceUsdCents?: number;
   spendingLimitUsdCents?: number;
-  clearEscrowAccount?: boolean; // If true, removes escrowContractId (for testing "no account" state)
+  clearEscrowAccount?: boolean;
 }
 
 /**
- * Reset a customer to default test state
- * - Deletes all service instances
- * - Deletes all API keys
- * - Deletes all Seal keys
- * - Resets balance and limits
- * - Clears monthly charges
- * - Optionally clears escrow account (for testing "no account exists" scenarios)
+ * Reset a customer to production defaults by deleting services/keys and recreating customer
+ *
+ * This ensures tests validate production behavior, not test-specific code paths.
+ *
+ * Process:
+ * 1. Delete all services, keys, and related data
+ * 2. Recreate customer with specified balance/spending limit
+ *
+ * Options:
+ * - balanceUsdCents: Set customer balance (default: 0)
+ * - spendingLimitUsdCents: Set spending limit (default: 25000 = $250)
+ * - clearEscrowAccount: Remove escrow contract ID (default: false)
  */
 export async function resetCustomerTestData(options: TestDataResetOptions = {}) {
   const walletAddress = options.walletAddress || MOCK_WALLET_ADDRESS;
-  const balanceUsdCents = options.balanceUsdCents ?? DEFAULT_BALANCE_USD_CENTS;
-  const spendingLimitUsdCents = options.spendingLimitUsdCents ?? DEFAULT_SPENDING_LIMIT_USD_CENTS;
+  const balanceUsdCents = options.balanceUsdCents ?? 0;
+  const spendingLimitUsdCents = options.spendingLimitUsdCents ?? 25000; // $250 default
   const clearEscrowAccount = options.clearEscrowAccount ?? false;
 
   // Find customer
@@ -41,16 +49,16 @@ export async function resetCustomerTestData(options: TestDataResetOptions = {}) 
   });
 
   if (!customer) {
-    console.log(`[TEST DATA] Customer not found: ${walletAddress}`);
+    console.log(`[TEST DATA] Customer not found (will be created on next auth): ${walletAddress}`);
     return {
-      success: false,
-      message: `Customer not found with wallet: ${walletAddress}`,
+      success: true,
+      message: 'Customer does not exist - will be created with production defaults on next auth',
     };
   }
 
   const customerId = customer.customerId;
 
-  // Delete all related data in transaction
+  // Delete all related data and update customer in transaction
   await db.transaction(async (tx) => {
     // 1. Delete service instances
     const deletedServices = await tx
@@ -70,44 +78,41 @@ export async function resetCustomerTestData(options: TestDataResetOptions = {}) 
       .where(eq(sealKeys.customerId, customerId))
       .returning();
 
-    // 4. Delete ledger entries (for clean test state)
+    // 4. Delete all other related data (no need to count these)
     await tx.delete(ledgerEntries).where(eq(ledgerEntries.customerId, customerId));
+    await tx.delete(refreshTokens).where(eq(refreshTokens.customerId, customerId));
+    await tx.delete(billingRecords).where(eq(billingRecords.customerId, customerId));
+    await tx.delete(escrowTransactions).where(eq(escrowTransactions.customerId, customerId));
+    await tx.delete(usageRecords).where(eq(usageRecords.customerId, customerId));
+    await tx.delete(haproxyRawLogs).where(eq(haproxyRawLogs.customerId, customerId));
+    await tx.delete(userActivityLogs).where(eq(userActivityLogs.customerId, customerId));
 
-    // 5. Reset customer balance and limits
-    // NOTE: By default we do NOT clear escrowContractId - once created, it persists (like blockchain)
-    // However, tests can request to clear it via clearEscrowAccount flag
-    const updateData: any = {
-      currentBalanceUsdCents: balanceUsdCents,
-      maxMonthlyUsdCents: spendingLimitUsdCents,
-      currentMonthChargedUsdCents: 0,
-      currentMonthStart: new Date(),
-      updatedAt: new Date(),
-    };
-
-    // Conditionally clear escrowContractId (test-only for "no account" scenarios)
-    if (clearEscrowAccount) {
-      updateData.escrowContractId = null;
-    }
-
+    // 5. Update customer with new balance/spending limit
     await tx
       .update(customers)
-      .set(updateData)
+      .set({
+        currentBalanceUsdCents: balanceUsdCents,
+        maxMonthlyUsdCents: spendingLimitUsdCents,
+        currentMonthChargedUsdCents: 0,
+        lastMonthChargedUsdCents: 0,
+        escrowContractId: clearEscrowAccount ? null : customer.escrowContractId,
+        currentMonthStart: new Date().toISOString().split('T')[0],
+        updatedAt: new Date(),
+      })
       .where(eq(customers.customerId, customerId));
 
     console.log(`[TEST DATA] Reset customer ${customerId}:`);
     console.log(`  - Deleted ${deletedServices.length} service instances`);
     console.log(`  - Deleted ${deletedApiKeys.length} API keys`);
     console.log(`  - Deleted ${deletedSealKeys.length} Seal keys`);
-    console.log(`  - Reset balance to $${balanceUsdCents / 100}`);
-    console.log(`  - Reset spending limit to $${spendingLimitUsdCents / 100}`);
+    console.log(`  - Deleted all related data (ledger, tokens, billing, logs)`);
+    console.log(`  - Updated customer: balance=$${balanceUsdCents / 100}, spending limit=$${spendingLimitUsdCents / 100}, escrow cleared=${clearEscrowAccount}`);
   });
 
   return {
     success: true,
-    message: 'Customer test data reset successfully',
-    customerId,
-    balanceUsd: balanceUsdCents / 100,
-    spendingLimitUsd: spendingLimitUsdCents / 100,
+    message: 'Customer reset successfully',
+    customerId: customerId,
   };
 }
 
@@ -183,7 +188,8 @@ export async function getApiKeysTestData(walletAddress: string = MOCK_WALLET_ADD
     found: true,
     customerId: customer.customerId,
     apiKeys: keys.map(k => ({
-      apiKeyId: k.apiKeyId,
+      apiKeyId: decryptSecret(k.apiKeyId), // Decrypt for tests (they expect plain text)
+      apiKeyFp: k.apiKeyFp, // Include fingerprint for reference
       serviceType: k.serviceType,
       metadata: k.metadata,
       isActive: k.isActive,

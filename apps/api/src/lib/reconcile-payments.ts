@@ -27,7 +27,7 @@ interface ReconcileResult {
   chargesSucceeded: number;
   chargesFailed: number;
   details: {
-    instanceId: string;
+    instanceId: number;
     success: boolean;
     error?: string;
   }[];
@@ -152,7 +152,7 @@ export async function reconcilePayments(customerId: number): Promise<ReconcileRe
  * @param instanceId - Service instance ID to charge
  * @returns Whether charge succeeded
  */
-export async function chargeMonthlySubscription(instanceId: string): Promise<boolean> {
+export async function chargeMonthlySubscription(instanceId: number): Promise<boolean> {
   const service = await db.query.serviceInstances.findFirst({
     where: eq(serviceInstances.instanceId, instanceId),
   });

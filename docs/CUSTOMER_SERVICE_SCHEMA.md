@@ -236,11 +236,11 @@ Suiftly can decline off-chain operations if:
 ### Service Tiers
 Each service can be configured independently with different tiers:
 
-| Tier | Description | Target |
-|------|-------------|--------|
-| **Starter** | Entry-level, lower limits | Individual developers, testing |
-| **Pro** | Enhanced limits and features | Small teams, production apps |
-| **Enterprise** | Highest limits, priority support | Enterprise, high-volume apps |
+| Tier | Description |
+|------|-------------|
+| **Starter** | Entry-level, no burst, no allowlist |
+| **Pro** | More guaranteed bandwidth, burst and allowlist supported. |
+| **Enterprise** | Significantly more guaranteed bandwidth. |
 
 **For complete tier definitions and rate limits, see [UI_DESIGN.md](./UI_DESIGN.md) (pricing and tier configuration).**
 
@@ -302,8 +302,7 @@ On the first day of each calendar month:
 The dashboard shows:
 - **Account Balance**: Current funds in escrow (on-chain state)
 - **Pending Charges**: Unbilled usage since last billing cycle (off-chain calculation)
-- **Current Month Charged**: Charges already billed this month (on-chain state)
-- **Last Month Total**: Final charges from the previous completed month (on-chain state)
+- **Last Month Total**: Final charges from the previous completed month (calculated from on-chain transaction history)
 - **Monthly Spending Limit**: Authorized maximum spending per month (on-chain state)
 
 ```typescript
@@ -312,8 +311,7 @@ The dashboard shows:
   "account_balance_usd": 150.00,        // On-chain: actual funds available
   "pending_charges_usd": 3.42,          // Off-chain: unbilled usage (calculated in real-time)
   "current_month": "2025-02",
-  "current_month_charged_usd": 42.75,   // On-chain: February charges already billed
-  "last_month_total_usd": 87.23,        // On-chain: January 2025 total
+  "last_month_total_usd": 87.23,        // Calculated from on-chain transaction history: January 2025 total
   "max_monthly_usd": 100.00             // On-chain: safety limit
 }
 ```
@@ -321,8 +319,9 @@ The dashboard shows:
 **Rationale:**
 - **Account Balance** is the primary metric - customers need to know when to deposit funds
 - **Pending Charges** provides early warning before billing executes (helps avoid service suspension)
-- **Current Month Charged** uses parallel terminology with "Pending Charges" for clarity
+- **Last Month Total** provides historical context for budgeting
 - **Monthly Limit** is a safety mechanism, not a spending target
+- Avoid showing "Current Month Charged" - potentially confusing when combined with pending charges
 - Avoid "Available This Month" calculation - it adds confusion between balance and limit constraints
 
 **Pending Charges Calculation:**
@@ -401,6 +400,40 @@ API keys authenticate service requests and map to customer accounts for billing 
 
 **For complete API key design, implementation, and security details, see [API_KEY_DESIGN.md](./API_KEY_DESIGN.md).**
 
+### API Key Fingerprint Storage
+
+The `api_key_fp` field stores 32-bit unsigned fingerprints in PostgreSQL's signed INTEGER type:
+
+**Unsigned to Signed Conversion:**
+```javascript
+// JavaScript: 32-bit unsigned → signed (for PostgreSQL storage)
+function toSigned32(unsigned) {
+  return unsigned > 0x7FFFFFFF ? unsigned - 0x100000000 : unsigned;
+}
+
+// Example:
+// Unsigned: 3,000,000,000 (0xB2D05E00)
+// Signed:  -1,294,967,296 (stored in PostgreSQL)
+```
+
+**Signed to Unsigned Conversion:**
+```javascript
+// PostgreSQL → JavaScript: signed → 32-bit unsigned
+function toUnsigned32(signed) {
+  return signed < 0 ? signed + 0x100000000 : signed;
+}
+
+// Example:
+// Signed:  -1,294,967,296 (from PostgreSQL)
+// Unsigned: 3,000,000,000 (0xB2D05E00)
+```
+
+**In Practice:**
+- Fingerprints are generated from first 7 Base32 characters of API key
+- Values >= 2^31 (2,147,483,648) are stored as negative numbers in PostgreSQL
+- Application code handles conversion transparently
+- Collision retry generates new API key (with different fingerprint) on conflict
+
 
 ## Seal Service Specifics
 
@@ -470,37 +503,7 @@ Rate limits are enforced **per customer**, not per API key.
 - Simplifies customer experience (aggregate view of usage)
 - Aligns with billing (customer pays for total usage)
 
-### HAProxy Sticky Table Implementation
-
-```
-# HAProxy configuration concept
-stick-table type string len 32 size 100k expire 1h store http_req_rate(10s)
-
-# On request:
-1. Extract API key from Authorization header
-2. Call Lua script to lookup customer_sticky_key
-3. Track rate against customer_sticky_key in stick table
-4. Deny if rate exceeds tier limit
-```
-
-**Flow:**
-
-```
-Request with API Key A (Customer 42, Seal Service)
-  └─> Decode: customer_id = 42
-  └─> Sticky key: "42"
-  └─> Sticky table: "42" → 45 req/10s
-
-Request with API Key B (Customer 42, Seal Service - different derivation)
-  └─> Decode: customer_id = 42 (same)
-  └─> Sticky key: "42" (same)
-  └─> Sticky table: "42" → 46 req/10s (incremented)
-
-Request with API Key C (Customer 99, Seal Service)
-  └─> Decode: customer_id = 99
-  └─> Sticky key: "99"
-  └─> Sticky table: "99" → 12 req/10s (separate counter)
-```
+**Implementation:** HAProxy enforces rate limits using map files. See `~/walrus/docs` for HAProxy configuration details.
 
 ## Service-Specific API Keys
 
@@ -532,14 +535,14 @@ CREATE TABLE customers (
   updated_at TIMESTAMP NOT NULL,
 
   INDEX idx_wallet (wallet_address),
-  INDEX idx_status (status) WHERE status != 'active',  -- Partial index for non-active customers
+  INDEX idx_customer_status (status) WHERE status != 'active',  -- Partial index for non-active customers
   CHECK (customer_id > 0),                 -- Ensure customer_id is never 0
   CHECK (status IN ('active', 'suspended', 'closed'))
 );
 
 -- Service instances
 CREATE TABLE service_instances (
-  instance_id UUID PRIMARY KEY,
+  instance_id SERIAL PRIMARY KEY,              -- Auto-increment (purely internal, never exposed)
   customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
   service_type VARCHAR(20) NOT NULL,
   state VARCHAR(30) NOT NULL DEFAULT 'not_provisioned',
@@ -555,8 +558,10 @@ CREATE TABLE service_instances (
 
 -- API keys for service authentication (see API_KEY_DESIGN.md for format and encryption details)
 CREATE TABLE api_keys (
-  api_key_id VARCHAR(100) PRIMARY KEY,     -- Full API key string (encrypted)
-  api_key_fp VARCHAR(64) NOT NULL,         -- API key fingerprint for fast lookups (first 7 Base32 chars → 32-bit)
+  api_key_fp INTEGER PRIMARY KEY,          -- 32-bit fingerprint (signed, stores unsigned values)
+                                           -- First 7 Base32 chars of key → 32-bit integer
+                                           -- Values >= 2^31 stored as negative (two's complement)
+  api_key_id VARCHAR(100) UNIQUE NOT NULL, -- Full API key string (encrypted)
   customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
   service_type VARCHAR(20) NOT NULL,       -- 'seal', 'grpc', 'graphql'
   metadata JSONB NOT NULL DEFAULT '{}',    -- Service-specific fields (flexible for multi-service)
@@ -566,22 +571,37 @@ CREATE TABLE api_keys (
   is_active BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMP NOT NULL,
   revoked_at TIMESTAMP NULL,
+  deleted_at TIMESTAMP NULL,               -- Soft delete timestamp
 
-  INDEX idx_customer_service (customer_id, service_type, is_active),
-  INDEX idx_api_key_fp (api_key_fp) WHERE is_active = true
+  INDEX idx_customer_service (customer_id, service_type, is_active)
+  -- Note: No index on api_key_fp needed - PRIMARY KEY automatically indexed
 );
 
 -- Seal keys (Seal service specific)
 CREATE TABLE seal_keys (
   seal_key_id UUID PRIMARY KEY,
   customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
+  instance_id INTEGER REFERENCES service_instances(instance_id) ON DELETE CASCADE,
   public_key VARCHAR(66) NOT NULL,
   encrypted_private_key TEXT NOT NULL,
   purchase_tx_digest VARCHAR(64),
   is_active BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMP NOT NULL,
 
-  INDEX idx_customer (customer_id)
+  INDEX idx_seal_customer (customer_id),
+  INDEX idx_seal_instance (instance_id)
+);
+
+-- Seal packages (Seal service specific - package addresses associated with Seal keys)
+CREATE TABLE seal_packages (
+  package_id UUID PRIMARY KEY,
+  seal_key_id UUID NOT NULL REFERENCES seal_keys(seal_key_id) ON DELETE CASCADE,
+  package_address VARCHAR(66) NOT NULL,   -- Sui package address
+  name VARCHAR(100),                       -- Optional friendly name
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMP NOT NULL,
+
+  INDEX idx_package_seal_key (seal_key_id)
 );
 
 -- Usage tracking for billing
@@ -609,8 +629,8 @@ CREATE TABLE escrow_transactions (
   asset_type VARCHAR(66),         -- Coin type
   timestamp TIMESTAMP NOT NULL,
 
-  INDEX idx_customer (customer_id),
-  INDEX idx_tx_digest (tx_digest)
+  INDEX idx_escrow_customer (customer_id),
+  INDEX idx_escrow_tx_digest (tx_digest)
 );
 
 -- HAProxy raw logs (TimescaleDB hypertable for usage metering and ops monitoring)
@@ -654,14 +674,16 @@ CREATE TABLE haproxy_raw_logs (
   termination_state TEXT,               -- HAProxy termination code (e.g., 'SD', 'SH', 'PR')
 
   -- Indexes (partial where useful to exclude common values)
-  INDEX idx_customer_time (customer_id, timestamp DESC) WHERE customer_id IS NOT NULL,
-  INDEX idx_server_time (server_id, timestamp DESC),
-  INDEX idx_service_network (service_type, network, timestamp DESC),
-  INDEX idx_traffic_type (traffic_type, timestamp DESC),
-  INDEX idx_event_type (event_type, timestamp DESC) WHERE event_type != 0,  -- Exclude successful requests
-  INDEX idx_status_code (status_code, timestamp DESC),
-  INDEX idx_api_key_fp (api_key_fp, timestamp DESC) WHERE api_key_fp != 0   -- Exclude requests without API key
+  INDEX idx_logs_customer_time (customer_id, timestamp DESC) WHERE customer_id IS NOT NULL,
+  INDEX idx_logs_server_time (server_id, timestamp DESC),
+  INDEX idx_logs_service_network (service_type, network, timestamp DESC),
+  INDEX idx_logs_traffic_type (traffic_type, timestamp DESC),
+  INDEX idx_logs_event_type (event_type, timestamp DESC) WHERE event_type != 0,  -- Exclude successful requests
+  INDEX idx_logs_status_code (status_code, timestamp DESC),
+  INDEX idx_logs_api_key_fp (api_key_fp, timestamp DESC) WHERE api_key_fp != 0   -- Exclude requests without API key
 );
+
+-- NOTE: Implementation currently uses TEXT for client_ip, but INET is recommended for efficiency and validation
 
 -- TimescaleDB hypertable configuration (applied via migration)
 -- SELECT create_hypertable('haproxy_raw_logs', 'timestamp', chunk_time_interval => INTERVAL '1 hour');
@@ -688,7 +710,7 @@ CREATE TABLE refresh_tokens (
   expires_at TIMESTAMP NOT NULL,
   created_at TIMESTAMP NOT NULL,
 
-  INDEX idx_customer (customer_id),
+  INDEX idx_refresh_customer (customer_id),
   INDEX idx_expires_at (expires_at)        -- Cleanup expired tokens
 );
 
@@ -706,7 +728,7 @@ CREATE TABLE ledger_entries (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
   INDEX idx_customer_created (customer_id, created_at DESC),
-  INDEX idx_tx_hash (tx_hash) WHERE tx_hash IS NOT NULL
+  INDEX idx_ledger_tx_hash (tx_hash) WHERE tx_hash IS NOT NULL
 );
 
 -- Billing records (charges and credits applied to accounts)
@@ -722,7 +744,7 @@ CREATE TABLE billing_records (
   created_at TIMESTAMP NOT NULL,
 
   INDEX idx_customer_period (customer_id, billing_period_start),
-  INDEX idx_status (status) WHERE status != 'paid'
+  INDEX idx_billing_status (status) WHERE status != 'paid'
 );
 
 -- Processing state (Global Manager resumability)
@@ -730,6 +752,30 @@ CREATE TABLE processing_state (
   key TEXT PRIMARY KEY,                    -- e.g., 'last_log_timestamp', 'last_billing_run'
   value TEXT NOT NULL,                     -- Timestamp or other state value
   updated_at TIMESTAMP NOT NULL
+);
+
+-- Global configuration (key-value store for ALL system settings)
+-- Includes: tier pricing, bandwidth limits, feature flags, system parameters
+-- Tier configuration keys:
+--   - fsubs_usd_sta, fsubs_usd_pro, fsubs_usd_ent (monthly subscription price in USD)
+--   - fbw_sta, fbw_pro, fbw_ent (bandwidth in req/sec per region)
+--   - freg_count (number of regions)
+-- Loaded into memory at server startup for O(1) lookups (see apps/api/src/lib/config-cache.ts)
+CREATE TABLE config_global (
+  key TEXT PRIMARY KEY,                    -- Configuration key
+  value TEXT NOT NULL,                     -- Configuration value (stored as string)
+  updated_at TIMESTAMP NOT NULL
+);
+
+-- User activity logs (audit trail for customer actions)
+CREATE TABLE user_activity_logs (
+  id SERIAL PRIMARY KEY,
+  customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
+  timestamp TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+  client_ip INET NOT NULL,                 -- Client IP address
+  message TEXT NOT NULL,                   -- Activity description
+
+  INDEX idx_activity_customer_time (customer_id, timestamp DESC)
 );
 
 -- System control (singleton table for system-wide state)

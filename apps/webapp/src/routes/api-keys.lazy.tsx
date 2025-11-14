@@ -78,7 +78,7 @@ function ApiKeysPage() {
                       </thead>
                       <tbody className="divide-y">
                         {apiKeys.map((key) => (
-                          <tr key={key.apiKeyId}>
+                          <tr key={key.apiKeyFp}>
                             <td className="px-3 py-2">
                               <code className="text-sm font-mono">{key.keyPreview}</code>
                             </td>

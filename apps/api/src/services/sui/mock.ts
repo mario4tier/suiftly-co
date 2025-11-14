@@ -479,9 +479,15 @@ export class MockSuiService implements ISuiService {
 
   /**
    * Generate customer ID (random 32-bit integer)
+   * Generates unsigned 32-bit value and converts to signed for PostgreSQL INTEGER storage
    */
   private generateCustomerId(): number {
-    return Math.floor(Math.random() * 4294967295) + 1;
+    // Generate unsigned 32-bit value (0 to 4294967295)
+    const unsigned = Math.floor(Math.random() * 4294967295) + 1;
+
+    // Convert to signed 32-bit (PostgreSQL INTEGER range: -2147483648 to 2147483647)
+    // Use bitwise OR 0 to force 32-bit signed conversion
+    return unsigned | 0;
   }
 }
 

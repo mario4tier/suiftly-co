@@ -4,9 +4,13 @@
  */
 
 import { test, expect } from '@playwright/test';
+import { resetCustomer } from '../helpers/db';
 
 test.describe('Dashboard Navigation', () => {
-  test.beforeEach(async ({ page }) => {
+  test.beforeEach(async ({ page, request }) => {
+    // Reset customer to production defaults (prevents test pollution from previous tests)
+    await resetCustomer(request);
+
     // Authenticate with mock wallet before each test
     await page.goto('/');
     // Click the Mock Wallet button (button element with "Mock Wallet" text)
