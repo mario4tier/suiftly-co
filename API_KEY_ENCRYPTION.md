@@ -99,15 +99,17 @@ openssl rand -base64 32
 
 ### 2. Set Environment Variable
 
-**Development (`.env`):**
+**Development (`~/.suiftly.env`):**
 ```bash
+# ~/.suiftly.env
 DB_APP_FIELDS_ENCRYPTION_KEY="<base64-encoded-key>"
 ```
 
-**Production:**
+**Production (`~/.suiftly.env`):**
 ```bash
-# Store in secure secrets manager (AWS Secrets Manager, HashiCorp Vault, etc.)
-export DB_APP_FIELDS_ENCRYPTION_KEY="<base64-encoded-key>"
+# ~/.suiftly.env
+# Back up this key securely (password manager) before production use
+DB_APP_FIELDS_ENCRYPTION_KEY="<base64-encoded-key>"
 ```
 
 **IMPORTANT**:
@@ -268,10 +270,10 @@ No migration needed - just set `DB_APP_FIELDS_ENCRYPTION_KEY` and start the API 
 
 ### Error: "DB_APP_FIELDS_ENCRYPTION_KEY not set"
 
-**Solution**: Add encryption key to `.env` file:
+**Solution**: Add encryption key to `~/.suiftly.env` file:
 ```bash
 openssl rand -base64 32
-# Copy output to .env
+# Copy output to ~/.suiftly.env
 ```
 
 ### Error: "must be 32 bytes"

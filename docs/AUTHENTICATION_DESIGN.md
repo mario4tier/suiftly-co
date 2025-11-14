@@ -790,13 +790,26 @@ openssl rand -base64 32  # DB_APP_FIELDS_ENCRYPTION_KEY
 
 **Loading in Application:**
 ```typescript
-// packages/api/src/config.ts
-import * as dotenv from 'dotenv'
-import * as os from 'os'
-import * as path from 'path'
+// apps/api/src/lib/config.ts
+import { readFileSync, existsSync } from 'fs';
+import { join } from 'path';
+import { homedir } from 'os';
 
-// Load from home directory
-dotenv.config({ path: path.join(os.homedir(), '.env') })
+// Load from ~/.suiftly.env (not project .env to avoid Python venv conflicts)
+const homeEnvPath = join(homedir(), '.suiftly.env');
+if (existsSync(homeEnvPath)) {
+  const envFile = readFileSync(homeEnvPath, 'utf-8');
+  envFile.split('\n').forEach(line => {
+    const match = line.match(/^([^=]+)=(.*)$/);
+    if (match) {
+      const key = match[1].trim();
+      const value = match[2].trim();
+      if (!process.env[key]) {
+        process.env[key] = value;
+      }
+    }
+  });
+}
 
 if (!process.env.JWT_SECRET || !process.env.DB_APP_FIELDS_ENCRYPTION_KEY) {
   throw new Error('Required secrets not found in ~/.suiftly.env')

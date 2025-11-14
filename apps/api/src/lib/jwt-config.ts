@@ -3,6 +3,8 @@
  * Enables fast testing with short expiry times while preventing accidents in production
  */
 
+import { config } from './config.js';
+
 export interface JWTConfig {
   accessTokenExpiry: string;
   refreshTokenExpiry: string;
@@ -89,7 +91,7 @@ function getProductionJWTConfig(): JWTConfig {
  */
 function getTestJWTConfig(): JWTConfig {
   // GUARD 1: Only allow in test/development environments
-  if (process.env.NODE_ENV === 'production') {
+  if (config.NODE_ENV === 'production') {
     throw new Error(
       'FATAL: Cannot use test JWT config in production!\n' +
         'This would cause all tokens to expire in seconds.'
@@ -105,12 +107,13 @@ function getTestJWTConfig(): JWTConfig {
   }
 
   // GUARD 3: Require test/dev secret (safety check)
-  const secret = process.env.JWT_SECRET || '';
-  if (!secret.includes('TEST') && !secret.includes('DEV')) {
+  // Decode base64 secret to check for markers
+  const secretDecoded = Buffer.from(config.JWT_SECRET, 'base64').toString('utf8');
+  if (!secretDecoded.includes('test') && !secretDecoded.includes('dev')) {
     throw new Error(
-      'JWT_SECRET must contain "TEST" or "DEV" substring for short expiry.\n' +
+      'JWT_SECRET must contain "test" or "dev" marker for short expiry.\n' +
         'This prevents accidentally using test config with production secrets.\n' +
-        `Current secret preview: ${secret.slice(0, 10)}...`
+        `Decoded preview: ${secretDecoded.slice(0, 10)}...`
     );
   }
 
@@ -128,11 +131,12 @@ function getTestJWTConfig(): JWTConfig {
  */
 export function getJWTConfig(): JWTConfig {
   // Check if all test conditions are met
-  const isTestEnv = process.env.NODE_ENV === 'test' || process.env.NODE_ENV === 'development';
+  const isTestEnv = config.NODE_ENV === 'test' || config.NODE_ENV === 'development';
   const shortExpiryEnabled = process.env.ENABLE_SHORT_JWT_EXPIRY === 'true';
-  const hasTestSecret =
-    (process.env.JWT_SECRET || '').includes('TEST') ||
-    (process.env.JWT_SECRET || '').includes('DEV');
+
+  // Decode base64 secret to check for test/dev markers
+  const secretDecoded = Buffer.from(config.JWT_SECRET, 'base64').toString('utf8');
+  const hasTestSecret = secretDecoded.includes('test') || secretDecoded.includes('dev');
 
   if (isTestEnv && shortExpiryEnabled && hasTestSecret) {
     return getTestJWTConfig();

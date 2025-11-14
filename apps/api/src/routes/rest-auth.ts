@@ -14,8 +14,9 @@ import { db, logActivity } from '@suiftly/database';
 import { customers, authNonces, refreshTokens } from '@suiftly/database/schema';
 import { eq, and, gt } from 'drizzle-orm';
 import { randomBytes, randomInt, createHash } from 'crypto';
+import { config } from '../lib/config.js';
 
-const MOCK_AUTH = process.env.MOCK_AUTH === 'true';
+const MOCK_AUTH = config.MOCK_AUTH;
 const NONCE_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes (user-friendly, still secure)
 
 /**
@@ -238,7 +239,7 @@ export async function registerAuthRoutes(server: FastifyInstance) {
     // Set httpOnly cookie for refresh token (same-origin, Lax)
     reply.setCookie('refreshToken', refreshToken, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: config.NODE_ENV === 'production',
       sameSite: 'lax',
       maxAge: Math.floor(refreshExpiryMs / 1000), // Convert ms to seconds
       path: '/',
@@ -335,7 +336,7 @@ export async function registerAuthRoutes(server: FastifyInstance) {
     // Clear cookie
     reply.clearCookie('refreshToken', {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: config.NODE_ENV === 'production',
       sameSite: 'lax',
       path: '/',
     });

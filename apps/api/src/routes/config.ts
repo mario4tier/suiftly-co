@@ -5,8 +5,9 @@
 
 import { router, publicProcedure } from '../lib/trpc';
 import { getAllConfig } from '../lib/config-cache';
+import { config } from '../lib/config.js';
 
-const MOCK_AUTH = process.env.MOCK_AUTH === 'true';
+const MOCK_AUTH = config.MOCK_AUTH;
 
 export const configRouter = router({
   /**

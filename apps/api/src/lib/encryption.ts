@@ -23,7 +23,9 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'crypto';
  * // Returns: "rZ8j3kF9...==:hG4mP7...==:x9Q2..."
  */
 export function encryptSecret(plaintext: string): string {
-  // Load encryption key from environment
+  // Load encryption key from process.env (runtime validation)
+  // Note: config.ts writes defaults to process.env, so this will have a value in dev/test
+  // Tests can delete process.env.DB_APP_FIELDS_ENCRYPTION_KEY to test error conditions
   const keyB64 = process.env.DB_APP_FIELDS_ENCRYPTION_KEY;
   if (!keyB64) {
     throw new Error(
@@ -74,7 +76,9 @@ export function encryptSecret(plaintext: string): string {
  * // Returns: "S4A2B3C4D5E6F7G8H9I0J1K2L3M4N5O6P7Q8R9"
  */
 export function decryptSecret(ciphertext: string): string {
-  // Load encryption key from environment
+  // Load encryption key from process.env (runtime validation)
+  // Note: config.ts writes defaults to process.env, so this will have a value in dev/test
+  // Tests can delete process.env.DB_APP_FIELDS_ENCRYPTION_KEY to test error conditions
   const keyB64 = process.env.DB_APP_FIELDS_ENCRYPTION_KEY;
   if (!keyB64) {
     throw new Error(
