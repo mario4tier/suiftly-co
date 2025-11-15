@@ -1,6 +1,7 @@
 import { pgTable, integer, varchar, bigint, date, timestamp, index, check } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { FIELD_LIMITS } from '@suiftly/shared/constants';
+import { customerStatusEnum } from './enums';
 
 /**
  * Customers table schema
@@ -22,7 +23,7 @@ export const customers = pgTable('customers', {
   customerId: integer('customer_id').primaryKey(),
   walletAddress: varchar('wallet_address', { length: FIELD_LIMITS.SUI_ADDRESS }).notNull().unique(),
   escrowContractId: varchar('escrow_contract_id', { length: FIELD_LIMITS.SUI_ADDRESS }),
-  status: varchar('status', { length: FIELD_LIMITS.CUSTOMER_STATUS }).notNull().default('active'),
+  status: customerStatusEnum('status').notNull().default('active'),
   maxMonthlyUsdCents: bigint('max_monthly_usd_cents', { mode: 'number' }), // 28-day spending limit (see note above)
   currentBalanceUsdCents: bigint('current_balance_usd_cents', { mode: 'number' }),
   currentMonthChargedUsdCents: bigint('current_month_charged_usd_cents', { mode: 'number' }), // Charged this 28-day period
@@ -34,5 +35,5 @@ export const customers = pgTable('customers', {
   idxWallet: index('idx_wallet').on(table.walletAddress),
   idxCustomerStatus: index('idx_customer_status').on(table.status).where(sql`${table.status} != 'active'`),
   checkCustomerId: check('check_customer_id', sql`${table.customerId} != 0`),
-  checkStatus: check('check_status', sql`${table.status} IN ('active', 'suspended', 'closed')`),
+  // Note: check_status constraint removed - PostgreSQL ENUM type provides validation
 }));

@@ -65,18 +65,20 @@ export const SPENDING_LIMIT = {
 
 **Schema:**
 ```sql
-ALTER TABLE customers ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'active';
-ALTER TABLE customers ADD CONSTRAINT check_status CHECK (status IN ('active', 'suspended', 'closed'));
+-- PostgreSQL ENUM type provides type safety (see ENUM_IMPLEMENTATION.md)
+CREATE TYPE customer_status AS ENUM('active', 'suspended', 'closed');
+ALTER TABLE customers ADD COLUMN status customer_status NOT NULL DEFAULT 'active';
 ```
 
 **Implementation:**
 ```typescript
+// Types derived from database ENUM (single source of truth)
 // packages/shared/src/constants/index.ts
 export const CUSTOMER_STATUS = {
   ACTIVE: 'active',
   SUSPENDED: 'suspended',
   CLOSED: 'closed',
-} as const;
+} as const satisfies Record<string, CustomerStatus>;
 
 export type CustomerStatus = typeof CUSTOMER_STATUS[keyof typeof CUSTOMER_STATUS];
 ```

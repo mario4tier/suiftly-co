@@ -233,6 +233,19 @@ Suiftly can decline off-chain operations if:
   - 1× gRPC service (if enabled, future)
   - 1× GraphQL service (if enabled, future)
 
+### Schema Design: Single Table vs Separate Tables
+
+**Decision**: Use a single `service_instances` table for all service types.
+
+**Rationale**:
+- **Efficient iteration**: The `idx_service_type_state` index enables fast service-type filtering without full table scans
+- **Schema flexibility**: Adding new service types requires no migrations
+- **Consistent patterns**: Same CRUD code handles all services
+- **Cross-service queries**: Easy to retrieve all services for a customer
+- **Minimal overhead**: ENUM storage (4 bytes) + indexed filtering is highly efficient
+
+**Performance**: With proper indexing, querying 100K seal instances from 300K total rows has the same performance as a dedicated `seal_instances` table.
+
 ### Service Tiers
 Each service can be configured independently with different tiers:
 
@@ -517,15 +530,25 @@ See [API_KEY_DESIGN.md](./API_KEY_DESIGN.md) for implementation details.
 
 ## Database Schema Summary
 
+**NOTE**: The schema uses PostgreSQL ENUM types for type safety. See [ENUM_IMPLEMENTATION.md](./ENUM_IMPLEMENTATION.md) for details.
+
 ### Complete Schema
 
 ```sql
+-- ENUM types (single source of truth - see ENUM_IMPLEMENTATION.md)
+CREATE TYPE customer_status AS ENUM('active', 'suspended', 'closed');
+CREATE TYPE service_type AS ENUM('seal', 'grpc', 'graphql');
+CREATE TYPE service_state AS ENUM('not_provisioned', 'provisioning', 'disabled', 'enabled', 'suspended_maintenance', 'suspended_no_payment');
+CREATE TYPE service_tier AS ENUM('starter', 'pro', 'enterprise');
+CREATE TYPE transaction_type AS ENUM('deposit', 'withdraw', 'charge', 'credit');
+CREATE TYPE billing_status AS ENUM('pending', 'paid', 'failed');
+
 -- Customers (wallet = customer)
 CREATE TABLE customers (
-  customer_id INTEGER PRIMARY KEY,         -- 32-bit random ID (1 to 4,294,967,295, excludes 0)
+  customer_id INTEGER PRIMARY KEY,         -- 32-bit random ID (full signed range: -2,147,483,648 to 2,147,483,647, excludes 0)
   wallet_address VARCHAR(66) NOT NULL UNIQUE, -- Sui wallet address (0x...)
   escrow_contract_id VARCHAR(66),          -- On-chain escrow object ID
-  status VARCHAR(20) NOT NULL DEFAULT 'active', -- Customer account status: 'active', 'suspended', 'closed'
+  status customer_status NOT NULL DEFAULT 'active', -- ENUM provides type safety
   max_monthly_usd_cents BIGINT,            -- Maximum authorized monthly spending (USD cents, NULL = unlimited)
   current_balance_usd_cents BIGINT,        -- Current balance in USD cents (cached from on-chain)
   current_month_charged_usd_cents BIGINT,  -- Amount charged this calendar month (USD cents)
@@ -536,24 +559,24 @@ CREATE TABLE customers (
 
   INDEX idx_wallet (wallet_address),
   INDEX idx_customer_status (status) WHERE status != 'active',  -- Partial index for non-active customers
-  CHECK (customer_id > 0),                 -- Ensure customer_id is never 0
-  CHECK (status IN ('active', 'suspended', 'closed'))
+  CHECK (customer_id != 0)                 -- Ensure customer_id is never 0 (allows full 32-bit signed range)
 );
 
 -- Service instances
 CREATE TABLE service_instances (
   instance_id SERIAL PRIMARY KEY,              -- Auto-increment (purely internal, never exposed)
   customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
-  service_type VARCHAR(20) NOT NULL,
-  state VARCHAR(30) NOT NULL DEFAULT 'not_provisioned',
-  tier VARCHAR(20) NOT NULL,
+  service_type service_type NOT NULL,          -- ENUM
+  state service_state NOT NULL DEFAULT 'not_provisioned', -- ENUM
+  tier service_tier NOT NULL,                  -- ENUM
   is_enabled BOOLEAN NOT NULL DEFAULT true,
   subscription_charge_pending BOOLEAN NOT NULL DEFAULT true,
   config JSONB,
   enabled_at TIMESTAMP,
   disabled_at TIMESTAMP,
 
-  UNIQUE (customer_id, service_type)
+  UNIQUE (customer_id, service_type),
+  INDEX idx_service_type_state (service_type, state)  -- Efficient service-type iteration for backend sync
 );
 
 -- API keys for service authentication (see API_KEY_DESIGN.md for format and encryption details)
@@ -563,7 +586,7 @@ CREATE TABLE api_keys (
                                            -- Values >= 2^31 stored as negative (two's complement)
   api_key_id VARCHAR(100) UNIQUE NOT NULL, -- Full API key string (encrypted)
   customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
-  service_type VARCHAR(20) NOT NULL,       -- 'seal', 'grpc', 'graphql'
+  service_type service_type NOT NULL,      -- ENUM: 'seal', 'grpc', 'graphql'
   metadata JSONB NOT NULL DEFAULT '{}',    -- Service-specific fields (flexible for multi-service)
                                            -- Seal: {key_version, seal_network, seal_access, seal_source, proc_group}
                                            -- gRPC: TBD
@@ -608,7 +631,7 @@ CREATE TABLE seal_packages (
 CREATE TABLE usage_records (
   record_id BIGSERIAL PRIMARY KEY,
   customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
-  service_type VARCHAR(20) NOT NULL,
+  service_type service_type NOT NULL,  -- ENUM
   request_count BIGINT NOT NULL,
   bytes_transferred BIGINT,
   window_start TIMESTAMP NOT NULL,
@@ -624,7 +647,7 @@ CREATE TABLE escrow_transactions (
   tx_id BIGSERIAL PRIMARY KEY,
   customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
   tx_digest VARCHAR(64) NOT NULL UNIQUE,
-  tx_type VARCHAR(20) NOT NULL,  -- 'deposit', 'withdraw', 'charge', 'credit'
+  tx_type transaction_type NOT NULL,  -- ENUM: 'deposit', 'withdraw', 'charge', 'credit'
   amount DECIMAL(20, 8) NOT NULL,
   asset_type VARCHAR(66),         -- Coin type
   timestamp TIMESTAMP NOT NULL,
@@ -718,7 +741,7 @@ CREATE TABLE refresh_tokens (
 CREATE TABLE ledger_entries (
   id UUID PRIMARY KEY,
   customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
-  type VARCHAR(20) NOT NULL,               -- 'deposit', 'withdrawal', 'charge', 'credit'
+  type transaction_type NOT NULL,          -- ENUM: 'deposit', 'withdraw', 'charge', 'credit'
   amount_usd_cents BIGINT NOT NULL,        -- USD amount (signed: + for deposit/credit, - for charge/withdrawal)
   amount_sui_mist BIGINT,                  -- SUI amount in mist (1 SUI = 10^9 mist), NULL for charges/credits
   sui_usd_rate_cents BIGINT,               -- Rate at transaction time (cents per 1 SUI), e.g., 245 = $2.45
@@ -738,8 +761,8 @@ CREATE TABLE billing_records (
   billing_period_start TIMESTAMP NOT NULL,
   billing_period_end TIMESTAMP NOT NULL,
   amount_usd_cents BIGINT NOT NULL,        -- Charged amount (positive) or credit (negative)
-  type VARCHAR(20) NOT NULL,               -- 'charge', 'credit', 'refund'
-  status VARCHAR(20) NOT NULL,             -- 'pending', 'paid', 'failed'
+  type transaction_type NOT NULL,          -- ENUM: 'deposit', 'withdraw', 'charge', 'credit'
+  status billing_status NOT NULL,          -- ENUM: 'pending', 'paid', 'failed'
   tx_digest VARCHAR(64),                   -- Escrow charge transaction (NULL if pending)
   created_at TIMESTAMP NOT NULL,
 

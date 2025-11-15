@@ -3,7 +3,30 @@
  *
  * All system-wide constants defined here to prevent documentation drift.
  * See docs/CONSTANTS.md for detailed explanations.
+ *
+ * IMPORTANT: Enum types are derived from database schema (PostgreSQL ENUM types).
+ * See docs/ENUM_IMPLEMENTATION.md for the complete enum architecture.
  */
+
+// Re-export enum types from database package (single source of truth)
+export type {
+  CustomerStatus,
+  ServiceType,
+  ServiceState,
+  ServiceTier,
+  TransactionType,
+  BillingStatus
+} from '@suiftly/database/schema';
+
+// Import types for creating constants objects with type checking
+import type {
+  CustomerStatus,
+  ServiceType,
+  ServiceState,
+  ServiceTier,
+  TransactionType,
+  BillingStatus
+} from '@suiftly/database/schema';
 
 // 28-Day Spending Limits (Rolling period from account creation)
 export const SPENDING_LIMIT = {
@@ -14,56 +37,30 @@ export const SPENDING_LIMIT = {
   PERIOD_MS: 28 * 24 * 60 * 60 * 1000, // 2419200000 milliseconds
 } as const;
 
+// Balance Limits
+export const BALANCE_LIMITS = {
+  MINIMUM_ACTIVE_SERVICES_USD: 50,
+} as const;
+
+/**
+ * Constants objects for convenient access
+ * These are derived from database enums to ensure consistency.
+ * The `satisfies` operator ensures type safety without widening types.
+ */
+
 // Customer Status Values
 export const CUSTOMER_STATUS = {
   ACTIVE: 'active',
   SUSPENDED: 'suspended',
   CLOSED: 'closed',
-} as const;
-
-export type CustomerStatus = typeof CUSTOMER_STATUS[keyof typeof CUSTOMER_STATUS];
+} as const satisfies Record<string, CustomerStatus>;
 
 // Service Types
 export const SERVICE_TYPE = {
   SEAL: 'seal',
   GRPC: 'grpc',
   GRAPHQL: 'graphql',
-} as const;
-
-export type ServiceType = typeof SERVICE_TYPE[keyof typeof SERVICE_TYPE];
-
-// Service Tiers
-export const SERVICE_TIER = {
-  STARTER: 'starter',
-  PRO: 'pro',
-  ENTERPRISE: 'enterprise',
-} as const;
-
-export type ServiceTier = typeof SERVICE_TIER[keyof typeof SERVICE_TIER];
-
-// Balance Limits
-export const BALANCE_LIMITS = {
-  MINIMUM_ACTIVE_SERVICES_USD: 50,
-} as const;
-
-// Transaction Types
-export const TRANSACTION_TYPE = {
-  DEPOSIT: 'deposit',
-  WITHDRAW: 'withdraw',
-  CHARGE: 'charge',
-  CREDIT: 'credit',
-} as const;
-
-export type TransactionType = typeof TRANSACTION_TYPE[keyof typeof TRANSACTION_TYPE];
-
-// Billing Status
-export const BILLING_STATUS = {
-  PENDING: 'pending',
-  PAID: 'paid',
-  FAILED: 'failed',
-} as const;
-
-export type BillingStatus = typeof BILLING_STATUS[keyof typeof BILLING_STATUS];
+} as const satisfies Record<string, ServiceType>;
 
 // Service States (6 distinct states - see UI_DESIGN.md)
 export const SERVICE_STATE = {
@@ -73,9 +70,29 @@ export const SERVICE_STATE = {
   ENABLED: 'enabled',
   SUSPENDED_MAINTENANCE: 'suspended_maintenance',
   SUSPENDED_NO_PAYMENT: 'suspended_no_payment',
-} as const;
+} as const satisfies Record<string, ServiceState>;
 
-export type ServiceState = typeof SERVICE_STATE[keyof typeof SERVICE_STATE];
+// Service Tiers
+export const SERVICE_TIER = {
+  STARTER: 'starter',
+  PRO: 'pro',
+  ENTERPRISE: 'enterprise',
+} as const satisfies Record<string, ServiceTier>;
+
+// Transaction Types
+export const TRANSACTION_TYPE = {
+  DEPOSIT: 'deposit',
+  WITHDRAW: 'withdraw',
+  CHARGE: 'charge',
+  CREDIT: 'credit',
+} as const satisfies Record<string, TransactionType>;
+
+// Billing Status
+export const BILLING_STATUS = {
+  PENDING: 'pending',
+  PAID: 'paid',
+  FAILED: 'failed',
+} as const satisfies Record<string, BillingStatus>;
 
 // Field Length Limits (matches database VARCHAR constraints)
 // Keep in sync: database schema, validation schemas, tests

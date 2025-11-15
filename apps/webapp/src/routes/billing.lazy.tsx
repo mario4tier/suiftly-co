@@ -70,9 +70,9 @@ function BillingPage() {
 
       toast.success(`Deposited $${amount.toFixed(2)} successfully`);
 
-      // If pending subscription charges were reconciled, show additional toast and refresh services
+      // If subscription charges were reconciled, show additional toast and refresh services
       if (result.reconciledCharges && result.reconciledCharges > 0) {
-        toast.success(`${result.reconciledCharges} pending subscription charge${result.reconciledCharges > 1 ? 's' : ''} processed`);
+        toast.success(`${result.reconciledCharges} subscription charge${result.reconciledCharges > 1 ? 's' : ''} processed`);
         // Invalidate services to update UI (remove payment pending banners)
         utils.services.list.invalidate();
       }

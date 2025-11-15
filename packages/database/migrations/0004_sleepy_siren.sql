@@ -1,0 +1,1 @@
+ALTER TABLE "usage_records" ALTER COLUMN "service_type" SET DATA TYPE "public"."service_type" USING "service_type"::"public"."service_type";

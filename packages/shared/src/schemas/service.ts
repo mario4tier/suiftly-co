@@ -1,8 +1,12 @@
 import { z } from 'zod';
+import { serviceTierEnum } from '@suiftly/database/schema';
 
 /**
  * Service configuration schemas
  * Pricing values loaded from config_global table at runtime
+ *
+ * IMPORTANT: Enum schemas derive from database enum definitions.
+ * See docs/ENUM_IMPLEMENTATION.md for the complete enum architecture.
  */
 
 /**
@@ -15,7 +19,7 @@ export const serviceStatusSchema = z.enum(['NotProvisioned', 'Enabled', 'Disable
 export type ServiceStatus = z.infer<typeof serviceStatusSchema>;
 
 export const sealConfigSchema = z.object({
-  tier: z.enum(['starter', 'pro', 'enterprise']),
+  tier: z.enum(serviceTierEnum.enumValues),
   burstEnabled: z.boolean().default(false),
   totalSealKeys: z.number().int().min(1).default(1),
   packagesPerSealKey: z.number().int().min(3).default(3),

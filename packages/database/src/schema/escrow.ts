@@ -2,12 +2,13 @@ import { pgTable, bigserial, uuid, integer, varchar, bigint, decimal, timestamp,
 import { sql } from 'drizzle-orm';
 import { customers } from './customers';
 import { FIELD_LIMITS } from '@suiftly/shared/constants';
+import { transactionTypeEnum, billingStatusEnum } from './enums';
 
 export const escrowTransactions = pgTable('escrow_transactions', {
   txId: bigserial('tx_id', { mode: 'number' }).primaryKey(),
   customerId: integer('customer_id').notNull().references(() => customers.customerId),
   txDigest: varchar('tx_digest', { length: FIELD_LIMITS.SUI_TX_DIGEST }).notNull().unique(),
-  txType: varchar('tx_type', { length: FIELD_LIMITS.TRANSACTION_TYPE }).notNull(),
+  txType: transactionTypeEnum('tx_type').notNull(),
   amount: decimal('amount', { precision: 20, scale: 8 }).notNull(),
   assetType: varchar('asset_type', { length: FIELD_LIMITS.SUI_ADDRESS }),
   timestamp: timestamp('timestamp').notNull(),
@@ -19,7 +20,7 @@ export const escrowTransactions = pgTable('escrow_transactions', {
 export const ledgerEntries = pgTable('ledger_entries', {
   id: uuid('id').primaryKey().defaultRandom(),
   customerId: integer('customer_id').notNull().references(() => customers.customerId),
-  type: varchar('type', { length: FIELD_LIMITS.TRANSACTION_TYPE }).notNull(),
+  type: transactionTypeEnum('type').notNull(),
   amountUsdCents: bigint('amount_usd_cents', { mode: 'number' }).notNull(),
   amountSuiMist: bigint('amount_sui_mist', { mode: 'number' }),
   suiUsdRateCents: bigint('sui_usd_rate_cents', { mode: 'number' }),
@@ -38,8 +39,8 @@ export const billingRecords = pgTable('billing_records', {
   billingPeriodStart: timestamp('billing_period_start').notNull(),
   billingPeriodEnd: timestamp('billing_period_end').notNull(),
   amountUsdCents: bigint('amount_usd_cents', { mode: 'number' }).notNull(),
-  type: varchar('type', { length: FIELD_LIMITS.TRANSACTION_TYPE }).notNull(),
-  status: varchar('status', { length: FIELD_LIMITS.BILLING_STATUS }).notNull(),
+  type: transactionTypeEnum('type').notNull(),
+  status: billingStatusEnum('status').notNull(),
   txDigest: varchar('tx_digest', { length: FIELD_LIMITS.SUI_TX_DIGEST }),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 }, (table) => ({

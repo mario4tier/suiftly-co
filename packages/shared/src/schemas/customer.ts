@@ -1,21 +1,21 @@
 import { z } from 'zod';
-import { CUSTOMER_STATUS, SPENDING_LIMIT } from '../constants';
+import { customerStatusEnum } from '@suiftly/database/schema';
+import { SPENDING_LIMIT } from '../constants';
 
 /**
  * Customer validation schemas
  * Based on customers table in CUSTOMER_SERVICE_SCHEMA.md
+ *
+ * IMPORTANT: Enum schemas derive from database enum definitions.
+ * See docs/ENUM_IMPLEMENTATION.md for the complete enum architecture.
  */
 
 // Sui wallet address validation (0x + 64 hex chars)
 export const walletAddressSchema = z.string()
   .regex(/^0x[a-fA-F0-9]{64}$/, 'Invalid Sui wallet address format');
 
-// Customer status enum
-export const customerStatusSchema = z.enum([
-  CUSTOMER_STATUS.ACTIVE,
-  CUSTOMER_STATUS.SUSPENDED,
-  CUSTOMER_STATUS.CLOSED,
-]);
+// Customer status enum - derived from database
+export const customerStatusSchema = z.enum(customerStatusEnum.enumValues);
 
 // 28-day spending limit validation
 export const spendingLimitSchema = z.number()
