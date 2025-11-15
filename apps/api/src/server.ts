@@ -23,6 +23,15 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+/**
+ * Convert hex string to Buffer for BYTEA fields
+ * Handles both 0x-prefixed and non-prefixed hex strings
+ */
+function hexToBuffer(hex: string): Buffer {
+  const cleanHex = hex.startsWith('0x') ? hex.slice(2) : hex;
+  return Buffer.from(cleanHex, 'hex');
+}
+
 const server = Fastify({
   logger: {
     level: config.NODE_ENV === 'production' ? 'info' : 'debug',
@@ -433,7 +442,7 @@ if (config.NODE_ENV !== 'production') {
           customerId: customer.customerId,
           type: 'charge',
           amountUsdCents: Math.round(amountUsd * 100),
-          txDigest: result.digest,
+          txDigest: hexToBuffer(result.digest),
           description,
         });
       }
@@ -487,7 +496,7 @@ if (config.NODE_ENV !== 'production') {
           customerId: customer.customerId,
           type: 'credit',
           amountUsdCents: Math.round(amountUsd * 100),
-          txDigest: result.digest,
+          txDigest: hexToBuffer(result.digest),
           description,
         });
       }

@@ -13,6 +13,15 @@ import { eq, desc, sql } from 'drizzle-orm';
 import { SPENDING_LIMIT } from '@suiftly/shared/constants';
 import { reconcilePayments } from '../lib/reconcile-payments';
 
+/**
+ * Convert hex string to Buffer for BYTEA fields
+ * Handles both 0x-prefixed and non-prefixed hex strings
+ */
+function hexToBuffer(hex: string): Buffer {
+  const cleanHex = hex.startsWith('0x') ? hex.slice(2) : hex;
+  return Buffer.from(cleanHex, 'hex');
+}
+
 export const billingRouter = router({
   /**
    * Get current balance and spending info
@@ -125,7 +134,7 @@ export const billingRouter = router({
           type: entry.type,
           amountUsd: Number(entry.amountUsdCents) / 100,
           description: entry.description,
-          txDigest: entry.txDigest,
+          txDigest: entry.txDigest ? `0x${entry.txDigest.toString('hex')}` : null,
           createdAt: entry.createdAt.toISOString(),
         })),
         total,
@@ -220,7 +229,7 @@ export const billingRouter = router({
         customerId: customer.customerId,
         type: 'deposit',
         amountUsdCents: amountCents,
-        txDigest: result.digest,
+        txDigest: hexToBuffer(result.digest),
         description: `Deposited $${input.amountUsd.toFixed(2)} to escrow account`,
       });
 
@@ -300,7 +309,7 @@ export const billingRouter = router({
         customerId: customer.customerId,
         type: 'withdraw',
         amountUsdCents: amountCents,
-        txDigest: result.digest,
+        txDigest: hexToBuffer(result.digest),
         description: `Withdrew $${input.amountUsd.toFixed(2)} from escrow account`,
       });
 
