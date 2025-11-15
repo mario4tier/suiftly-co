@@ -1,8 +1,14 @@
+CREATE TYPE "public"."billing_status" AS ENUM('pending', 'paid', 'failed');--> statement-breakpoint
+CREATE TYPE "public"."customer_status" AS ENUM('active', 'suspended', 'closed');--> statement-breakpoint
+CREATE TYPE "public"."service_state" AS ENUM('not_provisioned', 'provisioning', 'disabled', 'enabled', 'suspended_maintenance', 'suspended_no_payment');--> statement-breakpoint
+CREATE TYPE "public"."service_tier" AS ENUM('starter', 'pro', 'enterprise');--> statement-breakpoint
+CREATE TYPE "public"."service_type" AS ENUM('seal', 'grpc', 'graphql');--> statement-breakpoint
+CREATE TYPE "public"."transaction_type" AS ENUM('deposit', 'withdraw', 'charge', 'credit');--> statement-breakpoint
 CREATE TABLE "api_keys" (
 	"api_key_fp" integer PRIMARY KEY NOT NULL,
 	"api_key_id" varchar(150) NOT NULL,
 	"customer_id" integer NOT NULL,
-	"service_type" varchar(20) NOT NULL,
+	"service_type" "service_type" NOT NULL,
 	"metadata" jsonb DEFAULT '{}'::jsonb NOT NULL,
 	"is_active" boolean DEFAULT true NOT NULL,
 	"created_at" timestamp DEFAULT now() NOT NULL,
@@ -30,7 +36,7 @@ CREATE TABLE "customers" (
 	"customer_id" integer PRIMARY KEY NOT NULL,
 	"wallet_address" varchar(66) NOT NULL,
 	"escrow_contract_id" varchar(66),
-	"status" varchar(20) DEFAULT 'active' NOT NULL,
+	"status" "customer_status" DEFAULT 'active' NOT NULL,
 	"max_monthly_usd_cents" bigint,
 	"current_balance_usd_cents" bigint,
 	"current_month_charged_usd_cents" bigint,
@@ -39,8 +45,7 @@ CREATE TABLE "customers" (
 	"created_at" timestamp DEFAULT now() NOT NULL,
 	"updated_at" timestamp DEFAULT now() NOT NULL,
 	CONSTRAINT "customers_wallet_address_unique" UNIQUE("wallet_address"),
-	CONSTRAINT "check_customer_id" CHECK ("customers"."customer_id" > 0),
-	CONSTRAINT "check_status" CHECK ("customers"."status" IN ('active', 'suspended', 'closed'))
+	CONSTRAINT "check_customer_id" CHECK ("customers"."customer_id" != 0)
 );
 --> statement-breakpoint
 CREATE TABLE "billing_records" (
@@ -49,42 +54,45 @@ CREATE TABLE "billing_records" (
 	"billing_period_start" timestamp NOT NULL,
 	"billing_period_end" timestamp NOT NULL,
 	"amount_usd_cents" bigint NOT NULL,
-	"type" varchar(20) NOT NULL,
-	"status" varchar(20) NOT NULL,
-	"tx_digest" varchar(64),
-	"created_at" timestamp DEFAULT now() NOT NULL
+	"type" "transaction_type" NOT NULL,
+	"status" "billing_status" NOT NULL,
+	"tx_digest" "bytea",
+	"created_at" timestamp DEFAULT now() NOT NULL,
+	CONSTRAINT "check_tx_digest_length" CHECK ("billing_records"."tx_digest" IS NULL OR LENGTH("billing_records"."tx_digest") = 32)
 );
 --> statement-breakpoint
 CREATE TABLE "escrow_transactions" (
 	"tx_id" bigserial PRIMARY KEY NOT NULL,
 	"customer_id" integer NOT NULL,
-	"tx_digest" varchar(64) NOT NULL,
-	"tx_type" varchar(20) NOT NULL,
+	"tx_digest" "bytea" NOT NULL,
+	"tx_type" "transaction_type" NOT NULL,
 	"amount" numeric(20, 8) NOT NULL,
 	"asset_type" varchar(66),
 	"timestamp" timestamp NOT NULL,
-	CONSTRAINT "escrow_transactions_tx_digest_unique" UNIQUE("tx_digest")
+	CONSTRAINT "escrow_transactions_tx_digest_unique" UNIQUE("tx_digest"),
+	CONSTRAINT "check_tx_digest_length" CHECK (LENGTH("escrow_transactions"."tx_digest") = 32)
 );
 --> statement-breakpoint
 CREATE TABLE "ledger_entries" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"customer_id" integer NOT NULL,
-	"type" varchar(20) NOT NULL,
+	"type" "transaction_type" NOT NULL,
 	"amount_usd_cents" bigint NOT NULL,
 	"amount_sui_mist" bigint,
 	"sui_usd_rate_cents" bigint,
-	"tx_hash" varchar(66),
+	"tx_digest" "bytea",
 	"description" text,
 	"invoice_id" varchar(50),
-	"created_at" timestamp with time zone DEFAULT now() NOT NULL
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "check_tx_digest_length" CHECK ("ledger_entries"."tx_digest" IS NULL OR LENGTH("ledger_entries"."tx_digest") = 32)
 );
 --> statement-breakpoint
 CREATE TABLE "service_instances" (
 	"instance_id" serial PRIMARY KEY NOT NULL,
 	"customer_id" integer NOT NULL,
-	"service_type" varchar(20) NOT NULL,
-	"state" varchar(30) DEFAULT 'not_provisioned' NOT NULL,
-	"tier" varchar(20) NOT NULL,
+	"service_type" "service_type" NOT NULL,
+	"state" "service_state" DEFAULT 'not_provisioned' NOT NULL,
+	"tier" "service_tier" NOT NULL,
 	"is_enabled" boolean DEFAULT true NOT NULL,
 	"subscription_charge_pending" boolean DEFAULT true NOT NULL,
 	"config" jsonb,
@@ -94,29 +102,40 @@ CREATE TABLE "service_instances" (
 );
 --> statement-breakpoint
 CREATE TABLE "seal_keys" (
-	"seal_key_id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"seal_key_id" serial PRIMARY KEY NOT NULL,
 	"customer_id" integer NOT NULL,
 	"instance_id" integer,
-	"public_key" varchar(66) NOT NULL,
-	"encrypted_private_key" text NOT NULL,
-	"purchase_tx_digest" varchar(64),
+	"name" text,
+	"derivation_index" integer,
+	"encrypted_private_key" text,
+	"public_key" "bytea" NOT NULL,
+	"object_id" "bytea",
+	"register_txn_digest" "bytea",
 	"is_active" boolean DEFAULT true NOT NULL,
-	"created_at" timestamp DEFAULT now() NOT NULL
+	"created_at" timestamp DEFAULT now() NOT NULL,
+	CONSTRAINT "check_name_length" CHECK ("seal_keys"."name" IS NULL OR LENGTH("seal_keys"."name") <= 64),
+	CONSTRAINT "check_public_key_length" CHECK (LENGTH("seal_keys"."public_key") IN (48, 96)),
+	CONSTRAINT "check_object_id_length" CHECK ("seal_keys"."object_id" IS NULL OR LENGTH("seal_keys"."object_id") = 32),
+	CONSTRAINT "check_register_txn_digest_length" CHECK ("seal_keys"."register_txn_digest" IS NULL OR LENGTH("seal_keys"."register_txn_digest") = 32),
+	CONSTRAINT "check_key_source" CHECK (("seal_keys"."derivation_index" IS NOT NULL AND "seal_keys"."encrypted_private_key" IS NULL) OR
+        ("seal_keys"."derivation_index" IS NULL AND "seal_keys"."encrypted_private_key" IS NOT NULL))
 );
 --> statement-breakpoint
 CREATE TABLE "seal_packages" (
-	"package_id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
-	"seal_key_id" uuid NOT NULL,
-	"package_address" varchar(66) NOT NULL,
-	"name" varchar(100),
+	"package_id" serial PRIMARY KEY NOT NULL,
+	"seal_key_id" integer NOT NULL,
+	"package_address" "bytea" NOT NULL,
+	"name" text,
 	"is_active" boolean DEFAULT true NOT NULL,
-	"created_at" timestamp DEFAULT now() NOT NULL
+	"created_at" timestamp DEFAULT now() NOT NULL,
+	CONSTRAINT "check_package_address_length" CHECK (LENGTH("seal_packages"."package_address") = 32),
+	CONSTRAINT "check_name_length" CHECK ("seal_packages"."name" IS NULL OR LENGTH("seal_packages"."name") <= 64)
 );
 --> statement-breakpoint
 CREATE TABLE "usage_records" (
 	"record_id" bigserial PRIMARY KEY NOT NULL,
 	"customer_id" integer NOT NULL,
-	"service_type" varchar(20) NOT NULL,
+	"service_type" "service_type" NOT NULL,
 	"request_count" bigint NOT NULL,
 	"bytes_transferred" bigint,
 	"window_start" timestamp NOT NULL,
@@ -202,10 +221,14 @@ CREATE INDEX "idx_billing_status" ON "billing_records" USING btree ("status") WH
 CREATE INDEX "idx_escrow_customer" ON "escrow_transactions" USING btree ("customer_id");--> statement-breakpoint
 CREATE INDEX "idx_escrow_tx_digest" ON "escrow_transactions" USING btree ("tx_digest");--> statement-breakpoint
 CREATE INDEX "idx_customer_created" ON "ledger_entries" USING btree ("customer_id","created_at");--> statement-breakpoint
-CREATE INDEX "idx_ledger_tx_hash" ON "ledger_entries" USING btree ("tx_hash") WHERE "ledger_entries"."tx_hash" IS NOT NULL;--> statement-breakpoint
+CREATE INDEX "idx_ledger_tx_digest" ON "ledger_entries" USING btree ("tx_digest") WHERE "ledger_entries"."tx_digest" IS NOT NULL;--> statement-breakpoint
+CREATE INDEX "idx_service_type_state" ON "service_instances" USING btree ("service_type","state");--> statement-breakpoint
 CREATE INDEX "idx_seal_customer" ON "seal_keys" USING btree ("customer_id");--> statement-breakpoint
 CREATE INDEX "idx_seal_instance" ON "seal_keys" USING btree ("instance_id");--> statement-breakpoint
+CREATE INDEX "idx_seal_public_key" ON "seal_keys" USING btree ("public_key");--> statement-breakpoint
+CREATE INDEX "idx_seal_object_id" ON "seal_keys" USING btree ("object_id");--> statement-breakpoint
 CREATE INDEX "idx_package_seal_key" ON "seal_packages" USING btree ("seal_key_id");--> statement-breakpoint
+CREATE INDEX "idx_package_address" ON "seal_packages" USING btree ("package_address");--> statement-breakpoint
 CREATE INDEX "idx_customer_time" ON "usage_records" USING btree ("customer_id","window_start");--> statement-breakpoint
 CREATE INDEX "idx_billing" ON "usage_records" USING btree ("customer_id","service_type","window_start");--> statement-breakpoint
 CREATE INDEX "idx_logs_customer_time" ON "haproxy_raw_logs" USING btree ("customer_id","timestamp" DESC NULLS LAST) WHERE "haproxy_raw_logs"."customer_id" IS NOT NULL;--> statement-breakpoint

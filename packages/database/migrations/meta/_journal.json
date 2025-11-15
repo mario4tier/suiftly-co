@@ -5,36 +5,8 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1762912126781,
-      "tag": "0000_broken_blob",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1762961020239,
-      "tag": "0001_shallow_layla_miller",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1763170553680,
-      "tag": "0002_skinny_orphan",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "7",
-      "when": 1763172876085,
-      "tag": "0003_orange_moon_knight",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "7",
-      "when": 1763173790757,
-      "tag": "0004_sleepy_siren",
+      "when": 1763181098266,
+      "tag": "0000_initial_schema",
       "breakpoints": true
     }
   ]

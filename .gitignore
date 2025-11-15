@@ -37,6 +37,9 @@ npm-debug.log*
 # Test artifacts
 test-results/
 
+# Migration backups
+.migration-backups/
+
 # TanStack Router generated cache (auto-generated during dev)
 **/.tanstack/
 system.conf

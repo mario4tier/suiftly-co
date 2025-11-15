@@ -1,1 +1,0 @@
-CREATE INDEX "idx_service_type_state" ON "service_instances" USING btree ("service_type","state");
