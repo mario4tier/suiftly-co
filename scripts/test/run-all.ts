@@ -14,15 +14,9 @@
  *   tsx scripts/test/run-all.ts
  */
 
-import { spawn, ChildProcess, execSync } from 'child_process';
-import { basename } from 'path';
+import { spawn, execSync } from 'child_process';
 import { writeFileSync, appendFileSync } from 'fs';
-import {
-  waitForServer,
-  waitForPortFree,
-  isPortFree,
-  shutdownServer,
-} from '../../playwright-test-utils';
+import { waitForPortFree } from '../../playwright-test-utils';
 
 interface TestResult {
   name: string;
@@ -138,54 +132,21 @@ async function checkServerRunning(url: string): Promise<boolean> {
   }
 }
 
-let apiServer: ChildProcess | null = null;
-let webappServer: ChildProcess | null = null;
+// Track whether we started the servers (so we know to stop them)
 let startedServers = false;
 
 async function startDevServers(): Promise<void> {
   section('Starting dev servers...');
 
-  // Ensure ports are free (force cleanup if needed)
-  // This uses the robust waitForPortFree which auto-retries with force kill
-  if (!isPortFree(3000)) {
-    warning('Port 3000 is occupied, cleaning up...');
-    await shutdownServer('http://localhost:3000', 3000, 'existing API server');
-    await waitForPortFree(3000);
+  // Use start-dev.sh which handles process backgrounding, detaching, and logging
+  // This is simpler and more robust than managing processes directly in Node
+  try {
+    execSync('./scripts/dev/start-dev.sh', { stdio: 'inherit' });
+    startedServers = true;
+    success('Dev servers started');
+  } catch (error: any) {
+    throw new Error(`Failed to start dev servers: ${error.message}`);
   }
-
-  if (!isPortFree(5173)) {
-    warning('Port 5173 is occupied, cleaning up...');
-    await shutdownServer('http://localhost:5173', 5173, 'existing webapp');
-    await waitForPortFree(5173);
-  }
-
-  // Start API server
-  apiServer = spawn('npx', ['tsx', 'apps/api/src/server.ts'], {
-    env: {
-      ...process.env,
-      NODE_ENV: 'development',
-      MOCK_AUTH: 'true',
-      DATABASE_URL: 'postgresql://deploy:deploy_password_change_me@localhost/suiftly_dev',
-    },
-    stdio: 'inherit',
-  });
-
-  // Wait for API to be ready
-  await waitForServer('http://localhost:3000/health');
-  success('API server ready');
-
-  // Start webapp
-  webappServer = spawn('npm', ['run', 'dev'], {
-    cwd: 'apps/webapp',
-    env: process.env,
-    stdio: 'inherit',
-  });
-
-  // Wait for webapp to be ready
-  await waitForServer('http://localhost:5173');
-  success('Webapp ready');
-
-  startedServers = true;
 }
 
 async function stopDevServers(): Promise<void> {
@@ -193,15 +154,29 @@ async function stopDevServers(): Promise<void> {
     return;
   }
 
-  section('Stopping dev servers...');
+  // Use the robust stop-dev.sh script which handles all cleanup logic
+  // This centralizes port cleanup for both manual and automated use
+  try {
+    execSync('./scripts/dev/stop-dev.sh', { stdio: 'inherit' });
+  } catch (error: any) {
+    // Script might exit non-zero if processes were already stopped
+    warning(`stop-dev.sh exited with error (may be OK): ${error.message}`);
+  }
 
-  // Use the robust shutdown infrastructure
-  await shutdownServer('http://localhost:3000', 3000, 'API server');
-  await shutdownServer('http://localhost:5173', 5173, 'Webapp');
+  // Verify ports are free with short timeout (stop-dev.sh already checks)
+  // If this times out, it means stop-dev.sh failed to clean up properly
+  try {
+    await waitForPortFree(3000, 5000); // 5 second timeout
+    await waitForPortFree(5173, 5000);
+  } catch (error: any) {
+    error('Failed to verify ports are free after stop-dev.sh');
+    error('This indicates stop-dev.sh failed to clean up properly');
+    error('Please check /tmp/suiftly-api.log and /tmp/suiftly-webapp.log');
+    error('Manual cleanup may be required: lsof -ti:3000 | xargs kill -9');
+    throw new Error(`Port cleanup verification failed: ${error.message}`);
+  }
 
   // Reset state
-  apiServer = null;
-  webappServer = null;
   startedServers = false;
 
   success('Dev servers stopped');

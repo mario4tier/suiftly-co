@@ -97,10 +97,16 @@ export async function sigtermPort(port: number): Promise<boolean> {
 export async function forceKillPorts(ports: number[]): Promise<void> {
   for (const port of ports) {
     try {
-      const pids = execSync(`lsof -ti:${port}`, { encoding: 'utf-8', stdio: 'pipe' }).trim();
+      const pids = execSync(`lsof -ti:${port}`, { encoding: 'utf-8', stdio: 'pipe' })
+        .trim()
+        .split('\n')
+        .filter(pid => pid.length > 0)
+        .join(' '); // Convert newline-separated PIDs to space-separated for kill command
+
       if (pids) {
         console.log(`🧹 Force killing processes on port ${port}: PIDs ${pids}`);
-        execSync(`kill -9 ${pids}`, { stdio: 'inherit' });
+        // Redirect stderr to /dev/null to suppress npm error messages
+        execSync(`kill -9 ${pids} 2>/dev/null || true`, { stdio: 'pipe' });
         console.log(`✅ Force killed processes on port ${port}`);
       }
     } catch {
