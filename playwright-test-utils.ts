@@ -97,7 +97,9 @@ export async function sigtermPort(port: number): Promise<boolean> {
 export async function forceKillPorts(ports: number[]): Promise<void> {
   for (const port of ports) {
     try {
-      const pids = execSync(`lsof -ti:${port}`, { encoding: 'utf-8', stdio: 'pipe' })
+      // Only kill processes LISTENING on port (not just connected)
+      // This prevents killing parent processes that might have connections
+      const pids = execSync(`lsof -ti:${port} -sTCP:LISTEN`, { encoding: 'utf-8', stdio: 'pipe' })
         .trim()
         .split('\n')
         .filter(pid => pid.length > 0)

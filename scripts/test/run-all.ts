@@ -306,16 +306,32 @@ async function main() {
   }
 
   // 3. Playwright E2E - Short Expiry (2s/10s)
-  // Short-expiry tests need servers with special JWT config
-  // We must stop our servers first to avoid kill conflicts
-  section('Preparing for short-expiry tests (requires test servers)...');
+  // These tests need clean server state to avoid JWT pollution from previous tests
+  section('Preparing for short-expiry tests (clean server state)...');
 
-  // Stop our dev servers cleanly before short-expiry tests start
-  // This prevents the global setup's port cleanup from killing our processes
+  // Clear any JWT-related test data that might cause pollution (while server is still running)
+  section('Cleaning database for short-expiry tests...');
+  try {
+    const cleanupResponse = await fetch('http://localhost:3000/test/data/truncate-all', {
+      method: 'POST',
+      signal: AbortSignal.timeout(5000)
+    });
+    if (cleanupResponse.ok) {
+      success('Database cleaned');
+    } else {
+      warning('Database cleanup returned non-OK status');
+    }
+  } catch {
+    warning('Database cleanup failed or timed out');
+  }
+
+  // Stop servers to ensure clean process state
   await stopDevServers();
 
-  // Global setup will kill any remaining processes on ports and start test servers
-  // Includes robust retry logic for timing-sensitive tests
+  // Restart servers for short-expiry tests
+  await startDevServers();
+
+  // Run short-expiry tests (global setup will configure JWT via /test/jwt-config)
   result = await runCommand(
     'E2E Tests - Short Expiry (2s/10s)',
     'npx',
@@ -332,9 +348,7 @@ async function main() {
   }
 
   // 4. Other Playwright tests (chromium project)
-  // After short-expiry tests, dev servers are stopped, so we need to restart them
-  section('Restarting dev servers for chromium tests...');
-  await startDevServers();
+  // Servers are still running from short-expiry tests
 
   result = await runCommand(
     'E2E Tests - Other',

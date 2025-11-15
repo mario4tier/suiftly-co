@@ -14,8 +14,9 @@ force_kill_port() {
   local port=$1
   echo "  🧹 Cleaning up port $port..."
 
-  # Get PIDs (newline-separated)
-  local pids=$(lsof -ti:$port 2>/dev/null || true)
+  # Get PIDs of processes LISTENING on port (not just connected)
+  # This prevents killing parent processes that might have connections
+  local pids=$(lsof -ti:$port -sTCP:LISTEN 2>/dev/null || true)
 
   if [ -n "$pids" ]; then
     # Convert newlines to spaces for kill command
