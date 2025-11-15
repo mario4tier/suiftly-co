@@ -86,7 +86,7 @@ test.describe('API Key Creation on Subscription', () => {
     expect(apiKey.serviceType).toBe('seal');
     console.log('✅ API key service type is "seal"');
 
-    expect(apiKey.isActive).toBe(true);
+    expect(apiKey.isUserEnabled).toBe(true);
     console.log('✅ API key is active');
 
     // Validate API key format (should be 37 characters: S + 36 chars)
@@ -190,8 +190,8 @@ test.describe('API Key Creation on Subscription', () => {
     expect(serviceData.state).toBe('disabled');
     console.log('✅ Service state is "disabled"');
 
-    expect(serviceData.isEnabled).toBe(false);
-    console.log('✅ Service isEnabled is false');
+    expect(serviceData.isUserEnabled).toBe(false);
+    console.log('✅ Service isUserEnabled is false');
 
     expect(serviceData.subscriptionChargePending).toBe(false);
     console.log('✅ subscriptionChargePending is false (payment succeeded)');

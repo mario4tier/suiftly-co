@@ -150,9 +150,9 @@ async function startDevServers(): Promise<void> {
 }
 
 async function stopDevServers(): Promise<void> {
-  if (!startedServers) {
-    return;
-  }
+  // Always stop servers when requested, regardless of who started them
+  // This ensures we can restart servers for different test configurations
+  section('Stopping dev servers...');
 
   // Use the robust stop-dev.sh script which handles all cleanup logic
   // This centralizes port cleanup for both manual and automated use
@@ -365,7 +365,7 @@ async function main() {
     process.exit(1);
   }
 
-  // Cleanup: Stop servers if we started them
+  // Cleanup: Always stop servers at the end of test run
   await stopDevServers();
 
   // Print summary

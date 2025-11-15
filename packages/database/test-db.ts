@@ -50,7 +50,7 @@ async function testDatabase() {
       customerId: testCustomerId,
       serviceType: 'seal',
       tier: 'starter',
-      isEnabled: true,
+      isUserEnabled: true,
     });
     console.log('✓ Service instance created');
 
@@ -71,7 +71,7 @@ async function testDatabase() {
         seal_source: 0, // derived
         proc_group: 0,
       },
-      isActive: true,
+      isUserEnabled: true,
     });
     console.log('✓ API key created with encrypted api_key_id and metadata');
 
@@ -97,7 +97,7 @@ async function testDatabase() {
         customerId: 99999999, // Non-existent customer
         serviceType: 'seal',
         tier: 'pro',
-        isEnabled: true,
+        isUserEnabled: true,
       });
       console.log('✗ FAIL: Foreign key constraint should have prevented this!');
     } catch (err) {

@@ -1,5 +1,5 @@
 {
-  "id": "4f2cd9c2-dc10-4e79-be27-3a42e3b293e2",
+  "id": "3d612490-8027-43ff-8fd5-65b78ba5bc5e",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -40,8 +40,8 @@
           "notNull": true,
           "default": "'{}'::jsonb"
         },
-        "is_active": {
-          "name": "is_active",
+        "is_user_enabled": {
+          "name": "is_user_enabled",
           "type": "boolean",
           "primaryKey": false,
           "notNull": true,
@@ -84,7 +84,7 @@
               "nulls": "last"
             },
             {
-              "expression": "is_active",
+              "expression": "is_user_enabled",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -811,8 +811,8 @@
           "primaryKey": false,
           "notNull": true
         },
-        "is_enabled": {
-          "name": "is_enabled",
+        "is_user_enabled": {
+          "name": "is_user_enabled",
           "type": "boolean",
           "primaryKey": false,
           "notNull": true,
@@ -955,8 +955,8 @@
           "primaryKey": false,
           "notNull": false
         },
-        "is_active": {
-          "name": "is_active",
+        "is_user_enabled": {
+          "name": "is_user_enabled",
           "type": "boolean",
           "primaryKey": false,
           "notNull": true,
@@ -1115,8 +1115,8 @@
           "primaryKey": false,
           "notNull": false
         },
-        "is_active": {
-          "name": "is_active",
+        "is_user_enabled": {
+          "name": "is_user_enabled",
           "type": "boolean",
           "primaryKey": false,
           "notNull": true,

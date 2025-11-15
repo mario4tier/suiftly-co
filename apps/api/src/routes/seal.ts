@@ -122,7 +122,7 @@ export const sealRouter = router({
       const existingPackages = await db.query.sealPackages.findMany({
         where: and(
           eq(sealPackages.sealKeyId, input.sealKeyId),
-          eq(sealPackages.isActive, true)
+          eq(sealPackages.isUserEnabled, true)
         ),
       });
 
@@ -224,7 +224,7 @@ export const sealRouter = router({
       const [deleted] = await db
         .update(sealPackages)
         .set({
-          isActive: false,
+          isUserEnabled: false,
         })
         .where(eq(sealPackages.packageId, input.packageId))
         .returning();
@@ -266,7 +266,7 @@ export const sealRouter = router({
       const [updated] = await db
         .update(sealKeys)
         .set({
-          isActive: input.active,
+          isUserEnabled: input.active,
         })
         .where(eq(sealKeys.sealKeyId, input.sealKeyId))
         .returning();
@@ -326,7 +326,7 @@ export const sealRouter = router({
       .from(sealKeys)
       .where(and(
         eq(sealKeys.instanceId, service.instanceId),
-        eq(sealKeys.isActive, true)
+        eq(sealKeys.isUserEnabled, true)
       ));
 
     // Count API keys (includes both active and revoked, excludes deleted)
@@ -470,7 +470,7 @@ export const sealRouter = router({
         apiKeyFp: key.apiKeyFp, // Use fingerprint (PRIMARY KEY) for identification
         keyPreview: `${plainKey.slice(0, 8)}...${plainKey.slice(-4)}`, // Preview from decrypted key
         metadata: key.metadata,
-        isActive: key.isActive,
+        isUserEnabled: key.isUserEnabled,
         createdAt: key.createdAt,
         revokedAt: key.revokedAt,
       };
@@ -496,7 +496,7 @@ export const sealRouter = router({
       const result = await db
         .update(apiKeys)
         .set({
-          isActive: false,
+          isUserEnabled: false,
           revokedAt: new Date(),
         })
         .where(
@@ -536,7 +536,7 @@ export const sealRouter = router({
       const result = await db
         .update(apiKeys)
         .set({
-          isActive: true,
+          isUserEnabled: true,
           revokedAt: null,
         })
         .where(

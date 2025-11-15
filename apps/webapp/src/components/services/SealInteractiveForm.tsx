@@ -351,7 +351,7 @@ export function SealInteractiveForm({
   const formattedApiKeys = apiKeys?.map(key => ({
     id: key.apiKeyFp.toString(), // Use fingerprint (PRIMARY KEY) for identification
     key: key.keyPreview,
-    isRevoked: !key.isActive,
+    isRevoked: !key.isUserEnabled,
     createdAt: formatRelativeTime(new Date(key.createdAt)),
   })) || [];
 

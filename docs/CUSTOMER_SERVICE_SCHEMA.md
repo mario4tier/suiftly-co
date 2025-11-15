@@ -517,6 +517,15 @@ Schema uses **nullable `derivation_index`** to distinguish key types (no explici
 5. **derivation_index is NULL** - indicates imported key that cannot be regenerated
 6. Register on-chain and store `object_id` (same as derived keys)
 
+**Seal Key States**
+- `is_user_enabled`: Indicates the user intent of having the key served by our servers. This is independent of the seal_key_state.
+- `seal_key_state` is one of `not_provisioned` (start state), `registering`, `active`, `suspended`, `tobedeleted`.
+- The object_id have conditional uniqueness constraints while in active/suspended state.
+When transitioning to enabled state, the object_id must be set and can never be changed afterwards.
+- `registering` state includes multiple validations: payment done, packages are valid. In case of imported, validate that the user provided information is matching and the object_id ownership has been transferred to Suiftly.
+- `suspended` effect is equivalent to is_user_enabled = false, except that this is controlled from suiftly side (say for failed payment). `suspended` keys still have an entry in the key_server map.
+- `tobedeleted` removes the key from the key_server map and have no effect on other keys (say for uniqueness of object_id checks). Reaching this state would be done manually by a suiftly admin.
+
 **Additional Seal Keys:**
 
 - Customers can create additional Seal keys (derived or imported)
@@ -598,7 +607,7 @@ CREATE TABLE service_instances (
   service_type service_type NOT NULL,          -- ENUM
   state service_state NOT NULL DEFAULT 'not_provisioned', -- ENUM
   tier service_tier NOT NULL,                  -- ENUM
-  is_enabled BOOLEAN NOT NULL DEFAULT true,
+  is_user_enabled BOOLEAN NOT NULL DEFAULT true,
   subscription_charge_pending BOOLEAN NOT NULL DEFAULT true,
   config JSONB,
   enabled_at TIMESTAMP,
@@ -620,12 +629,12 @@ CREATE TABLE api_keys (
                                            -- Seal: {key_version, seal_network, seal_access, seal_source, proc_group}
                                            -- gRPC: TBD
                                            -- GraphQL: TBD
-  is_active BOOLEAN NOT NULL DEFAULT true,
+  is_user_enabled BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMP NOT NULL,
   revoked_at TIMESTAMP NULL,
   deleted_at TIMESTAMP NULL,               -- Soft delete timestamp
 
-  INDEX idx_customer_service (customer_id, service_type, is_active)
+  INDEX idx_customer_service (customer_id, service_type, is_user_enabled)
   -- Note: No index on api_key_fp needed - PRIMARY KEY automatically indexed
 );
 
@@ -658,7 +667,7 @@ CREATE TABLE seal_keys (
   -- On-chain registration transaction digest (32 bytes)
   register_txn_digest BYTEA CHECK (LENGTH(register_txn_digest) = 32),
 
-  is_active BOOLEAN NOT NULL DEFAULT true,
+  is_user_enabled BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMP NOT NULL,
 
   -- Indexes
@@ -684,7 +693,7 @@ CREATE TABLE seal_packages (
   -- Optional user-defined name (max 64 chars for DNS/Kubernetes compatibility)
   name VARCHAR(64),
 
-  is_active BOOLEAN NOT NULL DEFAULT true,
+  is_user_enabled BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMP NOT NULL,
 
   -- Indexes

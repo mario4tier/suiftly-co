@@ -492,7 +492,7 @@ export async function storeApiKey(options: {
             sealType: decoded.metadata.sealType,
             procGroup: decoded.metadata.procGroup,
           },
-          isActive: true,
+          isUserEnabled: true,
           createdAt: new Date(),
         })
         .returning();
@@ -530,7 +530,7 @@ export async function verifyApiKey(apiKey: string) {
   const record = await db.query.apiKeys.findFirst({
     where: and(
       eq(apiKeys.apiKeyFp, fingerprint),
-      eq(apiKeys.isActive, true)
+      eq(apiKeys.isUserEnabled, true)
     ),
   });
 
@@ -549,7 +549,7 @@ export async function revokeApiKey(apiKey: string, customerId: number): Promise<
   const result = await db
     .update(apiKeys)
     .set({
-      isActive: false,
+      isUserEnabled: false,
       revokedAt: new Date(),
     })
     .where(
@@ -602,14 +602,14 @@ export async function reEnableApiKey(apiKey: string, customerId: number): Promis
   const result = await db
     .update(apiKeys)
     .set({
-      isActive: true,
+      isUserEnabled: true,
       revokedAt: null,
     })
     .where(
       and(
         eq(apiKeys.apiKeyFp, fingerprint),
         eq(apiKeys.customerId, customerId),
-        eq(apiKeys.isActive, false) // Only re-enable if currently revoked
+        eq(apiKeys.isUserEnabled, false) // Only re-enable if currently revoked
       )
     )
     .returning();
@@ -633,7 +633,7 @@ export async function getApiKeys(
   ];
 
   if (!includeInactive) {
-    conditions.push(eq(apiKeys.isActive, true));
+    conditions.push(eq(apiKeys.isUserEnabled, true));
   }
 
   return await db.query.apiKeys.findMany({

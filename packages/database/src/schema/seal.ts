@@ -33,7 +33,7 @@ export const sealKeys = pgTable('seal_keys', {
   // On-chain registration transaction digest (32 bytes)
   registerTxnDigest: bytea('register_txn_digest'),
 
-  isActive: boolean('is_active').notNull().default(true),
+  isUserEnabled: boolean('is_user_enabled').notNull().default(true),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 }, (table) => ({
   idxSealCustomer: index('idx_seal_customer').on(table.customerId),
@@ -71,7 +71,7 @@ export const sealPackages = pgTable('seal_packages', {
   // Optional user-defined name (64 chars max for DNS/Kubernetes compatibility)
   name: text('name'),
 
-  isActive: boolean('is_active').notNull().default(true),
+  isUserEnabled: boolean('is_user_enabled').notNull().default(true),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 }, (table) => ({
   idxPackageSealKey: index('idx_package_seal_key').on(table.sealKeyId),

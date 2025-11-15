@@ -845,7 +845,7 @@ systemctl reload haproxy
    - HAProxy shared memory for instant revocation
    - Updated via Runtime API (no restarts)
    - Revoked keys fail at authentication layer
-   - Database tracks is_active status for long-term storage
+   - Database tracks is_user_enabled status for long-term storage
 
 6. **Version support**: 2-bit version field allows protocol upgrades
    - Future versions can change encryption/authentication algorithms
@@ -891,11 +891,11 @@ CREATE TABLE api_keys (
   seal_access SMALLINT NOT NULL,           -- Extracted from seal_type bit b (1=permission, 0=open)
   seal_source SMALLINT,                    -- Extracted from seal_type bit c (1=imported, 0=derived, NULL=open)
   proc_group SMALLINT NOT NULL,            -- Extracted from metadata (bits 10-8, 0-7)
-  is_active BOOLEAN NOT NULL DEFAULT true,
+  is_user_enabled BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMP NOT NULL,
   revoked_at TIMESTAMP NULL,
 
-  INDEX idx_customer_service (customer_id, service_type, is_active)
+  INDEX idx_customer_service (customer_id, service_type, is_user_enabled)
 );
 ```
 
@@ -968,13 +968,13 @@ Response:
       "key_prefix": "SABCD...6789",
       "proc_group": 1,
       "created_at": "2025-01-15T10:30:00Z",
-      "is_active": true
+      "is_user_enabled": true
     },
     {
       "key_prefix": "SEFGH...3456",
       "proc_group": 1,
       "created_at": "2025-01-16T14:22:00Z",
-      "is_active": true
+      "is_user_enabled": true
     }
   ]
 }

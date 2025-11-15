@@ -193,7 +193,7 @@ export const serviceInstances = pgTable('service_instances', {
   serviceType: serviceTypeEnum('service_type').notNull(),  // ← Changed to enum
   state: serviceStateEnum('state').notNull().default('not_provisioned'),  // ← Changed to enum
   tier: serviceTierEnum('tier').notNull(),  // ← Changed to enum
-  isEnabled: boolean('is_enabled').notNull().default(true),
+  isEnabled: boolean('is_user_enabled').notNull().default(true),
   subscriptionChargePending: boolean('subscription_charge_pending').notNull().default(true),
   config: jsonb('config'),
   enabledAt: timestamp('enabled_at'),

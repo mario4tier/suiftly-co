@@ -8,7 +8,7 @@ export const serviceInstances = pgTable('service_instances', {
   serviceType: serviceTypeEnum('service_type').notNull(),
   state: serviceStateEnum('state').notNull().default('not_provisioned'),
   tier: serviceTierEnum('tier').notNull(),
-  isEnabled: boolean('is_enabled').notNull().default(true),
+  isUserEnabled: boolean('is_user_enabled').notNull().default(true),
   subscriptionChargePending: boolean('subscription_charge_pending').notNull().default(true),
   config: jsonb('config'),
   enabledAt: timestamp('enabled_at'),

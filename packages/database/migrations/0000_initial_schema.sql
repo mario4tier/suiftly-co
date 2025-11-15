@@ -10,7 +10,7 @@ CREATE TABLE "api_keys" (
 	"customer_id" integer NOT NULL,
 	"service_type" "service_type" NOT NULL,
 	"metadata" jsonb DEFAULT '{}'::jsonb NOT NULL,
-	"is_active" boolean DEFAULT true NOT NULL,
+	"is_user_enabled" boolean DEFAULT true NOT NULL,
 	"created_at" timestamp DEFAULT now() NOT NULL,
 	"revoked_at" timestamp,
 	"deleted_at" timestamp,
@@ -93,7 +93,7 @@ CREATE TABLE "service_instances" (
 	"service_type" "service_type" NOT NULL,
 	"state" "service_state" DEFAULT 'not_provisioned' NOT NULL,
 	"tier" "service_tier" NOT NULL,
-	"is_enabled" boolean DEFAULT true NOT NULL,
+	"is_user_enabled" boolean DEFAULT true NOT NULL,
 	"subscription_charge_pending" boolean DEFAULT true NOT NULL,
 	"config" jsonb,
 	"enabled_at" timestamp,
@@ -111,7 +111,7 @@ CREATE TABLE "seal_keys" (
 	"public_key" "bytea" NOT NULL,
 	"object_id" "bytea",
 	"register_txn_digest" "bytea",
-	"is_active" boolean DEFAULT true NOT NULL,
+	"is_user_enabled" boolean DEFAULT true NOT NULL,
 	"created_at" timestamp DEFAULT now() NOT NULL,
 	CONSTRAINT "check_name_length" CHECK ("seal_keys"."name" IS NULL OR LENGTH("seal_keys"."name") <= 64),
 	CONSTRAINT "check_public_key_length" CHECK (LENGTH("seal_keys"."public_key") IN (48, 96)),
@@ -126,7 +126,7 @@ CREATE TABLE "seal_packages" (
 	"seal_key_id" integer NOT NULL,
 	"package_address" "bytea" NOT NULL,
 	"name" text,
-	"is_active" boolean DEFAULT true NOT NULL,
+	"is_user_enabled" boolean DEFAULT true NOT NULL,
 	"created_at" timestamp DEFAULT now() NOT NULL,
 	CONSTRAINT "check_package_address_length" CHECK (LENGTH("seal_packages"."package_address") = 32),
 	CONSTRAINT "check_name_length" CHECK ("seal_packages"."name" IS NULL OR LENGTH("seal_packages"."name") <= 64)
@@ -210,7 +210,7 @@ ALTER TABLE "seal_packages" ADD CONSTRAINT "seal_packages_seal_key_id_seal_keys_
 ALTER TABLE "usage_records" ADD CONSTRAINT "usage_records_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "haproxy_raw_logs" ADD CONSTRAINT "haproxy_raw_logs_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "user_activity_logs" ADD CONSTRAINT "user_activity_logs_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-CREATE INDEX "idx_customer_service" ON "api_keys" USING btree ("customer_id","service_type","is_active");--> statement-breakpoint
+CREATE INDEX "idx_customer_service" ON "api_keys" USING btree ("customer_id","service_type","is_user_enabled");--> statement-breakpoint
 CREATE INDEX "idx_created_at" ON "auth_nonces" USING btree ("created_at");--> statement-breakpoint
 CREATE INDEX "idx_refresh_customer" ON "refresh_tokens" USING btree ("customer_id");--> statement-breakpoint
 CREATE INDEX "idx_expires_at" ON "refresh_tokens" USING btree ("expires_at");--> statement-breakpoint

@@ -34,7 +34,7 @@ export const apiKeySchema = z.object({
   customerId: z.number().int().positive(),
   serviceType: z.enum([SERVICE_TYPE.SEAL, SERVICE_TYPE.GRPC, SERVICE_TYPE.GRAPHQL]),
   metadata: apiKeyMetadataSchema,
-  isActive: z.boolean(),
+  isUserEnabled: z.boolean(),
   createdAt: z.date().or(z.string().datetime()),
   revokedAt: z.date().or(z.string().datetime()).nullable().optional(),
 });
@@ -52,6 +52,6 @@ export const apiKeyResponseSchema = apiKeySchema.pick({
   apiKeyFp: true,
   customerId: true,
   serviceType: true,
-  isActive: true,
+  isUserEnabled: true,
   createdAt: true,
 });

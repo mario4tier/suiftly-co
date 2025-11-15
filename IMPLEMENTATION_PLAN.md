@@ -144,18 +144,18 @@ export default {
   + CHECK (customer_id > 0)
 
 // src/schema/services.ts
-- service_instances (instance_id, customer_id, service_type, tier, is_enabled, config,
+- service_instances (instance_id, customer_id, service_type, tier, is_user_enabled, config,
   enabled_at, disabled_at)
   + UNIQUE (customer_id, service_type)
 
 // src/schema/api_keys.ts
 - api_keys (api_key_id, customer_id, service_type, key_version, seal_network, seal_access,
-  seal_source, proc_group, is_active, created_at, revoked_at)
-  + INDEX idx_customer_service (customer_id, service_type, is_active)
+  seal_source, proc_group, is_user_enabled, created_at, revoked_at)
+  + INDEX idx_customer_service (customer_id, service_type, is_user_enabled)
 
 // src/schema/seal.ts
 - seal_keys (seal_key_id SERIAL, customer_id, public_key BYTEA(32), encrypted_private_key,
-  register_txn_digest BYTEA(32), is_active, created_at)
+  register_txn_digest BYTEA(32), is_user_enabled, created_at)
   + INDEX idx_customer (customer_id)
   + INDEX idx_seal_public_key (public_key)
 

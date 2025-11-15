@@ -106,7 +106,7 @@ API keys use 32-bit fingerprints derived from the first 7 Base32 characters of t
 - Fingerprint: First 7 Base32 characters → 32-bit value
 - Used for fast lookups without exposing full keys
 - Stored in `api_keys.api_key_fp` (INTEGER) field
-- Indexed for performance: `INDEX idx_api_key_fp (api_key_fp) WHERE is_active = true`
+- Indexed for performance: `INDEX idx_api_key_fp (api_key_fp) WHERE is_user_enabled = true`
 
 ---
 

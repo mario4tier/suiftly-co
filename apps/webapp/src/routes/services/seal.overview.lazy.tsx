@@ -40,7 +40,7 @@ function SealOverviewPage() {
       toast.error(error.message || 'Failed to toggle service');
       setIsToggling(false);
       // Revert optimistic UI update immediately
-      setLocalIsEnabled(isEnabled);
+      setLocalIsEnabled(isUserEnabled);
       // Also refetch to ensure consistency
       refetch();
     },
@@ -50,11 +50,11 @@ function SealOverviewPage() {
   const sealService = services?.find(s => s.serviceType === 'seal');
 
   // Sync local toggle state with server state
-  const isEnabled = sealService?.isEnabled ?? false;
+  const isUserEnabled = sealService?.isUserEnabled ?? false;
 
   useEffect(() => {
-    setLocalIsEnabled(isEnabled);
-  }, [isEnabled]);
+    setLocalIsEnabled(isUserEnabled);
+  }, [isUserEnabled]);
 
   if (isLoading) {
     return (
@@ -193,7 +193,7 @@ function SealOverviewPage() {
           <SealInteractiveForm
             serviceState={serviceState}
             tier={tier}
-            isEnabled={isEnabled}
+            isEnabled={isUserEnabled}
             isToggling={isToggling}
             onToggleService={handleToggleService}
             onChangePlan={() => {

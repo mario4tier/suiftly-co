@@ -10,12 +10,12 @@ export const apiKeys = pgTable('api_keys', {
   customerId: integer('customer_id').notNull().references(() => customers.customerId),
   serviceType: serviceTypeEnum('service_type').notNull(),
   metadata: jsonb('metadata').notNull().default({}),
-  isActive: boolean('is_active').notNull().default(true),
+  isUserEnabled: boolean('is_user_enabled').notNull().default(true),
   createdAt: timestamp('created_at').notNull().defaultNow(),
   revokedAt: timestamp('revoked_at'),
   deletedAt: timestamp('deleted_at'),
 }, (table) => ({
   uniqueApiKeyId: unique('api_keys_api_key_id_unique').on(table.apiKeyId),
-  idxCustomerService: index('idx_customer_service').on(table.customerId, table.serviceType, table.isActive),
+  idxCustomerService: index('idx_customer_service').on(table.customerId, table.serviceType, table.isUserEnabled),
   // Note: No index on api_key_fp needed - PRIMARY KEY is automatically indexed
 }));

@@ -70,7 +70,7 @@ test.describe('Service Toggle - Enable/Disable', () => {
     const initialService = await request.get('http://localhost:3000/test/data/service-instance?serviceType=seal');
     const initialData = await initialService.json();
     expect(initialData.state).toBe('disabled');
-    expect(initialData.isEnabled).toBe(false);
+    expect(initialData.isUserEnabled).toBe(false);
     console.log('✅ Initial state: DISABLED');
 
     // Toggle service ON
@@ -85,7 +85,7 @@ test.describe('Service Toggle - Enable/Disable', () => {
       async () => {
         const updatedService = await request.get('http://localhost:3000/test/data/service-instance?serviceType=seal');
         const updatedData = await updatedService.json();
-        return updatedData.state === 'enabled' && updatedData.isEnabled === true;
+        return updatedData.state === 'enabled' && updatedData.isUserEnabled === true;
       },
       { timeout: 3000, message: 'Service to be enabled in database' }
     );
@@ -93,7 +93,7 @@ test.describe('Service Toggle - Enable/Disable', () => {
     const updatedService = await request.get('http://localhost:3000/test/data/service-instance?serviceType=seal');
     const updatedData = await updatedService.json();
     expect(updatedData.state).toBe('enabled');
-    expect(updatedData.isEnabled).toBe(true);
+    expect(updatedData.isUserEnabled).toBe(true);
     expect(updatedData.enabledAt).toBeTruthy();
     console.log('✅ Database updated: service is now ENABLED');
 
@@ -117,7 +117,7 @@ test.describe('Service Toggle - Enable/Disable', () => {
       async () => {
         const response = await request.get('http://localhost:3000/test/data/service-instance?serviceType=seal');
         const data = await response.json();
-        return data.isEnabled === true;
+        return data.isUserEnabled === true;
       },
       { timeout: 3000, message: 'Service to be enabled' }
     );
@@ -132,14 +132,14 @@ test.describe('Service Toggle - Enable/Disable', () => {
       async () => {
         const response = await request.get('http://localhost:3000/test/data/service-instance?serviceType=seal');
         const data = await response.json();
-        return data.state === 'disabled' && data.isEnabled === false;
+        return data.state === 'disabled' && data.isUserEnabled === false;
       },
       { timeout: 3000, message: 'Service to be disabled' }
     );
 
     const serviceData = await (await request.get('http://localhost:3000/test/data/service-instance?serviceType=seal')).json();
     expect(serviceData.state).toBe('disabled');
-    expect(serviceData.isEnabled).toBe(false);
+    expect(serviceData.isUserEnabled).toBe(false);
     expect(serviceData.disabledAt).toBeTruthy();
     console.log('✅ Database updated: service is now DISABLED');
 
@@ -209,14 +209,14 @@ test.describe('Service Toggle - Enable/Disable', () => {
       async () => {
         const response = await request.get('http://localhost:3000/test/data/service-instance?serviceType=seal');
         const data = await response.json();
-        return data.isEnabled === true;
+        return data.isUserEnabled === true;
       },
       { timeout: 6000, message: 'Database to update after long API delay' }
     );
 
     // Verify database was actually updated
     const serviceData = await (await request.get('http://localhost:3000/test/data/service-instance?serviceType=seal')).json();
-    expect(serviceData.isEnabled).toBe(true);
+    expect(serviceData.isUserEnabled).toBe(true);
     console.log('✅ Database updated correctly after long delay');
   });
 
@@ -244,7 +244,7 @@ test.describe('Service Toggle - Enable/Disable', () => {
       async () => {
         const response = await request.get('http://localhost:3000/test/data/service-instance?serviceType=seal');
         const data = await response.json();
-        return data.isEnabled === true;
+        return data.isUserEnabled === true;
       },
       { timeout: 5000, message: 'Background API call to complete and update database' }
     );
@@ -256,7 +256,7 @@ test.describe('Service Toggle - Enable/Disable', () => {
 
     // Verify the database WAS updated (API call completed in background)
     const serviceData = await (await request.get('http://localhost:3000/test/data/service-instance?serviceType=seal')).json();
-    expect(serviceData.isEnabled).toBe(true);
+    expect(serviceData.isUserEnabled).toBe(true);
     console.log('✅ Database was updated even after navigation away');
 
     // Verify UI now reflects the updated state
@@ -288,14 +288,14 @@ test.describe('Service Toggle - Enable/Disable', () => {
       async () => {
         const response = await request.get('http://localhost:3000/test/data/service-instance?serviceType=seal');
         const data = await response.json();
-        return data.isEnabled === true;
+        return data.isUserEnabled === true;
       },
       { timeout: 3000, message: 'Database to sync after rapid toggles' }
     );
 
     // Verify final database state (eventual consistency)
     const serviceData = await (await request.get('http://localhost:3000/test/data/service-instance?serviceType=seal')).json();
-    expect(serviceData.isEnabled).toBe(true);
+    expect(serviceData.isUserEnabled).toBe(true);
     console.log('✅ Final state: ENABLED (state synced correctly)');
   });
 });

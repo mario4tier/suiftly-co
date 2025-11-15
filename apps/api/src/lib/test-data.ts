@@ -156,7 +156,7 @@ export async function getCustomerTestData(walletAddress: string = MOCK_WALLET_AD
       serviceType: s.serviceType,
       tier: s.tier,
       state: s.state,
-      isEnabled: s.isEnabled,
+      isUserEnabled: s.isUserEnabled,
       subscriptionChargePending: s.subscriptionChargePending,
     })),
     apiKeysCount: keys.length,
@@ -192,7 +192,7 @@ export async function getApiKeysTestData(walletAddress: string = MOCK_WALLET_ADD
       apiKeyFp: k.apiKeyFp, // Include fingerprint for reference
       serviceType: k.serviceType,
       metadata: k.metadata,
-      isActive: k.isActive,
+      isUserEnabled: k.isUserEnabled,
       createdAt: k.createdAt,
       revokedAt: k.revokedAt,
     })),
@@ -228,7 +228,7 @@ export async function getSealKeysTestData(walletAddress: string = MOCK_WALLET_AD
     sealKeys: keys.map(k => ({
       sealKeyId: k.sealKeyId,
       publicKey: k.publicKey,
-      isActive: k.isActive,
+      isUserEnabled: k.isUserEnabled,
       createdAt: k.createdAt,
       packages: k.packages,
     })),

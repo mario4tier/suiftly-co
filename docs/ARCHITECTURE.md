@@ -279,8 +279,8 @@ suiftly-co/
 **Key tables used by this architecture:**
 
 - **customers** - customer_id (random 32-bit), wallet_address, escrow_contract_id, balance, monthly limits
-- **service_instances** - instance_id, customer_id, service_type, tier, is_enabled, config (JSONB)
-- **api_keys** - api_key_id, customer_id, service_type, derivation, is_active (see [API_KEY_DESIGN.md](./API_KEY_DESIGN.md))
+- **service_instances** - instance_id, customer_id, service_type, tier, is_user_enabled, config (JSONB)
+- **api_keys** - api_key_id, customer_id, service_type, derivation, is_user_enabled (see [API_KEY_DESIGN.md](./API_KEY_DESIGN.md))
 - **haproxy_logs** (TimescaleDB hypertable) - timestamp, customer_id, service_type, method, status_code, bytes_out
 - **usage_records** - customer_id, service_type, request_count, window_start, window_end, charged_amount
 - **escrow_transactions** - customer_id, tx_digest, tx_type, amount, timestamp

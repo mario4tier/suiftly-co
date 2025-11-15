@@ -229,7 +229,7 @@ export const servicesRouter = router({
             tier: input.tier,
             state: SERVICE_STATE.DISABLED,
             config: input.config || defaultConfig,
-            isEnabled: false,
+            isUserEnabled: false,
             subscriptionChargePending: true, // Payment not confirmed yet
           })
           .returning();
@@ -472,7 +472,7 @@ export const servicesRouter = router({
       const [updatedService] = await db
         .update(serviceInstances)
         .set({
-          isEnabled: input.enabled,
+          isUserEnabled: input.enabled,
           state: input.enabled ? SERVICE_STATE.ENABLED : SERVICE_STATE.DISABLED,
           enabledAt: input.enabled ? new Date() : service.enabledAt,
           disabledAt: !input.enabled ? new Date() : service.disabledAt,
