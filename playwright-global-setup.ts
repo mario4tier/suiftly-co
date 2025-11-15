@@ -1,20 +1,10 @@
 /**
  * Playwright Global Setup/Teardown
- * Robust server management with config verification and graceful shutdown
+ * Simple server health checks - no more complex restarts!
+ * JWT expiry is now managed dynamically via /test/jwt-config API
  */
 
 import { FullConfig } from '@playwright/test';
-import { spawn, ChildProcess } from 'child_process';
-import {
-  ensureCorrectServer,
-  shutdownServer,
-  waitForServer,
-  waitForPortFree,
-  ExpectedConfig,
-} from './playwright-test-utils';
-
-let apiServer: ChildProcess | null = null;
-let webappServer: ChildProcess | null = null;
 
 async function globalSetup(config: FullConfig) {
   // Detect which project is ACTUALLY running by checking CLI args
@@ -35,121 +25,49 @@ async function globalSetup(config: FullConfig) {
 
   if (isShortExpiryRun) {
     console.log('🧪 Setting up for short-expiry tests (2s access, 10s refresh)...');
+    console.log('ℹ️  Short expiry will be set via API (/test/jwt-config) - no server restart needed');
 
-    const expectedConfig: ExpectedConfig = {
-      shortJWTExpiry: true,
-      jwtAccessExpiry: '2s',
-      jwtRefreshExpiry: '10s',
-      mockAuth: true,
-    };
-
-    // Check if correct server is already running
-    const apiStatus = await ensureCorrectServer(
-      'http://localhost:3000/health',
-      3000,
-      expectedConfig
-    );
-
-    if (apiStatus.needsRestart) {
-      console.log(`🔄 API server needs restart: ${apiStatus.reason}`);
-      await shutdownServer('http://localhost:3000', 3000, 'API server');
-      await waitForPortFree(3000);
-
-      // Start test API server with short JWT expiry
-      console.log('🚀 Starting API server with short JWT expiry...');
-      apiServer = spawn('npx', ['tsx', 'apps/api/src/server.ts'], {
-        env: {
-          ...process.env,
-          NODE_ENV: 'development',
-          ENABLE_SHORT_JWT_EXPIRY: 'true',
-          JWT_SECRET: 'TEST_DEV_SECRET_1234567890abcdef',
-          MOCK_AUTH: 'true',
-          DATABASE_URL: 'postgresql://deploy:deploy_password_change_me@localhost/suiftly_dev',
-        },
-        stdio: 'inherit',
-      });
-
-      await waitForServer('http://localhost:3000/health');
+    // Just check if servers are running (no config validation needed)
+    try {
+      const apiCheck = await fetch('http://localhost:3000/health', { signal: AbortSignal.timeout(2000) });
+      if (!apiCheck.ok) throw new Error('API not responding');
+      console.log('✅ API server already running');
+    } catch {
+      console.log('❌ API server not running - please start with: ./scripts/dev/start-dev.sh');
+      throw new Error('API server must be running before tests');
     }
 
-    // Check webapp (webapp doesn't have config, so just check if it's running)
     try {
       const webappCheck = await fetch('http://localhost:5173', { signal: AbortSignal.timeout(2000) });
       if (!webappCheck.ok) throw new Error('Webapp not responding');
       console.log('✅ Webapp already running');
     } catch {
-      console.log('🔄 Webapp needs restart');
-      await shutdownServer('http://localhost:5173', 5173, 'Webapp');
-      await waitForPortFree(5173);
-
-      console.log('🚀 Starting webapp...');
-      webappServer = spawn('npm', ['run', 'dev'], {
-        cwd: 'apps/webapp',
-        env: process.env,
-        stdio: 'inherit',
-      });
-
-      await waitForServer('http://localhost:5173');
+      console.log('❌ Webapp not running - please start with: ./scripts/dev/start-dev.sh');
+      throw new Error('Webapp must be running before tests');
     }
 
-    console.log('✅ Test servers ready with short JWT expiry');
+    console.log('✅ Dev servers ready (JWT expiry will be set dynamically by tests)');
 
   } else if (shouldUseNormalExpiry) {
     console.log('ℹ️  Setting up for normal tests (15m access, 30d refresh)...');
 
-    const expectedConfig: ExpectedConfig = {
-      shortJWTExpiry: false,
-      jwtAccessExpiry: '15m',
-      jwtRefreshExpiry: '30d',
-      mockAuth: true,
-    };
-
-    // Check if correct server is running
-    const apiStatus = await ensureCorrectServer(
-      'http://localhost:3000/health',
-      3000,
-      expectedConfig
-    );
-
-    if (apiStatus.needsRestart) {
-      console.log(`🔄 API server needs restart: ${apiStatus.reason}`);
-      await shutdownServer('http://localhost:3000', 3000, 'API server');
-      await waitForPortFree(3000);
-
-      // Start API server with normal JWT expiry
-      console.log('🚀 Starting API server with normal JWT expiry...');
-      apiServer = spawn('npx', ['tsx', 'apps/api/src/server.ts'], {
-        env: {
-          ...process.env,
-          NODE_ENV: 'development',
-          JWT_SECRET: 'TEST_DEV_SECRET_1234567890abcdef',
-          MOCK_AUTH: 'true',
-          DATABASE_URL: 'postgresql://deploy:deploy_password_change_me@localhost/suiftly_dev',
-        },
-        stdio: 'inherit',
-      });
-
-      await waitForServer('http://localhost:3000/health');
+    // Just check if servers are running
+    try {
+      const apiCheck = await fetch('http://localhost:3000/health', { signal: AbortSignal.timeout(2000) });
+      if (!apiCheck.ok) throw new Error('API not responding');
+      console.log('✅ API server already running');
+    } catch {
+      console.log('❌ API server not running - please start with: ./scripts/dev/start-dev.sh');
+      throw new Error('API server must be running before tests');
     }
 
-    // Check webapp
     try {
       const webappCheck = await fetch('http://localhost:5173', { signal: AbortSignal.timeout(2000) });
       if (!webappCheck.ok) throw new Error('Webapp not responding');
       console.log('✅ Webapp already running');
     } catch {
-      console.log('🔄 Webapp needs restart');
-      await shutdownServer('http://localhost:5173', 5173, 'Webapp');
-      await waitForPortFree(5173);
-
-      console.log('🚀 Starting webapp...');
-      webappServer = spawn('npm', ['run', 'dev'], {
-        cwd: 'apps/webapp',
-        env: process.env,
-        stdio: 'inherit',
-      });
-
-      await waitForServer('http://localhost:5173');
+      console.log('❌ Webapp not running - please start with: ./scripts/dev/start-dev.sh');
+      throw new Error('Webapp must be running before tests');
     }
 
     console.log('✅ Dev servers ready with normal JWT expiry');
@@ -173,35 +91,16 @@ async function globalSetup(config: FullConfig) {
 }
 
 async function globalTeardown() {
-  // Only teardown if we started servers (short-expiry tests)
-  // For normal/chromium tests, leave dev servers running
-
-  if (apiServer || webappServer) {
-    console.log('🧹 Cleaning up test servers...');
-
-    if (apiServer) {
-      console.log('🧹 Stopping API server...');
-      apiServer.kill('SIGTERM');
-      setTimeout(() => {
-        if (apiServer && !apiServer.killed) {
-          apiServer.kill('SIGKILL');
-        }
-      }, 2000);
-    }
-
-    if (webappServer) {
-      console.log('🧹 Stopping webapp server...');
-      webappServer.kill('SIGTERM');
-      setTimeout(() => {
-        if (webappServer && !webappServer.killed) {
-          webappServer.kill('SIGKILL');
-        }
-      }, 2000);
-    }
-
-    // Wait for graceful shutdown
-    await new Promise(resolve => setTimeout(resolve, 3000));
-    console.log('✅ Test servers stopped');
+  // Clear any runtime JWT config overrides
+  try {
+    await fetch('http://localhost:3000/test/jwt-config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clear: true }),
+    });
+    console.log('✅ Cleared runtime JWT config');
+  } catch {
+    // Server might be down, that's ok
   }
 }
 

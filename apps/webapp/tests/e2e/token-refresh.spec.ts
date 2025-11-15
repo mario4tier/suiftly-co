@@ -82,10 +82,31 @@ test.describe('Token Expiry - Normal Config (15m access, 30d refresh)', () => {
 });
 
 test.describe('Token Refresh - Short Expiry Config (2s access, 10s refresh)', () => {
-  test('access token should auto-refresh after expiry (2s) and request should succeed', async ({ page }) => {
-    // Backend automatically started with short expiry config via Playwright webServer
-    // ENABLE_SHORT_JWT_EXPIRY=true JWT_SECRET=TEST_DEV MOCK_AUTH=true
+  test.beforeEach(async ({ request }) => {
+    // Set short JWT expiry via API (no server restart needed!)
+    await request.post('http://localhost:3000/test/jwt-config', {
+      data: {
+        accessTokenExpiry: '2s',
+        refreshTokenExpiry: '10s',
+      },
+    });
 
+    // Verify it was set correctly
+    const response = await request.get('http://localhost:3000/test/config');
+    const config = await response.json();
+    if (config.jwtConfig.accessTokenExpiry !== '2s' || config.jwtConfig.refreshTokenExpiry !== '10s') {
+      throw new Error(`Failed to set short JWT expiry. Got: ${JSON.stringify(config.jwtConfig)}`);
+    }
+  });
+
+  test.afterEach(async ({ request }) => {
+    // Clear JWT config override (restore defaults)
+    await request.post('http://localhost:3000/test/jwt-config', {
+      data: { clear: true },
+    });
+  });
+
+  test('access token should auto-refresh after expiry (2s) and request should succeed', async ({ page }) => {
     // 1. Authenticate with mock wallet
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet")');

@@ -95,15 +95,51 @@ if (config.NODE_ENV !== 'production') {
   server.get('/test/config', {
     config: { rateLimit: false },
   }, async () => {
+    const { getJWTConfig } = await import('./lib/jwt-config.js');
+    const { hasRuntimeJWTOverride } = await import('./lib/runtime-jwt-config.js');
+    const jwtConfig = getJWTConfig();
+
     return {
       environment: config.NODE_ENV,
       mockAuth: config.MOCK_AUTH,
       shortJWTExpiry: config.ENABLE_SHORT_JWT_EXPIRY === true,
+      hasRuntimeJWTOverride: hasRuntimeJWTOverride(),
       jwtConfig: {
-        accessTokenExpiry: process.env.JWT_ACCESS_EXPIRY || '15m',
-        refreshTokenExpiry: process.env.JWT_REFRESH_EXPIRY || '30d',
+        accessTokenExpiry: jwtConfig.accessTokenExpiry,
+        refreshTokenExpiry: jwtConfig.refreshTokenExpiry,
       },
     };
+  });
+
+  // Set JWT config at runtime (for testing only)
+  server.post('/test/jwt-config', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    if (config.NODE_ENV === 'production') {
+      reply.status(403).send({ error: 'Cannot change JWT config in production' });
+      return;
+    }
+
+    const { setRuntimeJWTConfig } = await import('./lib/runtime-jwt-config.js');
+    const body = request.body as any;
+
+    if (body.clear) {
+      setRuntimeJWTConfig(null);
+      reply.send({ success: true, message: 'JWT config cleared (using defaults)' });
+    } else {
+      const { accessTokenExpiry, refreshTokenExpiry } = body;
+      if (!accessTokenExpiry || !refreshTokenExpiry) {
+        reply.status(400).send({ error: 'Must provide accessTokenExpiry and refreshTokenExpiry' });
+        return;
+      }
+
+      setRuntimeJWTConfig({ accessTokenExpiry, refreshTokenExpiry });
+      reply.send({
+        success: true,
+        message: 'JWT config set',
+        config: { accessTokenExpiry, refreshTokenExpiry }
+      });
+    }
   });
 
   // Set test delays - allows tests to slow down API responses for UI testing

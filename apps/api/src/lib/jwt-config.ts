@@ -4,6 +4,7 @@
  */
 
 import { config } from './config.js';
+import { getRuntimeJWTConfig } from './runtime-jwt-config.js';
 
 export interface JWTConfig {
   accessTokenExpiry: string;
@@ -128,8 +129,15 @@ function getTestJWTConfig(): JWTConfig {
 /**
  * Get JWT configuration (auto-selects production or test config)
  * SAFE DEFAULT: Always returns production config unless ALL test conditions are met
+ * RUNTIME OVERRIDE: Tests can dynamically change config via setRuntimeJWTConfig()
  */
 export function getJWTConfig(): JWTConfig {
+  // Check for runtime override first (for testing)
+  const runtimeConfig = getRuntimeJWTConfig();
+  if (runtimeConfig) {
+    return runtimeConfig;
+  }
+
   // Check if all test conditions are met
   const isTestEnv = config.NODE_ENV === 'test' || config.NODE_ENV === 'development';
   const shortExpiryEnabled = process.env.ENABLE_SHORT_JWT_EXPIRY === 'true';
