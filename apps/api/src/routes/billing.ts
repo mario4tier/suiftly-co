@@ -125,7 +125,7 @@ export const billingRouter = router({
           type: entry.type,
           amountUsd: Number(entry.amountUsdCents) / 100,
           description: entry.description,
-          txHash: entry.txHash,
+          txDigest: entry.txDigest,
           createdAt: entry.createdAt.toISOString(),
         })),
         total,
@@ -220,7 +220,7 @@ export const billingRouter = router({
         customerId: customer.customerId,
         type: 'deposit',
         amountUsdCents: amountCents,
-        txHash: result.digest,
+        txDigest: result.digest,
         description: `Deposited $${input.amountUsd.toFixed(2)} to escrow account`,
       });
 
@@ -243,7 +243,7 @@ export const billingRouter = router({
         success: true,
         newBalanceUsd: account ? account.balanceUsdcCents / 100 : 0,
         accountCreated: result.accountCreated || false,
-        txHash: result.digest,
+        txDigest: result.digest,
         reconciledCharges: reconcileResult.chargesSucceeded, // Return how many pending charges were cleared
       };
     }),
@@ -300,7 +300,7 @@ export const billingRouter = router({
         customerId: customer.customerId,
         type: 'withdraw',
         amountUsdCents: amountCents,
-        txHash: result.digest,
+        txDigest: result.digest,
         description: `Withdrew $${input.amountUsd.toFixed(2)} from escrow account`,
       });
 
@@ -317,7 +317,7 @@ export const billingRouter = router({
       return {
         success: true,
         newBalanceUsd: account ? account.balanceUsdcCents / 100 : 0,
-        txHash: result.digest,
+        txDigest: result.digest,
       };
     }),
 
@@ -388,7 +388,7 @@ export const billingRouter = router({
         success: true,
         newLimit: input.newLimitUsd === 0 ? null : input.newLimitUsd,
         accountCreated: result.accountCreated || false,
-        txHash: result.digest,
+        txDigest: result.digest,
       };
     }),
 });

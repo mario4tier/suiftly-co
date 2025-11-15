@@ -39,7 +39,7 @@ export const ledgerEntrySchema = z.object({
   amountUsdCents: z.number().int(), // Can be negative for withdrawals
   amountSuiMist: z.number().int().positive().nullable().optional(), // NULL for charges/credits
   suiUsdRateCents: z.number().int().positive().nullable().optional(), // e.g., 245 = $2.45/SUI
-  txHash: z.string().regex(/^0x[a-fA-F0-9]{64}$/).nullable().optional(),
+  txDigest: z.string().regex(/^0x[a-fA-F0-9]{64}$/).nullable().optional(),
   description: z.string().max(500).nullable().optional(), // TEXT field, no constant needed
   invoiceId: z.string().max(FIELD_LIMITS.INVOICE_ID).nullable().optional(),
   createdAt: z.date().or(z.string().datetime()),

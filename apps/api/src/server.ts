@@ -433,7 +433,7 @@ if (config.NODE_ENV !== 'production') {
           customerId: customer.customerId,
           type: 'charge',
           amountUsdCents: Math.round(amountUsd * 100),
-          txHash: result.digest,
+          txDigest: result.digest,
           description,
         });
       }
@@ -487,7 +487,7 @@ if (config.NODE_ENV !== 'production') {
           customerId: customer.customerId,
           type: 'credit',
           amountUsdCents: Math.round(amountUsd * 100),
-          txHash: result.digest,
+          txDigest: result.digest,
           description,
         });
       }

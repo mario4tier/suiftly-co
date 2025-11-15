@@ -637,7 +637,7 @@ interface Transaction {
   type: string;
   amountUsd: number;
   description: string | null;
-  txHash: string | null;
+  txDigest: string | null;
   createdAt: string;
 }
 
@@ -688,10 +688,10 @@ function TransactionItem({ transaction }: { transaction: Transaction }) {
             <span className="text-gray-500">Time:</span>
             <span>{date} {time}</span>
           </div>
-          {transaction.txHash && (
+          {transaction.txDigest && (
             <div className="flex gap-2">
               <span className="text-gray-500">TX:</span>
-              <span className="font-mono text-xs break-all">{transaction.txHash}</span>
+              <span className="font-mono text-xs break-all">{transaction.txDigest}</span>
             </div>
           )}
         </div>
