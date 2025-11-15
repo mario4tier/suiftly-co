@@ -93,6 +93,8 @@ APISERVER=1                 # 1 = runs API servers, 0 = other role
 **✅ Encrypt:** API keys, Seal API keys, refresh tokens (stored in `*_encrypted` columns)
 **❌ Don't encrypt:** Wallet addresses, configs, logs, metrics, nonces, timestamps
 
+**Note:** This encryption is for database storage security. For the cryptographic design of API key generation and encoding (AES-128-CTR with HMAC), see [API_KEY_DESIGN.md](API_KEY_DESIGN.md).
+
 ### Algorithm: AES-256-GCM
 
 **Why AES-256-GCM:**

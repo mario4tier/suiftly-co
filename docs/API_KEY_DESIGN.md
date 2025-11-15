@@ -904,6 +904,12 @@ CREATE TABLE api_keys (
 - `proc_group` identifies the process group for routing (3 bits = 0-7 groups, currently always 1)
 - For **Seal service**: Key selection is determined by `package_id` in customer's PTB (not by API key)
 
+### Database Storage Encryption
+
+API keys are encrypted at rest in the database using AES-256-GCM encryption. The `api_key_id` column stores the encrypted value in the format `IV:authTag:ciphertext`. This provides additional security beyond the cryptographic encoding of the key itself.
+
+For complete details on database-level encryption, secret management, and the `DB_APP_FIELDS_ENCRYPTION_KEY` configuration, see [APP_SECURITY_DESIGN.md](APP_SECURITY_DESIGN.md).
+
 ## API Operations
 
 ### Create Key (Rate Limited)
