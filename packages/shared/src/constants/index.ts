@@ -120,8 +120,9 @@ export const FIELD_LIMITS = {
   TRANSACTION_TYPE: 20,     // 'deposit', 'withdraw', 'charge', 'credit'
   BILLING_STATUS: 20,       // 'pending', 'paid', 'failed'
 
-  // User-provided names
-  PACKAGE_NAME: 100,        // Seal package names
+  // User-provided names (DNS/Kubernetes compatible - max 64 chars)
+  SEAL_KEY_NAME: 64,        // Seal key names
+  PACKAGE_NAME: 64,         // Seal package names
 
   // Business identifiers
   INVOICE_ID: 50,           // Invoice references

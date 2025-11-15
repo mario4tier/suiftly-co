@@ -122,7 +122,7 @@ interface CustomerCache {
   last_month_charged_usd_cents: bigint;
   cache_version: number;              // Incremented on each update
   last_synced_at: Date;
-  last_synced_tx_digest: string;
+  last_synced_tx_digest: Buffer;      // BYTEA (32 bytes)
 }
 
 // Stale cache detection
@@ -475,19 +475,47 @@ These are completely different concepts:
 
 **Schema:** See `seal_keys` table in [Database Schema Summary](#database-schema-summary) below.
 
+**Seal Key Cryptography (BLS12-381 IBE):**
+
+Seal uses Boneh-Franklin Identity-Based Encryption (IBE) with the BLS12-381 curve:
+- **Master Secret Key (msk)**: 32 bytes (BLS12-381 scalar in field Fr)
+- **Master Public Key (mpk)**: 48 bytes (G1 point, compressed) - this is what `public_key` field stores
+- **Purpose**:
+  - `mpk` (public_key) is **registered on-chain** and used by clients to encrypt data
+  - `msk` (private key) is held by key server to derive identity-based decryption keys
+- **On-chain Registration**: `sui client call --function create_and_transfer_v1 ... --args <PUBKEY>` registers the public key and returns `object_id`
+
+**Two Key Types: Derived vs Imported**
+
+Schema uses **nullable `derivation_index`** to distinguish key types (no explicit `key_type` field):
+
+| Aspect | Derived Keys | Imported Keys |
+|--------|--------------|---------------|
+| **Identifier** | `derivation_index IS NOT NULL` | `derivation_index IS NULL` |
+| **Generation** | Derived from `MASTER_SEED` + index | External BLS12-381 key imported |
+| **Storage** | `derivation_index` only (~4 bytes) | `encrypted_private_key` (~hundreds of bytes) |
+| **Regeneration** | ✅ Can regenerate from seed + index | ❌ Cannot regenerate (one-time import) |
+| **Backup** | Seed backup sufficient | Full encrypted key backup required |
+| **Use Case** | Primary production keys (recommended) | Migration from external systems, disaster recovery |
+
 **Creation Flow (Derive or Import):**
 
-**Option 1: Derive New Seal Key**
+**Option 1: Derive New Seal Key (Recommended)**
 1. Customer initiates Seal key derivation through dashboard
-2. Backend generates new Sui key pair (derived from customer's wallet)
-3. Private key encrypted with customer's wallet public key
-4. Public key registered on-chain if required by Seal protocol
-5. Customer can download encrypted private key
+2. Backend derives BLS12-381 key pair from `MASTER_SEED` using next available `derivation_index`
+3. Store: `derivation_index`, `public_key` (48 bytes mpk)
+4. **No encrypted_private_key stored** - can regenerate on demand from seed + index
+5. Register on-chain: `sui client call --function create_and_transfer_v1 ... --args <PUBKEY>`
+6. Store returned `object_id` (NULL until registration succeeds)
+7. Customer receives `object_id` and `public_key` (mpk) for encryption operations
 
 **Option 2: Import Existing Seal Key**
-1. Customer provides existing Sui key pair
-2. Backend validates and stores encrypted private key
-3. Public key registered on-chain if required by Seal protocol
+1. Customer provides existing BLS12-381 private key (32 bytes, hex-encoded)
+2. Backend validates key format and extracts public key (48 bytes)
+3. Encrypt private key with customer's wallet public key (for recovery)
+4. Store: `encrypted_private_key`, `public_key` (48 bytes mpk)
+5. **derivation_index is NULL** - indicates imported key that cannot be regenerated
+6. Register on-chain and store `object_id` (same as derived keys)
 
 **Additional Seal Keys:**
 
@@ -495,7 +523,8 @@ These are completely different concepts:
 - Each Seal key incurs a monthly fee (no free tier)
 - All Seal keys for a customer have equal privileges
 - Use cases: Separate keys per environment (dev/staging/prod), organizational isolation, disaster recovery backup
-- **Important:** Seal keys are NOT rotated - they must be preserved to decrypt existing data
+- **Important:** Seal keys are NOT rotated - they must be preserved to decrypt existing encrypted data
+- **Storage Efficiency**: Derived keys use ~4 bytes (`derivation_index`), imported keys use ~hundreds of bytes (encrypted key material)
 
 ### Seal Service Configuration
 
@@ -600,31 +629,70 @@ CREATE TABLE api_keys (
   -- Note: No index on api_key_fp needed - PRIMARY KEY automatically indexed
 );
 
--- Seal keys (Seal service specific)
+-- Seal keys (Seal service specific - IBE master keys for encryption)
 CREATE TABLE seal_keys (
-  seal_key_id UUID PRIMARY KEY,
+  seal_key_id SERIAL PRIMARY KEY,                  -- Auto-increment for performance (internal-only)
   customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
   instance_id INTEGER REFERENCES service_instances(instance_id) ON DELETE CASCADE,
-  public_key VARCHAR(66) NOT NULL,
-  encrypted_private_key TEXT NOT NULL,
-  purchase_tx_digest VARCHAR(64),
+
+  -- Optional user-defined name (max 64 chars for DNS/Kubernetes compatibility)
+  name VARCHAR(64),
+
+  -- Derived keys: store derivation_index (can regenerate from MASTER_SEED)
+  -- Imported keys: derivation_index is NULL
+  derivation_index INTEGER,
+
+  -- Encrypted private key (32 bytes BLS12-381 scalar, encrypted with customer wallet key)
+  -- NULL for derived keys (regenerable), required for imported keys
+  encrypted_private_key TEXT,
+
+  -- BLS12-381 master public key (mpk) for Boneh-Franklin IBE
+  -- Typically 48 bytes (G1 point, compressed) - registered on-chain for client encryption
+  -- May be 96 bytes (G2 point) in alternative implementations
+  public_key BYTEA NOT NULL CHECK (LENGTH(public_key) IN (48, 96)),
+
+  -- Sui blockchain object ID for key server registration (32 bytes)
+  -- NULL until on-chain registration succeeds
+  object_id BYTEA CHECK (object_id IS NULL OR LENGTH(object_id) = 32),
+
+  -- On-chain registration transaction digest (32 bytes)
+  register_txn_digest BYTEA CHECK (LENGTH(register_txn_digest) = 32),
+
   is_active BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMP NOT NULL,
 
+  -- Indexes
   INDEX idx_seal_customer (customer_id),
-  INDEX idx_seal_instance (instance_id)
+  INDEX idx_seal_instance (instance_id),
+  INDEX idx_seal_public_key (public_key),
+  INDEX idx_seal_object_id (object_id),
+
+  -- Constraints
+  CHECK (name IS NULL OR LENGTH(name) <= 64),
+  CHECK (
+    (derivation_index IS NOT NULL AND encrypted_private_key IS NULL) OR
+    (derivation_index IS NULL AND encrypted_private_key IS NOT NULL)
+  )
 );
 
 -- Seal packages (Seal service specific - package addresses associated with Seal keys)
 CREATE TABLE seal_packages (
-  package_id UUID PRIMARY KEY,
-  seal_key_id UUID NOT NULL REFERENCES seal_keys(seal_key_id) ON DELETE CASCADE,
-  package_address VARCHAR(66) NOT NULL,   -- Sui package address
-  name VARCHAR(100),                       -- Optional friendly name
+  package_id SERIAL PRIMARY KEY,                   -- Auto-increment for performance (internal-only)
+  seal_key_id INTEGER NOT NULL REFERENCES seal_keys(seal_key_id) ON DELETE CASCADE,
+  package_address BYTEA NOT NULL CHECK (LENGTH(package_address) = 32),  -- Sui package address (32 bytes)
+
+  -- Optional user-defined name (max 64 chars for DNS/Kubernetes compatibility)
+  name VARCHAR(64),
+
   is_active BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMP NOT NULL,
 
-  INDEX idx_package_seal_key (seal_key_id)
+  -- Indexes
+  INDEX idx_package_seal_key (seal_key_id),
+  INDEX idx_package_address (package_address),
+
+  -- Constraints
+  CHECK (name IS NULL OR LENGTH(name) <= 64)
 );
 
 -- Usage tracking for billing
@@ -646,7 +714,7 @@ CREATE TABLE usage_records (
 CREATE TABLE escrow_transactions (
   tx_id BIGSERIAL PRIMARY KEY,
   customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
-  tx_digest VARCHAR(64) NOT NULL UNIQUE,
+  tx_digest BYTEA NOT NULL UNIQUE CHECK (LENGTH(tx_digest) = 32),  -- Sui transaction digest (32 bytes)
   tx_type transaction_type NOT NULL,  -- ENUM: 'deposit', 'withdraw', 'charge', 'credit'
   amount DECIMAL(20, 8) NOT NULL,
   asset_type VARCHAR(66),         -- Coin type
@@ -745,13 +813,13 @@ CREATE TABLE ledger_entries (
   amount_usd_cents BIGINT NOT NULL,        -- USD amount (signed: + for deposit/credit, - for charge/withdrawal)
   amount_sui_mist BIGINT,                  -- SUI amount in mist (1 SUI = 10^9 mist), NULL for charges/credits
   sui_usd_rate_cents BIGINT,               -- Rate at transaction time (cents per 1 SUI), e.g., 245 = $2.45
-  tx_hash VARCHAR(66),                     -- On-chain TX hash for deposits/withdrawals, NULL for charges/credits
+  tx_digest BYTEA CHECK (LENGTH(tx_digest) = 32),  -- On-chain transaction digest (32 bytes) for deposits/withdrawals, NULL for charges/credits
   description TEXT,                        -- Human-readable description
   invoice_id VARCHAR(50),                  -- Optional invoice reference
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
   INDEX idx_customer_created (customer_id, created_at DESC),
-  INDEX idx_ledger_tx_hash (tx_hash) WHERE tx_hash IS NOT NULL
+  INDEX idx_ledger_tx_digest (tx_digest) WHERE tx_digest IS NOT NULL
 );
 
 -- Billing records (charges and credits applied to accounts)
@@ -763,7 +831,7 @@ CREATE TABLE billing_records (
   amount_usd_cents BIGINT NOT NULL,        -- Charged amount (positive) or credit (negative)
   type transaction_type NOT NULL,          -- ENUM: 'deposit', 'withdraw', 'charge', 'credit'
   status billing_status NOT NULL,          -- ENUM: 'pending', 'paid', 'failed'
-  tx_digest VARCHAR(64),                   -- Escrow charge transaction (NULL if pending)
+  tx_digest BYTEA CHECK (LENGTH(tx_digest) = 32),  -- Escrow charge transaction digest (32 bytes), NULL if pending
   created_at TIMESTAMP NOT NULL,
 
   INDEX idx_customer_period (customer_id, billing_period_start),
@@ -843,11 +911,38 @@ CREATE TABLE system_control (
 
 ---
 
-**Document Version**: 1.11
-**Last Updated**: 2025-01-17
+**Document Version**: 1.15
+**Last Updated**: 2025-01-14
 **Status**: Design specification (not yet implemented)
 
 **Changelog:**
+- v1.15: Added user-defined names to seal_keys and seal_packages:
+  - Added `name VARCHAR(64)` field to both seal_keys and seal_packages
+  - 64-character limit for DNS/Kubernetes compatibility (RFC 1123 DNS label)
+  - Optional field for user-friendly identification
+  - Added CHECK constraints to enforce 64-character limit
+- v1.14: Simplified seal_keys schema based on Boneh-Franklin IBE research:
+  - **Removed `key_type` field** - use NULL `derivation_index` to identify imported keys (simpler)
+  - **Made `object_id` nullable** - NULL until on-chain registration succeeds
+  - Clarified `public_key` is the IBE master public key (mpk, 48 bytes G1 point)
+  - Confirmed public_key is registered on-chain via `create_and_transfer_v1` function
+  - Updated CHECK constraint to use `derivation_index` nullability instead of `key_type`
+  - Added detailed explanation of Boneh-Franklin IBE and BLS12-381 key sizes
+- v1.13: Enhanced seal_keys schema for BLS12-381 IBE and derived/imported keys:
+  - Added `derivation_index` for derived keys (regenerable from MASTER_SEED)
+  - Made `encrypted_private_key` nullable (NULL for derived, required for imported)
+  - Added `object_id` field (32 bytes) for Sui blockchain key server registration
+  - Updated `public_key` CHECK constraint to allow 48 bytes (G1) or 96 bytes (G2)
+  - Added comprehensive documentation on BLS12-381 IBE key structure
+  - Added CHECK constraint to enforce derived/imported key consistency rules
+  - Added index on `object_id` for on-chain validation lookups
+- v1.12: Optimized seal_keys and seal_packages tables:
+  - Changed primary keys from UUID to SERIAL for better performance
+  - Changed all Sui addresses/digests from VARCHAR to BYTEA (50% storage reduction)
+  - Renamed purchase_tx_digest → register_txn_digest (more accurate naming)
+  - Added indexes on public_key and package_address for lookups
+  - Added CHECK constraints to enforce 32-byte length for binary fields
+  - Standardized all transaction digest fields across schema to use BYTEA
 - v1.11: Refactored API key design to separate document:
   - Moved detailed API key implementation to API_KEY_DESIGN.md
   - Kept high-level overview and database schema in this document

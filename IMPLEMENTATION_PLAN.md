@@ -154,9 +154,10 @@ export default {
   + INDEX idx_customer_service (customer_id, service_type, is_active)
 
 // src/schema/seal.ts
-- seal_keys (seal_key_id, customer_id, public_key, encrypted_private_key,
-  purchase_tx_digest, is_active, created_at)
+- seal_keys (seal_key_id SERIAL, customer_id, public_key BYTEA(32), encrypted_private_key,
+  register_txn_digest BYTEA(32), is_active, created_at)
   + INDEX idx_customer (customer_id)
+  + INDEX idx_seal_public_key (public_key)
 
 // src/schema/usage.ts
 - usage_records (record_id, customer_id, service_type, request_count, bytes_transferred,
