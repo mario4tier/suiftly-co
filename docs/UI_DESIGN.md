@@ -653,8 +653,8 @@ Each service page has **2 major modes of operation**:
 │ Seal                                                │
 │                                                     │
 │  Enable Service                         OFF ⟳ [ON] │
-│  [ Configuration ]  [ Keys ]                        │  ← Tabs
-│  ────────────────                                   │
+│  [ Overview ]  [ X-API-Key ]  [ Seal Keys ]  [ More Settings ]  │  ← Tabs
+│  ──────────                                         │
 │                                                     │
 |  Monthly Charges - ENTERPRISE [Change Plan]         |
 |                                                     |
@@ -669,19 +669,11 @@ Each service page has **2 major modes of operation**:
 │                                                     │
 │  Pending Per-Request Charges: $0.00 [See Details]   |
 │                                                     │
-│  Burst Allowed:            OFF ⟳ [ON]              │
-│                                                     │
-│  IP Allowlist (?)                                   │
-│  ┌──────────────────────────────────────────┐       │
-│  │ 192.168.1.100                            │       │
-│  │ 10.0.0.0/24                              │       │
-│  └──────────────────────────────────────────┘       │
-│                                                     │
 └─────────────────────────────────────────────────────┘
 ```
 
 
-**Tab 1: Configuration**
+**Tab 1: Overview**
 
 - **ON/OFF**
   - Type: Slider switch
@@ -698,6 +690,116 @@ Each service page has **2 major modes of operation**:
 
 - **Pending Per-Request Charges**
   - Shows only pending total, [See Details] Will bring up the stats page which covers usage breakdown.
+
+**Note:** When gRPC and GraphQL are implemented in the future, they will use similar interactive form and pricing model as Seal.
+
+---
+
+**Tab 2: X-API-Key**
+
+```
+┌──────────────────────────────────────────────────────┐
+│  X-API-Key                                           │
+│                                                      │
+│  API Keys (1 of 2) used                              │
+│  ┌────────────────────────────────────────┐          │
+│  │  key_abc123...  [Copy] [Revoke]        │          │
+│  └────────────────────────────────────────┘          │
+│                          [ Add New API Key ]         │
+└──────────────────────────────────────────────────────┘
+```
+
+**X-API-Key Tab Behavior (After Service Enabled):**
+- **API Keys Section:**
+  - List of active API keys (truncated display)
+  - Copy button → Copies full key to clipboard
+  - Revoke button → Disables key (confirmation required)
+  - Enable button (if revoked) → Re-enables key
+  - Delete button → Remove key forever (confirmation required)
+  - **"Add New API Key":**
+    - Creates new key (+$1/month to add if all used).
+
+**Note:** Adding/deleting keys may update monthly fee and trigger billing events.
+          Keys are encrypted in DB for security, and have fingerprint used for internal coordination.
+
+---
+
+**Tab 3: Seal Keys**
+
+```
+┌──────────────────────────────────────────────────────┐
+│  Seal Keys & Packages                                │
+│                                                      │
+│  Seal Keys & Packages (1 of 1) used                  │
+│  ┌────────────────────────────────────────┐          │
+│  │  seal_xyz789...  [Export] [Disable] [▼]│          │
+|  |  Object ID: 0xabcde... [Copy]          │          │
+│  │                                        │          │
+│  │  Packages (4 of 5) Used                │          │
+│  │    • package-1  [Edit] [Delete]        │          │
+│  │    • package-2  [Edit] [Delete]        │          │
+│  │    • package-3  [Edit] [Delete]        │          │
+│  │    • package-4  [Edit] [Delete]        │          │
+│  │    • package-5  [Edit] [Delete]        │          │
+│  │                                        │          │
+│  │    [ Add Package to this Seal Key ]    │          │
+│  └────────────────────────────────────────┘          │
+│                         [ Add New Seal Key ]         │
+└──────────────────────────────────────────────────────┘
+```
+
+**Hierarchy:** Service → Seal Keys → Packages (each seal key owns its packages)
+
+**Seal Keys Tab Behavior (After Service Enabled):**
+- **Seal Keys & Packages Section:**
+  - Each seal key has an expandable card ([▼] to collapse/expand)
+  - Seal key is shown truncated (first 6 + last 4 chars). Need to press [Export] to see full key.
+  - the user 'name' field is shown next with ellipsis if too long... (not leaving enough place for the actions)
+
+  - **Seal Key actions:**
+    - Export → Shows export modal that we will define later.
+    - Disable → Disable seal key (confirmation required)
+    - Enable (if disabled) → Re-enables key
+    - Delete (if disabled) → Remove key (confirmation required, dangerous not recoverable)
+    - Add New Seal Key → Give choice to import or generate new one.
+  This is similar to how API keys are handled except that the backend is more complex, but from a user perspective it is similar.
+  - **Object ID** shows (truncated) once the seal key is registered or imported. It has a
+  copy to clipboard" button.
+
+  - **Packages (nested under each seal key):**
+    - Packages are children of their parent seal key
+    - Each package shows: address truncated + [Edit] [Disable] actions
+    - Edit → Change package address
+    - Enable/Disable → Toggle package is_user_enabled state.
+    - Delete → Remove package (confirmation needed)
+    - **"Add Package to this Seal Key":**
+      - Creates new package under this seal key up to the limit included (later we will allow to buy more packages for 5$/month each).
+    This is similar to how API keys are handled except that the backend is different.
+
+**Note:** Adding/deleting seal keys or packages may update monthly fee and trigger billing events. This is to be implemented later.
+
+    Keys are encrypted in DB for security, and have fingerprint used for internal coordination.
+
+---
+
+**Tab 4: More Settings**
+
+```
+┌─────────────────────────────────────────────────────┐
+│  More Settings                                      │
+│                                                     │
+│  Burst Allowed:            OFF ⟳ [ON]              │
+│                                                     │
+│  IP Allowlist (?)                                   │
+│  ┌──────────────────────────────────────────┐       │
+│  │ 192.168.1.100                            │       │
+│  │ 10.0.0.0/24                              │       │
+│  └──────────────────────────────────────────┘       │
+│                                                     │
+└─────────────────────────────────────────────────────┘
+```
+
+**More Settings Tab Content:**
 
 - **Burst (?)**
   - Type: Checkbox
@@ -717,80 +819,6 @@ Each service page has **2 major modes of operation**:
   - Format: Accepts space, newline, or comma as delimiters (e.g., "192.168.1.100, 10.0.0.0/24" or one per line)
   - Validation: Validates IPv4 format and CIDR notation
   - Pricing: Included with Pro/Enterprise tiers (no additional cost)
-
-**Note:** When gRPC and GraphQL are implemented in the future, they will use similar interactive form and pricing model as Seal.
-
----
-
-**Tab 2: Keys**
-
-```
-┌──────────────────────────────────────────────────────┐
-│  Keys & Packages                                     │
-│                                                      │
-│                                                      │
-│  Seal Keys & Packages (1 of 1) used                  │
-│  ┌────────────────────────────────────────┐          │
-│  │  seal_xyz789...  [Export] [Disable] [▼]│          │
-|  |  Object ID: 0xabcde... [Copy]          │          │
-│  │                                        │          │
-│  │  Packages (4 of 5) Used                │          │
-│  │    • package-1  [Edit] [Delete]        │          │
-│  │    • package-2  [Edit] [Delete]        │          │
-│  │    • package-3  [Edit] [Delete]        │          │
-│  │    • package-4  [Edit] [Delete]        │          │
-│  │    • package-5  [Edit] [Delete]        │          │
-│  │                                        │          │
-│  │    [ Add Package to this Seal Key ]    │          │
-│  └────────────────────────────────────────┘          │
-│                         [ Add New Seal Key ]         │
-│                                                      │
-│  API Keys (1 of 2) used                              │
-│  ┌────────────────────────────────────────┐          │
-│  │  key_abc123...  [Copy] [Revoke]        │          │
-│  └────────────────────────────────────────┘          │
-│                          [ Add New API Key ]         │
-└──────────────────────────────────────────────────────┘
-```
-
-**Hierarchy:** Service → Seal Keys → Packages (each seal key owns its packages)
-               Service → API Keys (independent of seal keys)
-
-**Keys Tab Behavior (After Service Enabled):**
-- **Seal Keys & Packages Section:**
-  - Each seal key has an expandable card ([▼] to collapse/expand)
-  - Seal key is shown truncated (first 6 + last 4 chars). Need to press [Export] to see full key.
-
-  - **Seal Key actions:**
-    - Export → Shows key in a modal for copying.
-    - Disable → Disable seal key (confirmation required)
-    - Enable (if disabled) → Re-enables key
-    - Delete (if disabled) → Remove key (confirmation required, dangerous not recoverable)
-    - Add New Seal Key → Give choice to import or generate new one.
-
-  - **Object ID** shows (truncated) once the seal key is registered or imported. It has a
-  copy to clipboard" button.
-
-  - **Packages (nested under each seal key):**
-    - Packages are children of their parent seal key
-    - Each package shows: address truncated + [Edit] [Delete] actions
-    - Edit → Change package address
-    - Delete → Remove package (confirmation needed)
-    - **"Add Package to this Seal Key":**
-      - Creates new package under this seal key.
-
-
-- **API Keys Section:**
-  - List of active API keys (truncated display)
-  - Copy button → Copies full key to clipboard
-  - Revoke button → Disables key (confirmation required)
-  - Enable button (if revoked) → Re-enables key
-  - Delete button → Remove key forever (confirmation required)
-  - **"Add New API Key":**
-    - Creates new key (+$1/month to add if all used).
-
-**Note:** Adding/deleting keys or packages may updates monthly fee and triggers billing events.
-          Keys are encrypted in DB for security, and have fingerprint used for internal coordination.
 
 ### Anti-Abuse & Rate Limiting (Key Operations)
 
@@ -814,11 +842,15 @@ Each service page has **2 major modes of operation**:
 - Prevents disputes: "You authorized this change at {timestamp}"
 - Pro-rated charges/credits prevent gaming the system (e.g., rapid add/remove cycles)
 
+All abuse throttling are to be implemented later.
+
+---
+
 ### Stats Pages (Seal / gRPC / GraphQL)
 
 **URL:** `services/seal/stats`
 
-**Tab 4: Stats**
+**Stats Page (Separate Route)**
 ```
 ┌──────────────────────────────────────────────────────┐
 │  Stats                                               │
@@ -850,7 +882,7 @@ Each service page has **2 major modes of operation**:
 └──────────────────────────────────────────────────────┘
 ```
 
-**Stats Tab Behavior:**
+**Stats Page Behavior:**
 - **Always show graph placeholders** (even when empty)
 - **Info banner:** "Stats updated hourly. Data appears after 24 hours."
 - **Purpose:** Show users what observability they'll get
@@ -860,7 +892,13 @@ Each service page has **2 major modes of operation**:
   - Response times (multi-line: p50, p95, p99)
   - Optional: Error rate, geographic distribution
 
-**Tab 2: Logs**
+---
+
+### Activity Log (Separate Route)
+
+**URL:** `services/seal/logs`
+
+**Logs Page (Separate Route)**
 
 ```
 ┌──────────────────────────────────────────────────────┐
@@ -889,7 +927,7 @@ Each service page has **2 major modes of operation**:
 └──────────────────────────────────────────────────────┘
 ```
 
-**Logs Tab Content:**
+**Logs Page Content:**
 - **Configuration changes:** When user edits settings
 - **Charges/Credits:** Billing events (monthly charges, pro-rated changes)
 - **Service events:** Enabled/disabled, errors

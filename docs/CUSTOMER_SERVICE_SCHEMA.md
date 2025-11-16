@@ -518,7 +518,7 @@ Schema uses **nullable `derivation_index`** to distinguish key types (no explici
 6. Register on-chain and store `object_id` (same as derived keys)
 
 **Seal Key States**
-- `is_user_enabled`: Indicates the user intent of having the key served by our servers. This is independent of the seal_key_state.
+- `is_user_enabled`: Indicates the user intent of having the key served by our key servers. This is independent of the seal_key_state.
 - `seal_key_state` is one of `not_provisioned` (start state), `registering`, `active`, `suspended`, `tobedeleted`.
 - The object_id have conditional uniqueness constraints while in active/suspended state.
 When transitioning to enabled state, the object_id must be set and can never be changed afterwards.
