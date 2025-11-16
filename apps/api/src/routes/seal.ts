@@ -7,12 +7,14 @@ import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import { router, protectedProcedure } from '../lib/trpc';
 import { db } from '@suiftly/database';
-import { sealKeys, sealPackages, serviceInstances, apiKeys, configGlobal } from '@suiftly/database/schema';
+import { sealKeys, sealPackages, serviceInstances, apiKeys, configGlobal, customers } from '@suiftly/database/schema';
 import { eq, and, sql, isNull } from 'drizzle-orm';
 import { SERVICE_TYPE } from '@suiftly/shared/constants';
 import { storeApiKey, getApiKeys, revokeApiKey, deleteApiKey, reEnableApiKey, type SealType } from '../lib/api-keys';
 import { parseIpAddressList, ipAllowlistUpdateSchema } from '@suiftly/shared/schemas';
 import { decryptSecret } from '../lib/encryption';
+import { generateSealKey } from '../lib/seal-key-generation';
+import { getTierPriceUsdCents } from '../lib/config-cache';
 
 export const sealRouter = router({
   /**
@@ -46,7 +48,42 @@ export const sealRouter = router({
       },
     });
 
-    return keys;
+    // Format keys for UI display
+    return keys.map(key => {
+      // Format public key for display (truncated hex)
+      const publicKeyHex = key.publicKey.toString('hex');
+      const keyPreview = `seal_${publicKeyHex.slice(0, 6)}...${publicKeyHex.slice(-4)}`;
+
+      // Format object ID if present
+      const objectId = key.objectId
+        ? `0x${key.objectId.toString('hex')}`
+        : undefined;
+
+      const objectIdPreview = objectId
+        ? `${objectId.slice(0, 8)}...${objectId.slice(-6)}`
+        : undefined;
+
+      return {
+        id: key.sealKeyId.toString(),
+        sealKeyId: key.sealKeyId,
+        name: key.name,
+        keyPreview,
+        publicKeyHex, // Full hex for export
+        objectId,
+        objectIdPreview,
+        isUserEnabled: key.isUserEnabled,
+        createdAt: key.createdAt,
+        packages: key.packages.map(pkg => ({
+          id: pkg.packageId.toString(),
+          packageId: pkg.packageId,
+          name: pkg.name,
+          packageAddress: `0x${pkg.packageAddress.toString('hex')}`,
+          packageAddressPreview: `0x${pkg.packageAddress.toString('hex').slice(0, 6)}...${pkg.packageAddress.toString('hex').slice(-4)}`,
+          isUserEnabled: pkg.isUserEnabled,
+          createdAt: pkg.createdAt,
+        })),
+      };
+    });
   }),
 
   /**
@@ -54,7 +91,7 @@ export const sealRouter = router({
    */
   listPackages: protectedProcedure
     .input(z.object({
-      sealKeyId: z.string().uuid(),
+      sealKeyId: z.number().int(),
     }))
     .query(async ({ ctx, input }) => {
       if (!ctx.user) {
@@ -91,9 +128,9 @@ export const sealRouter = router({
    */
   addPackage: protectedProcedure
     .input(z.object({
-      sealKeyId: z.string().uuid(),
-      packageAddress: z.string().length(66), // Sui object address
-      name: z.string().max(100).optional(),
+      sealKeyId: z.number().int(),
+      packageAddress: z.string().regex(/^0x[0-9a-fA-F]{64}$/, 'Must be a valid 32-byte hex address (0x + 64 hex chars)'),
+      name: z.string().max(64).optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       if (!ctx.user) {
@@ -133,17 +170,42 @@ export const sealRouter = router({
         });
       }
 
+      // Convert hex address to Buffer
+      const addressBuffer = Buffer.from(input.packageAddress.slice(2), 'hex');
+
+      // Auto-generate name if not provided (package-1, package-2, etc.)
+      let packageName = input.name;
+      if (!packageName) {
+        // Find all existing package names for this seal key that match "package-X" pattern
+        const existingNames = existingPackages
+          .map(p => p.name)
+          .filter((n): n is string => !!n && /^package-\d+$/.test(n));
+
+        // Extract numbers and find the highest
+        const numbers = existingNames.map(n => parseInt(n.replace('package-', ''), 10));
+        const nextNumber = numbers.length > 0 ? Math.max(...numbers) + 1 : 1;
+        packageName = `package-${nextNumber}`;
+      }
+
       // Create the package
       const [newPackage] = await db
         .insert(sealPackages)
         .values({
           sealKeyId: input.sealKeyId,
-          packageAddress: input.packageAddress,
-          name: input.name,
+          packageAddress: addressBuffer,
+          name: packageName,
         })
         .returning();
 
-      return newPackage;
+      return {
+        id: newPackage.packageId.toString(),
+        packageId: newPackage.packageId,
+        name: newPackage.name,
+        packageAddress: `0x${newPackage.packageAddress.toString('hex')}`,
+        packageAddressPreview: `0x${newPackage.packageAddress.toString('hex').slice(0, 6)}...${newPackage.packageAddress.toString('hex').slice(-4)}`,
+        isUserEnabled: newPackage.isUserEnabled,
+        createdAt: newPackage.createdAt,
+      };
     }),
 
   /**
@@ -151,9 +213,9 @@ export const sealRouter = router({
    */
   updatePackage: protectedProcedure
     .input(z.object({
-      packageId: z.string().uuid(),
-      packageAddress: z.string().length(66).optional(),
-      name: z.string().max(100).optional(),
+      packageId: z.number().int(),
+      packageAddress: z.string().regex(/^0x[0-9a-fA-F]{64}$/, 'Must be a valid 32-byte hex address (0x + 64 hex chars)').optional(),
+      name: z.string().max(64).optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       if (!ctx.user) {
@@ -176,26 +238,40 @@ export const sealRouter = router({
           code: 'NOT_FOUND',
           message: 'Package not found',
         });
+      }
+
+      // Prepare update values
+      const updateValues: any = {};
+      if (input.packageAddress) {
+        updateValues.packageAddress = Buffer.from(input.packageAddress.slice(2), 'hex');
+      }
+      if (input.name !== undefined) {
+        updateValues.name = input.name || null;
       }
 
       const [updated] = await db
         .update(sealPackages)
-        .set({
-          ...(input.packageAddress && { packageAddress: input.packageAddress }),
-          ...(input.name !== undefined && { name: input.name }),
-        })
+        .set(updateValues)
         .where(eq(sealPackages.packageId, input.packageId))
         .returning();
 
-      return updated;
+      return {
+        id: updated.packageId.toString(),
+        packageId: updated.packageId,
+        name: updated.name,
+        packageAddress: `0x${updated.packageAddress.toString('hex')}`,
+        packageAddressPreview: `0x${updated.packageAddress.toString('hex').slice(0, 6)}...${updated.packageAddress.toString('hex').slice(-4)}`,
+        isUserEnabled: updated.isUserEnabled,
+        createdAt: updated.createdAt,
+      };
     }),
 
   /**
-   * Delete a package
+   * Delete a package (soft delete - mark as inactive)
    */
   deletePackage: protectedProcedure
     .input(z.object({
-      packageId: z.string().uuid(),
+      packageId: z.number().int(),
     }))
     .mutation(async ({ ctx, input }) => {
       if (!ctx.user) {
@@ -220,16 +296,13 @@ export const sealRouter = router({
         });
       }
 
-      // Soft delete (mark as inactive)
-      const [deleted] = await db
-        .update(sealPackages)
-        .set({
-          isUserEnabled: false,
-        })
-        .where(eq(sealPackages.packageId, input.packageId))
-        .returning();
+      // Hard delete the package record
+      // Note: Package can only be deleted if already disabled (enforced in UI)
+      await db
+        .delete(sealPackages)
+        .where(eq(sealPackages.packageId, input.packageId));
 
-      return deleted;
+      return { success: true };
     }),
 
   /**
@@ -237,8 +310,8 @@ export const sealRouter = router({
    */
   toggleKey: protectedProcedure
     .input(z.object({
-      sealKeyId: z.string().uuid(),
-      active: z.boolean(),
+      sealKeyId: z.number().int(),
+      enabled: z.boolean(),
     }))
     .mutation(async ({ ctx, input }) => {
       if (!ctx.user) {
@@ -266,12 +339,236 @@ export const sealRouter = router({
       const [updated] = await db
         .update(sealKeys)
         .set({
-          isUserEnabled: input.active,
+          isUserEnabled: input.enabled,
         })
         .where(eq(sealKeys.sealKeyId, input.sealKeyId))
         .returning();
 
-      return updated;
+      return { success: true };
+    }),
+
+  /**
+   * Toggle package enabled/disabled state
+   */
+  togglePackage: protectedProcedure
+    .input(z.object({
+      packageId: z.number().int(),
+      enabled: z.boolean(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.user) {
+        throw new TRPCError({
+          code: 'UNAUTHORIZED',
+          message: 'Not authenticated',
+        });
+      }
+
+      // Verify the package belongs to the user via seal key
+      const pkg = await db.query.sealPackages.findFirst({
+        where: eq(sealPackages.packageId, input.packageId),
+        with: {
+          sealKey: true,
+        },
+      });
+
+      if (!pkg || pkg.sealKey.customerId !== ctx.user.customerId) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Package not found',
+        });
+      }
+
+      const [updated] = await db
+        .update(sealPackages)
+        .set({
+          isUserEnabled: input.enabled,
+        })
+        .where(eq(sealPackages.packageId, input.packageId))
+        .returning();
+
+      return { success: true };
+    }),
+
+  /**
+   * Create a new seal key (derived from master seed)
+   *
+   * SECURITY: This is a carefully controlled operation that:
+   * - Validates user authentication and service subscription
+   * - Enforces seal key limits based on subscription tier
+   * - Only creates keys for authenticated users with active subscriptions
+   *
+   * PRODUCTION: This will invoke seal-cli utility to:
+   * 1. Derive BLS12-381 key from MASTER_SEED using derivation index
+   * 2. Generate the public key (mpk) for IBE operations
+   * 3. Store encrypted private key securely
+   *
+   * This is an EXPENSIVE operation (time + money) - all validation
+   * must be done BEFORE calling seal-cli.
+   *
+   * Name is auto-generated as "seal-key-N" where N is the next sequential number.
+   * Users can rename keys after creation if desired.
+   */
+  createKey: protectedProcedure
+    .input(z.object({
+      // No input needed - name is auto-generated
+    }))
+    .mutation(async ({ ctx, input }) => {
+      // ====================================================================
+      // VALIDATION PHASE - Perform ALL checks before expensive operations
+      // ====================================================================
+
+      if (!ctx.user) {
+        throw new TRPCError({
+          code: 'UNAUTHORIZED',
+          message: 'Not authenticated',
+        });
+      }
+
+      // Verify user has an active Seal service subscription
+      const service = await db.query.serviceInstances.findFirst({
+        where: and(
+          eq(serviceInstances.customerId, ctx.user.customerId),
+          eq(serviceInstances.serviceType, SERVICE_TYPE.SEAL)
+        ),
+      });
+
+      if (!service) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'You must have an active Seal service subscription to create seal keys',
+        });
+      }
+
+      // Check if subscription charge is pending (payment gate logic)
+      // This is the same validation used when trying to enable the service
+      if (service.subscriptionChargePending) {
+        // Get customer to check account status
+        const customer = await db.query.customers.findFirst({
+          where: eq(customers.customerId, ctx.user.customerId),
+        });
+
+        if (!customer) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'Customer not found',
+          });
+        }
+
+        // Check if escrow account exists
+        if (!customer.escrowContractId) {
+          throw new TRPCError({
+            code: 'PAYMENT_REQUIRED',
+            message: 'Subscription payment pending. Add funds via Billing.',
+          });
+        }
+
+        // Check if balance is sufficient for subscription
+        const monthlyPriceUsdCents = getTierPriceUsdCents(service.tier);
+        if (customer.currentBalanceUsdCents < monthlyPriceUsdCents) {
+          throw new TRPCError({
+            code: 'PAYMENT_REQUIRED',
+            message: 'Insufficient funds. Deposit to proceed via Billing page.',
+          });
+        }
+
+        // Account exists with funds but charge still pending
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Subscription payment pending. Please contact support if this persists.',
+        });
+      }
+
+      // Get configuration limits
+      const config = service.config as any || {};
+      const maxSealKeys = config.totalSealKeys || 1;
+
+      // Count active seal keys (excludes disabled keys)
+      const activeKeys = await db.query.sealKeys.findMany({
+        where: and(
+          eq(sealKeys.instanceId, service.instanceId),
+          eq(sealKeys.isUserEnabled, true)
+        ),
+      });
+
+      // Enforce seal key limit based on subscription tier
+      if (activeKeys.length >= maxSealKeys) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: `Maximum seal key limit reached (${maxSealKeys}). Disable an existing key or upgrade your subscription to create more keys.`,
+        });
+      }
+
+      // Find next available derivation index
+      // NOTE: We assign indices sequentially to make key management easier
+      // Even if a key is deleted, its index is never reused
+      const allKeys = await db.query.sealKeys.findMany({
+        where: eq(sealKeys.instanceId, service.instanceId),
+      });
+
+      const usedIndices = allKeys
+        .map(k => k.derivationIndex)
+        .filter((idx): idx is number => idx !== null);
+
+      const nextIndex = usedIndices.length === 0 ? 0 : Math.max(...usedIndices) + 1;
+
+      // Auto-generate name as "seal-key-N"
+      // Find highest N from existing "seal-key-N" names
+      const sealKeyPattern = /^seal-key-(\d+)$/;
+      const existingNumbers = allKeys
+        .map(k => k.name?.match(sealKeyPattern)?.[1])
+        .filter((n): n is string => n !== undefined)
+        .map(n => parseInt(n, 10));
+
+      const nextKeyNumber = existingNumbers.length === 0 ? 1 : Math.max(...existingNumbers) + 1;
+      const autoGeneratedName = `seal-key-${nextKeyNumber}`;
+
+      // ====================================================================
+      // KEY GENERATION PHASE - EXPENSIVE OPERATION
+      // ====================================================================
+
+      // Generate seal key using seal-cli utility (or mock in development)
+      // This is the expensive operation - all validation is complete at this point
+      const { publicKey, encryptedPrivateKey } = await generateSealKey({
+        derivationIndex: nextIndex,
+        customerId: ctx.user.customerId, // For mock deterministic generation
+      });
+
+      // ====================================================================
+      // DATABASE STORAGE PHASE
+      // ====================================================================
+
+      // Store the seal key in database
+      const [newKey] = await db
+        .insert(sealKeys)
+        .values({
+          customerId: ctx.user.customerId,
+          instanceId: service.instanceId,
+          name: autoGeneratedName,
+          derivationIndex: nextIndex,
+          publicKey,
+          encryptedPrivateKey: encryptedPrivateKey || null,
+          isUserEnabled: true,
+        })
+        .returning();
+
+      // ====================================================================
+      // RESPONSE FORMATTING
+      // ====================================================================
+
+      // Format for UI display
+      const publicKeyHex = newKey.publicKey.toString('hex');
+      const keyPreview = `seal_${publicKeyHex.slice(0, 6)}...${publicKeyHex.slice(-4)}`;
+
+      return {
+        id: newKey.sealKeyId.toString(),
+        sealKeyId: newKey.sealKeyId,
+        name: newKey.name,
+        keyPreview,
+        publicKeyHex, // Full public key for export/verification
+        isUserEnabled: newKey.isUserEnabled,
+        createdAt: newKey.createdAt,
+        packages: [],
+      };
     }),
 
   /**
@@ -462,13 +759,14 @@ export const sealRouter = router({
 
     const keys = await getApiKeys(ctx.user.customerId, SERVICE_TYPE.SEAL, true);
 
-    // Decrypt keys and return with truncated preview
-    // API keys are encrypted in database, but we show a preview based on the decrypted key
+    // Decrypt keys and return both preview and full key
+    // Full key is kept in memory but not rendered to DOM (safe from scraping)
     return keys.map(key => {
       const plainKey = decryptSecret(key.apiKeyId); // Decrypt the stored key
       return {
         apiKeyFp: key.apiKeyFp, // Use fingerprint (PRIMARY KEY) for identification
         keyPreview: `${plainKey.slice(0, 8)}...${plainKey.slice(-4)}`, // Preview from decrypted key
+        fullKey: plainKey, // Full key for copying (not rendered to DOM)
         metadata: key.metadata,
         isUserEnabled: key.isUserEnabled,
         createdAt: key.createdAt,

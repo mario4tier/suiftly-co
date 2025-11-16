@@ -20,6 +20,16 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { type ServiceState, type ServiceTier } from "@suiftly/shared/constants";
 import {
   freg_count,
@@ -34,6 +44,7 @@ import {
 } from "@/lib/config";
 import { SealKeysSection } from "./SealKeysSection";
 import { ApiKeysSection } from "./ApiKeysSection";
+import { AddPackageModal } from "./AddPackageModal";
 import { trpc } from "@/lib/trpc";
 import { useSearch, useNavigate } from "@tanstack/react-router";
 import { LinkButton } from "@/components/ui/link-button";
@@ -69,6 +80,16 @@ export function SealInteractiveForm({
   const [editingIpText, setEditingIpText] = useState("");      // User input
   const [validationErrors, setValidationErrors] = useState<Array<{ ip: string; error: string }>>([]);
 
+  // Package modal state (add only - editing is done inline)
+  const [packageModalOpen, setPackageModalOpen] = useState(false);
+  const [currentSealKeyId, setCurrentSealKeyId] = useState<string | null>(null);
+
+  // Delete package confirmation state
+  const [deletePackageDialog, setDeletePackageDialog] = useState<{ keyId: string; packageId: string; packageName?: string } | null>(null);
+
+  // Disable package confirmation state
+  const [disablePackageDialog, setDisablePackageDialog] = useState<{ keyId: string; packageId: string } | null>(null);
+
   const utils = trpc.useUtils();
   const navigate = useNavigate();
 
@@ -90,6 +111,9 @@ export function SealInteractiveForm({
 
   // Fetch API keys
   const { data: apiKeys, isLoading: apiKeysLoading } = trpc.seal.listApiKeys.useQuery();
+
+  // Fetch seal keys with packages
+  const { data: sealKeys, isLoading: sealKeysLoading } = trpc.seal.listKeys.useQuery();
 
   // API Key mutations
   const createApiKeyMutation = trpc.seal.createApiKey.useMutation({
@@ -133,6 +157,101 @@ export function SealInteractiveForm({
     },
     onError: (error) => {
       console.error("Failed to delete API key:", error.message);
+    },
+  });
+
+  // Seal Key mutations
+  const toggleSealKeyMutation = trpc.seal.toggleKey.useMutation({
+    onSuccess: () => {
+      utils.seal.listKeys.invalidate();
+      utils.seal.getUsageStats.invalidate();
+      toast.success("Seal key updated");
+    },
+    onError: (error) => {
+      toast.error(error.message || "Failed to update seal key");
+    },
+  });
+
+  // Package mutations
+  const addPackageMutation = trpc.seal.addPackage.useMutation({
+    onSuccess: () => {
+      utils.seal.listKeys.invalidate();
+      utils.seal.getUsageStats.invalidate();
+      toast.success("Package added successfully");
+    },
+    onError: (error) => {
+      toast.error(error.message || "Failed to add package");
+    },
+  });
+
+  const updatePackageMutation = trpc.seal.updatePackage.useMutation({
+    onMutate: async (variables) => {
+      // Cancel any outgoing refetches to avoid overwriting our optimistic update
+      await utils.seal.listKeys.cancel();
+
+      // Snapshot the previous value
+      const previousData = utils.seal.listKeys.getData();
+
+      // Optimistically update the cache
+      utils.seal.listKeys.setData(undefined, (old) => {
+        if (!old) return old;
+
+        return old.map(key => ({
+          ...key,
+          packages: key.packages.map(pkg =>
+            pkg.id === variables.packageId
+              ? { ...pkg, name: variables.name }
+              : pkg
+          ),
+        }));
+      });
+
+      // Return context with the snapshot
+      return { previousData };
+    },
+    onSuccess: () => {
+      // Revalidate to ensure sync with server
+      utils.seal.listKeys.invalidate();
+      // No toast for name updates - it's a quick inline edit
+    },
+    onError: (error, _variables, context) => {
+      // Rollback on error
+      if (context?.previousData) {
+        utils.seal.listKeys.setData(undefined, context.previousData);
+      }
+      toast.error(error.message || "Failed to update package");
+    },
+  });
+
+  const deletePackageMutation = trpc.seal.deletePackage.useMutation({
+    onSuccess: () => {
+      utils.seal.listKeys.invalidate();
+      utils.seal.getUsageStats.invalidate();
+      toast.success("Package deleted");
+    },
+    onError: (error) => {
+      toast.error(error.message || "Failed to delete package");
+    },
+  });
+
+  const togglePackageMutation = trpc.seal.togglePackage.useMutation({
+    onSuccess: () => {
+      utils.seal.listKeys.invalidate();
+      toast.success("Package updated");
+    },
+    onError: (error) => {
+      toast.error(error.message || "Failed to update package");
+    },
+  });
+
+  const createSealKeyMutation = trpc.seal.createKey.useMutation({
+    onSuccess: () => {
+      utils.seal.listKeys.invalidate();
+      utils.seal.getUsageStats.invalidate();
+      toast.success("Seal key created successfully");
+    },
+    onError: (error) => {
+      toast.error(error.message || "Failed to create seal key");
     },
   });
 
@@ -333,6 +452,108 @@ export function SealInteractiveForm({
     await deleteApiKeyMutation.mutateAsync({ apiKeyFp: parseInt(keyId, 10) });
   };
 
+  // Seal Key handlers
+  const handleToggleSealKey = async (keyId: string, enabled: boolean) => {
+    await toggleSealKeyMutation.mutateAsync({
+      sealKeyId: parseInt(keyId, 10),
+      enabled,
+    });
+  };
+
+  const handleExportSealKey = (keyId: string) => {
+    // TODO: Implement export modal showing full key and instructions
+    toast.info("Export functionality will be available soon");
+  };
+
+  const handleDeleteSealKey = async (keyId: string) => {
+    // TODO: Add confirmation dialog
+    toast.info("Delete seal key functionality will be available soon");
+  };
+
+  const handleAddSealKey = async () => {
+    // Name is auto-generated as "seal-key-N" by the backend
+    // Users can edit the name later if desired
+    await createSealKeyMutation.mutateAsync({});
+  };
+
+  // Package handlers
+  const handleAddPackage = async (keyId: string) => {
+    setCurrentSealKeyId(keyId);
+    setPackageModalOpen(true);
+  };
+
+  const handleUpdatePackageName = async (keyId: string, packageId: string, newName: string) => {
+    // Inline name update - just update the name field
+    await updatePackageMutation.mutateAsync({
+      packageId: parseInt(packageId, 10),
+      name: newName,
+    });
+  };
+
+  const handlePackageModalSubmit = async (data: { packageAddress: string; name: string }) => {
+    if (currentSealKeyId) {
+      await addPackageMutation.mutateAsync({
+        sealKeyId: parseInt(currentSealKeyId, 10),
+        packageAddress: data.packageAddress,
+        name: data.name || undefined,
+      });
+    }
+    setPackageModalOpen(false);
+  };
+
+  const handleDeletePackage = async (keyId: string, packageId: string, packageName?: string) => {
+    setDeletePackageDialog({ keyId, packageId, packageName });
+  };
+
+  const handleDeletePackageConfirm = async () => {
+    if (!deletePackageDialog) return;
+
+    try {
+      await deletePackageMutation.mutateAsync({
+        packageId: parseInt(deletePackageDialog.packageId, 10),
+      });
+      setDeletePackageDialog(null);
+    } catch (error) {
+      // Error toast is handled by mutation onError
+      setDeletePackageDialog(null);
+    }
+  };
+
+  const handleEnablePackage = async (keyId: string, packageId: string) => {
+    try {
+      await togglePackageMutation.mutateAsync({
+        packageId: parseInt(packageId, 10),
+        enabled: true,
+      });
+    } catch (error) {
+      // Error toast is handled by mutation onError
+    }
+  };
+
+  const handleDisablePackage = async (keyId: string, packageId: string) => {
+    setDisablePackageDialog({ keyId, packageId });
+  };
+
+  const handleDisablePackageConfirm = async () => {
+    if (!disablePackageDialog) return;
+
+    try {
+      await togglePackageMutation.mutateAsync({
+        packageId: parseInt(disablePackageDialog.packageId, 10),
+        enabled: false,
+      });
+      setDisablePackageDialog(null);
+    } catch (error) {
+      // Error toast is handled by mutation onError
+      setDisablePackageDialog(null);
+    }
+  };
+
+  const handleCopyObjectId = (objectId: string) => {
+    navigator.clipboard.writeText(objectId);
+    toast.success("Object ID copied to clipboard");
+  };
+
   // Helper function to format relative time
   const formatRelativeTime = (date: Date): string => {
     const now = new Date();
@@ -351,6 +572,7 @@ export function SealInteractiveForm({
   const formattedApiKeys = apiKeys?.map(key => ({
     id: key.apiKeyFp.toString(), // Use fingerprint (PRIMARY KEY) for identification
     key: key.keyPreview,
+    fullKey: key.fullKey, // Full key for copying (not rendered to DOM)
     isRevoked: !key.isUserEnabled,
     createdAt: formatRelativeTime(new Date(key.createdAt)),
   })) || [];
@@ -566,32 +788,39 @@ export function SealInteractiveForm({
 
         {/* Seal Keys Tab */}
         <TabsContent value="seal-keys" className="space-y-6">
-          <SealKeysSection
-            sealKeys={[
-              {
-                id: "1",
-                key: "seal_xyz789...",
-                objectId: "0xabcde...",
-                isDisabled: false,
-                packages: [
-                  { id: "1", address: "0x1234...abcd", name: "package-1" },
-                  { id: "2", address: "0x5678...efgh", name: "package-2" },
-                  { id: "3", address: "0x9abc...ijkl", name: "package-3" },
-                ],
-              },
-            ]}
-            maxSealKeys={fskey_incl}
-            maxPackagesPerKey={fskey_pkg_incl}
-            isReadOnly={isReadOnly}
-            onExportKey={(keyId) => console.log("Export key:", keyId)}
-            onToggleKey={(keyId, disable) => console.log("Toggle key:", keyId, disable)}
-            onDeleteKey={(keyId) => console.log("Delete key:", keyId)}
-            onAddKey={() => console.log("Add key")}
-            onAddPackage={(keyId) => console.log("Add package to key:", keyId)}
-            onEditPackage={(keyId, pkgId) => console.log("Edit package:", keyId, pkgId)}
-            onDeletePackage={(keyId, pkgId) => console.log("Delete package:", keyId, pkgId)}
-            onCopyObjectId={(objId) => console.log("Copied object ID:", objId)}
-          />
+          {sealKeysLoading ? (
+            <div className="text-center py-4 text-gray-500">Loading seal keys...</div>
+          ) : (
+            <SealKeysSection
+              sealKeys={(sealKeys || []).map(key => ({
+                id: key.id,
+                key: key.keyPreview,
+                name: key.name,
+                objectId: key.objectIdPreview,
+                isDisabled: !key.isUserEnabled,
+                packages: key.packages.map(pkg => ({
+                  id: pkg.id,
+                  address: pkg.packageAddressPreview,
+                  fullAddress: pkg.packageAddress,
+                  name: pkg.name || undefined,
+                  isDisabled: !pkg.isUserEnabled,
+                })),
+              }))}
+              maxSealKeys={usageStats?.sealKeys.total ?? fskey_incl}
+              maxPackagesPerKey={usageStats?.packagesPerKey.max ?? fskey_pkg_incl}
+              isReadOnly={isReadOnly}
+              onExportKey={handleExportSealKey}
+              onToggleKey={handleToggleSealKey}
+              onDeleteKey={handleDeleteSealKey}
+              onAddKey={handleAddSealKey}
+              onAddPackage={handleAddPackage}
+              onUpdatePackageName={handleUpdatePackageName}
+              onEnablePackage={handleEnablePackage}
+              onDisablePackage={handleDisablePackage}
+              onDeletePackage={handleDeletePackage}
+              onCopyObjectId={handleCopyObjectId}
+            />
+          )}
         </TabsContent>
 
         {/* More Settings Tab */}
@@ -742,6 +971,61 @@ export function SealInteractiveForm({
           </div>
         </TabsContent>
       </Tabs>
+
+      {/* Add Package Modal */}
+      <AddPackageModal
+        isOpen={packageModalOpen}
+        onClose={() => setPackageModalOpen(false)}
+        onSubmit={handlePackageModalSubmit}
+        isLoading={addPackageMutation.isPending}
+        mode="add"
+      />
+
+      {/* Disable Package Confirmation Dialog */}
+      <AlertDialog open={!!disablePackageDialog} onOpenChange={(open) => !open && setDisablePackageDialog(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Disable Package?</AlertDialogTitle>
+            <AlertDialogDescription>
+              <div className="mt-2 text-gray-900 dark:text-gray-100">
+                The package will stop working immediately but can be re-enabled later.
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDisablePackageConfirm}>
+              Disable Package
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Delete Package Confirmation Dialog */}
+      <AlertDialog open={!!deletePackageDialog} onOpenChange={(open) => !open && setDeletePackageDialog(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Package?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete this package?
+              {deletePackageDialog?.packageName && (
+                <div className="mt-2 rounded bg-gray-100 dark:bg-gray-900 px-3 py-2 font-mono text-sm text-gray-900 dark:text-gray-100">
+                  {deletePackageDialog.packageName}
+                </div>
+              )}
+              <div className="mt-2 text-gray-900 dark:text-gray-100">
+                This action cannot be undone.
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDeletePackageConfirm} className="bg-red-600 hover:bg-red-700 dark:bg-red-600 dark:hover:bg-red-700">
+              Delete Package
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

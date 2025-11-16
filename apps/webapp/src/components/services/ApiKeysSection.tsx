@@ -3,13 +3,26 @@
  * List of API keys with Copy, Revoke/Enable, Delete actions
  */
 
-import { Copy, Ban, Trash2 } from "lucide-react";
+import { useState } from "react";
+import { Ban, Trash2 } from "lucide-react";
 import { InlineButton } from "@/components/ui/inline-button";
 import { AddButton } from "@/components/ui/add-button";
+import { CopyableValue } from "@/components/ui/copyable-value";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 interface ApiKey {
   id: string;
   key: string; // Truncated display
+  fullKey: string; // Full key for copying (not rendered to DOM)
   isRevoked: boolean;
   createdAt?: string;
 }
@@ -18,7 +31,6 @@ interface ApiKeysSectionProps {
   apiKeys: ApiKey[];
   maxApiKeys: number;
   isReadOnly?: boolean;
-  onCopyKey?: (keyId: string) => void;
   onRevokeKey?: (keyId: string) => void;
   onReEnableKey?: (keyId: string) => void;
   onDeleteKey?: (keyId: string) => void;
@@ -29,34 +41,25 @@ export function ApiKeysSection({
   apiKeys,
   maxApiKeys,
   isReadOnly = false,
-  onCopyKey,
   onRevokeKey,
   onReEnableKey,
   onDeleteKey,
   onAddKey,
 }: ApiKeysSectionProps) {
-  const handleCopyKey = (keyId: string, fullKey: string) => {
-    // In real implementation, fetch full key from secure endpoint
-    navigator.clipboard.writeText(fullKey);
-    onCopyKey?.(keyId);
-    console.log("Copied API key:", keyId);
-  };
+  const [disableDialog, setDisableDialog] = useState<{ keyId: string; keyDisplay: string } | null>(null);
+  const [deleteDialog, setDeleteDialog] = useState<{ keyId: string; keyDisplay: string } | null>(null);
 
-  const handleRevokeKey = (keyId: string, keyDisplay: string) => {
-    const confirmed = window.confirm(
-      `Revoke this API key?\n\n${keyDisplay}\n\nThe key will stop working immediately but can be re-enabled later.`
-    );
-    if (confirmed) {
-      onRevokeKey?.(keyId);
+  const handleDisableConfirm = () => {
+    if (disableDialog) {
+      onRevokeKey?.(disableDialog.keyId);
+      setDisableDialog(null);
     }
   };
 
-  const handleDeleteKey = (keyId: string, keyDisplay: string) => {
-    const confirmed = window.confirm(
-      `Delete this API key?\n\n${keyDisplay}\n\nThis action is IRREVERSIBLE.`
-    );
-    if (confirmed) {
-      onDeleteKey?.(keyId);
+  const handleDeleteConfirm = () => {
+    if (deleteDialog) {
+      onDeleteKey?.(deleteDialog.keyId);
+      setDeleteDialog(null);
     }
   };
 
@@ -89,11 +92,9 @@ export function ApiKeysSection({
           </thead>
           <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
             {apiKeys.map((apiKey) => (
-              <tr key={apiKey.id}>
+              <tr key={apiKey.id} data-testid={`apik-${apiKey.id}`}>
                 <td className="px-3 py-3">
-                  <code className="text-sm font-mono text-gray-900 dark:text-gray-100">
-                    {apiKey.key}
-                  </code>
+                  <CopyableValue value={apiKey.key} copyValue={apiKey.fullKey} />
                 </td>
                 <td className="px-3 py-3 text-sm text-gray-500 dark:text-gray-400">
                   {apiKey.createdAt}
@@ -101,7 +102,7 @@ export function ApiKeysSection({
                 <td className="px-3 py-3">
                   {apiKey.isRevoked ? (
                     <span className="inline-flex items-center rounded-full px-2 py-1 text-xs font-medium bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-400">
-                      Revoked
+                      Disabled
                     </span>
                   ) : (
                     <span className="inline-flex items-center rounded-full px-2 py-1 text-xs font-medium bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400">
@@ -112,22 +113,13 @@ export function ApiKeysSection({
                 <td className="px-3 py-3">
                   <div className="flex items-center justify-end gap-1.5">
                     {!apiKey.isRevoked && (
-                      <>
-                        <InlineButton
-                          onClick={() => handleCopyKey(apiKey.id, apiKey.key)}
-                          disabled={isReadOnly}
-                        >
-                          <Copy className="h-3 w-3" />
-                          Copy
-                        </InlineButton>
-                        <InlineButton
-                          onClick={() => handleRevokeKey(apiKey.id, apiKey.key)}
-                          disabled={isReadOnly}
-                        >
-                          <Ban className="h-3 w-3" />
-                          Revoke
-                        </InlineButton>
-                      </>
+                      <InlineButton
+                        onClick={() => setDisableDialog({ keyId: apiKey.id, keyDisplay: apiKey.key })}
+                        disabled={isReadOnly}
+                      >
+                        <Ban className="h-3 w-3" />
+                        Disable
+                      </InlineButton>
                     )}
                     {apiKey.isRevoked && (
                       <>
@@ -135,11 +127,11 @@ export function ApiKeysSection({
                           onClick={() => onReEnableKey?.(apiKey.id)}
                           disabled={isReadOnly}
                         >
-                          Re-enable
+                          Enable
                         </InlineButton>
                         <InlineButton
                           variant="danger"
-                          onClick={() => handleDeleteKey(apiKey.id, apiKey.key)}
+                          onClick={() => setDeleteDialog({ keyId: apiKey.id, keyDisplay: apiKey.key })}
                           disabled={isReadOnly}
                         >
                           <Trash2 className="h-3 w-3" />
@@ -164,6 +156,54 @@ export function ApiKeysSection({
           Add New API Key
         </AddButton>
       )}
+
+      {/* Disable Key Confirmation Dialog */}
+      <AlertDialog open={!!disableDialog} onOpenChange={(open) => !open && setDisableDialog(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Disable API Key?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to disable this API key?
+              <div className="mt-2 rounded bg-gray-100 dark:bg-gray-900 px-3 py-2 font-mono text-sm text-gray-900 dark:text-gray-100">
+                {disableDialog?.keyDisplay}
+              </div>
+              <div className="mt-2 text-gray-900 dark:text-gray-100">
+                The key will stop working immediately but can be re-enabled later.
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDisableConfirm}>
+              Disable Key
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Delete Key Confirmation Dialog */}
+      <AlertDialog open={!!deleteDialog} onOpenChange={(open) => !open && setDeleteDialog(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete API Key?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to permanently delete this API key?
+              <div className="mt-2 rounded bg-gray-100 dark:bg-gray-900 px-3 py-2 font-mono text-sm text-gray-900 dark:text-gray-100">
+                {deleteDialog?.keyDisplay}
+              </div>
+              <div className="mt-2 font-semibold text-red-600 dark:text-red-400">
+                This action is IRREVERSIBLE.
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDeleteConfirm} className="bg-red-600 hover:bg-red-700 dark:bg-red-600 dark:hover:bg-red-700">
+              Delete Key
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
