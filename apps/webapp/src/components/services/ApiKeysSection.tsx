@@ -164,8 +164,10 @@ export function ApiKeysSection({
             <AlertDialogTitle>Disable API Key?</AlertDialogTitle>
             <AlertDialogDescription>
               Are you sure you want to disable this API key?
-              <div className="mt-2 rounded bg-gray-100 dark:bg-gray-900 px-3 py-2 font-mono text-sm text-gray-900 dark:text-gray-100">
-                {disableDialog?.keyDisplay}
+              <div className="mt-2 rounded bg-gray-100 dark:bg-gray-900 px-3 py-2">
+                <div className="font-mono text-sm text-gray-900 dark:text-gray-100">
+                  {disableDialog?.keyDisplay}
+                </div>
               </div>
               <div className="mt-2 text-gray-900 dark:text-gray-100">
                 The key will stop working immediately but can be re-enabled later.
@@ -188,11 +190,13 @@ export function ApiKeysSection({
             <AlertDialogTitle>Delete API Key?</AlertDialogTitle>
             <AlertDialogDescription>
               Are you sure you want to permanently delete this API key?
-              <div className="mt-2 rounded bg-gray-100 dark:bg-gray-900 px-3 py-2 font-mono text-sm text-gray-900 dark:text-gray-100">
-                {deleteDialog?.keyDisplay}
+              <div className="mt-2 rounded bg-gray-100 dark:bg-gray-900 px-3 py-2">
+                <div className="font-mono text-sm text-gray-900 dark:text-gray-100">
+                  {deleteDialog?.keyDisplay}
+                </div>
               </div>
               <div className="mt-2 font-semibold text-red-600 dark:text-red-400">
-                This action is IRREVERSIBLE.
+                This action cannot be undone.
               </div>
             </AlertDialogDescription>
           </AlertDialogHeader>

@@ -39,8 +39,8 @@ interface SealKeysSectionProps {
   onAddPackage?: (keyId: string) => void;
   onUpdatePackageName?: (keyId: string, packageId: string, newName: string) => void;
   onEnablePackage?: (keyId: string, packageId: string) => void;
-  onDisablePackage?: (keyId: string, packageId: string) => void;
-  onDeletePackage?: (keyId: string, packageId: string) => void;
+  onDisablePackage?: (keyId: string, packageId: string, packageAddress: string, packageName?: string) => void;
+  onDeletePackage?: (keyId: string, packageId: string, packageAddress: string, packageName?: string) => void;
   onCopyObjectId?: (objectId: string) => void;
 }
 
@@ -263,7 +263,7 @@ export function SealKeysSection({
                             <div className="flex items-center justify-end gap-1.5">
                               {!pkg.isDisabled && (
                                 <InlineButton
-                                  onClick={() => onDisablePackage?.(sealKey.id, pkg.id)}
+                                  onClick={() => onDisablePackage?.(sealKey.id, pkg.id, pkg.address, pkg.name)}
                                   disabled={isReadOnly}
                                 >
                                   <Ban className="h-3 w-3" />
@@ -280,7 +280,7 @@ export function SealKeysSection({
                                   </InlineButton>
                                   <InlineButton
                                     variant="danger"
-                                    onClick={() => onDeletePackage?.(sealKey.id, pkg.id)}
+                                    onClick={() => onDeletePackage?.(sealKey.id, pkg.id, pkg.address, pkg.name)}
                                     disabled={isReadOnly}
                                   >
                                     <Trash2 className="h-3 w-3" />

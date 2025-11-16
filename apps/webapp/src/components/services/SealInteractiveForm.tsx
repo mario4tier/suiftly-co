@@ -85,10 +85,20 @@ export function SealInteractiveForm({
   const [currentSealKeyId, setCurrentSealKeyId] = useState<string | null>(null);
 
   // Delete package confirmation state
-  const [deletePackageDialog, setDeletePackageDialog] = useState<{ keyId: string; packageId: string; packageName?: string } | null>(null);
+  const [deletePackageDialog, setDeletePackageDialog] = useState<{
+    keyId: string;
+    packageId: string;
+    packageAddress: string;
+    packageName?: string;
+  } | null>(null);
 
   // Disable package confirmation state
-  const [disablePackageDialog, setDisablePackageDialog] = useState<{ keyId: string; packageId: string } | null>(null);
+  const [disablePackageDialog, setDisablePackageDialog] = useState<{
+    keyId: string;
+    packageId: string;
+    packageAddress: string;
+    packageName?: string;
+  } | null>(null);
 
   const utils = trpc.useUtils();
   const navigate = useNavigate();
@@ -501,8 +511,8 @@ export function SealInteractiveForm({
     setPackageModalOpen(false);
   };
 
-  const handleDeletePackage = async (keyId: string, packageId: string, packageName?: string) => {
-    setDeletePackageDialog({ keyId, packageId, packageName });
+  const handleDeletePackage = async (keyId: string, packageId: string, packageAddress: string, packageName?: string) => {
+    setDeletePackageDialog({ keyId, packageId, packageAddress, packageName });
   };
 
   const handleDeletePackageConfirm = async () => {
@@ -530,8 +540,8 @@ export function SealInteractiveForm({
     }
   };
 
-  const handleDisablePackage = async (keyId: string, packageId: string) => {
-    setDisablePackageDialog({ keyId, packageId });
+  const handleDisablePackage = async (keyId: string, packageId: string, packageAddress: string, packageName?: string) => {
+    setDisablePackageDialog({ keyId, packageId, packageAddress, packageName });
   };
 
   const handleDisablePackageConfirm = async () => {
@@ -987,6 +997,17 @@ export function SealInteractiveForm({
           <AlertDialogHeader>
             <AlertDialogTitle>Disable Package?</AlertDialogTitle>
             <AlertDialogDescription>
+              Are you sure you want to disable this package?
+              <div className="mt-2 rounded bg-gray-100 dark:bg-gray-900 px-3 py-2">
+                {disablePackageDialog?.packageName && (
+                  <div className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-1">
+                    {disablePackageDialog.packageName}
+                  </div>
+                )}
+                <div className="font-mono text-sm text-gray-900 dark:text-gray-100">
+                  {disablePackageDialog?.packageAddress}
+                </div>
+              </div>
               <div className="mt-2 text-gray-900 dark:text-gray-100">
                 The package will stop working immediately but can be re-enabled later.
               </div>
@@ -1007,13 +1028,18 @@ export function SealInteractiveForm({
           <AlertDialogHeader>
             <AlertDialogTitle>Delete Package?</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete this package?
-              {deletePackageDialog?.packageName && (
-                <div className="mt-2 rounded bg-gray-100 dark:bg-gray-900 px-3 py-2 font-mono text-sm text-gray-900 dark:text-gray-100">
-                  {deletePackageDialog.packageName}
+              Are you sure you want to permanently delete this package?
+              <div className="mt-2 rounded bg-gray-100 dark:bg-gray-900 px-3 py-2">
+                {deletePackageDialog?.packageName && (
+                  <div className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-1">
+                    {deletePackageDialog.packageName}
+                  </div>
+                )}
+                <div className="font-mono text-sm text-gray-900 dark:text-gray-100">
+                  {deletePackageDialog?.packageAddress}
                 </div>
-              )}
-              <div className="mt-2 text-gray-900 dark:text-gray-100">
+              </div>
+              <div className="mt-2 font-semibold text-red-600 dark:text-red-400">
                 This action cannot be undone.
               </div>
             </AlertDialogDescription>
