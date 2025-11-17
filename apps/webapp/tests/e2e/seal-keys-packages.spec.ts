@@ -120,8 +120,8 @@ test.describe('Seal Keys & Packages Management', () => {
     // Wait for the key to be created and displayed
     await expect(page.locator('text=/Seal key created successfully/i')).toBeVisible({ timeout: 5000 });
 
-    // Should see the seal key
-    await expect(page.locator('code:has-text("seal_")')).toBeVisible();
+    // Should see the seal key (displayed as 0x... instead of seal_)
+    await expect(page.locator('code').filter({ hasText: /^0x[0-9a-f]{6}\.\.\.[0-9a-f]{4}$/i })).toBeVisible();
 
     // Add a package using the modal form
     await addPackageViaUI(page, '0x' + '1'.repeat(64), 'Test Package');
@@ -476,6 +476,31 @@ test.describe('Seal Keys & Packages Management', () => {
     await expect(page.locator('button:has-text("Add Package to this Seal Key")')).not.toBeVisible();
 
     console.log('✅ Package count limit enforced correctly');
+  });
+
+  test('package address displays without backslash-x escape', async ({ page }) => {
+    // Setup: Create a seal key via UI
+    await createSealKeyViaUI(page);
+
+    // Add a package with an address that starts with hex bytes that could trigger escape sequences
+    // Test addresses: c6f0 (which might display as \xc6 if improperly escaped)
+    const problematicAddress = '0xc6f0' + '1234'.repeat(15); // 0xc6f0123412341234...
+    await addPackageViaUI(page, problematicAddress, 'Problematic Address');
+
+    // Find the package address cell
+    const packageAddressCell = page.locator('td').filter({ hasText: /0x.*c6f0/ }).first();
+    await expect(packageAddressCell).toBeVisible();
+
+    // Get the actual text content
+    const addressText = await packageAddressCell.locator('code').textContent();
+    console.log('Package address displayed as:', addressText);
+
+    // The address should NOT contain a backslash character
+    // If it shows "0x\xc6f0..." then there's a bug
+    expect(addressText).not.toContain('\\');
+    expect(addressText).toMatch(/^0xc6f0/); // Should start with 0xc6f0 (no backslash before x)
+
+    console.log('✅ Package address displays correctly without \\x escape');
   });
 
   test.afterEach(async ({ page }) => {

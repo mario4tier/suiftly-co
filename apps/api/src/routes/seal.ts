@@ -52,7 +52,7 @@ export const sealRouter = router({
     return keys.map(key => {
       // Format public key for display (truncated hex)
       const publicKeyHex = key.publicKey.toString('hex');
-      const keyPreview = `seal_${publicKeyHex.slice(0, 6)}...${publicKeyHex.slice(-4)}`;
+      const keyPreview = `0x${publicKeyHex.slice(0, 6)}...${publicKeyHex.slice(-4)}`;
 
       // Format object ID if present
       const objectId = key.objectId
@@ -557,7 +557,7 @@ export const sealRouter = router({
 
       // Format for UI display
       const publicKeyHex = newKey.publicKey.toString('hex');
-      const keyPreview = `seal_${publicKeyHex.slice(0, 6)}...${publicKeyHex.slice(-4)}`;
+      const keyPreview = `0x${publicKeyHex.slice(0, 6)}...${publicKeyHex.slice(-4)}`;
 
       return {
         id: newKey.sealKeyId.toString(),
