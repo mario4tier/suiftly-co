@@ -32,11 +32,12 @@ interface SealKeysSectionProps {
   maxSealKeys: number;
   maxPackagesPerKey: number;
   isReadOnly?: boolean;
-  onExportKey?: (keyId: string) => void;
-  onToggleKey?: (keyId: string, disable: boolean) => void;
-  onDeleteKey?: (keyId: string) => void;
+  onExportKey?: (keyId: string, keyPreview: string, keyName?: string) => void;
+  onToggleKey?: (keyId: string, currentlyDisabled: boolean, keyPreview: string, keyName?: string) => void;
+  onDeleteKey?: (keyId: string, keyPreview: string, keyName?: string) => void;
   onAddKey?: () => void;
   onAddPackage?: (keyId: string) => void;
+  onUpdateSealKeyName?: (keyId: string, newName: string) => void;
   onUpdatePackageName?: (keyId: string, packageId: string, newName: string) => void;
   onEnablePackage?: (keyId: string, packageId: string) => void;
   onDisablePackage?: (keyId: string, packageId: string, packageAddress: string, packageName?: string) => void;
@@ -54,30 +55,50 @@ export function SealKeysSection({
   onDeleteKey,
   onAddKey,
   onAddPackage,
+  onUpdateSealKeyName,
   onUpdatePackageName,
   onEnablePackage,
   onDisablePackage,
   onDeletePackage,
   onCopyObjectId,
 }: SealKeysSectionProps) {
+  const [editingSealKeyId, setEditingSealKeyId] = useState<string | null>(null);
+  const [editingSealKeyName, setEditingSealKeyName] = useState("");
   const [editingPackageId, setEditingPackageId] = useState<string | null>(null);
-  const [editingName, setEditingName] = useState("");
+  const [editingPackageName, setEditingPackageName] = useState("");
 
-  const handleStartEditName = (packageId: string, currentName: string | undefined | null) => {
+  // Seal key name editing handlers
+  const handleStartEditSealKeyName = (keyId: string, currentName: string | undefined | null) => {
+    setEditingSealKeyId(keyId);
+    setEditingSealKeyName(currentName || "");
+  };
+
+  const handleSaveSealKeyNameEdit = (keyId: string) => {
+    onUpdateSealKeyName?.(keyId, editingSealKeyName.trim());
+    setEditingSealKeyId(null);
+    setEditingSealKeyName("");
+  };
+
+  const handleCancelSealKeyNameEdit = () => {
+    setEditingSealKeyId(null);
+    setEditingSealKeyName("");
+  };
+
+  // Package name editing handlers
+  const handleStartEditPackageName = (packageId: string, currentName: string | undefined | null) => {
     setEditingPackageId(packageId);
-    setEditingName(currentName || "");
+    setEditingPackageName(currentName || "");
   };
 
-  const handleSaveNameEdit = (keyId: string, packageId: string) => {
-    // Call the update callback with the new name
-    onUpdatePackageName?.(keyId, packageId, editingName.trim());
+  const handleSavePackageNameEdit = (keyId: string, packageId: string) => {
+    onUpdatePackageName?.(keyId, packageId, editingPackageName.trim());
     setEditingPackageId(null);
-    setEditingName("");
+    setEditingPackageName("");
   };
 
-  const handleCancelNameEdit = () => {
+  const handleCancelPackageNameEdit = () => {
     setEditingPackageId(null);
-    setEditingName("");
+    setEditingPackageName("");
   };
 
   return (
@@ -101,12 +122,56 @@ export function SealKeysSection({
                 <code className="text-sm font-mono text-gray-900 dark:text-gray-100">
                   {sealKey.key}
                 </code>
-                {sealKey.name && (
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate max-w-xs">
-                      {sealKey.name}
+                {/* Seal Key Name - Inline Editing */}
+                {editingSealKeyId === sealKey.id ? (
+                  <div className="flex items-center gap-1">
+                    <Input
+                      value={editingSealKeyName}
+                      onChange={(e) => setEditingSealKeyName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          handleSaveSealKeyNameEdit(sealKey.id);
+                        } else if (e.key === 'Escape') {
+                          handleCancelSealKeyNameEdit();
+                        }
+                      }}
+                      onBlur={() => handleSaveSealKeyNameEdit(sealKey.id)}
+                      placeholder="Seal key name"
+                      className="h-7 text-sm font-semibold"
+                      autoFocus
+                      maxLength={64}
+                    />
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleSaveSealKeyNameEdit(sealKey.id)}
+                      className="h-7 w-7 p-0"
+                    >
+                      <Check className="h-3 w-3 text-green-600" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={handleCancelSealKeyNameEdit}
+                      className="h-7 w-7 p-0"
+                    >
+                      <X className="h-3 w-3 text-red-600" />
+                    </Button>
+                  </div>
+                ) : (
+                  <div
+                    onClick={() => !isReadOnly && handleStartEditSealKeyName(sealKey.id, sealKey.name)}
+                    className={`flex items-center gap-1.5 ${
+                      !isReadOnly ? 'cursor-pointer' : ''
+                    }`}
+                    title={!isReadOnly ? 'Click to edit name' : ''}
+                  >
+                    <span className={`text-sm font-semibold text-gray-900 dark:text-gray-100 truncate max-w-xs ${
+                      !sealKey.name ? 'text-gray-500 dark:text-gray-400 italic' : ''
+                    } ${!isReadOnly ? 'hover:text-gray-700 dark:hover:text-gray-300' : ''}`}>
+                      {sealKey.name || 'Click to add name'}
                     </span>
-                    <Pencil className="h-3 w-3 text-gray-400 dark:text-gray-500 flex-shrink-0" />
+                    {!isReadOnly && <Pencil className="h-3 w-3 text-gray-400 dark:text-gray-500 flex-shrink-0" />}
                   </div>
                 )}
                 {sealKey.isDisabled && (
@@ -117,36 +182,40 @@ export function SealKeysSection({
               </div>
 
               {/* Seal Key Actions */}
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => onExportKey?.(sealKey.id)}
+              <div className="flex items-center gap-1.5">
+                <InlineButton
+                  onClick={() => onExportKey?.(sealKey.id, sealKey.key, sealKey.name ?? undefined)}
                   disabled={isReadOnly}
                 >
-                  <Download className="h-3 w-3 mr-1" />
+                  <Download className="h-3 w-3" />
                   Export
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => onToggleKey?.(sealKey.id, sealKey.isDisabled)}
-                  disabled={isReadOnly}
-                >
-                  <Ban className="h-3 w-3 mr-1" />
-                  {sealKey.isDisabled ? "Enable" : "Disable"}
-                </Button>
-                {sealKey.isDisabled && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => onDeleteKey?.(sealKey.id)}
+                </InlineButton>
+                {!sealKey.isDisabled && (
+                  <InlineButton
+                    onClick={() => onToggleKey?.(sealKey.id, sealKey.isDisabled, sealKey.key, sealKey.name ?? undefined)}
                     disabled={isReadOnly}
-                    className="text-red-600 hover:text-red-700 dark:text-red-400"
                   >
-                    <Trash2 className="h-3 w-3 mr-1" />
-                    Delete
-                  </Button>
+                    <Ban className="h-3 w-3" />
+                    Disable
+                  </InlineButton>
+                )}
+                {sealKey.isDisabled && (
+                  <>
+                    <InlineButton
+                      onClick={() => onToggleKey?.(sealKey.id, sealKey.isDisabled, sealKey.key, sealKey.name ?? undefined)}
+                      disabled={isReadOnly}
+                    >
+                      Enable
+                    </InlineButton>
+                    <InlineButton
+                      variant="danger"
+                      onClick={() => onDeleteKey?.(sealKey.id, sealKey.key, sealKey.name ?? undefined)}
+                      disabled={isReadOnly}
+                    >
+                      <Trash2 className="h-3 w-3" />
+                      Delete
+                    </InlineButton>
+                  </>
                 )}
               </div>
             </div>
@@ -198,16 +267,16 @@ export function SealKeysSection({
                             {editingPackageId === pkg.id ? (
                               <div className="flex items-center gap-1">
                                 <Input
-                                  value={editingName}
-                                  onChange={(e) => setEditingName(e.target.value)}
+                                  value={editingPackageName}
+                                  onChange={(e) => setEditingPackageName(e.target.value)}
                                   onKeyDown={(e) => {
                                     if (e.key === 'Enter') {
-                                      handleSaveNameEdit(sealKey.id, pkg.id);
+                                      handleSavePackageNameEdit(sealKey.id, pkg.id);
                                     } else if (e.key === 'Escape') {
-                                      handleCancelNameEdit();
+                                      handleCancelPackageNameEdit();
                                     }
                                   }}
-                                  onBlur={() => handleSaveNameEdit(sealKey.id, pkg.id)}
+                                  onBlur={() => handleSavePackageNameEdit(sealKey.id, pkg.id)}
                                   placeholder="Package name"
                                   className="h-7 text-sm"
                                   autoFocus
@@ -216,7 +285,7 @@ export function SealKeysSection({
                                 <Button
                                   variant="ghost"
                                   size="sm"
-                                  onClick={() => handleSaveNameEdit(sealKey.id, pkg.id)}
+                                  onClick={() => handleSavePackageNameEdit(sealKey.id, pkg.id)}
                                   className="h-7 w-7 p-0"
                                 >
                                   <Check className="h-3 w-3 text-green-600" />
@@ -224,7 +293,7 @@ export function SealKeysSection({
                                 <Button
                                   variant="ghost"
                                   size="sm"
-                                  onClick={handleCancelNameEdit}
+                                  onClick={handleCancelPackageNameEdit}
                                   className="h-7 w-7 p-0"
                                 >
                                   <X className="h-3 w-3 text-red-600" />
@@ -232,7 +301,7 @@ export function SealKeysSection({
                               </div>
                             ) : (
                               <div
-                                onClick={() => !isReadOnly && handleStartEditName(pkg.id, pkg.name)}
+                                onClick={() => !isReadOnly && handleStartEditPackageName(pkg.id, pkg.name)}
                                 className={`flex items-center gap-1.5 ${
                                   !isReadOnly ? 'cursor-pointer' : ''
                                 }`}

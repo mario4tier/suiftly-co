@@ -100,6 +100,31 @@ export function SealInteractiveForm({
     packageName?: string;
   } | null>(null);
 
+  // Seal key confirmation dialogs
+  const [enableSealKeyDialog, setEnableSealKeyDialog] = useState<{
+    keyId: string;
+    keyPreview: string;
+    keyName?: string;
+  } | null>(null);
+
+  const [disableSealKeyDialog, setDisableSealKeyDialog] = useState<{
+    keyId: string;
+    keyPreview: string;
+    keyName?: string;
+  } | null>(null);
+
+  const [deleteSealKeyDialog, setDeleteSealKeyDialog] = useState<{
+    keyId: string;
+    keyPreview: string;
+    keyName?: string;
+  } | null>(null);
+
+  const [exportSealKeyDialog, setExportSealKeyDialog] = useState<{
+    keyId: string;
+    keyPreview: string;
+    keyName?: string;
+  } | null>(null);
+
   const utils = trpc.useUtils();
   const navigate = useNavigate();
 
@@ -171,6 +196,42 @@ export function SealInteractiveForm({
   });
 
   // Seal Key mutations
+  const updateSealKeyMutation = trpc.seal.updateKey.useMutation({
+    onMutate: async (variables) => {
+      // Cancel any outgoing refetches to avoid overwriting our optimistic update
+      await utils.seal.listKeys.cancel();
+
+      // Snapshot the previous value
+      const previousData = utils.seal.listKeys.getData();
+
+      // Optimistically update the cache
+      utils.seal.listKeys.setData(undefined, (old) => {
+        if (!old) return old;
+
+        return old.map(key =>
+          key.id === variables.sealKeyId.toString()
+            ? { ...key, name: variables.name }
+            : key
+        );
+      });
+
+      // Return context with the snapshot
+      return { previousData };
+    },
+    onSuccess: () => {
+      // Revalidate to ensure sync with server
+      utils.seal.listKeys.invalidate();
+      // No toast for name updates - it's a quick inline edit
+    },
+    onError: (error, _variables, context) => {
+      // Rollback on error
+      if (context?.previousData) {
+        utils.seal.listKeys.setData(undefined, context.previousData);
+      }
+      toast.error(error.message || "Failed to update seal key");
+    },
+  });
+
   const toggleSealKeyMutation = trpc.seal.toggleKey.useMutation({
     onSuccess: () => {
       utils.seal.listKeys.invalidate();
@@ -209,7 +270,7 @@ export function SealInteractiveForm({
         return old.map(key => ({
           ...key,
           packages: key.packages.map(pkg =>
-            pkg.id === variables.packageId
+            pkg.id === variables.packageId.toString()
               ? { ...pkg, name: variables.name }
               : pkg
           ),
@@ -463,21 +524,60 @@ export function SealInteractiveForm({
   };
 
   // Seal Key handlers
-  const handleToggleSealKey = async (keyId: string, enabled: boolean) => {
-    await toggleSealKeyMutation.mutateAsync({
+  const handleUpdateSealKeyName = async (keyId: string, newName: string) => {
+    // Inline name update - just update the name field
+    await updateSealKeyMutation.mutateAsync({
       sealKeyId: parseInt(keyId, 10),
-      enabled,
+      name: newName,
     });
   };
 
-  const handleExportSealKey = (keyId: string) => {
-    // TODO: Implement export modal showing full key and instructions
-    toast.info("Export functionality will be available soon");
+  const handleToggleSealKey = (keyId: string, currentlyDisabled: boolean, keyPreview: string, keyName?: string) => {
+    if (currentlyDisabled) {
+      // Show enable confirmation
+      setEnableSealKeyDialog({ keyId, keyPreview, keyName });
+    } else {
+      // Show disable confirmation
+      setDisableSealKeyDialog({ keyId, keyPreview, keyName });
+    }
   };
 
-  const handleDeleteSealKey = async (keyId: string) => {
-    // TODO: Add confirmation dialog
-    toast.info("Delete seal key functionality will be available soon");
+  const handleEnableSealKeyConfirm = async () => {
+    if (!enableSealKeyDialog) return;
+
+    try {
+      await toggleSealKeyMutation.mutateAsync({
+        sealKeyId: parseInt(enableSealKeyDialog.keyId, 10),
+        enabled: true,
+      });
+      setEnableSealKeyDialog(null);
+    } catch (error) {
+      // Error toast is handled by mutation onError
+      setEnableSealKeyDialog(null);
+    }
+  };
+
+  const handleDisableSealKeyConfirm = async () => {
+    if (!disableSealKeyDialog) return;
+
+    try {
+      await toggleSealKeyMutation.mutateAsync({
+        sealKeyId: parseInt(disableSealKeyDialog.keyId, 10),
+        enabled: false,
+      });
+      setDisableSealKeyDialog(null);
+    } catch (error) {
+      // Error toast is handled by mutation onError
+      setDisableSealKeyDialog(null);
+    }
+  };
+
+  const handleExportSealKey = (keyId: string, keyPreview: string, keyName?: string) => {
+    setExportSealKeyDialog({ keyId, keyPreview, keyName });
+  };
+
+  const handleDeleteSealKey = (keyId: string, keyPreview: string, keyName?: string) => {
+    setDeleteSealKeyDialog({ keyId, keyPreview, keyName });
   };
 
   const handleAddSealKey = async () => {
@@ -824,6 +924,7 @@ export function SealInteractiveForm({
               onDeleteKey={handleDeleteSealKey}
               onAddKey={handleAddSealKey}
               onAddPackage={handleAddPackage}
+              onUpdateSealKeyName={handleUpdateSealKeyName}
               onUpdatePackageName={handleUpdatePackageName}
               onEnablePackage={handleEnablePackage}
               onDisablePackage={handleDisablePackage}
@@ -1048,6 +1149,126 @@ export function SealInteractiveForm({
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={handleDeletePackageConfirm} className="bg-red-600 hover:bg-red-700 dark:bg-red-600 dark:hover:bg-red-700">
               Delete Package
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Enable Seal Key Confirmation Dialog */}
+      <AlertDialog open={!!enableSealKeyDialog} onOpenChange={(open) => !open && setEnableSealKeyDialog(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Enable Seal Key?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to enable this seal key?
+              <div className="mt-2 rounded bg-gray-100 dark:bg-gray-900 px-3 py-2">
+                {enableSealKeyDialog?.keyName && (
+                  <div className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-1">
+                    {enableSealKeyDialog.keyName}
+                  </div>
+                )}
+                <div className="font-mono text-sm text-gray-900 dark:text-gray-100">
+                  {enableSealKeyDialog?.keyPreview}
+                </div>
+              </div>
+              <div className="mt-2 text-gray-900 dark:text-gray-100">
+                The seal key and its packages will become active immediately.
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleEnableSealKeyConfirm}>
+              Enable Seal Key
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Disable Seal Key Confirmation Dialog */}
+      <AlertDialog open={!!disableSealKeyDialog} onOpenChange={(open) => !open && setDisableSealKeyDialog(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Disable Seal Key?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to disable this seal key?
+              <div className="mt-2 rounded bg-gray-100 dark:bg-gray-900 px-3 py-2">
+                {disableSealKeyDialog?.keyName && (
+                  <div className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-1">
+                    {disableSealKeyDialog.keyName}
+                  </div>
+                )}
+                <div className="font-mono text-sm text-gray-900 dark:text-gray-100">
+                  {disableSealKeyDialog?.keyPreview}
+                </div>
+              </div>
+              <div className="mt-2 text-gray-900 dark:text-gray-100">
+                The seal key and all its packages will stop working immediately but can be re-enabled later.
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDisableSealKeyConfirm}>
+              Disable Seal Key
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Delete Seal Key Dialog */}
+      <AlertDialog open={!!deleteSealKeyDialog} onOpenChange={(open) => !open && setDeleteSealKeyDialog(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Seal Key Not Supported</AlertDialogTitle>
+            <AlertDialogDescription>
+              <div className="mt-2 rounded bg-gray-100 dark:bg-gray-900 px-3 py-2">
+                {deleteSealKeyDialog?.keyName && (
+                  <div className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-1">
+                    {deleteSealKeyDialog.keyName}
+                  </div>
+                )}
+                <div className="font-mono text-sm text-gray-900 dark:text-gray-100">
+                  {deleteSealKeyDialog?.keyPreview}
+                </div>
+              </div>
+              <div className="mt-3 text-gray-900 dark:text-gray-100">
+                Deleting seal keys is not yet supported. You can disable the seal key instead, which will stop all associated packages from working.
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogAction onClick={() => setDeleteSealKeyDialog(null)}>
+              OK
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Export Seal Key Dialog */}
+      <AlertDialog open={!!exportSealKeyDialog} onOpenChange={(open) => !open && setExportSealKeyDialog(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Export Seal Key</AlertDialogTitle>
+            <AlertDialogDescription>
+              <div className="mt-2 rounded bg-gray-100 dark:bg-gray-900 px-3 py-2">
+                {exportSealKeyDialog?.keyName && (
+                  <div className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-1">
+                    {exportSealKeyDialog.keyName}
+                  </div>
+                )}
+                <div className="font-mono text-sm text-gray-900 dark:text-gray-100">
+                  {exportSealKeyDialog?.keyPreview}
+                </div>
+              </div>
+              <div className="mt-3 text-gray-900 dark:text-gray-100">
+                Feature coming soon! Contact <span className="font-semibold">support@mhax.io</span> for assistance in the meantime.
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogAction onClick={() => setExportSealKeyDialog(null)}>
+              OK
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

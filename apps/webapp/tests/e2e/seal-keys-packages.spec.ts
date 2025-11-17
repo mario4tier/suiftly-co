@@ -167,6 +167,81 @@ test.describe('Seal Keys & Packages Management', () => {
     console.log('✅ Package name edited inline successfully');
   });
 
+  test('edit seal key name inline', async ({ page }) => {
+    // Setup: Create a seal key via UI
+    await createSealKeyViaUI(page);
+
+    // Should see auto-generated name "seal-key-1"
+    await expect(page.locator('text=seal-key-1')).toBeVisible();
+
+    // Click on the seal key name to start inline editing
+    const sealKeyName = page.locator('text=seal-key-1').first();
+    await sealKeyName.click();
+
+    // Wait for the inline editing input to appear
+    const nameInput = page.locator('input[placeholder="Seal key name"]');
+    await expect(nameInput).toBeVisible({ timeout: 5000 });
+    await expect(nameInput).toHaveValue('seal-key-1');
+
+    // Clear and type new name
+    await nameInput.clear();
+    await nameInput.fill('My Custom Seal Key');
+
+    // Press Enter to save
+    await nameInput.press('Enter');
+    await waitAfterMutation(page);
+
+    // Should see updated name (no toast shown for inline edits)
+    await expect(page.locator('text=My Custom Seal Key')).toBeVisible({ timeout: 5000 });
+
+    // Original name should no longer be visible
+    await expect(page.locator('text=seal-key-1')).not.toBeVisible();
+
+    console.log('✅ Seal key name edited inline successfully');
+  });
+
+  test('edit seal key name when empty (recovery)', async ({ page }) => {
+    // Setup: Create a seal key and clear its name
+    await createSealKeyViaUI(page);
+
+    // Should see auto-generated name "seal-key-1"
+    await expect(page.locator('text=seal-key-1')).toBeVisible();
+
+    // Click on the seal key name to start inline editing
+    const sealKeyName = page.locator('text=seal-key-1').first();
+    await sealKeyName.click();
+
+    // Wait for the inline editing input to appear
+    const nameInput = page.locator('input[placeholder="Seal key name"]');
+    await expect(nameInput).toBeVisible({ timeout: 5000 });
+
+    // Clear the name to make it empty
+    await nameInput.clear();
+    await nameInput.press('Enter');
+    await waitAfterMutation(page);
+
+    // Should see "Click to add name" placeholder
+    await expect(page.locator('text=Click to add name')).toBeVisible({ timeout: 5000 });
+
+    // Click on the placeholder to edit
+    const placeholder = page.locator('text=Click to add name').first();
+    await placeholder.click();
+
+    // Input should appear again, now empty
+    await expect(nameInput).toBeVisible({ timeout: 5000 });
+    await expect(nameInput).toHaveValue('');
+
+    // Type a new name
+    await nameInput.fill('Recovered Name');
+    await nameInput.press('Enter');
+    await waitAfterMutation(page);
+
+    // Should see the new name
+    await expect(page.locator('text=Recovered Name')).toBeVisible({ timeout: 5000 });
+
+    console.log('✅ Seal key name editable when empty (recovery works)');
+  });
+
   test('disable package with confirmation dialog', async ({ page }) => {
     // Setup: Create a seal key and package via UI
     await createSealKeyViaUI(page);

@@ -306,6 +306,57 @@ export const sealRouter = router({
     }),
 
   /**
+   * Update seal key name
+   */
+  updateKey: protectedProcedure
+    .input(z.object({
+      sealKeyId: z.number().int(),
+      name: z.string().max(64).optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.user) {
+        throw new TRPCError({
+          code: 'UNAUTHORIZED',
+          message: 'Not authenticated',
+        });
+      }
+
+      // Verify the seal key belongs to the user
+      const key = await db.query.sealKeys.findFirst({
+        where: and(
+          eq(sealKeys.sealKeyId, input.sealKeyId),
+          eq(sealKeys.customerId, ctx.user.customerId)
+        ),
+      });
+
+      if (!key) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Seal key not found',
+        });
+      }
+
+      // Prepare update values
+      const updateValues: { name?: string | null } = {};
+      if (input.name !== undefined) {
+        updateValues.name = input.name || null;
+      }
+
+      // Update the name
+      const [updated] = await db
+        .update(sealKeys)
+        .set(updateValues)
+        .where(eq(sealKeys.sealKeyId, input.sealKeyId))
+        .returning();
+
+      return {
+        id: updated.sealKeyId.toString(),
+        sealKeyId: updated.sealKeyId,
+        name: updated.name,
+      };
+    }),
+
+  /**
    * Toggle seal key active/inactive state
    */
   toggleKey: protectedProcedure
