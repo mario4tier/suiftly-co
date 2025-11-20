@@ -500,27 +500,35 @@ Schema uses **nullable `derivation_index`** to distinguish key types (no explici
 
 **Creation Flow (Derive or Import):**
 
-**Option 1: Derive New Seal Key (Recommended)**
+**Option 1: Derive New Seal Key from Pool (Recommended)**
 
 **SECURITY: Key derivation is handled by a privileged script with mm-reader access. The API server NEVER has access to mm vault or MASTER_SEED.**
 
-1. **Customer Request** (API Server):
-   - Customer initiates Seal key derivation through dashboard
-   - API server validates: authentication, service subscription, payment, key limits
-   - API server enqueues derivation job or calls privileged script
+**Production uses a pre-populated Seal Key Pool to ensure instant customer assignment without Sui network delays.**
 
-2. **Key Derivation** (Privileged Script with mm-reader + postgres access):
+1. **Pool Management** (Background Job - Privileged Script with mm-reader + postgres access):
+   - Maintains pool of 100 pre-derived and pre-registered seal keys
    - Script atomically increments global `derivation_index` sequence (in database transaction)
    - Reads `MASTER_SEED` from mm vault (privileged operation)
    - Derives BLS12-381 key pair using `derivation_index`: `seal-cli derive-key --seed <MASTER_SEED> --index <INDEX>`
    - Registers key on-chain: `sui client call --function create_and_transfer_v1 ... --args <PUBKEY>`
-   - Stores in database: `derivation_index`, `public_key` (48 bytes mpk), `object_id`, `register_txn_digest`
+   - Stores in pool table: `derivation_index`, `public_key` (48 bytes mpk), `object_id`, `register_txn_digest`
    - **No encrypted_private_key stored** - can regenerate on demand from seed + index
    - Transaction ensures atomicity: if any step fails, `derivation_index` sequence rolls back (no gaps)
+   - Continuously refills pool as keys are assigned to customers
+
+2. **Customer Request** (API Server):
+   - Customer initiates Seal key request through dashboard
+   - API server validates: authentication, service subscription, payment, key limits
+   - **Atomically assigns a key from pool** (single transaction):
+     - Removes one pre-registered key from pool
+     - Creates `seal_keys` record linked to customer
+     - Returns immediately with `object_id` and `public_key`
+   - **Instant response** - no waiting for on-chain registration
 
 3. **Response** (API Server):
    - Customer receives `object_id` and `public_key` (mpk) for encryption operations
-   - Key is ready to use immediately
+   - Key is ready to use immediately (already registered on-chain)
 
 **Global Derivation Index Sequence:**
 - `derivation_index` is **global across all customers** (scoped per `proc_index`, currently always 1)
@@ -530,26 +538,48 @@ Schema uses **nullable `derivation_index`** to distinguish key types (no explici
 - Transaction-safe: failed derivations don't waste indices
 
 **Option 2: Import Existing Seal Key** (Future)
-1. Customer provides existing BLS12-381 private key (32 bytes, hex-encoded)
+1. Customer provides existing BLS12-381 private key (32 bytes, hex-encoded) and Sui `object_id`
 2. Backend validates key format and extracts public key (48 bytes)
-3. Encrypt private key with customer's wallet public key (for recovery)
-4. Store: `encrypted_private_key`, `public_key` (48 bytes mpk)
-5. **derivation_index is NULL** - indicates imported key that cannot be regenerated
-6. Register on-chain and store `object_id` (same as derived keys)
+3. Verify `object_id` exists on-chain and matches provided public key
+4. **Customer transfers ownership** of the seal key object to Suiftly's `objects_owner_id` address
+   - Required for Suiftly to update the key server URL associated with the object
+   - Customer initiates transfer via Sui wallet: `sui client transfer --object-id <OBJECT_ID> --to <OBJECTS_OWNER_ID>`
+5. Backend validates transfer completed successfully (object now owned by Suiftly)
+6. Encrypt private key with database encryption key (for operational recovery)
+7. Store: `encrypted_private_key`, `public_key` (48 bytes mpk), `object_id`, `register_txn_digest`
+8. **derivation_index is NULL** - indicates imported key that cannot be regenerated
+9. Update on-chain object with Suiftly's key server URL (now possible since Suiftly owns object)
 
-**Seal Key Pool** (Future Enhancement)
+**Seal Key Pool** (MVP Requirement)
 
-To avoid delays when users create new keys, we can maintain a small pool of pre-derived keys (up to 100):
-- Pool keys are pre-registered with known `object_id` and `public_key`
-- When user requests a key, assign from pool in atomic transaction
-- Background job keeps pool filled using privileged derivation script
-- Pool managed by `seal_key_pool` table (to be added)
+**Production deployment requires a pre-populated pool** to ensure instant customer key assignment without Sui network delays.
 
-**Current Implementation:**
-- Keys are derived on-demand when requested by customer
-- Privileged TypeScript script handles derivation: `scripts/seal-keys/derive-and-register.ts`
+**Pool Design:**
+- Maintains pool of 100 pre-derived and pre-registered seal keys
+- Pool keys are fully registered on-chain with known `object_id` and `public_key`
+- Customer requests receive instant assignment from pool (atomic database transaction)
+- Background job continuously refills pool using privileged derivation script
+- Pool managed by `seal_key_pool` table (schema below)
+
+**Pool Table Schema:**
+```sql
+CREATE TABLE seal_key_pool (
+  pool_key_id SERIAL PRIMARY KEY,
+  derivation_index INTEGER NOT NULL UNIQUE,
+  public_key BYTEA NOT NULL CHECK (LENGTH(public_key) IN (48, 96)),
+  object_id BYTEA NOT NULL CHECK (LENGTH(object_id) = 32),
+  register_txn_digest BYTEA NOT NULL CHECK (LENGTH(register_txn_digest) = 32),
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+
+  INDEX idx_pool_ready (created_at)  -- Oldest keys assigned first (FIFO)
+);
+```
+
+**Implementation:**
+- Privileged TypeScript script: `scripts/seal-keys/pool-manager.ts`
 - Script requires mm-reader + postgres access (NOT the API server)
-- Testing: Reuse first 11 keys (indices 0-10) for development
+- Background job runs continuously to maintain pool at 100 keys
+- **Testing mode**: Reuse first 11 keys (indices 0-10) for development without depleting pool
 
 **Key Ownership:**
 - All registered Seal keys are owned by a Sui address controlled by Suiftly
@@ -770,6 +800,20 @@ CREATE TABLE seal_key_sequences (
 -- SELECT 1, COALESCE(MAX(derivation_index), -1) + 1
 -- FROM seal_keys
 -- WHERE derivation_index IS NOT NULL;
+
+-- Seal key pool (pre-derived keys ready for instant customer assignment)
+-- MVP requirement: maintains 100 pre-registered keys to avoid Sui network delays
+CREATE TABLE seal_key_pool (
+  pool_key_id SERIAL PRIMARY KEY,
+  derivation_index INTEGER NOT NULL UNIQUE,        -- References global sequence
+  public_key BYTEA NOT NULL CHECK (LENGTH(public_key) IN (48, 96)),
+  object_id BYTEA NOT NULL CHECK (LENGTH(object_id) = 32),
+  register_txn_digest BYTEA NOT NULL CHECK (LENGTH(register_txn_digest) = 32),
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+
+  -- Index for FIFO assignment (oldest keys assigned first)
+  INDEX idx_pool_ready (created_at)
+);
 
 -- Usage tracking for billing
 CREATE TABLE usage_records (
@@ -996,17 +1040,24 @@ CREATE TABLE system_control (
 **Status**: Design specification (not yet implemented)
 
 **Changelog:**
-- v1.16: Added global derivation index sequence and security architecture:
+- v1.16: Added global derivation index sequence, seal key pool, and security architecture:
   - **Added `seal_key_sequences` table** for atomic derivation_index increment
+  - **Added `seal_key_pool` table** for MVP pre-registered key pool (100 keys)
   - Global sequence per `proc_index` (currently always 1) prevents race conditions
   - Transaction-safe: rollback prevents gaps in derivation sequence
   - **Added UNIQUE constraint** on `seal_keys.derivation_index` (prevents duplicates)
-  - **Updated Creation Flow** to document privileged script architecture
+  - **Updated Creation Flow** to document pool-based instant assignment:
+    - Option 1: Background job maintains pre-registered pool of 100 keys
+    - Customer requests get instant assignment from pool (no Sui network delay)
+    - Pool continuously refilled by privileged script
+  - **Updated Option 2 (Import)** to document required object transfer:
+    - Customer must transfer seal key object ownership to Suiftly
+    - Required for updating key server URL on-chain
   - **Security boundary**: API server NEVER has mm-reader access
-  - Privileged TypeScript script (`scripts/seal-keys/derive-and-register.ts`) handles key derivation
+  - Privileged TypeScript script (`scripts/seal-keys/pool-manager.ts`) handles pool management
   - Script requires mm-reader + postgres access to read MASTER_SEED and register keys
   - Documented global scope of derivation_index (across all customers)
-  - Updated Seal Key Pool section to reflect current on-demand implementation
+  - **Seal Key Pool is MVP requirement**, not future enhancement
 - v1.15: Added user-defined names to seal_keys and seal_packages:
   - Added `name VARCHAR(64)` field to both seal_keys and seal_packages
   - 64-character limit for DNS/Kubernetes compatibility (RFC 1123 DNS label)
