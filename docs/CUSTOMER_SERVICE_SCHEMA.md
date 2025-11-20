@@ -10,23 +10,34 @@ This document defines the high-level schema for managing customers and backend s
 
 - **Customer = Wallet**: One wallet address = one customer (1:1 relationship)
 - **No PII**: No personal information collected or required
-- **Terms**: "Customer" and "wallet" are used interchangeably throughout the system
+- **Terminology**: "Customer" and "wallet" are used interchangeably throughout the system
 
 > **Note**: If a business entity controls multiple wallets, each wallet is treated as a distinct, independent customer.
 
 ### Customer Account Structure
 
 ```
-Customer (Wallet Address)
-├── Suiftly Account (Escrow Contract - On-chain)
-│   ├── Deposit operations
-│   ├── Withdraw operations
-│   ├── Suiftly charge/credit operations
-│   └── Balance tracking
-└── Services (0 or more)
-    ├── Seal Service
-    ├── gRPC Service (future)
-    └── GraphQL Service (future)
+customers (wallet_address)
+├── escrow_contract_id (on-chain)
+│   ├── escrow_transactions (deposit, withdraw, charge, credit)
+│   ├── ledger_entries (USD/SUI accounting with exchange rates)
+│   └── billing_records (monthly charges and credits)
+│
+├── service_instances (0 or more)
+│   ├── Seal: service_type='seal'
+│   │   ├── seal_keys (derived from pool or imported)
+│   │   │   ├── seal_key_pool → seal_keys (assignment)
+│   │   │   └── seal_packages (package addresses per key)
+│   │   └── api_keys (service_type='seal')
+│   │
+│   ├── gRPC: service_type='grpc' (future)
+│   │   └── api_keys (service_type='grpc')
+│   │
+│   └── GraphQL: service_type='graphql' (future)
+│       └── api_keys (service_type='graphql')
+│
+└── usage_records (billing and metering)
+    └── haproxy_raw_logs (TimescaleDB: request logs)
 ```
 
 ## On-Chain Account (Escrow Contract)
