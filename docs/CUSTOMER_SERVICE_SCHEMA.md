@@ -19,9 +19,16 @@ This document defines the high-level schema for managing customers and backend s
 ```
 customers (wallet_address)
 ├── escrow_contract_id (on-chain)
-│   ├── escrow_transactions (deposit, withdraw, charge, credit)
-│   ├── ledger_entries (USD/SUI accounting with exchange rates)
-│   └── billing_records (monthly charges and credits)
+│   └── ledger_entries (completed on-chain transactions ONLY)
+│       ├── Deposits (tx_digest, amount_sui_mist, sui_usd_rate_cents)
+│       ├── Withdrawals (tx_digest, amount_sui_mist, sui_usd_rate_cents)
+│       └── Charges (tx_digest, amount_sui_mist, sui_usd_rate_cents)
+│
+├── billing_records (invoices - intent to charge/credit)
+│   ├── Status: 'pending' (not yet executed on-chain)
+│   ├── Status: 'paid' (successfully charged, references ledger_entry_id)
+│   ├── Status: 'failed' (charge failed, no ledger_entry)
+│   └── line_items (itemization: subscription, usage, adjustments)
 │
 ├── service_instances (0 or more)
 │   ├── Seal: service_type='seal'
@@ -269,46 +276,99 @@ Each service can be configured independently with different tiers:
 **For complete tier definitions and rate limits, see [UI_DESIGN.md](./UI_DESIGN.md) (pricing and tier configuration).**
 
 ### Service Billing
+
+**Three-Table Model:**
+1. **`usage_records`** - Metering (what was used)
+2. **`billing_records`** - Invoicing (intent to charge - pending/paid/failed)
+3. **`ledger_entries`** - Accounting (completed on-chain transactions)
+
+**Key Principles:**
 - **Primary model**: Usage-based charging (e.g., requests count)
-- **Tier structure**: See [UI_DESIGN.md](./UI_DESIGN.md) (pricing and tier configuration) for tier definitions and rate limits
-- **Metering**: Real-time usage tracking against rate limits
-- **Billing cycle**: Charges deducted from escrow account from time to time (usually when at least 5$ accumulated)
+- **Tier structure**: See [UI_DESIGN.md](./UI_DESIGN.md) for tier definitions and rate limits
+- **Metering**: Real-time usage tracking against rate limits → `usage_records`
+- **Billing cycle**: Charges accumulated, then billed when threshold reached (e.g., $5)
 - **Monthly limits**: All charges validated against customer's authorized monthly spending cap
 
 **Billing Flow:**
 
 ```typescript
 // On each billing cycle (e.g., hourly or daily)
-async function processBilling(customerUUID: string, serviceType: string) {
-  // 1. Calculate usage charges
-  const usage = await getUsageForPeriod(customerUUID, serviceType, period);
-  const chargeAmountUSD = usage.requests * tierConfig.price_per_request;
+async function processBilling(customerId: number, serviceType: string) {
+  // 1. Calculate usage charges from usage_records
+  const usage = await getUsageForPeriod(customerId, serviceType, period);
+  const lineItems = [
+    {
+      description: `${serviceType} usage - ${period}`,
+      amount_usd_cents: usage.requests * tierConfig.price_per_request,
+      quantity: usage.requests,
+      service_type: serviceType,
+      period: period
+    }
+  ];
+  const totalAmountUsdCents = lineItems.reduce((sum, item) => sum + item.amount_usd_cents, 0);
 
-  // 2. Validate against monthly limit (off-chain check)
-  const customer = await getCustomer(customerUUID);
-  if (customer.current_month_charged + chargeAmountUSD > customer.max_monthly_usd) {
-    // Suspend service - monthly limit exceeded
-    await suspendService(customerUUID, serviceType, "monthly_limit_exceeded");
+  // 2. Create billing_record (status='pending')
+  const billingRecord = await db.insert(billing_records).values({
+    customer_id: customerId,
+    billing_period_start: period.start,
+    billing_period_end: period.end,
+    amount_usd_cents: totalAmountUsdCents,
+    type: 'charge',
+    status: 'pending',
+    line_items: lineItems,
+    ledger_entry_id: null  // Not yet executed
+  });
+
+  // 3. Validate against monthly limit (off-chain check)
+  const customer = await getCustomer(customerId);
+  if (customer.current_month_charged_usd_cents + totalAmountUsdCents > customer.max_monthly_usd_cents) {
+    // Mark billing_record as failed
+    await db.update(billing_records).set({ status: 'failed' }).where(eq(billing_records.id, billingRecord.id));
+    await suspendService(customerId, serviceType, "monthly_limit_exceeded");
     return { success: false, reason: "monthly_limit_exceeded" };
   }
 
-  // 3. Validate balance (off-chain check)
-  if (customer.current_balance_usd < chargeAmountUSD) {
-    // Suspend service - insufficient balance
-    await suspendService(customerUUID, serviceType, "insufficient_balance");
+  // 4. Validate balance (off-chain check)
+  if (customer.current_balance_usd_cents < totalAmountUsdCents) {
+    await db.update(billing_records).set({ status: 'failed' }).where(eq(billing_records.id, billingRecord.id));
+    await suspendService(customerId, serviceType, "insufficient_balance");
     return { success: false, reason: "insufficient_balance" };
   }
 
-  // 4. Execute on-chain charge
-  const txDigest = await chargeEscrowAccount(customer.wallet_address, chargeAmountUSD);
+  // 5. Execute on-chain charge via escrow contract
+  const { txDigest, amountSuiMist, suiUsdRateCents } = await chargeEscrowAccount(
+    customer.wallet_address,
+    totalAmountUsdCents
+  );
 
-  // 5. Update off-chain records
-  await updateCustomerSpending(customerUUID, chargeAmountUSD);
-  await recordUsage(customerUUID, serviceType, usage, chargeAmountUSD);
+  // 6. Create ledger_entry (on-chain record)
+  const ledgerEntry = await db.insert(ledger_entries).values({
+    customer_id: customerId,
+    type: 'charge',
+    amount_usd_cents: -totalAmountUsdCents,  // Negative for charges
+    amount_sui_mist: amountSuiMist,
+    sui_usd_rate_cents: suiUsdRateCents,
+    tx_digest: txDigest,
+    description: `Billing period ${period.start} to ${period.end}`
+  });
 
-  return { success: true, tx_digest: txDigest };
+  // 7. Update billing_record (status='paid', reference ledger_entry)
+  await db.update(billing_records).set({
+    status: 'paid',
+    ledger_entry_id: ledgerEntry.id
+  }).where(eq(billing_records.id, billingRecord.id));
+
+  // 8. Update customer spending cache
+  await updateCustomerSpending(customerId, totalAmountUsdCents);
+
+  return { success: true, tx_digest: txDigest, ledger_entry_id: ledgerEntry.id };
 }
 ```
+
+**Relationship:**
+- `usage_records` → aggregated → creates `billing_record` (pending)
+- `billing_record` (pending) → execute on-chain → creates `ledger_entry`
+- `billing_record` → updated to (paid) → references `ledger_entry.id`
 
 **Monthly Reset:**
 
@@ -841,20 +901,6 @@ CREATE TABLE usage_records (
   INDEX idx_billing (customer_id, service_type, window_start)
 );
 
--- Escrow transactions (mirror of on-chain events)
-CREATE TABLE escrow_transactions (
-  tx_id BIGSERIAL PRIMARY KEY,
-  customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
-  tx_digest BYTEA NOT NULL UNIQUE CHECK (LENGTH(tx_digest) = 32),  -- Sui transaction digest (32 bytes)
-  tx_type transaction_type NOT NULL,  -- ENUM: 'deposit', 'withdraw', 'charge', 'credit'
-  amount DECIMAL(20, 8) NOT NULL,
-  asset_type VARCHAR(66),         -- Coin type
-  timestamp TIMESTAMP NOT NULL,
-
-  INDEX idx_escrow_customer (customer_id),
-  INDEX idx_escrow_tx_digest (tx_digest)
-);
-
 -- HAProxy raw logs (TimescaleDB hypertable for usage metering and ops monitoring)
 -- Based on walrus HAPROXY_LOGS.md specification
 -- Ref: ~/walrus/docs/HAPROXY_LOGS.md and haproxy_log_record.py
@@ -936,37 +982,48 @@ CREATE TABLE refresh_tokens (
   INDEX idx_expires_at (expires_at)        -- Cleanup expired tokens
 );
 
--- Ledger entries (financial accounting with SUI/USD exchange rates)
+-- Ledger entries (completed on-chain transactions ONLY - immutable blockchain record)
+-- Pure mirror of blockchain state - every entry corresponds to a completed Sui transaction
 CREATE TABLE ledger_entries (
   id UUID PRIMARY KEY,
   customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
   type transaction_type NOT NULL,          -- ENUM: 'deposit', 'withdraw', 'charge', 'credit'
   amount_usd_cents BIGINT NOT NULL,        -- USD amount (signed: + for deposit/credit, - for charge/withdrawal)
-  amount_sui_mist BIGINT,                  -- SUI amount in mist (1 SUI = 10^9 mist), NULL for charges/credits
-  sui_usd_rate_cents BIGINT,               -- Rate at transaction time (cents per 1 SUI), e.g., 245 = $2.45
-  tx_digest BYTEA CHECK (LENGTH(tx_digest) = 32),  -- On-chain transaction digest (32 bytes) for deposits/withdrawals, NULL for charges/credits
+  amount_sui_mist BIGINT NOT NULL,         -- SUI amount in mist (1 SUI = 10^9 mist) - ALWAYS present for on-chain
+  sui_usd_rate_cents BIGINT NOT NULL,      -- Exchange rate at transaction time (cents per 1 SUI), e.g., 245 = $2.45
+  tx_digest BYTEA NOT NULL CHECK (LENGTH(tx_digest) = 32),  -- On-chain transaction digest (32 bytes) - NEVER NULL
   description TEXT,                        -- Human-readable description
-  invoice_id VARCHAR(50),                  -- Optional invoice reference
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
   INDEX idx_customer_created (customer_id, created_at DESC),
-  INDEX idx_ledger_tx_digest (tx_digest) WHERE tx_digest IS NOT NULL
+  INDEX idx_ledger_tx_digest (tx_digest)  -- UNIQUE index since each tx should appear once
 );
 
--- Billing records (charges and credits applied to accounts)
+-- Billing records (invoices - intent to charge/credit)
+-- Represents what NEEDS to be done (pending) vs what WAS done (paid/failed)
+-- References ledger_entries when successfully executed on-chain
 CREATE TABLE billing_records (
   id UUID PRIMARY KEY,
   customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
   billing_period_start TIMESTAMP NOT NULL,
   billing_period_end TIMESTAMP NOT NULL,
   amount_usd_cents BIGINT NOT NULL,        -- Charged amount (positive) or credit (negative)
-  type transaction_type NOT NULL,          -- ENUM: 'deposit', 'withdraw', 'charge', 'credit'
+  type transaction_type NOT NULL,          -- ENUM: 'charge', 'credit' (deposit/withdraw are not billed)
   status billing_status NOT NULL,          -- ENUM: 'pending', 'paid', 'failed'
-  tx_digest BYTEA CHECK (LENGTH(tx_digest) = 32),  -- Escrow charge transaction digest (32 bytes), NULL if pending
+
+  -- Itemization (JSON array of line items)
+  line_items JSONB NOT NULL DEFAULT '[]', -- [{description, amount_usd_cents, quantity, service_type, period}]
+  -- Example: [{"description": "Seal Pro tier subscription", "amount_usd_cents": 5000, "service_type": "seal", "period": "2025-01"}]
+
+  -- Reference to completed on-chain transaction (NULL if pending/failed)
+  ledger_entry_id UUID REFERENCES ledger_entries(id),
+
   created_at TIMESTAMP NOT NULL,
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
 
   INDEX idx_customer_period (customer_id, billing_period_start),
-  INDEX idx_billing_status (status) WHERE status != 'paid'
+  INDEX idx_billing_status (status) WHERE status != 'paid',
+  INDEX idx_ledger_reference (ledger_entry_id) WHERE ledger_entry_id IS NOT NULL
 );
 
 -- Processing state (Global Manager resumability)
@@ -1046,11 +1103,28 @@ CREATE TABLE system_control (
 
 ---
 
-**Document Version**: 1.16
+**Document Version**: 1.17
 **Last Updated**: 2025-01-19
 **Status**: Design specification (not yet implemented)
 
 **Changelog:**
+- v1.17: Consolidated financial tables and clarified billing/ledger relationship:
+  - **Removed `escrow_transactions` table** (redundant with ledger_entries)
+  - **Updated `ledger_entries`** to be on-chain transactions ONLY:
+    - `tx_digest` now NOT NULL (every entry is a completed blockchain transaction)
+    - `amount_sui_mist` and `sui_usd_rate_cents` now NOT NULL (always present for on-chain)
+    - Pure mirror of blockchain state - immutable record
+  - **Enhanced `billing_records`** for invoicing workflow:
+    - Added `line_items` JSONB field for itemization (subscription, usage, adjustments)
+    - Added `ledger_entry_id` foreign key to reference completed on-chain transaction
+    - Type restricted to 'charge' or 'credit' (deposits/withdrawals are not billed)
+    - Represents intent (pending) vs execution (paid/failed)
+  - **Three-table billing model**:
+    - `usage_records` → metering (what was used)
+    - `billing_records` → invoicing (intent to charge)
+    - `ledger_entries` → accounting (completed on-chain)
+  - **Updated Service Billing section** with complete flow showing relationship
+  - **Updated customer account structure diagram** to show new relationships
 - v1.16: Added global derivation index sequence, seal key pool, and security architecture:
   - **Added `seal_key_sequences` table** for atomic derivation_index increment
   - **Added `seal_key_pool` table** for MVP pre-registered key pool (100 keys)
