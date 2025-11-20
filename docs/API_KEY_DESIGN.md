@@ -24,8 +24,8 @@ This document defines the API key architecture for authenticating service reques
 
 API keys can exist in three states:
 
-1. **Active** (`isActive: true`, `deletedAt: null`) - Key is working and can authenticate requests
-2. **Revoked** (`isActive: false`, `deletedAt: null`) - Key is disabled but can be re-enabled
+1. **Active** (`isUserEnabled: true`, `deletedAt: null`) - Key is working and can authenticate requests
+2. **Revoked** (`isUserEnabled: false`, `deletedAt: null`) - Key is disabled but can be re-enabled
 3. **Deleted** (`deletedAt: not null`) - Soft deleted, invisible in UI but preserved for audit
 
 ### Slot Management
@@ -45,8 +45,8 @@ API keys can exist in three states:
 ### Lifecycle Operations
 
 1. **Create** - New API key created in Active state, counts as used slot
-2. **Revoke** - Set `isActive: false`, `revokedAt: timestamp`. Key stops working but still counts as used
-3. **Re-enable** - Set `isActive: true`, `revokedAt: null`. Revoked key becomes active again
+2. **Revoke** - Set `isUserEnabled: false`, `revokedAt: timestamp`. Key stops working but still counts as used
+3. **Re-enable** - Set `isUserEnabled: true`, `revokedAt: null`. Revoked key becomes active again
 4. **Delete** - Set `deletedAt: timestamp`. Soft delete, removes from UI and frees up slot
 
 ### Enforcement

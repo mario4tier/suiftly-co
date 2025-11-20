@@ -577,6 +577,24 @@ A banner can optionally have a small spinner appended.
 #### Toasters
 Top-middle of the screen, fade out after 3 seconds. Used for non-critical feedback after a user action (e.g. "Configuration saved", "Wallet connected", etc.)
 
+#### CopyableValue Security Pattern
+Component for displaying sensitive values (API keys, addresses). **Key principle: Full values kept in JS memory, never rendered to DOM.**
+
+```tsx
+// Backend: Send both preview and full value
+{ keyPreview: "sk_abc123...xyz789", fullKey: "sk_abc123..." }
+
+// Frontend: Display preview, copy full
+<CopyableValue value={keyPreview} copyValue={fullKey} />
+```
+
+**Security trade-offs accepted:**
+- ✅ Protected: DOM scraping, screenshots, passive observation
+- ⚠️ Not protected: XSS (but session already compromised), DevTools (physical access = game over)
+- Alternative (fetch-on-copy) rejected: More complex, minimal security gain, worse UX
+
+See: [copyable-value.tsx](../apps/webapp/src/components/ui/copyable-value.tsx), [seal.ts](../apps/api/src/routes/seal.ts)
+
 ### Service Pages (Seal / gRPC / GraphQL)
 
 **URL Pattern:** `/services/seal`, `/services/grpc`, `/services/graphql`
