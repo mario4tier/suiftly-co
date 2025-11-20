@@ -501,21 +501,70 @@ Schema uses **nullable `derivation_index`** to distinguish key types (no explici
 **Creation Flow (Derive or Import):**
 
 **Option 1: Derive New Seal Key (Recommended)**
-1. Customer initiates Seal key derivation through dashboard
-2. Backend derives BLS12-381 key pair from `MASTER_SEED` using next available `derivation_index`
-3. Store: `derivation_index`, `public_key` (48 bytes mpk)
-4. **No encrypted_private_key stored** - can regenerate on demand from seed + index
-5. Register on-chain: `sui client call --function create_and_transfer_v1 ... --args <PUBKEY>`
-6. Store returned `object_id` (NULL until registration succeeds)
-7. Customer receives `object_id` and `public_key` (mpk) for encryption operations
 
-**Option 2: Import Existing Seal Key**
+**SECURITY: Key derivation is handled by a privileged script with mm-reader access. The API server NEVER has access to mm vault or MASTER_SEED.**
+
+1. **Customer Request** (API Server):
+   - Customer initiates Seal key derivation through dashboard
+   - API server validates: authentication, service subscription, payment, key limits
+   - API server enqueues derivation job or calls privileged script
+
+2. **Key Derivation** (Privileged Script with mm-reader + postgres access):
+   - Script atomically increments global `derivation_index` sequence (in database transaction)
+   - Reads `MASTER_SEED` from mm vault (privileged operation)
+   - Derives BLS12-381 key pair using `derivation_index`: `seal-cli derive-key --seed <MASTER_SEED> --index <INDEX>`
+   - Registers key on-chain: `sui client call --function create_and_transfer_v1 ... --args <PUBKEY>`
+   - Stores in database: `derivation_index`, `public_key` (48 bytes mpk), `object_id`, `register_txn_digest`
+   - **No encrypted_private_key stored** - can regenerate on demand from seed + index
+   - Transaction ensures atomicity: if any step fails, `derivation_index` sequence rolls back (no gaps)
+
+3. **Response** (API Server):
+   - Customer receives `object_id` and `public_key` (mpk) for encryption operations
+   - Key is ready to use immediately
+
+**Global Derivation Index Sequence:**
+- `derivation_index` is **global across all customers** (scoped per `proc_index`, currently always 1)
+- Sequence managed in `seal_key_sequences` table with atomic increment
+- Each derived key gets a unique sequential index: 0, 1, 2, 3...
+- Indices are NEVER reused (even if key is deleted)
+- Transaction-safe: failed derivations don't waste indices
+
+**Option 2: Import Existing Seal Key** (Future)
 1. Customer provides existing BLS12-381 private key (32 bytes, hex-encoded)
 2. Backend validates key format and extracts public key (48 bytes)
 3. Encrypt private key with customer's wallet public key (for recovery)
 4. Store: `encrypted_private_key`, `public_key` (48 bytes mpk)
 5. **derivation_index is NULL** - indicates imported key that cannot be regenerated
 6. Register on-chain and store `object_id` (same as derived keys)
+
+**Seal Key Pool** (Future Enhancement)
+
+To avoid delays when users create new keys, we can maintain a small pool of pre-derived keys (up to 100):
+- Pool keys are pre-registered with known `object_id` and `public_key`
+- When user requests a key, assign from pool in atomic transaction
+- Background job keeps pool filled using privileged derivation script
+- Pool managed by `seal_key_pool` table (to be added)
+
+**Current Implementation:**
+- Keys are derived on-demand when requested by customer
+- Privileged TypeScript script handles derivation: `scripts/seal-keys/derive-and-register.ts`
+- Script requires mm-reader + postgres access (NOT the API server)
+- Testing: Reuse first 11 keys (indices 0-10) for development
+
+**Key Ownership:**
+- All registered Seal keys are owned by a Sui address controlled by Suiftly
+- Owner's private key stored in mm vault: `objects_owner_sk`
+- Keys transferred to customer wallets after payment validation
+
+**Related mm vault keys:**
+- `master_key`: Seed used for BLS12-381 key derivation (global MASTER_SEED)
+- `objects_owner_id`: Sui address owning all seal key objects
+- `objects_owner_sk`: Private key for the owner address (used for on-chain registration)
+
+**Script Requirements:**
+- Must run with mm-reader permissions (access to mm vault)
+- Must have postgres database access (read/write seal_keys table)
+- API server NEVER has mm-reader access (security boundary)
 
 **Seal Key States**
 - `is_user_enabled`: Indicates the user intent of having the key served by our key servers. This is independent of the seal_key_state.
@@ -681,7 +730,11 @@ CREATE TABLE seal_keys (
   CHECK (
     (derivation_index IS NOT NULL AND encrypted_private_key IS NULL) OR
     (derivation_index IS NULL AND encrypted_private_key IS NOT NULL)
-  )
+  ),
+
+  -- Unique constraint: derivation_index must be globally unique (when not NULL)
+  -- Prevents race conditions in key derivation
+  UNIQUE (derivation_index)
 );
 
 -- Seal packages (Seal service specific - package addresses associated with Seal keys)
@@ -703,6 +756,20 @@ CREATE TABLE seal_packages (
   -- Constraints
   CHECK (name IS NULL OR LENGTH(name) <= 64)
 );
+
+-- Seal key derivation index sequence (global sequence per proc_index)
+-- Ensures atomic increment of derivation_index with no gaps on transaction rollback
+CREATE TABLE seal_key_sequences (
+  proc_index INTEGER PRIMARY KEY,                  -- Processing group (currently always 1)
+  next_derivation_index INTEGER NOT NULL DEFAULT 0, -- Next available derivation index
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- Initialize sequence for proc_index = 1
+-- INSERT INTO seal_key_sequences (proc_index, next_derivation_index)
+-- SELECT 1, COALESCE(MAX(derivation_index), -1) + 1
+-- FROM seal_keys
+-- WHERE derivation_index IS NOT NULL;
 
 -- Usage tracking for billing
 CREATE TABLE usage_records (
@@ -906,11 +973,15 @@ CREATE TABLE system_control (
 - Extend service_instances and api_keys tables
 
 ### Security Considerations
+- **CRITICAL: API server NEVER has mm-reader access** - seal key derivation in privileged scripts only
+- **Privilege separation**: Only TypeScript scripts in `scripts/seal-keys/` can read MASTER_SEED from mm vault
+- **Global sequence atomicity**: Database transaction ensures no race conditions or gaps in derivation_index
 - Never log full API keys (log only key_id or prefix)
-- Encrypt Seal private keys with customer's wallet
+- Encrypt imported Seal private keys with customer's wallet (derived keys store only index)
 - Rate limit authentication endpoints (prevent brute force)
 - Implement API key rotation reminders
 - Monitor for suspicious patterns (rapid key creation)
+- Unique constraint on derivation_index prevents duplicate key derivation
 
 ### Performance Targets
 - API key lookup: <1ms (cached), <10ms (DB)
@@ -920,11 +991,22 @@ CREATE TABLE system_control (
 
 ---
 
-**Document Version**: 1.15
-**Last Updated**: 2025-01-14
+**Document Version**: 1.16
+**Last Updated**: 2025-01-19
 **Status**: Design specification (not yet implemented)
 
 **Changelog:**
+- v1.16: Added global derivation index sequence and security architecture:
+  - **Added `seal_key_sequences` table** for atomic derivation_index increment
+  - Global sequence per `proc_index` (currently always 1) prevents race conditions
+  - Transaction-safe: rollback prevents gaps in derivation sequence
+  - **Added UNIQUE constraint** on `seal_keys.derivation_index` (prevents duplicates)
+  - **Updated Creation Flow** to document privileged script architecture
+  - **Security boundary**: API server NEVER has mm-reader access
+  - Privileged TypeScript script (`scripts/seal-keys/derive-and-register.ts`) handles key derivation
+  - Script requires mm-reader + postgres access to read MASTER_SEED and register keys
+  - Documented global scope of derivation_index (across all customers)
+  - Updated Seal Key Pool section to reflect current on-demand implementation
 - v1.15: Added user-defined names to seal_keys and seal_packages:
   - Added `name VARCHAR(64)` field to both seal_keys and seal_packages
   - 64-character limit for DNS/Kubernetes compatibility (RFC 1123 DNS label)
