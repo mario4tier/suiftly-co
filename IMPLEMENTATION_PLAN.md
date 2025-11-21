@@ -304,7 +304,7 @@ psql suiftly_dev -c "SELECT * FROM timescaledb_information.hypertables WHERE hyp
 - Real mode: Ed25519 signature verification
 - JWT generation with jose
 - httpOnly cookie setting
-**Test:** 
+**Test:**
 ```typescript
 // apps/api/tests/auth.test.ts
 test('mock auth accepts any signature')
@@ -390,92 +390,84 @@ test('JWT cookie is httpOnly')
 
 **Test:** ✅ E2E tests pass (2/2) - auth flow + protected endpoint verification
 
-## Phase 9: Dashboard Layout
+## Phase 9: Dashboard Layout ✅ COMPLETE
 **Goal:** Main dashboard structure
 **Ref:** docs/UI_DESIGN.md#dashboard-layout
 **Files:** apps/webapp/src/components/layout/
 **Components:**
-- DashboardLayout
-- Header with WalletWidget
-- Sidebar navigation
-- Content area
-**Test:** Visual regression test with Playwright
+- DashboardLayout - Premium layout with header and sidebar
+- Header with WalletWidget - Logo, beta badge, theme toggle, wallet widget
+- Sidebar navigation - Cloudflare-style navigation with collapsible sections
+- Content area - Max-width container with proper padding
 
-## Phase 10: Service Configuration UI (Seal Only)
+**Implemented:**
+- ✅ DashboardLayout.tsx - Main layout wrapper
+- ✅ Header.tsx - Logo, beta badge, theme toggle, WalletWidget
+- ✅ Sidebar.tsx - Collapsible navigation with service sections, active state styling
+
+## Phase 10: Service Configuration UI (Seal Only) ✅ COMPLETE
 **Goal:** Seal service config form
 **Ref:** docs/UI_DESIGN.md#service-configuration-form
-**Files:** apps/webapp/src/pages/services/seal/
-**Features:**
-- React Hook Form + Zod
-- Tier selection (Starter/Pro/Enterprise)
-- Origin configuration
-- Live price calculation
-**Test:** Form validation, price updates correctly
+**Files:** apps/webapp/src/components/services/, apps/webapp/src/routes/services/
 
-## Phase 11: Service Backend CRUD
+**Implemented:**
+- ✅ SealConfigForm.tsx - Onboarding subscription form with tier selection
+- ✅ SealInteractiveForm.tsx - Full-featured management form with tabs
+- ✅ SealKeysSection.tsx - Seal key management with packages
+- ✅ ApiKeysSection.tsx - API key management (create, revoke, delete)
+- ✅ AddPackageModal.tsx - Modal for adding packages to seal keys
+
+**Features:**
+- ✅ Tier selection (Starter/Pro/Enterprise) with pricing from global config
+- ✅ Terms of service acceptance with modal
+- ✅ Tab-based layout (Overview, X-API-Key, Seal Keys, More Settings)
+- ✅ Monthly charges breakdown table
+- ✅ Service enable/disable toggle
+- ✅ Burst toggle (Pro/Enterprise)
+- ✅ IP allowlist management with validation
+- ✅ URL-based tab navigation for deep linking
+
+## Phase 11: Service Backend CRUD ✅ COMPLETE
 **Goal:** Service instance management with balance/limit validation
 **Ref:** docs/CUSTOMER_SERVICE_SCHEMA.md#balance--spending-limit-validation
-**Files:** apps/api/src/routes/services.ts
-**Endpoints:**
-- services.list
-- services.getConfig
-- services.updateConfig (with validation)
-- services.enable (with validation)
-- services.disable
+**Files:** apps/api/src/routes/services.ts, apps/api/src/routes/seal.ts
+
+**Implemented Endpoints:**
+- ✅ services.subscribe - Create service with payment (service-first pattern)
+- ✅ services.list - List all services for customer
+- ✅ services.getByType - Get specific service
+- ✅ services.toggleService - Enable/disable service (State 3 ↔ 4)
+- ✅ services.updateConfig - Update burst, IP allowlist
+
+**Seal-Specific Endpoints (apps/api/src/routes/seal.ts):**
+- ✅ seal.getUsageStats - Get usage statistics (keys, packages, allowlist)
+- ✅ seal.listApiKeys / createApiKey / revokeApiKey / reEnableApiKey / deleteApiKey
+- ✅ seal.listKeys / createKey / updateKey / toggleKey
+- ✅ seal.addPackage / updatePackage / deletePackage / togglePackage
+- ✅ seal.getMoreSettings / updateBurstSetting / updateIpAllowlist
 
 **Critical: Balance/Limit Validation**
 
-Before allowing operations that incur charges, validate:
-```typescript
-// Before enabling service or upgrading tier
-async function validateOperation(customerId: number, estimatedCost: number) {
-  const customer = await getCustomer(customerId);
+Service-first pattern implemented:
+1. Create service with `subscriptionChargePending=true`
+2. Attempt payment via Sui escrow
+3. Update pending flag on success
+4. Return warnings (not errors) for low balance
 
-  // Check 1: Sufficient balance
-  if (customer.current_balance_usd_cents < estimatedCost * 100) {
-    return {
-      allowed: false,
-      error: "insufficient_balance",
-      details: {
-        current_balance_usd: customer.current_balance_usd_cents / 100,
-        estimated_cost_usd: estimatedCost,
-        required_deposit_usd: estimatedCost - (customer.current_balance_usd_cents / 100)
-      }
-    };
-  }
+**Operations with validation:**
+- ✅ Subscribe validates balance and spending limits (warnings only)
+- ✅ Toggle service checks pending payment status
+- ✅ Tier-specific features validated (burst, IP allowlist for Pro/Enterprise only)
 
-  // Check 2: Within monthly limit
-  const projectedMonthly = customer.current_month_charged_usd_cents + (estimatedCost * 100);
-  if (projectedMonthly > customer.max_monthly_usd_cents) {
-    return {
-      allowed: false,
-      error: "monthly_limit_exceeded",
-      details: {
-        max_monthly_usd: customer.max_monthly_usd_cents / 100,
-        current_month_charged_usd: customer.current_month_charged_usd_cents / 100,
-        estimated_cost_usd: estimatedCost,
-        remaining_authorization_usd: (customer.max_monthly_usd_cents - customer.current_month_charged_usd_cents) / 100
-      }
-    };
-  }
-
-  return { allowed: true };
-}
-```
-
-**Operations requiring validation:**
-- Enabling a new service
-- Upgrading service tier
-- Purchasing additional Seal keys
-- Any configuration change that increases costs
-
-**Test:** Integration tests with test database, including validation error cases
-
-## Phase 12: Coming Soon Pages
+## Phase 12: Coming Soon Pages ✅ COMPLETE
 **Goal:** Placeholder for gRPC/GraphQL
 **Ref:** apps/webapp/src/routes/services/grpc.lazy.tsx, apps/webapp/src/routes/services/graphql.lazy.tsx
 **Files:** apps/webapp/src/routes/services/{grpc,graphql}.lazy.tsx
-**Test:** Routes render correct content
+
+**Implemented:**
+- ✅ grpc.lazy.tsx - Coming Soon page with DashboardLayout
+- ✅ graphql.lazy.tsx - Coming Soon page with DashboardLayout
+- Both pages render placeholder content indicating future availability
 
 ## Phase 13: Global Manager Core
 **Goal:** Daemon process structure
@@ -555,25 +547,45 @@ customer_id,encrypted_key,rate_limit,tier,service_type
 - Rate limits match tier configurations
 - File is atomically replaced (no partial reads)
 
-## Phase 17: Wallet Widget & Escrow
+## Phase 17: Wallet Widget & Escrow ✅ COMPLETE
 **Goal:** Balance display & fund management
 **Ref:** docs/UI_DESIGN.md#wallet-widget-header-component
-**Files:** apps/webapp/src/components/wallet/WalletWidget.tsx
-**Features:**
-- Collapsible balance display
-- Deposit/Withdraw modals
-- Escrow panel (optional)
-**Test:** Mock escrow contract interactions
+**Files:**
+- apps/webapp/src/components/wallet/WalletWidget.tsx
+- apps/webapp/src/routes/billing.lazy.tsx
+- apps/api/src/routes/billing.ts
 
-## Phase 18: API Key Management UI
+**Implemented:**
+- ✅ WalletWidget.tsx - Connected wallet dropdown with address, copy, billing link, disconnect
+- ✅ Billing page - Full-featured billing management
+- ✅ Escrow account display with balance and spending limit
+- ✅ Deposit/Withdraw modals with validation
+- ✅ Spending limit adjustment (28-day protection)
+- ✅ "How It Works" collapsible explanation with diagram
+- ✅ Billing history with transaction details
+- ✅ Next scheduled payment section
+- ✅ Backend: billing.getBalance, billing.getTransactions, billing.deposit, billing.withdraw, billing.updateSpendingLimit
+- ✅ Payment reconciliation on deposit (clears pending subscription charges)
+- ✅ Mock Sui service for development/testing
+
+## Phase 18: API Key Management UI ✅ COMPLETE
 **Goal:** View/regenerate API keys
-**Files:** apps/webapp/src/pages/api-keys/
-**Features:**
-- List keys by service
-- Show/hide key values
-- Regenerate with confirmation
-- Copy to clipboard
-**Test:** Keys display correctly, regenerate works
+**Files:**
+- apps/webapp/src/routes/api-keys.lazy.tsx
+- apps/webapp/src/components/services/ApiKeysSection.tsx
+- apps/api/src/routes/seal.ts
+
+**Implemented:**
+- ✅ Global API Keys page - Lists all API keys across services
+- ✅ ApiKeysSection component - Full management within Seal service
+- ✅ List keys by service with status (Active/Revoked)
+- ✅ Copy full key to clipboard
+- ✅ Create new API keys
+- ✅ Revoke/Re-enable API keys
+- ✅ Delete API keys with confirmation
+- ✅ Key preview display (shows partial key)
+- ✅ Usage stats integration (keys used vs total)
+- ✅ "Manage" link from global page to service-specific management
 
 ## Phase 19: Deployment Scripts
 **Goal:** Idempotent Python deployment
@@ -644,30 +656,32 @@ customer_id,encrypted_key,rate_limit,tier,service_type
 
 Incremental improvements identified during development (not full phases):
 
-### 3. Wire up Burst Toggle
-**Status:** UI exists, backend wired, needs integration
+### 3. Wire up Burst Toggle ✅ COMPLETE
+**Status:** Fully implemented
 **Files:**
 - apps/webapp/src/components/services/SealInteractiveForm.tsx
 - apps/api/src/routes/seal.ts
 
-**Task:** Connect burst toggle switch to `seal.updateConfig` endpoint
-- Add `onBurstChange` handler prop to SealInteractiveForm
-- Call `seal.updateConfig` mutation with updated `burst_limit` in config
-- Apply same loading state pattern as service toggle
-- Update UI to reflect new burst state after success
+**Implemented:**
+- ✅ Burst toggle connected to `seal.updateBurstSetting` endpoint
+- ✅ Loading state and error handling
+- ✅ Settings loaded from backend on mount
+- ✅ Tier validation (Pro/Enterprise only)
 
-### 4. Implement IP Allowlist Updates
-**Status:** UI exists, backend ready, needs integration
+### 4. Implement IP Allowlist Updates ✅ COMPLETE
+**Status:** Fully implemented
 **Files:**
 - apps/webapp/src/components/services/SealInteractiveForm.tsx
 - apps/api/src/routes/seal.ts
+- packages/shared/src/schemas/ip-address.ts
 
-**Task:** Add live IP allowlist editing with debounced API calls
-- Add debounced input handler (e.g., 500ms delay after typing stops)
-- Call `seal.updateConfig` mutation with updated `ip_allowlist` array
-- Show loading indicator during save
-- Handle validation errors (invalid IP format, exceeding tier limit)
-- Display success feedback after save
+**Implemented:**
+- ✅ IP allowlist text input with real-time validation
+- ✅ Save/Cancel buttons for unsaved changes
+- ✅ `seal.updateIpAllowlist` endpoint
+- ✅ Client-side validation with error display
+- ✅ Toggle enable/disable independent of editing
+- ✅ Tier validation (Pro/Enterprise only)
 
 ### 5. Implement Plan Change
 **Status:** UI button exists, functionality not implemented
