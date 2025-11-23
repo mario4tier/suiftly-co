@@ -35,11 +35,17 @@ export const billingRouter = router({
       });
     }
 
+    // First, check if we have an escrow address stored in the database
+    const customer = await db.query.customers.findFirst({
+      where: eq(customers.walletAddress, ctx.user.walletAddress),
+    });
+
     const suiService = getSuiService();
     const account = await suiService.getAccount(ctx.user.walletAddress);
 
     if (!account) {
       // No escrow account yet - return zeros but with default spending limit
+      // Also return escrowContractId from DB if we have it (for client to use)
       return {
         found: false,
         balanceUsd: 0,
@@ -48,6 +54,7 @@ export const billingRouter = router({
         currentPeriodRemainingUsd: SPENDING_LIMIT.DEFAULT_USD, // Full default limit available
         periodEndsAt: null,
         message: 'No escrow account created yet',
+        escrowContractId: customer?.escrowContractId || null, // Return DB value if available
       };
     }
 
@@ -75,6 +82,7 @@ export const billingRouter = router({
       currentPeriodRemainingUsd: remaining,
       periodEndsAt,
       accountAddress: account.accountAddress,
+      escrowContractId: customer?.escrowContractId || account.accountAddress, // Prefer DB value, fallback to on-chain
     };
   }),
 
@@ -192,6 +200,11 @@ export const billingRouter = router({
 
       const suiService = getSuiService();
 
+      // Check if we have an escrow address stored in the database
+      let customer = await db.query.customers.findFirst({
+        where: eq(customers.walletAddress, ctx.user.walletAddress),
+      });
+
       // Convert USD to cents
       const amountCents = Math.round(input.amountUsd * 100);
       const spendingLimitCents = input.initialSpendingLimitUsd !== undefined
@@ -199,10 +212,12 @@ export const billingRouter = router({
         : undefined;
 
       // Execute deposit on blockchain/mock
+      // Pass escrowAddress if we have it in DB, otherwise let it create new account
       const result = await suiService.deposit({
         userAddress: ctx.user.walletAddress,
         amountUsdCents: amountCents,
         initialSpendingLimitUsdCents: spendingLimitCents,
+        escrowAddress: customer?.escrowContractId || undefined,
       });
 
       if (!result.success) {
@@ -212,10 +227,37 @@ export const billingRouter = router({
         });
       }
 
-      // Get customer ID for ledger entry
-      const customer = await db.query.customers.findFirst({
-        where: eq(customers.walletAddress, ctx.user.walletAddress),
-      });
+      // If account was created, update the database with the escrow address
+      if (result.accountCreated && result.createdObjects) {
+        if (!customer) {
+          // Create new customer record with escrow address
+          const newCustomer = await db
+            .insert(customers)
+            .values({
+              customerId: Math.floor(Math.random() * 1000000000),
+              walletAddress: ctx.user.walletAddress,
+              escrowContractId: result.createdObjects.escrowAddress,
+            })
+            .returning();
+          customer = newCustomer[0];
+        } else if (!customer.escrowContractId) {
+          // Update existing customer with escrow address
+          await db
+            .update(customers)
+            .set({
+              escrowContractId: result.createdObjects.escrowAddress,
+              updatedAt: new Date(),
+            })
+            .where(eq(customers.customerId, customer.customerId));
+        }
+      }
+
+      // Get customer ID for ledger entry (re-fetch if needed)
+      if (!customer) {
+        customer = await db.query.customers.findFirst({
+          where: eq(customers.walletAddress, ctx.user.walletAddress),
+        });
+      }
 
       if (!customer) {
         throw new TRPCError({
@@ -276,13 +318,20 @@ export const billingRouter = router({
 
       const suiService = getSuiService();
 
+      // Check if we have an escrow address stored in the database
+      let customer = await db.query.customers.findFirst({
+        where: eq(customers.walletAddress, ctx.user.walletAddress),
+      });
+
       // Convert USD to cents
       const amountCents = Math.round(input.amountUsd * 100);
 
       // Execute withdrawal on blockchain/mock
+      // Pass escrowAddress if we have it in DB, otherwise let it create new account
       const result = await suiService.withdraw({
         userAddress: ctx.user.walletAddress,
         amountUsdCents: amountCents,
+        escrowAddress: customer?.escrowContractId || undefined,
       });
 
       if (!result.success) {
@@ -292,10 +341,37 @@ export const billingRouter = router({
         });
       }
 
-      // Get customer ID for ledger entry
-      const customer = await db.query.customers.findFirst({
-        where: eq(customers.walletAddress, ctx.user.walletAddress),
-      });
+      // If account was created, update the database with the escrow address
+      if (result.accountCreated && result.createdObjects) {
+        if (!customer) {
+          // Create new customer record with escrow address
+          const newCustomer = await db
+            .insert(customers)
+            .values({
+              customerId: Math.floor(Math.random() * 1000000000),
+              walletAddress: ctx.user.walletAddress,
+              escrowContractId: result.createdObjects.escrowAddress,
+            })
+            .returning();
+          customer = newCustomer[0];
+        } else if (!customer.escrowContractId) {
+          // Update existing customer with escrow address
+          await db
+            .update(customers)
+            .set({
+              escrowContractId: result.createdObjects.escrowAddress,
+              updatedAt: new Date(),
+            })
+            .where(eq(customers.customerId, customer.customerId));
+        }
+      }
+
+      // Get customer ID for ledger entry (re-fetch if needed)
+      if (!customer) {
+        customer = await db.query.customers.findFirst({
+          where: eq(customers.walletAddress, ctx.user.walletAddress),
+        });
+      }
 
       if (!customer) {
         throw new TRPCError({
@@ -331,6 +407,96 @@ export const billingRouter = router({
     }),
 
   /**
+   * Report escrow account address
+   * Called by client after creating an escrow account on-chain
+   * This updates our database with the escrow address for future operations
+   */
+  reportEscrowAddress: protectedProcedure
+    .input(
+      z.object({
+        escrowAddress: z.string()
+          .regex(/^0x[0-9a-fA-F]{64}$/, 'Invalid Sui address format (must be 0x + 64 hex chars)'),
+        userTrackingAddress: z.string()
+          .regex(/^0x[0-9a-fA-F]{64}$/, 'Invalid Sui address format')
+          .optional(),
+        suiftlyTrackingAddress: z.string()
+          .regex(/^0x[0-9a-fA-F]{64}$/, 'Invalid Sui address format')
+          .optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.user) {
+        throw new TRPCError({
+          code: 'UNAUTHORIZED',
+          message: 'Not authenticated',
+        });
+      }
+
+      // Validate escrow address is not empty or invalid
+      if (!input.escrowAddress || input.escrowAddress === '0x0000000000000000000000000000000000000000000000000000000000000000') {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Invalid escrow address: cannot be empty or zero address',
+        });
+      }
+
+      // Find or create the customer record
+      let customer = await db.query.customers.findFirst({
+        where: eq(customers.walletAddress, ctx.user.walletAddress),
+      });
+
+      if (!customer) {
+        // Create customer record if doesn't exist
+        const result = await db
+          .insert(customers)
+          .values({
+            customerId: Math.floor(Math.random() * 1000000000), // Generate random ID
+            walletAddress: ctx.user.walletAddress,
+            escrowContractId: input.escrowAddress,
+          })
+          .returning();
+        customer = result[0];
+      } else if (!customer.escrowContractId) {
+        // Update existing customer with escrow address
+        await db
+          .update(customers)
+          .set({
+            escrowContractId: input.escrowAddress,
+            updatedAt: new Date(),
+          })
+          .where(eq(customers.customerId, customer.customerId));
+      } else if (customer.escrowContractId !== input.escrowAddress) {
+        // Customer already has a different escrow address - this is an error
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: `Customer already has escrow address ${customer.escrowContractId}`,
+        });
+      }
+
+      // Log the activity
+      await logActivity({
+        customerId: customer.customerId,
+        clientIp: ctx.req.ip || ctx.req.socket.remoteAddress || '127.0.0.1',
+        message: `Reported escrow account address: ${input.escrowAddress}`,
+      });
+
+      // Sync the account state from blockchain
+      const suiService = getSuiService();
+      const account = await suiService.syncAccount(ctx.user.walletAddress);
+
+      return {
+        success: true,
+        escrowAddress: input.escrowAddress,
+        synced: !!account,
+        accountState: account ? {
+          balanceUsd: account.balanceUsdCents / 100,
+          spendingLimitUsd: account.spendingLimitUsdCents === 0 ? null : account.spendingLimitUsdCents / 100,
+          currentPeriodChargedUsd: account.currentPeriodChargedUsdCents / 100,
+        } : null,
+      };
+    }),
+
+  /**
    * Update spending limit
    */
   updateSpendingLimit: protectedProcedure
@@ -357,13 +523,20 @@ export const billingRouter = router({
 
       const suiService = getSuiService();
 
+      // Check if we have an escrow address stored in the database
+      let customer = await db.query.customers.findFirst({
+        where: eq(customers.walletAddress, ctx.user.walletAddress),
+      });
+
       // Convert USD to cents (0 = unlimited)
       const limitCents = Math.round(input.newLimitUsd * 100);
 
       // Execute update on blockchain/mock
+      // Pass escrowAddress if we have it in DB, otherwise let it create new account
       const result = await suiService.updateSpendingLimit({
         userAddress: ctx.user.walletAddress,
         newLimitUsdCents: limitCents,
+        escrowAddress: customer?.escrowContractId || undefined,
       });
 
       if (!result.success) {
@@ -373,10 +546,37 @@ export const billingRouter = router({
         });
       }
 
-      // Get customer ID for activity log
-      const customer = await db.query.customers.findFirst({
-        where: eq(customers.walletAddress, ctx.user.walletAddress),
-      });
+      // If account was created, update the database with the escrow address
+      if (result.accountCreated && result.createdObjects) {
+        if (!customer) {
+          // Create new customer record with escrow address
+          const newCustomer = await db
+            .insert(customers)
+            .values({
+              customerId: Math.floor(Math.random() * 1000000000),
+              walletAddress: ctx.user.walletAddress,
+              escrowContractId: result.createdObjects.escrowAddress,
+            })
+            .returning();
+          customer = newCustomer[0];
+        } else if (!customer.escrowContractId) {
+          // Update existing customer with escrow address
+          await db
+            .update(customers)
+            .set({
+              escrowContractId: result.createdObjects.escrowAddress,
+              updatedAt: new Date(),
+            })
+            .where(eq(customers.customerId, customer.customerId));
+        }
+      }
+
+      // Get customer ID for activity log (re-fetch if needed)
+      if (!customer) {
+        customer = await db.query.customers.findFirst({
+          where: eq(customers.walletAddress, ctx.user.walletAddress),
+        });
+      }
 
       if (!customer) {
         throw new TRPCError({
