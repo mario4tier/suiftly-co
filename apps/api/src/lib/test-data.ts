@@ -9,10 +9,11 @@ import { db } from '@suiftly/database';
 import {
   customers, serviceInstances, ledgerEntries, apiKeys, sealKeys,
   refreshTokens, billingRecords, escrowTransactions, usageRecords,
-  haproxyRawLogs, userActivityLogs
+  haproxyRawLogs, userActivityLogs, mockSuiTransactions
 } from '@suiftly/database/schema';
 import { eq } from 'drizzle-orm';
 import { decryptSecret } from './encryption';
+import { suiMockConfig } from '../services/sui/mock-config';
 
 const MOCK_WALLET_ADDRESS = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 
@@ -86,8 +87,12 @@ export async function resetCustomerTestData(options: TestDataResetOptions = {}) 
     await tx.delete(usageRecords).where(eq(usageRecords.customerId, customerId));
     await tx.delete(haproxyRawLogs).where(eq(haproxyRawLogs.customerId, customerId));
     await tx.delete(userActivityLogs).where(eq(userActivityLogs.customerId, customerId));
+    await tx.delete(mockSuiTransactions).where(eq(mockSuiTransactions.customerId, customerId));
 
-    // 5. Update customer with new balance/spending limit
+    // 5. Clear Sui mock config (reset delays and failure injections)
+    suiMockConfig.clearConfig();
+
+    // 6. Update customer with new balance/spending limit
     await tx
       .update(customers)
       .set({

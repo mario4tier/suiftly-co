@@ -7,7 +7,9 @@
     ".": "./src/index.ts",
     "./types": "./src/types/index.ts",
     "./schemas": "./src/schemas/index.ts",
-    "./constants": "./src/constants/index.ts"
+    "./constants": "./src/constants/index.ts",
+    "./db-clock": "./src/db-clock/index.ts",
+    "./billing": "./src/billing/index.ts"
   },
   "dependencies": {
     "zod": "^3.24.1"

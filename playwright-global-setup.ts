@@ -102,6 +102,17 @@ async function globalTeardown() {
   } catch {
     // Server might be down, that's ok
   }
+
+  // Reset to real database clock (important for cleanup)
+  try {
+    await fetch('http://localhost:3000/test/clock/real', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    console.log('✅ Reset to real database clock');
+  } catch {
+    // Server might be down, that's ok
+  }
 }
 
 export default globalSetup;

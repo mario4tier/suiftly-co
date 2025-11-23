@@ -271,6 +271,7 @@ export const servicesRouter = router({
           userAddress: customer.walletAddress,
           amountUsdCents: priceUsdCents,
           description: `${input.serviceType} ${input.tier} tier subscription`,
+          escrowAddress: customer.escrowContractId,
         });
 
         if (!chargeResult.success) {
@@ -441,13 +442,13 @@ export const servicesRouter = router({
         const tierPrice = getTierPriceUsdCents(service.tier);
 
         console.log('[TOGGLE] Validating funds for pending charge - Account:', account ? {
-          balance: account.balanceUsdcCents,
+          balance: account.balanceUsdCents,
           tierPrice,
           hasAccount: !!account
         } : 'null');
 
         // If no account exists or insufficient balance, guide to deposit
-        if (!account || account.balanceUsdcCents < tierPrice) {
+        if (!account || account.balanceUsdCents < tierPrice) {
           throw new TRPCError({
             code: 'BAD_REQUEST',
             message: 'Insufficient funds. Deposit to proceed via Billing page.',

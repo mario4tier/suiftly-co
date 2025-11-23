@@ -11,3 +11,7 @@ export * from './escrow';
 export * from './logs';
 export * from './auth';
 export * from './system';
+
+// Mock tables (test/development only - NOT for production use)
+export * from './mock';
+export * from './mock-tracking';

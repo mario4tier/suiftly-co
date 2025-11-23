@@ -15,6 +15,10 @@
  *    - Reduces user friction (one signature instead of two)
  *    - Real implementation uses PTB (Programmable Transaction Block) to do create+operation atomically
  *    - Mock implementation simulates this behavior
+ * 7. Smart contracts CANNOT discover objects - escrow address must be passed as parameter
+ *    - If escrowAddress provided: use existing account
+ *    - If not provided: create new account with three objects
+ *    - Discovery (via tracking objects) is ONLY for backend recovery after transient failures
  *
  * Based on ESCROW_DESIGN.md:
  * - Per-user shared object escrow model
@@ -38,7 +42,7 @@ export interface EscrowAccount {
   /** Suiftly backend address (has capability) */
   suiftlyAddress: string;
   /** Balance in USDC (MVP: integer cents) */
-  balanceUsdcCents: number;
+  balanceUsdCents: number;
   /** 28-day spending limit in USD cents (0 = unlimited) */
   spendingLimitUsdCents: number;
   /** Amount charged in current 28-day period (USD cents) */
@@ -66,6 +70,18 @@ export interface TransactionResult {
   gasUsed?: number;
   /** Account was created as part of this transaction */
   accountCreated?: boolean;
+  /**
+   * When account is created, contains the three object addresses
+   * This allows immediate storage in DB without needing to query blockchain
+   */
+  createdObjects?: {
+    /** Shared escrow account address */
+    escrowAddress: string;
+    /** User's tracking object address (owned by user) */
+    userTrackingAddress: string;
+    /** Suiftly's tracking object address (owned by Suiftly) */
+    suiftlyTrackingAddress: string;
+  };
 }
 
 /**
@@ -75,9 +91,15 @@ export interface DepositParams {
   /** User's wallet address */
   userAddress: string;
   /** Amount to deposit in USDC cents */
-  amountUsdcCents: number;
+  amountUsdCents: number;
   /** Initial spending limit if account doesn't exist (USD cents, 0 = unlimited) */
   initialSpendingLimitUsdCents?: number;
+  /**
+   * Escrow account address (shared object)
+   * - If provided: use existing account
+   * - If not provided: create new account with three objects (escrow + 2 tracking)
+   */
+  escrowAddress?: string;
 }
 
 /**
@@ -87,9 +109,15 @@ export interface WithdrawParams {
   /** User's wallet address */
   userAddress: string;
   /** Amount to withdraw in USDC cents */
-  amountUsdcCents: number;
+  amountUsdCents: number;
   /** Initial spending limit if account doesn't exist (USD cents, 0 = unlimited) */
   initialSpendingLimitUsdCents?: number;
+  /**
+   * Escrow account address (shared object)
+   * - If provided: use existing account
+   * - If not provided: create new account with three objects (escrow + 2 tracking)
+   */
+  escrowAddress?: string;
 }
 
 /**
@@ -102,6 +130,12 @@ export interface ChargeParams {
   amountUsdCents: number;
   /** Description for ledger */
   description: string;
+  /**
+   * Escrow account address (shared object)
+   * - REQUIRED: charge only works on existing accounts
+   * - Smart contract cannot discover this - must be provided
+   */
+  escrowAddress: string;
 }
 
 /**
@@ -112,6 +146,12 @@ export interface UpdateSpendingLimitParams {
   userAddress: string;
   /** New spending limit in USD cents (0 = unlimited) */
   newLimitUsdCents: number;
+  /**
+   * Escrow account address (shared object)
+   * - If provided: use existing account
+   * - If not provided: create new account with three objects (escrow + 2 tracking)
+   */
+  escrowAddress?: string;
 }
 
 /**
@@ -223,8 +263,9 @@ export interface ISuiService {
    *
    * NOTE: Does NOT create account automatically. If account doesn't exist,
    * credit fails. This is intentional - we only credit existing customers.
+   * The escrowAddress MUST be provided as smart contracts cannot discover it.
    *
-   * @param params - Charge parameters (amount will be added)
+   * @param params - Charge parameters (amount will be added, escrowAddress required)
    * @returns Transaction result
    * @throws If account doesn't exist
    */
@@ -273,6 +314,46 @@ export interface ISuiService {
    * @returns True if mock, false if real
    */
   isMock(): boolean;
+
+  /**
+   * Get transaction history for user (mock only)
+   *
+   * Returns simulated blockchain transaction history.
+   * Real implementation would query blockchain indexer.
+   *
+   * @param userAddress - User's wallet address
+   * @param limit - Maximum number of transactions to return (default: 100)
+   * @returns Array of transactions, newest first
+   */
+  getTransactionHistory(
+    userAddress: string,
+    limit?: number
+  ): Promise<TransactionHistoryEntry[]>;
+}
+
+/**
+ * Transaction history entry
+ * Returned by getTransactionHistory
+ */
+export interface TransactionHistoryEntry {
+  /** Transaction digest/hash */
+  txDigest: string;
+  /** Transaction type */
+  txType: 'deposit' | 'withdraw' | 'charge' | 'credit';
+  /** Amount in USD cents */
+  amountUsdCents: number;
+  /** Description (for charges/credits) */
+  description?: string;
+  /** Whether transaction succeeded */
+  success: boolean;
+  /** Error message if failed */
+  error?: string;
+  /** Simulated checkpoint/block height */
+  checkpoint?: number;
+  /** Balance after transaction */
+  balanceAfterUsdCents?: number;
+  /** When transaction occurred */
+  timestamp: Date;
 }
 
 /**

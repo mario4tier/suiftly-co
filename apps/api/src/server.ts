@@ -297,7 +297,7 @@ if (config.NODE_ENV !== 'production') {
     reply.send({
       found: true,
       walletAddress,
-      balanceUsd: account.balanceUsdcCents / 100,
+      balanceUsd: account.balanceUsdCents / 100,
       spendingLimitUsd: account.spendingLimitUsdCents / 100,
       currentPeriodChargedUsd: account.currentPeriodChargedUsdCents / 100,
       currentPeriodStartMs: account.currentPeriodStartMs,
@@ -323,7 +323,7 @@ if (config.NODE_ENV !== 'production') {
 
     const result = await suiService.deposit({
       userAddress: walletAddress,
-      amountUsdcCents: Math.round(amountUsd * 100),
+      amountUsdCents: Math.round(amountUsd * 100),
       initialSpendingLimitUsdCents: initialSpendingLimitUsd !== undefined
         ? Math.round(initialSpendingLimitUsd * 100)
         : undefined,
@@ -335,7 +335,7 @@ if (config.NODE_ENV !== 'production') {
       digest: result.digest,
       accountCreated: result.accountCreated,
       newBalanceUsd: result.success
-        ? ((await suiService.getAccount(walletAddress))?.balanceUsdcCents ?? 0) / 100
+        ? ((await suiService.getAccount(walletAddress))?.balanceUsdCents ?? 0) / 100
         : undefined,
     });
   });
@@ -358,7 +358,7 @@ if (config.NODE_ENV !== 'production') {
 
     const result = await suiService.withdraw({
       userAddress: walletAddress,
-      amountUsdcCents: Math.round(amountUsd * 100),
+      amountUsdCents: Math.round(amountUsd * 100),
     });
 
     reply.send({
@@ -367,7 +367,7 @@ if (config.NODE_ENV !== 'production') {
       digest: result.digest,
       accountCreated: result.accountCreated,
       newBalanceUsd: result.success
-        ? ((await suiService.getAccount(walletAddress))?.balanceUsdcCents ?? 0) / 100
+        ? ((await suiService.getAccount(walletAddress))?.balanceUsdCents ?? 0) / 100
         : undefined,
     });
   });
@@ -421,10 +421,21 @@ if (config.NODE_ENV !== 'production') {
       return;
     }
 
+    // Get the escrow address for this wallet
+    const account = await suiService.getAccount(walletAddress);
+    if (!account) {
+      reply.code(400).send({
+        success: false,
+        error: 'Account does not exist. Create account first with deposit or withdraw.',
+      });
+      return;
+    }
+
     const result = await suiService.charge({
       userAddress: walletAddress,
       amountUsdCents: Math.round(amountUsd * 100),
       description,
+      escrowAddress: account.accountAddress,
     });
 
     // If successful, create ledger entry
@@ -453,7 +464,7 @@ if (config.NODE_ENV !== 'production') {
       error: result.error,
       digest: result.digest,
       newBalanceUsd: result.success
-        ? ((await suiService.getAccount(walletAddress))?.balanceUsdcCents ?? 0) / 100
+        ? ((await suiService.getAccount(walletAddress))?.balanceUsdCents ?? 0) / 100
         : undefined,
     });
   });
@@ -475,10 +486,21 @@ if (config.NODE_ENV !== 'production') {
       return;
     }
 
+    // Get the escrow address for this wallet
+    const account = await suiService.getAccount(walletAddress);
+    if (!account) {
+      reply.code(400).send({
+        success: false,
+        error: 'Account does not exist. Create account first with deposit or withdraw.',
+      });
+      return;
+    }
+
     const result = await suiService.credit({
       userAddress: walletAddress,
       amountUsdCents: Math.round(amountUsd * 100),
       description,
+      escrowAddress: account.accountAddress,
     });
 
     // If successful, create ledger entry
@@ -507,8 +529,274 @@ if (config.NODE_ENV !== 'production') {
       error: result.error,
       digest: result.digest,
       newBalanceUsd: result.success
-        ? ((await suiService.getAccount(walletAddress))?.balanceUsdcCents ?? 0) / 100
+        ? ((await suiService.getAccount(walletAddress))?.balanceUsdCents ?? 0) / 100
         : undefined,
+    });
+  });
+
+  // ========================================
+  // Sui Mock Configuration Endpoints
+  // ========================================
+
+  // Import suiMockConfig for test endpoints
+  const { suiMockConfig } = await import('./services/sui/mock-config');
+
+  // ========================================
+  // Database Clock Time Manipulation Endpoints
+  // ========================================
+
+  // Import database clock for test endpoints
+  const { dbClockProvider } = await import('@suiftly/shared/db-clock');
+  const { MockDBClock } = await import('@suiftly/shared/db-clock');
+
+  // Get current Sui mock configuration
+  server.get('/test/sui/config', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    reply.send({
+      enabled: suiMockConfig.isEnabled(),
+      config: suiMockConfig.getConfig(),
+    });
+  });
+
+  // Set Sui mock configuration (delays, failures)
+  server.post('/test/sui/config', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    const body = request.body as any;
+
+    // Validate config fields
+    const validKeys = [
+      'chargeDelayMs', 'depositDelayMs', 'withdrawDelayMs', 'creditDelayMs', 'getAccountDelayMs',
+      'forceChargeFailure', 'forceChargeFailureMessage',
+      'forceDepositFailure', 'forceDepositFailureMessage',
+      'forceWithdrawFailure', 'forceWithdrawFailureMessage',
+      'forceCreditFailure', 'forceCreditFailureMessage',
+      'forceInsufficientBalance', 'forceSpendingLimitExceeded', 'forceAccountNotFound',
+    ];
+
+    const invalidKeys = Object.keys(body).filter(k => !validKeys.includes(k));
+    if (invalidKeys.length > 0) {
+      reply.code(400).send({
+        success: false,
+        error: `Invalid config keys: ${invalidKeys.join(', ')}`,
+        validKeys,
+      });
+      return;
+    }
+
+    suiMockConfig.setConfig(body);
+    reply.send({
+      success: true,
+      config: suiMockConfig.getConfig(),
+    });
+  });
+
+  // Clear Sui mock configuration
+  server.post('/test/sui/config/clear', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    suiMockConfig.clearConfig();
+    reply.send({
+      success: true,
+      config: suiMockConfig.getConfig(),
+    });
+  });
+
+  // Get Sui mock transaction history
+  server.get('/test/sui/transactions', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    const query = request.query as any;
+    const walletAddress = query.walletAddress || '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    const limit = parseInt(query.limit) || 100;
+
+    const history = await suiService.getTransactionHistory(walletAddress, limit);
+
+    reply.send({
+      walletAddress,
+      count: history.length,
+      transactions: history,
+    });
+  });
+
+  // ========================================
+  // Database Clock Test Endpoints
+  // ========================================
+
+  // Get current database clock configuration
+  server.get('/test/clock', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    const mockClock = dbClockProvider.getMockClock();
+    if (!mockClock) {
+      reply.send({
+        type: 'real',
+        message: 'Using real system clock',
+        currentTime: new Date().toISOString(),
+      });
+    } else {
+      const config = mockClock.getConfig();
+      reply.send({
+        type: 'mock',
+        currentTime: mockClock.now().toISOString(),
+        config,
+      });
+    }
+  });
+
+  // Enable mock database clock with specific time
+  server.post('/test/clock/mock', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    const body = request.body as any;
+
+    // Parse time from body (can be ISO string or milliseconds)
+    let mockTime: Date | undefined;
+    if (body.time) {
+      if (typeof body.time === 'string') {
+        mockTime = new Date(body.time);
+      } else if (typeof body.time === 'number') {
+        mockTime = new Date(body.time);
+      } else {
+        reply.code(400).send({
+          error: 'Invalid time format. Use ISO string or milliseconds.',
+        });
+        return;
+      }
+
+      if (isNaN(mockTime.getTime())) {
+        reply.code(400).send({
+          error: 'Invalid date/time value',
+        });
+        return;
+      }
+    }
+
+    const mockClock = dbClockProvider.useMockClock({
+      currentTime: mockTime,
+      autoAdvance: body.autoAdvance || false,
+      timeScale: body.timeScale || 1.0,
+    });
+
+    reply.send({
+      success: true,
+      currentTime: mockClock.now().toISOString(),
+      config: mockClock.getConfig(),
+    });
+  });
+
+  // Reset to real database clock
+  server.post('/test/clock/real', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    dbClockProvider.useRealClock();
+    reply.send({
+      success: true,
+      type: 'real',
+      currentTime: new Date().toISOString(),
+    });
+  });
+
+  // Advance mock clock by specific duration
+  server.post('/test/clock/advance', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    const mockClock = dbClockProvider.getMockClock();
+    if (!mockClock) {
+      reply.code(400).send({
+        error: 'Mock clock not enabled. Use /test/clock/mock first.',
+      });
+      return;
+    }
+
+    const body = request.body as any;
+
+    // Support multiple time units
+    if (body.days) {
+      mockClock.advanceDays(body.days);
+    }
+    if (body.hours) {
+      mockClock.advanceHours(body.hours);
+    }
+    if (body.milliseconds) {
+      mockClock.advance(body.milliseconds);
+    }
+
+    reply.send({
+      success: true,
+      currentTime: mockClock.now().toISOString(),
+      advanced: {
+        days: body.days || 0,
+        hours: body.hours || 0,
+        milliseconds: body.milliseconds || 0,
+      },
+    });
+  });
+
+  // Set mock clock to specific time
+  server.post('/test/clock/set', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    const mockClock = dbClockProvider.getMockClock();
+    if (!mockClock) {
+      reply.code(400).send({
+        error: 'Mock clock not enabled. Use /test/clock/mock first.',
+      });
+      return;
+    }
+
+    const body = request.body as any;
+
+    // Parse time from body
+    let newTime: Date;
+    if (typeof body.time === 'string') {
+      newTime = new Date(body.time);
+    } else if (typeof body.time === 'number') {
+      newTime = new Date(body.time);
+    } else {
+      reply.code(400).send({
+        error: 'Invalid time format. Use ISO string or milliseconds.',
+      });
+      return;
+    }
+
+    if (isNaN(newTime.getTime())) {
+      reply.code(400).send({
+        error: 'Invalid date/time value',
+      });
+      return;
+    }
+
+    mockClock.setTime(newTime);
+    reply.send({
+      success: true,
+      currentTime: mockClock.now().toISOString(),
+    });
+  });
+
+  // Get billing period info for testing
+  server.get('/test/billing/period', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    const query = request.query as any;
+    const customerCreatedAt = query.createdAt ? new Date(query.createdAt) : new Date();
+
+    if (isNaN(customerCreatedAt.getTime())) {
+      reply.code(400).send({
+        error: 'Invalid createdAt date',
+      });
+      return;
+    }
+
+    const { getBillingPeriodInfo } = await import('@suiftly/shared/billing');
+    const periodInfo = getBillingPeriodInfo(customerCreatedAt);
+
+    reply.send({
+      ...periodInfo,
+      start: periodInfo.start.toISOString(),
+      end: periodInfo.end.toISOString(),
+      currentTime: dbClockProvider.getClock().now().toISOString(),
     });
   });
 

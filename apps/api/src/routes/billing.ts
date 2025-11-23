@@ -66,7 +66,7 @@ export const billingRouter = router({
 
     return {
       found: true,
-      balanceUsd: account.balanceUsdcCents / 100,
+      balanceUsd: account.balanceUsdCents / 100,
       spendingLimitUsd:
         account.spendingLimitUsdCents === 0
           ? null // Unlimited
@@ -166,7 +166,7 @@ export const billingRouter = router({
 
     return {
       synced: true,
-      balanceUsd: account.balanceUsdcCents / 100,
+      balanceUsd: account.balanceUsdCents / 100,
       message: 'Balance synced from blockchain',
     };
   }),
@@ -201,7 +201,7 @@ export const billingRouter = router({
       // Execute deposit on blockchain/mock
       const result = await suiService.deposit({
         userAddress: ctx.user.walletAddress,
-        amountUsdcCents: amountCents,
+        amountUsdCents: amountCents,
         initialSpendingLimitUsdCents: spendingLimitCents,
       });
 
@@ -250,7 +250,7 @@ export const billingRouter = router({
 
       return {
         success: true,
-        newBalanceUsd: account ? account.balanceUsdcCents / 100 : 0,
+        newBalanceUsd: account ? account.balanceUsdCents / 100 : 0,
         accountCreated: result.accountCreated || false,
         txDigest: result.digest,
         reconciledCharges: reconcileResult.chargesSucceeded, // Return how many pending charges were cleared
@@ -282,7 +282,7 @@ export const billingRouter = router({
       // Execute withdrawal on blockchain/mock
       const result = await suiService.withdraw({
         userAddress: ctx.user.walletAddress,
-        amountUsdcCents: amountCents,
+        amountUsdCents: amountCents,
       });
 
       if (!result.success) {
@@ -325,7 +325,7 @@ export const billingRouter = router({
 
       return {
         success: true,
-        newBalanceUsd: account ? account.balanceUsdcCents / 100 : 0,
+        newBalanceUsd: account ? account.balanceUsdCents / 100 : 0,
         txDigest: result.digest,
       };
     }),

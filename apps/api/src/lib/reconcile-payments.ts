@@ -88,6 +88,7 @@ export async function reconcilePayments(customerId: number): Promise<ReconcileRe
         userAddress: customer.walletAddress,
         amountUsdCents: priceUsdCents,
         description: `${service.serviceType} ${service.tier} tier subscription`,
+        escrowAddress: customer.escrowContractId,
       });
 
       if (chargeResult.success) {
@@ -181,6 +182,7 @@ export async function chargeMonthlySubscription(instanceId: number): Promise<boo
     userAddress: customer.walletAddress,
     amountUsdCents: priceUsdCents,
     description: `${service.serviceType} ${service.tier} tier subscription`,
+    escrowAddress: customer.escrowContractId,
   });
 
   if (chargeResult.success) {
