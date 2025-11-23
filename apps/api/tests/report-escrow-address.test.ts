@@ -11,12 +11,24 @@ import { customers, mockSuiTransactions } from '@suiftly/database/schema';
 import { eq } from 'drizzle-orm';
 
 describe('reportEscrowAddress validation', () => {
-  const testWallet = '0x1234567890123456789012345678901234567890123456789012345678901234';
+  // Use a unique wallet address for this test suite to avoid conflicts
+  const testWallet = '0x2234567890123456789012345678901234567890123456789012345678902234';
   const validEscrowAddress = '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890';
   const anotherValidAddress = '0x9876543210987654321098765432109876543210987654321098765432109876';
 
   beforeEach(async () => {
     // Clean up any existing test data - delete in correct order for foreign keys
+    const customer = await db.query.customers.findFirst({
+      where: eq(customers.walletAddress, testWallet),
+    });
+    if (customer) {
+      await db.delete(mockSuiTransactions).where(eq(mockSuiTransactions.customerId, customer.customerId));
+      await db.delete(customers).where(eq(customers.walletAddress, testWallet));
+    }
+  });
+
+  afterEach(async () => {
+    // Clean up after each test
     const customer = await db.query.customers.findFirst({
       where: eq(customers.walletAddress, testWallet),
     });

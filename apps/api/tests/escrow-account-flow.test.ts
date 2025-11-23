@@ -20,7 +20,14 @@ describe('Escrow Account Flow', () => {
   const testEscrowAddress = '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890';
 
   beforeEach(async () => {
-    // Clean up any existing test data
+    // Clean up any existing test data - delete in correct order to avoid FK constraints
+    await db.delete(mockSuiTransactions);
+    // Delete all test customers to ensure clean slate
+    await db.delete(customers).where(eq(customers.walletAddress, testWallet));
+  });
+
+  afterEach(async () => {
+    // Clean up after each test to ensure no data leaks
     await db.delete(mockSuiTransactions);
     await db.delete(customers).where(eq(customers.walletAddress, testWallet));
   });
@@ -120,12 +127,17 @@ describe('Escrow Account Flow', () => {
   it('should handle charge operations with escrow address from DB', async () => {
     const suiService = getSuiService() as MockSuiService;
 
-    // Setup: Create customer with escrow address
+    // Setup: Create customer with escrow address and necessary fields
     const customerId = Math.floor(Math.random() * 1000000000);
     await db.insert(customers).values({
       customerId,
       walletAddress: testWallet,
       escrowContractId: testEscrowAddress,
+      currentBalanceUsdCents: 0,
+      currentMonthChargedUsdCents: 0,
+      lastMonthChargedUsdCents: 0,
+      currentMonthStart: new Date(),
+      maxMonthlyUsdCents: 0, // 0 = unlimited
     });
 
     // Deposit funds first
@@ -170,12 +182,17 @@ describe('Escrow Account Flow', () => {
   it('should prioritize DB escrow address over blockchain discovery', async () => {
     const suiService = getSuiService() as MockSuiService;
 
-    // Step 1: Create account with specific escrow address
+    // Step 1: Create account with specific escrow address and necessary fields
     const customerId = Math.floor(Math.random() * 1000000000);
     await db.insert(customers).values({
       customerId,
       walletAddress: testWallet,
       escrowContractId: testEscrowAddress,
+      currentBalanceUsdCents: 0,
+      currentMonthChargedUsdCents: 0,
+      lastMonthChargedUsdCents: 0,
+      currentMonthStart: new Date(),
+      maxMonthlyUsdCents: 0, // 0 = unlimited
     });
 
     // Step 2: Deposit using DB escrow address
@@ -184,6 +201,10 @@ describe('Escrow Account Flow', () => {
       amountUsdCents: 3000,
       escrowAddress: testEscrowAddress, // Use DB address
     });
+
+    if (!depositResult.success) {
+      console.error('Deposit failed:', depositResult.error);
+    }
 
     expect(depositResult.success).toBe(true);
     expect(depositResult.accountCreated).toBe(false); // Should use existing
