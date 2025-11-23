@@ -451,6 +451,13 @@ test.describe('Seal Keys & Packages Management', () => {
     // Click Disable button
     const disableButton = page.locator('button:has-text("Disable")').first();
     await disableButton.click();
+
+    // Should see confirmation dialog
+    await expect(page.locator('text=Disable Seal Key?')).toBeVisible({ timeout: 2000 });
+
+    // Click the confirmation button in the dialog
+    const confirmButton = page.locator('button:has-text("Disable Seal Key")');
+    await confirmButton.click();
     await waitAfterMutation(page);
 
     // Should see success toast
@@ -469,6 +476,13 @@ test.describe('Seal Keys & Packages Management', () => {
     // Click Enable button
     const enableButton = page.locator('button:has-text("Enable")').first();
     await enableButton.click();
+
+    // Should see confirmation dialog
+    await expect(page.locator('text=Enable Seal Key?')).toBeVisible({ timeout: 2000 });
+
+    // Click the confirmation button in the dialog
+    const confirmEnableButton = page.locator('button:has-text("Enable Seal Key")');
+    await confirmEnableButton.click();
     await waitAfterMutation(page);
 
     // Should see success toast

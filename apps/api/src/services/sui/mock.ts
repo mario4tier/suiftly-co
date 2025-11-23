@@ -201,9 +201,6 @@ export class MockSuiService implements ISuiService {
           })
           .where(eq(customers.walletAddress, userAddress))
           .returning();
-
-        // Update customer to the newly created one
-        customer = result[0];
       }
     }
 
@@ -352,9 +349,6 @@ export class MockSuiService implements ISuiService {
           })
           .where(eq(customers.walletAddress, userAddress))
           .returning();
-
-        // Update customer to the newly created one
-        customer = result[0];
       }
     }
 

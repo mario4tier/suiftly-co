@@ -27,8 +27,13 @@ export interface BillingPeriod {
 export function getCurrentBillingPeriodStart(customerCreatedAt: Date): Date {
   const clock = getDBClock();
   const now = clock.now();
-  const created = new Date(customerCreatedAt);
-  created.setHours(0, 0, 0, 0);
+  // Work entirely in UTC to avoid timezone issues
+  const created = new Date(Date.UTC(
+    customerCreatedAt.getUTCFullYear(),
+    customerCreatedAt.getUTCMonth(),
+    customerCreatedAt.getUTCDate(),
+    0, 0, 0, 0
+  ));
 
   // Calculate how many complete 28-day periods have passed
   const daysSinceCreation = Math.floor((now.getTime() - created.getTime()) / (1000 * 60 * 60 * 24));
@@ -36,7 +41,7 @@ export function getCurrentBillingPeriodStart(customerCreatedAt: Date): Date {
 
   // Start of current period is created date + (completePeriods * 28 days)
   const periodStart = new Date(created);
-  periodStart.setDate(periodStart.getDate() + (completePeriods * 28));
+  periodStart.setUTCDate(periodStart.getUTCDate() + (completePeriods * 28));
 
   return periodStart;
 }
@@ -50,7 +55,7 @@ export function getCurrentBillingPeriodStart(customerCreatedAt: Date): Date {
 export function getCurrentBillingPeriodEnd(customerCreatedAt: Date): Date {
   const periodStart = getCurrentBillingPeriodStart(customerCreatedAt);
   const periodEnd = new Date(periodStart);
-  periodEnd.setDate(periodEnd.getDate() + 28);
+  periodEnd.setUTCDate(periodEnd.getUTCDate() + 28);
   return periodEnd;
 }
 

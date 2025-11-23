@@ -113,9 +113,9 @@ test.describe('DBClock Test Examples', () => {
     expect(elapsedMs).toBeLessThan(11000);
   });
 
-  test('clock resets between tests', async ({ request }) => {
+  test('clock resets between tests', async ({ request, page }) => {
     // This test runs after the others, but clock should be real time again
-    // (reset by base-test fixture)
+    // (reset by base-test fixture - which requires page fixture to be used)
     const status = await getClockStatus(request);
     expect(status.type).toBe('real');
 
