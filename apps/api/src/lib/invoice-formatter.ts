@@ -35,19 +35,30 @@ export interface InvoiceLineItem {
  * - Add-ons (future: "Seal - 2 extra keys")
  * - Available credits (will be applied when DRAFT → PENDING)
  *
+ * IMPORTANT: Excludes services with subscriptionChargePending=true because:
+ * - Initial charge hasn't been paid yet
+ * - Service hasn't been activated/provisioned
+ * - Proration credit calculation would be unclear
+ * - It's confusing to show next month's charges when current month isn't settled
+ *
  * @param customerId Customer ID
  * @param draftAmountCents DRAFT invoice gross amount
+ * @param billingPeriodStart Invoice due date (1st of next month) - used to calculate credit month
  * @returns Array of line items
  */
 export async function buildDraftLineItems(
   customerId: number,
-  draftAmountCents: number
+  draftAmountCents: number,
+  billingPeriodStart?: Date
 ): Promise<InvoiceLineItem[]> {
   const lineItems: InvoiceLineItem[] = [];
 
-  // Get subscribed services
+  // Get subscribed services (exclude services with pending initial charge)
   const services = await db.query.serviceInstances.findMany({
-    where: eq(serviceInstances.customerId, customerId),
+    where: and(
+      eq(serviceInstances.customerId, customerId),
+      eq(serviceInstances.subscriptionChargePending, false)
+    ),
   });
 
   // Add line item for each service
@@ -67,32 +78,52 @@ export async function buildDraftLineItems(
   }
 
   // Get available credits
-  const now = dbClock.now();
-  const credits = await db
-    .select({ total: sql<number>`COALESCE(SUM(${customerCredits.remainingAmountUsdCents}), 0)` })
-    .from(customerCredits)
-    .where(
-      and(
-        eq(customerCredits.customerId, customerId),
-        gt(customerCredits.remainingAmountUsdCents, 0),
-        sql`(${customerCredits.expiresAt} IS NULL OR ${customerCredits.expiresAt} > ${now})`
-      )
-    );
+  // Only show credits if there are active services in the DRAFT
+  // (If all services have pending subscription charges, don't show credits)
+  if (services.length > 0) {
+    const now = dbClock.now();
+    const credits = await db
+      .select({ total: sql<number>`COALESCE(SUM(${customerCredits.remainingAmountUsdCents}), 0)` })
+      .from(customerCredits)
+      .where(
+        and(
+          eq(customerCredits.customerId, customerId),
+          gt(customerCredits.remainingAmountUsdCents, 0),
+          sql`(${customerCredits.expiresAt} IS NULL OR ${customerCredits.expiresAt} > ${now})`
+        )
+      );
 
-  const creditsCents = Number(credits[0]?.total ?? 0);
+    const creditsCents = Number(credits[0]?.total ?? 0);
 
-  if (creditsCents > 0) {
-    // Credit description includes service name for clarity
-    // When multiple services exist, will show "Seal partial month credit", "gRPC partial month credit", etc.
-    const serviceName = services.length === 1
-      ? services[0].serviceType.charAt(0).toUpperCase() + services[0].serviceType.slice(1)
-      : 'Service'; // Fallback if multiple services (rare for partial month credit)
+    if (creditsCents > 0) {
+      // Credit description includes service name and month for clarity
+      const serviceName = services.length === 1
+        ? services[0].serviceType.charAt(0).toUpperCase() + services[0].serviceType.slice(1)
+        : 'Service'; // Fallback if multiple services (rare for partial month credit)
 
-    lineItems.push({
-      description: `${serviceName} partial month credit`,
-      amountUsd: -(creditsCents / 100),
-      type: 'credit',
-    });
+      // Credit is for the month BEFORE the DRAFT invoice due date
+      // Example: December 1st DRAFT invoice → credit is for November partial month
+      let creditMonth: Date;
+      if (billingPeriodStart) {
+        // Use invoice due date minus 1 month
+        creditMonth = new Date(billingPeriodStart);
+        creditMonth.setUTCMonth(creditMonth.getUTCMonth() - 1);
+      } else {
+        // Fallback to current month if billing period not provided
+        creditMonth = now;
+      }
+
+      const monthName = creditMonth.toLocaleDateString('en-US', {
+        month: 'long',
+        timeZone: 'UTC'
+      });
+
+      lineItems.push({
+        description: `${serviceName} partial month credit (${monthName})`,
+        amountUsd: -(creditsCents / 100),
+        type: 'credit',
+      });
+    }
   }
 
   return lineItems;

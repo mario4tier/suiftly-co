@@ -138,4 +138,160 @@ test.describe('Subscription Without Funds', () => {
 
     console.log('✅ After navigating away and back, interactive form is shown');
   });
+
+  test('Billing page shows pending subscription notification with amount needed', async ({ page }) => {
+    // Subscribe without funds (Pro tier defaults to $29/month)
+    await page.locator('label:has-text("Agree to")').click();
+    await page.locator('button:has-text("Subscribe to Service")').click();
+    await page.waitForTimeout(2000);
+
+    // Navigate to billing page using sidebar link
+    await page.locator('nav').getByRole('link', { name: /Billing & Payments/i }).click();
+    await page.waitForURL('/billing', { timeout: 5000 });
+
+    // Should show pending subscription notification
+    const notification = page.locator('.bg-orange-50').filter({ hasText: 'Subscription payment pending' });
+    await expect(notification).toBeVisible({ timeout: 5000 });
+
+    // Notification should mention Seal service and Pro tier price
+    await expect(notification).toContainText('Seal');
+    await expect(notification).toContainText('pro');
+    await expect(notification).toContainText('$29.00');
+
+    // Should show how much to deposit
+    await expect(notification).toContainText(/Deposit at least.*\$29\.00/i);
+
+    console.log('✅ Billing page shows pending subscription notification with correct amount');
+  });
+
+  test('Next Scheduled Payment excludes services with pending subscription charges', async ({ page }) => {
+    // First, deposit $1 to create escrow account (so "Next Scheduled Payment" section is visible)
+    // Navigate to billing page
+    await page.locator('nav').getByRole('link', { name: /Billing & Payments/i }).click();
+    await page.waitForURL('/billing', { timeout: 5000 });
+
+    // Deposit $1
+    await page.locator('button:has-text("Deposit")').first().click();
+    await page.fill('input#depositAmount', '1');
+    await page.locator('[role="dialog"]').getByRole('button', { name: 'Deposit' }).click();
+    await expect(page.locator('[data-sonner-toast]').filter({ hasText: /Deposited.*successfully/i })).toBeVisible({ timeout: 5000 });
+    await page.waitForTimeout(500);
+
+    // Now navigate to seal service and subscribe
+    await page.click('text=Seal');
+    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
+
+    // Subscribe without sufficient funds (Pro tier defaults to $29/month, we only have $1)
+    await page.locator('label:has-text("Agree to")').click();
+    await page.locator('button:has-text("Subscribe to Service")').click();
+    await page.waitForTimeout(2000);
+
+    // Navigate back to billing page
+    await page.locator('nav').getByRole('link', { name: /Billing & Payments/i }).click();
+    await page.waitForURL('/billing', { timeout: 5000 });
+
+    // Verify "Next Scheduled Payment" section shows $0.00
+    const nextPaymentSection = page.locator('button:has-text("Next Scheduled Payment")').locator('..');
+    await expect(nextPaymentSection).toContainText('$0.00', { timeout: 5000 });
+
+    // Expand "Next Scheduled Payment" section
+    await page.locator('button:has-text("Next Scheduled Payment")').click();
+    await page.waitForTimeout(500);
+
+    // Within the expanded section, should NOT contain Seal service (because subscriptionChargePending is true)
+    // The expanded content is in a div that comes after the button
+    const expandedContent = page.locator('button:has-text("Next Scheduled Payment")').locator('../..');
+
+    // Should show "No upcoming charges" (the fallback message when there are no line items)
+    // This proves that Seal service is NOT included in the DRAFT invoice
+    await expect(expandedContent).toContainText('No upcoming charges');
+
+    console.log('  → Shows "No upcoming charges" (proves Seal is excluded from DRAFT invoice)');
+    console.log('✅ Next Scheduled Payment excludes pending subscription');
+  });
+
+  test('Billing notification disappears after depositing sufficient funds', async ({ page, request }) => {
+    // Subscribe without funds
+    await page.locator('label:has-text("Agree to")').click();
+    await page.locator('button:has-text("Subscribe to Service")').click();
+    await page.waitForTimeout(2000);
+
+    // Navigate to billing page using sidebar link
+    await page.locator('nav').getByRole('link', { name: /Billing & Payments/i }).click();
+    await page.waitForURL('/billing', { timeout: 5000 });
+
+    // Verify notification is shown
+    const notification = page.locator('.bg-orange-50').filter({ hasText: 'Subscription payment pending' });
+    await expect(notification).toBeVisible({ timeout: 5000 });
+
+    // Deposit funds ($30 to cover the $29 subscription)
+    await page.locator('button:has-text("Deposit")').first().click();
+    await page.fill('input#depositAmount', '30');
+
+    // Click the submit button within the dialog footer
+    await page.locator('[role="dialog"]').getByRole('button', { name: 'Deposit' }).click();
+
+    // Wait for deposit to complete and reconciliation to happen
+    await expect(page.locator('[data-sonner-toast]').filter({ hasText: /Deposited.*successfully/i })).toBeVisible({ timeout: 5000 });
+    await page.waitForTimeout(1000); // Give time for reconciliation
+
+    // Notification should disappear
+    await expect(notification).not.toBeVisible({ timeout: 5000 });
+
+    console.log('✅ Notification disappears after depositing funds');
+  });
+
+  test('Next Scheduled Payment updates immediately after deposit activates subscription', async ({ page }) => {
+    // First, create escrow account with small deposit so "Next Scheduled Payment" section is visible
+    await page.locator('nav').getByRole('link', { name: /Billing & Payments/i }).click();
+    await page.waitForURL('/billing', { timeout: 5000 });
+
+    await page.locator('button:has-text("Deposit")').first().click();
+    await page.fill('input#depositAmount', '1');
+    await page.locator('[role="dialog"]').getByRole('button', { name: 'Deposit' }).click();
+    await expect(page.locator('[data-sonner-toast]').filter({ hasText: /Deposited.*successfully/i })).toBeVisible({ timeout: 5000 });
+    await page.waitForTimeout(500);
+
+    // Subscribe without sufficient funds (Pro tier defaults to $29/month, we only have $1)
+    await page.click('text=Seal');
+    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
+    await page.locator('label:has-text("Agree to")').click();
+    await page.locator('button:has-text("Subscribe to Service")').click();
+    await page.waitForTimeout(2000);
+
+    // Navigate back to billing page
+    await page.locator('nav').getByRole('link', { name: /Billing & Payments/i }).click();
+    await page.waitForURL('/billing', { timeout: 5000 });
+
+    // Verify Next Scheduled Payment shows $0.00 (service has pending charge)
+    const nextPaymentSection = page.locator('button:has-text("Next Scheduled Payment")').locator('..');
+    await expect(nextPaymentSection).toContainText('$0.00', { timeout: 5000 });
+
+    // Deposit funds ($30 to cover the $29 subscription)
+    await page.locator('button:has-text("Deposit")').first().click();
+    await page.fill('input#depositAmount', '30');
+    await page.locator('[role="dialog"]').getByRole('button', { name: 'Deposit' }).click();
+
+    // Wait for deposit to complete
+    await expect(page.locator('[data-sonner-toast]').filter({ hasText: /Deposited.*successfully/i })).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('[data-sonner-toast]').filter({ hasText: /subscription charge.*processed/i })).toBeVisible({ timeout: 5000 });
+
+    // Give React Query time to invalidate and refetch
+    await page.waitForTimeout(1000);
+
+    // Next Scheduled Payment should now be updated (no longer $0.00)
+    // The exact amount will be less than $29 due to proration credit for partial month
+    // WITHOUT needing to navigate away and come back
+    await expect(nextPaymentSection).not.toContainText('$0.00', { timeout: 5000 });
+
+    // Should contain a positive dollar amount (service is now in DRAFT invoice)
+    const amountMatch = await nextPaymentSection.textContent();
+    const hasPositiveAmount = amountMatch && /\$[1-9]\d*\.\d{2}/.test(amountMatch);
+    if (!hasPositiveAmount) {
+      throw new Error('Expected Next Scheduled Payment to show a positive amount after subscription activation');
+    }
+
+    console.log('  → Next Scheduled Payment updated from $0.00 to positive amount (includes proration credit)');
+    console.log('✅ Next Scheduled Payment updates immediately after subscription activation');
+  });
 });

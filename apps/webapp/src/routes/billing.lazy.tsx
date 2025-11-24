@@ -17,6 +17,7 @@ import { Label } from '../components/ui/label';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { ChevronRight, ChevronDown, User, ArrowUpDown, ArrowDownUp, Shield, Building2, AlertCircle } from 'lucide-react';
 import { toast } from 'sonner';
+import { getTierPriceUsdCents } from '@suiftly/shared/pricing';
 
 export const Route = createLazyFileRoute('/billing')({
   component: BillingPage,
@@ -41,6 +42,9 @@ function BillingPage() {
 
   // Query balance
   const { data: balanceData, isLoading: balanceLoading, refetch: refetchBalance } = trpc.billing.getBalance.useQuery();
+
+  // Query services to check for pending subscriptions
+  const { data: services } = trpc.services.list.useQuery();
 
   // Query next scheduled payment (DRAFT invoice)
   const { data: nextPaymentData, isLoading: nextPaymentLoading } = trpc.billing.getNextScheduledPayment.useQuery();
@@ -78,6 +82,8 @@ function BillingPage() {
         toast.success(`${result.reconciledCharges} subscription charge${result.reconciledCharges > 1 ? 's' : ''} processed`);
         // Invalidate services to update UI (remove payment pending banners)
         utils.services.list.invalidate();
+        // Invalidate next scheduled payment to show updated DRAFT invoice (now includes activated service)
+        utils.billing.getNextScheduledPayment.invalidate();
       }
 
       setDepositModalOpen(false);
@@ -174,12 +180,53 @@ function BillingPage() {
   const spendingLimit = balanceData?.spendingLimitUsd; // null = unlimited, number = limit
   const found = balanceData?.found ?? false;
 
+  // Calculate pending subscription charges
+  const pendingServices = services?.filter(s => s.subscriptionChargePending) ?? [];
+  const totalPendingUsd = pendingServices.reduce((sum, service) => {
+    const priceUsdCents = getTierPriceUsdCents(service.tier);
+    return sum + (priceUsdCents / 100);
+  }, 0);
+  const shortfallUsd = Math.max(0, totalPendingUsd - balance);
+
   return (
     <DashboardLayout>
       <div className="space-y-6">
         <div>
           <h2 className="text-3xl font-bold tracking-tight">Billing</h2>
         </div>
+
+        {/* Pending Subscription Notification */}
+        {pendingServices.length > 0 && (
+          <div className="bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-900 rounded-lg px-4 py-3 flex gap-3">
+            <AlertCircle className="h-5 w-5 text-orange-600 dark:text-orange-500 flex-shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <div className="text-sm text-orange-900 dark:text-orange-200">
+                <p className="font-semibold mb-1">Subscription payment pending</p>
+                <p>
+                  {pendingServices.length === 1 ? (
+                    <>
+                      Your {pendingServices[0].serviceType.charAt(0).toUpperCase() + pendingServices[0].serviceType.slice(1)} subscription ({pendingServices[0].tier} tier - ${(getTierPriceUsdCents(pendingServices[0].tier) / 100).toFixed(2)}/month) requires payment.
+                    </>
+                  ) : (
+                    <>
+                      You have {pendingServices.length} subscriptions requiring payment (total: ${totalPendingUsd.toFixed(2)}/month).
+                    </>
+                  )}
+                  {' '}
+                  {shortfallUsd > 0 ? (
+                    <>
+                      Deposit at least <span className="font-bold">${shortfallUsd.toFixed(2)}</span> to activate {pendingServices.length === 1 ? 'your service' : 'these services'}.
+                    </>
+                  ) : (
+                    <>
+                      You have sufficient balance. The charge will be processed automatically.
+                    </>
+                  )}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
 
       {/* How It Works - Collapsible */}
       <Card className="p-4 mb-6">

@@ -649,7 +649,11 @@ export const billingRouter = router({
     }
 
     // Build line items using shared formatter (reusable for historical invoices too)
-    const lineItems = await buildDraftLineItems(customer.customerId, Number(draft.amountUsdCents));
+    const lineItems = await buildDraftLineItems(
+      customer.customerId,
+      Number(draft.amountUsdCents),
+      draft.billingPeriodStart || undefined
+    );
 
     // Calculate total (sum of all line items)
     const totalUsd = lineItems.reduce((sum, item) => sum + item.amountUsd, 0);

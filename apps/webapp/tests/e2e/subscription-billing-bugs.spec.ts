@@ -66,7 +66,8 @@ test.describe('Subscription Billing - Bug Detection', () => {
 
     // Expanded section should show line items with service name (no colons)
     await expect(page.locator('text=Seal Pro tier')).toBeVisible();
-    await expect(page.locator('text=Seal partial month credit')).toBeVisible();
+    // Credit includes month name in format: "Seal partial month credit (November)"
+    await expect(page.locator('text=/Seal partial month credit \\(/i')).toBeVisible();
     await expect(page.locator('text=Total Charge')).toBeVisible();
 
     // Verify line item amounts in the full expanded section
