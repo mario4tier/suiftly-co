@@ -11,6 +11,8 @@ export * from './escrow';
 export * from './logs';
 export * from './auth';
 export * from './system';
+export * from './billing'; // Phase 1A billing tables
+export * from './admin'; // Admin notifications
 
 // Mock tables (test/development only - NOT for production use)
 export * from './mock';

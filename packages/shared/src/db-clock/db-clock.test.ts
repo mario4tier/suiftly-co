@@ -23,12 +23,13 @@ describe('RealDBClock', () => {
     expect(now.getTime()).toBeLessThanOrEqual(after);
   });
 
-  it('should return today with time zeroed', () => {
+  it('should return today with time zeroed (UTC)', () => {
     const today = clock.today();
-    expect(today.getHours()).toBe(0);
-    expect(today.getMinutes()).toBe(0);
-    expect(today.getSeconds()).toBe(0);
-    expect(today.getMilliseconds()).toBe(0);
+    // Use UTC methods since today() returns UTC midnight
+    expect(today.getUTCHours()).toBe(0);
+    expect(today.getUTCMinutes()).toBe(0);
+    expect(today.getUTCSeconds()).toBe(0);
+    expect(today.getUTCMilliseconds()).toBe(0);
   });
 
   it('should calculate days until future date', () => {

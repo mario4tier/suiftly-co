@@ -1,4 +1,4 @@
-CREATE TYPE "public"."billing_status" AS ENUM('pending', 'paid', 'failed');--> statement-breakpoint
+CREATE TYPE "public"."billing_status" AS ENUM('draft', 'pending', 'paid', 'failed', 'voided');--> statement-breakpoint
 CREATE TYPE "public"."customer_status" AS ENUM('active', 'suspended', 'closed');--> statement-breakpoint
 CREATE TYPE "public"."service_state" AS ENUM('not_provisioned', 'provisioning', 'disabled', 'enabled', 'suspended_maintenance', 'suspended_no_payment');--> statement-breakpoint
 CREATE TYPE "public"."service_tier" AS ENUM('starter', 'pro', 'enterprise');--> statement-breakpoint
@@ -32,6 +32,51 @@ CREATE TABLE "refresh_tokens" (
 	CONSTRAINT "refresh_tokens_token_hash_unique" UNIQUE("token_hash")
 );
 --> statement-breakpoint
+CREATE TABLE "billing_idempotency" (
+	"idempotency_key" varchar(100) PRIMARY KEY NOT NULL,
+	"billing_record_id" uuid,
+	"response" text NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "customer_credits" (
+	"credit_id" serial PRIMARY KEY NOT NULL,
+	"customer_id" integer NOT NULL,
+	"original_amount_usd_cents" bigint NOT NULL,
+	"remaining_amount_usd_cents" bigint NOT NULL,
+	"reason" varchar(50) NOT NULL,
+	"description" text,
+	"campaign_id" varchar(50),
+	"expires_at" timestamp with time zone,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "check_remaining_not_negative" CHECK ("customer_credits"."remaining_amount_usd_cents" >= 0),
+	CONSTRAINT "check_remaining_not_exceed_original" CHECK ("customer_credits"."remaining_amount_usd_cents" <= "customer_credits"."original_amount_usd_cents")
+);
+--> statement-breakpoint
+CREATE TABLE "invoice_line_items" (
+	"line_item_id" serial PRIMARY KEY NOT NULL,
+	"billing_record_id" uuid NOT NULL,
+	"description" text NOT NULL,
+	"amount_usd_cents" bigint NOT NULL,
+	"service_type" varchar(20),
+	"quantity" integer DEFAULT 1,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "invoice_payments" (
+	"payment_id" serial PRIMARY KEY NOT NULL,
+	"billing_record_id" uuid NOT NULL,
+	"source_type" varchar(20) NOT NULL,
+	"credit_id" integer,
+	"escrow_transaction_id" bigint,
+	"amount_usd_cents" bigint NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "check_source_type_match" CHECK (
+    ("invoice_payments"."source_type" = 'credit' AND "invoice_payments"."credit_id" IS NOT NULL AND "invoice_payments"."escrow_transaction_id" IS NULL) OR
+    ("invoice_payments"."source_type" = 'escrow' AND "invoice_payments"."escrow_transaction_id" IS NOT NULL AND "invoice_payments"."credit_id" IS NULL)
+  )
+);
+--> statement-breakpoint
 CREATE TABLE "customers" (
 	"customer_id" integer PRIMARY KEY NOT NULL,
 	"wallet_address" varchar(66) NOT NULL,
@@ -42,6 +87,9 @@ CREATE TABLE "customers" (
 	"current_month_charged_usd_cents" bigint,
 	"last_month_charged_usd_cents" bigint,
 	"current_month_start" date,
+	"paid_once" boolean DEFAULT false NOT NULL,
+	"grace_period_start" date,
+	"grace_period_notified_at" timestamp with time zone[],
 	"created_at" timestamp DEFAULT now() NOT NULL,
 	"updated_at" timestamp DEFAULT now() NOT NULL,
 	CONSTRAINT "customers_wallet_address_unique" UNIQUE("wallet_address"),
@@ -57,6 +105,12 @@ CREATE TABLE "billing_records" (
 	"type" "transaction_type" NOT NULL,
 	"status" "billing_status" NOT NULL,
 	"tx_digest" "bytea",
+	"invoice_number" varchar(50),
+	"due_date" timestamp with time zone,
+	"amount_paid_usd_cents" bigint DEFAULT 0 NOT NULL,
+	"retry_count" integer DEFAULT 0,
+	"last_retry_at" timestamp with time zone,
+	"failure_reason" text,
 	"created_at" timestamp DEFAULT now() NOT NULL,
 	CONSTRAINT "check_tx_digest_length" CHECK ("billing_records"."tx_digest" IS NULL OR LENGTH("billing_records"."tx_digest") = 32)
 );
@@ -198,8 +252,43 @@ CREATE TABLE "system_control" (
 	CONSTRAINT "check_singleton" CHECK ("system_control"."id" = 1)
 );
 --> statement-breakpoint
+CREATE TABLE "mock_sui_transactions" (
+	"id" bigserial PRIMARY KEY NOT NULL,
+	"customer_id" integer NOT NULL,
+	"tx_digest" varchar(66) NOT NULL,
+	"tx_type" varchar(20) NOT NULL,
+	"amount_usd_cents" bigint NOT NULL,
+	"description" text,
+	"success" varchar(5) DEFAULT 'true' NOT NULL,
+	"error_message" text,
+	"checkpoint" bigint,
+	"balance_after_usd_cents" bigint,
+	"spending_limit_usd_cents" bigint,
+	"period_charged_after_usd_cents" bigint,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "mock_tracking_objects" (
+	"id" bigserial PRIMARY KEY NOT NULL,
+	"tracking_address" varchar(66) NOT NULL,
+	"owner" varchar(10) NOT NULL,
+	"user_address" varchar(66) NOT NULL,
+	"escrow_address" varchar(66) NOT NULL,
+	"created_by_tx" varchar(66) NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"reconciled" varchar(5) DEFAULT 'false' NOT NULL,
+	"reconciled_at" timestamp with time zone,
+	CONSTRAINT "mock_tracking_objects_tracking_address_unique" UNIQUE("tracking_address")
+);
+--> statement-breakpoint
 ALTER TABLE "api_keys" ADD CONSTRAINT "api_keys_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "refresh_tokens" ADD CONSTRAINT "refresh_tokens_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "billing_idempotency" ADD CONSTRAINT "billing_idempotency_billing_record_id_billing_records_id_fk" FOREIGN KEY ("billing_record_id") REFERENCES "public"."billing_records"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "customer_credits" ADD CONSTRAINT "customer_credits_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "invoice_line_items" ADD CONSTRAINT "invoice_line_items_billing_record_id_billing_records_id_fk" FOREIGN KEY ("billing_record_id") REFERENCES "public"."billing_records"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "invoice_payments" ADD CONSTRAINT "invoice_payments_billing_record_id_billing_records_id_fk" FOREIGN KEY ("billing_record_id") REFERENCES "public"."billing_records"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "invoice_payments" ADD CONSTRAINT "invoice_payments_credit_id_customer_credits_credit_id_fk" FOREIGN KEY ("credit_id") REFERENCES "public"."customer_credits"("credit_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "invoice_payments" ADD CONSTRAINT "invoice_payments_escrow_transaction_id_escrow_transactions_tx_id_fk" FOREIGN KEY ("escrow_transaction_id") REFERENCES "public"."escrow_transactions"("tx_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "billing_records" ADD CONSTRAINT "billing_records_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "escrow_transactions" ADD CONSTRAINT "escrow_transactions_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "ledger_entries" ADD CONSTRAINT "ledger_entries_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
@@ -210,10 +299,18 @@ ALTER TABLE "seal_packages" ADD CONSTRAINT "seal_packages_seal_key_id_seal_keys_
 ALTER TABLE "usage_records" ADD CONSTRAINT "usage_records_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "haproxy_raw_logs" ADD CONSTRAINT "haproxy_raw_logs_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "user_activity_logs" ADD CONSTRAINT "user_activity_logs_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "mock_sui_transactions" ADD CONSTRAINT "mock_sui_transactions_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "idx_customer_service" ON "api_keys" USING btree ("customer_id","service_type","is_user_enabled");--> statement-breakpoint
 CREATE INDEX "idx_created_at" ON "auth_nonces" USING btree ("created_at");--> statement-breakpoint
 CREATE INDEX "idx_refresh_customer" ON "refresh_tokens" USING btree ("customer_id");--> statement-breakpoint
 CREATE INDEX "idx_expires_at" ON "refresh_tokens" USING btree ("expires_at");--> statement-breakpoint
+CREATE INDEX "idx_idempotency_created" ON "billing_idempotency" USING btree ("created_at");--> statement-breakpoint
+CREATE INDEX "idx_credit_customer" ON "customer_credits" USING btree ("customer_id");--> statement-breakpoint
+CREATE INDEX "idx_credit_expires" ON "customer_credits" USING btree ("expires_at") WHERE "customer_credits"."expires_at" IS NOT NULL;--> statement-breakpoint
+CREATE INDEX "idx_line_items_billing" ON "invoice_line_items" USING btree ("billing_record_id");--> statement-breakpoint
+CREATE INDEX "idx_payment_billing_record" ON "invoice_payments" USING btree ("billing_record_id");--> statement-breakpoint
+CREATE INDEX "idx_payment_credit" ON "invoice_payments" USING btree ("credit_id") WHERE "invoice_payments"."credit_id" IS NOT NULL;--> statement-breakpoint
+CREATE INDEX "idx_payment_escrow" ON "invoice_payments" USING btree ("escrow_transaction_id") WHERE "invoice_payments"."escrow_transaction_id" IS NOT NULL;--> statement-breakpoint
 CREATE INDEX "idx_wallet" ON "customers" USING btree ("wallet_address");--> statement-breakpoint
 CREATE INDEX "idx_customer_status" ON "customers" USING btree ("status") WHERE "customers"."status" != 'active';--> statement-breakpoint
 CREATE INDEX "idx_customer_period" ON "billing_records" USING btree ("customer_id","billing_period_start");--> statement-breakpoint

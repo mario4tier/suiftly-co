@@ -857,6 +857,12 @@ See [.claude/commands/g.md](.claude/commands/g.md) for command definition.
 - Error tracking (Sentry or similar)
 - Alert on Global Manager failures
 
+**Internal Error Tracking:**
+- `admin_notifications` table stores billing validation failures and system errors
+- Call `logInternalError()` from `@suiftly/database/billing` for internal errors requiring admin attention
+- Logs to both console and database with severity (error/warning/info), category, and details
+- Used by billing engine to report DRAFT validation failures, duplicate charges, etc.
+
 ---
 
 ## Security

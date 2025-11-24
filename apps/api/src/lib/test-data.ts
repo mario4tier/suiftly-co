@@ -9,7 +9,8 @@ import { db } from '@suiftly/database';
 import {
   customers, serviceInstances, ledgerEntries, apiKeys, sealKeys,
   refreshTokens, billingRecords, escrowTransactions, usageRecords,
-  haproxyRawLogs, userActivityLogs, mockSuiTransactions
+  haproxyRawLogs, userActivityLogs, mockSuiTransactions,
+  invoicePayments, customerCredits, billingIdempotency, adminNotifications
 } from '@suiftly/database/schema';
 import { eq } from 'drizzle-orm';
 import { decryptSecret } from './encryption';
@@ -79,10 +80,17 @@ export async function resetCustomerTestData(options: TestDataResetOptions = {}) 
       .where(eq(sealKeys.customerId, customerId))
       .returning();
 
-    // 4. Delete all other related data (no need to count these)
+    // 4. Delete all other related data (in correct order for foreign keys)
+    // New billing tables (Phase 1A/2) - delete before billing_records
+    await tx.delete(adminNotifications).where(eq(adminNotifications.customerId, String(customerId)));
+    await tx.delete(billingIdempotency); // No customer_id column, delete all for simplicity
+    await tx.delete(invoicePayments); // References billing_records, so delete first
+    await tx.delete(customerCredits).where(eq(customerCredits.customerId, customerId));
+
+    // Original tables
     await tx.delete(ledgerEntries).where(eq(ledgerEntries.customerId, customerId));
     await tx.delete(refreshTokens).where(eq(refreshTokens.customerId, customerId));
-    await tx.delete(billingRecords).where(eq(billingRecords.customerId, customerId));
+    await tx.delete(billingRecords).where(eq(billingRecords.customerId, customerId)); // Now safe to delete
     await tx.delete(escrowTransactions).where(eq(escrowTransactions.customerId, customerId));
     await tx.delete(usageRecords).where(eq(usageRecords.customerId, customerId));
     await tx.delete(haproxyRawLogs).where(eq(haproxyRawLogs.customerId, customerId));
@@ -148,6 +156,10 @@ export async function getCustomerTestData(walletAddress: string = MOCK_WALLET_AD
     where: eq(sealKeys.customerId, customer.customerId),
   });
 
+  const credits = await db.query.customerCredits.findMany({
+    where: eq(customerCredits.customerId, customer.customerId),
+  });
+
   return {
     found: true,
     customer: {
@@ -166,6 +178,14 @@ export async function getCustomerTestData(walletAddress: string = MOCK_WALLET_AD
     })),
     apiKeysCount: keys.length,
     sealKeysCount: sealKeysData.length,
+    credits: credits.map(c => ({
+      creditId: c.creditId,
+      originalAmountUsdCents: Number(c.originalAmountUsdCents),
+      remainingAmountUsdCents: Number(c.remainingAmountUsdCents),
+      reason: c.reason,
+      description: c.description,
+      expiresAt: c.expiresAt?.toISOString() || null,
+    })),
   };
 }
 

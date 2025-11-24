@@ -16,12 +16,18 @@ export class RealDBClock implements DBClock {
   }
 
   /**
-   * Get today's date with time zeroed
+   * Get today's date with time zeroed (UTC)
    */
   today(): Date {
     const now = new Date();
-    now.setHours(0, 0, 0, 0);
-    return now;
+    // Use UTC methods to avoid timezone issues
+    const today = new Date(Date.UTC(
+      now.getUTCFullYear(),
+      now.getUTCMonth(),
+      now.getUTCDate(),
+      0, 0, 0, 0
+    ));
+    return today;
   }
 
   /**

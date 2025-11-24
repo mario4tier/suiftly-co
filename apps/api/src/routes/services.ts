@@ -15,6 +15,8 @@ import { testDelayManager } from '../lib/test-delays';
 import { getTierPriceUsdCents } from '../lib/config-cache';
 import { getSuiService } from '../services/sui/index.js';
 import { storeApiKey } from '../lib/api-keys';
+import { handleSubscriptionBilling } from '@suiftly/database/billing';
+import { dbClock } from '@suiftly/shared/db-clock';
 
 // Zod schemas for input validation
 const serviceTypeSchema = z.enum([SERVICE_TYPE.SEAL, SERVICE_TYPE.GRPC, SERVICE_TYPE.GRAPHQL]);
@@ -42,7 +44,7 @@ async function validateSubscription(
   const existing = await db.query.serviceInstances.findFirst({
     where: and(
       eq(serviceInstances.customerId, customerId),
-      eq(serviceInstances.serviceType, serviceType)
+      eq(serviceInstances.serviceType, serviceType as 'seal' | 'grpc' | 'graphql')
     ),
   });
 
@@ -263,82 +265,92 @@ export const servicesRouter = router({
         });
       }
 
-      // 6. Attempt charge (OUTSIDE transaction)
+      // 6. Use billing engine to handle subscription payment
+      //    This creates:
+      //    - Immediate invoice for first month (full charge)
+      //    - DRAFT invoice for next billing cycle
+      //    - Reconciliation credit for partial month
       const suiService = getSuiService();
 
       try {
-        const chargeResult = await suiService.charge({
-          userAddress: customer.walletAddress,
-          amountUsdCents: priceUsdCents,
-          description: `${input.serviceType} ${input.tier} tier subscription`,
-          escrowAddress: customer.escrowContractId,
-        });
+        const billingResult = await handleSubscriptionBilling(
+          db,
+          ctx.user!.customerId,
+          input.serviceType,
+          input.tier,
+          priceUsdCents,
+          suiService,
+          dbClock
+        );
 
-        if (!chargeResult.success) {
-          // Charge failed - service exists but can't be enabled
-          // Return SUCCESS (service was created) but with subscriptionChargePending=true
-          console.log('[SUBSCRIBE] Charge failed, returning service with pending payment:', chargeResult.error);
+        if (!billingResult.paymentSuccessful) {
+          // Payment failed - service exists but can't be enabled
+          console.log('[SUBSCRIBE] Billing failed, returning service with pending payment:', billingResult.error);
 
           // Map errors to user-friendly messages
           let paymentErrorMessage: string;
-          if (chargeResult.error?.includes('Account does not exist') ||
-              chargeResult.error?.includes('Insufficient balance')) {
-            // No escrow account OR insufficient funds → same message
+          if (billingResult.error?.includes('Account does not exist') ||
+              billingResult.error?.includes('Insufficient balance') ||
+              billingResult.error?.includes('No escrow account')) {
             paymentErrorMessage = 'Subscription payment pending. Add funds via Billing';
           } else {
-            // Other errors (spending limit, etc) → show specific error
-            paymentErrorMessage = chargeResult.error || 'Payment failed';
+            paymentErrorMessage = billingResult.error || 'Payment failed';
           }
 
           return {
             ...service,
             subscriptionChargePending: true,
-            apiKey: apiKey, // Include API key even if payment pending
-            paymentPending: true, // Flag to inform frontend
-            paymentError: chargeResult.error?.includes('Account does not exist')
+            apiKey: apiKey,
+            paymentPending: true,
+            paymentError: billingResult.error?.includes('No escrow account')
               ? 'NO_ESCROW_ACCOUNT'
               : 'PAYMENT_FAILED',
             paymentErrorMessage,
           };
         }
 
-        // 7. Charge succeeded - update pending flag
+        // 7. Payment succeeded - update service state and enable it
         await db
           .update(serviceInstances)
-          .set({ subscriptionChargePending: false })
+          .set({
+            state: SERVICE_STATE.ENABLED, // Set state to enabled (was disabled during creation)
+            subscriptionChargePending: false,
+            isUserEnabled: true, // Auto-enable service after successful payment
+          })
           .where(eq(serviceInstances.instanceId, service.instanceId));
+
+        // Note: DRAFT invoice already calculated correctly by handleSubscriptionBilling()
+        // It includes all subscribed services regardless of enable/disable toggle state
 
         // 8. Record charge in ledger
         await db.insert(ledgerEntries).values({
           customerId: ctx.user!.customerId,
           type: 'charge',
-          amountUsdCents: BigInt(priceUsdCents),
+          amountUsdCents: priceUsdCents,
           description: `${input.serviceType} ${input.tier} tier subscription`,
           createdAt: new Date(),
         });
 
-        // 9. Return service with API key (show key only once!)
-        // Note: API key was already created in the transaction
+        // 9. Return service with API key
         return {
           ...service,
           subscriptionChargePending: false,
-          apiKey: apiKey, // Include API key in response (only time it's visible)
+          isUserEnabled: true,
+          apiKey: apiKey,
           paymentPending: false,
         };
 
-      } catch (chargeError) {
-        // Unexpected error during charge
-        // Service exists but subscriptionChargePending=true
-        console.error('[SUBSCRIBE] Unexpected charge error:', chargeError);
+      } catch (billingError) {
+        // Unexpected error during billing
+        console.error('[SUBSCRIBE] Unexpected billing error:', billingError);
 
-        // Return SUCCESS (service was created) with pending payment
         return {
           ...service,
           subscriptionChargePending: true,
           apiKey: apiKey,
           paymentPending: true,
           paymentError: 'UNEXPECTED_ERROR',
-          paymentErrorMessage: chargeError instanceof Error ? chargeError.message : 'Unexpected error',
+          paymentErrorMessage: billingError instanceof Error ? billingError.message : 'Unexpected error',
         };
       }
     }),

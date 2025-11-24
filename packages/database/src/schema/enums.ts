@@ -51,11 +51,13 @@ export const transactionTypeEnum = pgEnum('transaction_type', [
   'credit'
 ]);
 
-// Billing status
+// Billing status (invoice lifecycle states)
 export const billingStatusEnum = pgEnum('billing_status', [
-  'pending',
-  'paid',
-  'failed'
+  'draft',    // Pre-computed projection for next billing cycle
+  'pending',  // Ready for payment processing
+  'paid',     // Fully paid
+  'failed',   // Charge attempt failed
+  'voided'    // Cancelled (billing error, etc.)
 ]);
 
 /**

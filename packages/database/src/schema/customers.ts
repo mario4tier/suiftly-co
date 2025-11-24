@@ -1,4 +1,4 @@
-import { pgTable, integer, varchar, bigint, date, timestamp, index, check } from 'drizzle-orm/pg-core';
+import { pgTable, integer, varchar, bigint, date, timestamp, index, check, boolean } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { FIELD_LIMITS } from '@suiftly/shared/constants';
 import { customerStatusEnum } from './enums';
@@ -29,6 +29,12 @@ export const customers = pgTable('customers', {
   currentMonthChargedUsdCents: bigint('current_month_charged_usd_cents', { mode: 'number' }), // Charged this 28-day period
   lastMonthChargedUsdCents: bigint('last_month_charged_usd_cents', { mode: 'number' }), // Charged last 28-day period
   currentMonthStart: date('current_month_start'), // Start of current 28-day period
+
+  // Billing state tracking (Phase 1A)
+  paidOnce: boolean('paid_once').notNull().default(false), // Has customer ever paid anything?
+  gracePeriodStart: date('grace_period_start'), // When grace period started (NULL = none)
+  gracePeriodNotifiedAt: timestamp('grace_period_notified_at', { withTimezone: true, mode: 'date' }).array(), // Timestamps of reminder emails sent
+
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
 }, (table) => ({

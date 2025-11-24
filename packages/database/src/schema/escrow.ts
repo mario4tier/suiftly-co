@@ -45,6 +45,19 @@ export const billingRecords = pgTable('billing_records', {
   type: transactionTypeEnum('type').notNull(),
   status: billingStatusEnum('status').notNull(),
   txDigest: bytea('tx_digest'),
+
+  // Phase 1A: Invoice metadata and multi-source payment tracking
+  invoiceNumber: varchar('invoice_number', { length: 50 }), // INV-2025-01-0001
+  dueDate: timestamp('due_date', { withTimezone: true }),
+
+  // Multi-source payment tracking (credits + escrow)
+  amountPaidUsdCents: bigint('amount_paid_usd_cents', { mode: 'number' }).notNull().default(0), // Running total of payments received
+
+  // Retry tracking for failed payments
+  retryCount: integer('retry_count').default(0),
+  lastRetryAt: timestamp('last_retry_at', { withTimezone: true }),
+  failureReason: text('failure_reason'),
+
   createdAt: timestamp('created_at').notNull().defaultNow(),
 }, (table) => ({
   idxCustomerPeriod: index('idx_customer_period').on(table.customerId, table.billingPeriodStart),

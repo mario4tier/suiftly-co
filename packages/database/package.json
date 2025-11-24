@@ -5,21 +5,26 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./schema": "./src/schema/index.ts"
+    "./schema": "./src/schema/index.ts",
+    "./billing": "./src/billing/index.ts"
   },
   "scripts": {
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/migrate.ts && tsx src/timescale-setup.ts",
     "db:push": "drizzle-kit push && tsx src/timescale-setup.ts",
     "db:studio": "drizzle-kit studio",
-    "db:timescale": "tsx src/timescale-setup.ts"
+    "db:timescale": "tsx src/timescale-setup.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "drizzle-orm": "^0.44.7",
-    "pg": "^8.13.1"
+    "pg": "^8.13.1",
+    "@suiftly/shared": "*"
   },
   "devDependencies": {
     "@types/pg": "^8.11.10",
-    "drizzle-kit": "^0.31.6"
+    "drizzle-kit": "^0.31.6",
+    "vitest": "^2.0.0"
   }
 }

@@ -192,7 +192,7 @@ export async function registerAuthRoutes(server: FastifyInstance) {
             currentBalanceUsdCents: 0,
             currentMonthChargedUsdCents: 0,
             lastMonthChargedUsdCents: 0,
-            currentMonthStart: new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0],
+            currentMonthStart: new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1)).toISOString().split('T')[0],
           });
           inserted = true;
         } catch (error: any) {

@@ -42,3 +42,7 @@ const pool = new Pool({
 });
 
 export const db = drizzle(pool, { schema });
+
+// Export database type for use in billing modules
+// This preserves schema types when passing transactions around
+export type Database = typeof db;

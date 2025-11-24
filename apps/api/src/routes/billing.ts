@@ -8,10 +8,12 @@ import { TRPCError } from '@trpc/server';
 import { router, protectedProcedure } from '../lib/trpc';
 import { getSuiService } from '../services/sui';
 import { db, logActivity } from '@suiftly/database';
-import { ledgerEntries, customers } from '@suiftly/database/schema';
-import { eq, desc, sql } from 'drizzle-orm';
+import { ledgerEntries, customers, billingRecords, customerCredits } from '@suiftly/database/schema';
+import { eq, and, desc, sql, gt } from 'drizzle-orm';
 import { SPENDING_LIMIT } from '@suiftly/shared/constants';
 import { reconcilePayments } from '../lib/reconcile-payments';
+import { dbClock } from '@suiftly/shared/db-clock';
+import { buildDraftLineItems } from '../lib/invoice-formatter';
 
 /**
  * Convert hex string to Buffer for BYTEA fields
@@ -600,4 +602,76 @@ export const billingRouter = router({
         txDigest: result.digest,
       };
     }),
+
+  /**
+   * Get next scheduled payment (DRAFT invoice)
+   * Returns upcoming charges for the next billing cycle
+   */
+  getNextScheduledPayment: protectedProcedure.query(async ({ ctx }) => {
+    if (!ctx.user) {
+      throw new TRPCError({
+        code: 'UNAUTHORIZED',
+        message: 'Not authenticated',
+      });
+    }
+
+    // Get customer
+    const customer = await db.query.customers.findFirst({
+      where: eq(customers.walletAddress, ctx.user.walletAddress),
+    });
+
+    if (!customer) {
+      return {
+        found: false,
+        totalUsd: 0,
+        subscriptionChargesUsd: 0,
+        usageChargesUsd: 0,
+        dueDate: null,
+      };
+    }
+
+    // Query for DRAFT invoice
+    const draft = await db.query.billingRecords.findFirst({
+      where: and(
+        eq(billingRecords.customerId, customer.customerId),
+        eq(billingRecords.status, 'draft')
+      ),
+    });
+
+    if (!draft) {
+      return {
+        found: false,
+        totalUsd: 0,
+        subscriptionChargesUsd: 0,
+        usageChargesUsd: 0,
+        dueDate: null,
+      };
+    }
+
+    // Build line items using shared formatter (reusable for historical invoices too)
+    const lineItems = await buildDraftLineItems(customer.customerId, Number(draft.amountUsdCents));
+
+    // Calculate total (sum of all line items)
+    const totalUsd = lineItems.reduce((sum, item) => sum + item.amountUsd, 0);
+
+    // Per UTC_CONVENTION.md: All timestamps are UTC
+    // WORKAROUND: Database plain timestamp is interpreted as local time by node-postgres
+    // Extract date components and re-create as UTC to get correct ISO string
+    const dueDate = draft.billingPeriodStart
+      ? new Date(Date.UTC(
+          draft.billingPeriodStart.getUTCFullYear(),
+          draft.billingPeriodStart.getUTCMonth(),
+          draft.billingPeriodStart.getUTCDate(),
+          0, 0, 0, 0
+        )).toISOString()
+      : null;
+
+    return {
+      found: true,
+      lineItems,
+      totalUsd,
+      dueDate,
+      invoiceNumber: draft.invoiceNumber,
+    };
+  }),
 });

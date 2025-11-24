@@ -236,4 +236,46 @@ test.describe('Billing Page', () => {
 
     console.log('✅ Unlimited spending limit displayed correctly');
   });
+
+  test('shows next scheduled payment after subscribing to service', async ({ page }) => {
+    // Deposit $50 to cover Pro tier subscription ($29)
+    await page.request.post(`${API_BASE}/test/wallet/deposit`, {
+      data: {
+        walletAddress: MOCK_WALLET_ADDRESS,
+        amountUsd: 50,
+        initialSpendingLimitUsd: 250,
+      },
+    });
+
+    // Subscribe to Seal Pro tier
+    await page.click('text=Seal');
+    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
+
+    // Accept terms and subscribe
+    await page.locator('label:has-text("Agree to")').click();
+    const subscribeButton = page.locator('button:has-text("Subscribe to Service")');
+    await subscribeButton.click();
+
+    // Wait for subscription success
+    await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
+
+    // Navigate to billing page
+    await page.click('text=Billing');
+    await page.waitForURL('/billing', { timeout: 5000 });
+
+    // Expand Next Scheduled Payment section
+    await page.locator('text=Next Scheduled Payment').click();
+
+    // BUG: Should show $29.00 for Seal Pro subscription, but likely shows $0.00
+    // DRAFT invoice should exist with Pro tier price
+    await expect(page.locator('text=Subscription Charges:')).toBeVisible();
+
+    // Check the actual amount displayed (this will fail if bug exists)
+    // The next payment should show $29.00 for Pro tier on Feb 1st
+    const nextPaymentSection = page.locator('text=Next Scheduled Payment').locator('..');
+    await expect(nextPaymentSection).toContainText('$29.00');
+    await expect(nextPaymentSection).not.toContainText('$0.00');
+
+    console.log('✅ Next scheduled payment shows correct amount after subscription');
+  });
 });

@@ -42,6 +42,9 @@ function BillingPage() {
   // Query balance
   const { data: balanceData, isLoading: balanceLoading, refetch: refetchBalance } = trpc.billing.getBalance.useQuery();
 
+  // Query next scheduled payment (DRAFT invoice)
+  const { data: nextPaymentData, isLoading: nextPaymentLoading } = trpc.billing.getNextScheduledPayment.useQuery();
+
   // Query transactions (only when history expanded)
   const { data: transactionsData, isLoading: transactionsLoading, refetch: refetchTransactions } = trpc.billing.getTransactions.useQuery(
     { limit: 20, offset: 0 },
@@ -325,28 +328,53 @@ function BillingPage() {
               <div>
                 <div className="font-medium">Next Scheduled Payment</div>
                 <div className="text-sm text-gray-500">
-                  {new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1).toLocaleDateString('en-US', {
-                    month: 'long',
-                    day: 'numeric',
-                    year: 'numeric',
-                  })}
+                  {nextPaymentData?.dueDate
+                    ? new Date(nextPaymentData.dueDate).toLocaleDateString('en-US', {
+                        month: 'long',
+                        day: 'numeric',
+                        year: 'numeric',
+                        timeZone: 'UTC', // Display UTC date as-is, no local conversion
+                      })
+                    : new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth() + 1, 1)).toLocaleDateString('en-US', {
+                        month: 'long',
+                        day: 'numeric',
+                        year: 'numeric',
+                        timeZone: 'UTC',
+                      })}
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <span className="font-bold">$0.00</span>
+                <span className="font-bold">
+                  {nextPaymentLoading ? '...' : `$${(nextPaymentData?.totalUsd ?? 0).toFixed(2)}`}
+                </span>
                 {nextPaymentExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
               </div>
             </button>
 
             {nextPaymentExpanded && (
               <div className="mt-4 pt-4 border-t space-y-2">
-                <div className="text-sm text-gray-600">
-                  <p className="mb-2 font-medium">Subscription Charges:</p>
-                  <p className="ml-4 text-gray-500">No active subscriptions</p>
-                </div>
-                <div className="text-sm text-gray-600">
-                  <p className="mb-2 font-medium">Usage Charges:</p>
-                  <p className="ml-4 text-gray-500">No usage charges</p>
+                <div className="text-sm">
+                  {nextPaymentData?.lineItems && nextPaymentData.lineItems.length > 0 ? (
+                    <>
+                      {nextPaymentData.lineItems.map((item, index) => (
+                        <div
+                          key={index}
+                          className={`flex justify-between mb-1 ${item.amountUsd < 0 ? 'text-green-600' : 'text-gray-600'}`}
+                        >
+                          <span>{item.description}</span>
+                          <span className="font-medium">
+                            {item.amountUsd < 0 ? '-' : ''}${Math.abs(item.amountUsd).toFixed(2)}
+                          </span>
+                        </div>
+                      ))}
+                      <div className="flex justify-between pt-2 border-t font-bold">
+                        <span>Total Charge:</span>
+                        <span>${(nextPaymentData?.totalUsd ?? 0).toFixed(2)}</span>
+                      </div>
+                    </>
+                  ) : (
+                    <p className="text-gray-500">No upcoming charges</p>
+                  )}
                 </div>
               </div>
             )}
