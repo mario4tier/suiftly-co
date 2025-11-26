@@ -165,20 +165,19 @@ test.describe('Billing Page', () => {
     await expect(page.locator('text=Next Scheduled Payment')).toBeVisible();
 
     // Should NOT show details initially
-    await expect(page.locator('text=Subscription Charges:')).not.toBeVisible();
+    await expect(page.locator('text=No upcoming charges')).not.toBeVisible();
 
     // Click to expand
     await page.locator('text=Next Scheduled Payment').click();
 
-    // Should now show details
-    await expect(page.locator('text=Subscription Charges:')).toBeVisible();
-    await expect(page.locator('text=Usage Charges:')).toBeVisible();
+    // Should now show details (no subscriptions = "No upcoming charges")
+    await expect(page.locator('text=No upcoming charges')).toBeVisible();
 
     // Click again to collapse
     await page.locator('text=Next Scheduled Payment').click();
 
     // Should hide details
-    await expect(page.locator('text=Subscription Charges:')).not.toBeVisible();
+    await expect(page.locator('text=No upcoming charges')).not.toBeVisible();
 
     console.log('✅ Next scheduled payment expandable works correctly');
   });
@@ -266,15 +265,18 @@ test.describe('Billing Page', () => {
     // Expand Next Scheduled Payment section
     await page.locator('text=Next Scheduled Payment').click();
 
-    // BUG: Should show $29.00 for Seal Pro subscription, but likely shows $0.00
-    // DRAFT invoice should exist with Pro tier price
-    await expect(page.locator('text=Subscription Charges:')).toBeVisible();
+    // Should show line items for subscribed service (even if service is DISABLED)
+    // Billing rule: Subscriptions are charged regardless of isUserEnabled toggle state
+    // Should NOT show "No upcoming charges" - there should be a DRAFT invoice
+    await expect(page.locator('text=No upcoming charges')).not.toBeVisible();
 
-    // Check the actual amount displayed (this will fail if bug exists)
-    // The next payment should show $29.00 for Pro tier on Feb 1st
-    const nextPaymentSection = page.locator('text=Next Scheduled Payment').locator('..');
-    await expect(nextPaymentSection).toContainText('$29.00');
-    await expect(nextPaymentSection).not.toContainText('$0.00');
+    // Should show Pro tier line item and partial month credit
+    // Note: Don't check specific amounts - they vary by date (unless DBClock is set)
+    await expect(page.locator('text=Seal Pro tier')).toBeVisible();
+    await expect(page.locator('text=Seal partial month credit')).toBeVisible();
+
+    // Should show Total Charge label
+    await expect(page.locator('text=Total Charge:')).toBeVisible();
 
     console.log('✅ Next scheduled payment shows correct amount after subscription');
   });

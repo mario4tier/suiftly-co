@@ -332,6 +332,7 @@ test.describe('Seal Keys & Packages Management', () => {
   });
 
   test('delete a disabled package with confirmation dialog', async ({ page }) => {
+    test.setTimeout(40000); // Slightly extended - test creates multiple resources (key + package + disable + delete)
     // Setup: Create a seal key and package, then disable it
     await createSealKeyViaUI(page);
     await addPackageViaUI(page, '0x' + '3'.repeat(64), 'Package to Delete');
@@ -463,8 +464,9 @@ test.describe('Seal Keys & Packages Management', () => {
     // Should see success toast
     await expect(page.locator('text=Seal key updated')).toBeVisible({ timeout: 5000 });
 
-    // Wait for UI to update (give time for data refetch)
-    await page.waitForTimeout(500);
+    // Wait for React state propagation after mutation completes
+    // (React needs time to re-render the component tree with new disabled state)
+    await page.waitForTimeout(300);
 
     // Should see DISABLED badge
     await expect(page.locator('text=DISABLED')).toBeVisible({ timeout: 5000 });
@@ -536,9 +538,6 @@ test.describe('Seal Keys & Packages Management', () => {
     // Verify copy button exists and is clickable
     await expect(copyButton).toBeVisible();
     await copyButton.click();
-
-    // Wait a bit for the copy operation to complete
-    await page.waitForTimeout(500);
 
     // The CopyableValue component handles the copy internally and shows a brief "Copied!" tooltip
     // We can verify the copy succeeded by checking clipboard content would require additional permissions

@@ -309,13 +309,14 @@ export const servicesRouter = router({
           };
         }
 
-        // 7. Payment succeeded - update service state and enable it
+        // 7. Payment succeeded - clear pending flag but keep service OFF
+        //    Service remains disabled to allow user to provision/configure before enabling
         await db
           .update(serviceInstances)
           .set({
-            state: SERVICE_STATE.ENABLED, // Set state to enabled (was disabled during creation)
+            state: SERVICE_STATE.DISABLED, // Keep disabled - user must manually enable after config
             subscriptionChargePending: false,
-            isUserEnabled: true, // Auto-enable service after successful payment
+            isUserEnabled: false, // Service stays OFF - user enables when ready
           })
           .where(eq(serviceInstances.instanceId, service.instanceId));
 
@@ -335,7 +336,7 @@ export const servicesRouter = router({
         return {
           ...service,
           subscriptionChargePending: false,
-          isUserEnabled: true,
+          isUserEnabled: false, // Service OFF - user must manually enable
           apiKey: apiKey,
           paymentPending: false,
         };

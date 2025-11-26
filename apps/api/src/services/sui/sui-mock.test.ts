@@ -10,21 +10,9 @@ import { MockSuiService } from './mock';
 import { suiMockConfig } from './mock-config';
 import { dbClockProvider, type DBClock } from '@suiftly/shared/db-clock';
 import { db } from '@suiftly/database';
-import {
-  customers,
-  mockSuiTransactions,
-  mockTrackingObjects,
-  refreshTokens,
-  userActivityLogs,
-  apiKeys,
-  serviceInstances,
-  sealKeys,
-  escrowTransactions,
-  ledgerEntries,
-  billingRecords,
-  usageRecords
-} from '@suiftly/database/schema';
+import { customers, mockSuiTransactions, mockTrackingObjects } from '@suiftly/database/schema';
 import { eq, and, desc } from 'drizzle-orm';
+import { cleanupCustomerByWallet } from '../../../tests/helpers/cleanup.js';
 
 describe('Sui Mock Interface', () => {
   let mockSui: MockSuiService;
@@ -46,43 +34,7 @@ describe('Sui Mock Interface', () => {
     testWalletAddress = '0x' + 'a'.repeat(64);
 
     // Clean up any existing test customer to start fresh
-    const existingCustomer = await db.query.customers.findFirst({
-      where: eq(customers.walletAddress, testWalletAddress)
-    });
-
-    // Clear tracking objects for this address (they exist independently)
-    await db.delete(mockTrackingObjects)
-      .where(eq(mockTrackingObjects.userAddress, testWalletAddress));
-
-    if (existingCustomer) {
-      // Clear any existing mock transactions
-      await db.delete(mockSuiTransactions)
-        .where(eq(mockSuiTransactions.customerId, existingCustomer.customerId));
-
-      // Clear all dependent tables to avoid foreign key constraint violations
-      await db.delete(usageRecords)
-        .where(eq(usageRecords.customerId, existingCustomer.customerId));
-      await db.delete(escrowTransactions)
-        .where(eq(escrowTransactions.customerId, existingCustomer.customerId));
-      await db.delete(ledgerEntries)
-        .where(eq(ledgerEntries.customerId, existingCustomer.customerId));
-      await db.delete(billingRecords)
-        .where(eq(billingRecords.customerId, existingCustomer.customerId));
-      await db.delete(sealKeys)
-        .where(eq(sealKeys.customerId, existingCustomer.customerId));
-      await db.delete(serviceInstances)
-        .where(eq(serviceInstances.customerId, existingCustomer.customerId));
-      await db.delete(apiKeys)
-        .where(eq(apiKeys.customerId, existingCustomer.customerId));
-      await db.delete(refreshTokens)
-        .where(eq(refreshTokens.customerId, existingCustomer.customerId));
-      await db.delete(userActivityLogs)
-        .where(eq(userActivityLogs.customerId, existingCustomer.customerId));
-
-      // Delete the customer
-      await db.delete(customers)
-        .where(eq(customers.customerId, existingCustomer.customerId));
-    }
+    await cleanupCustomerByWallet(testWalletAddress);
 
     // Note: We'll let the mock service create the customer when needed
     testCustomerId = 0; // Will be set when needed
@@ -95,42 +47,8 @@ describe('Sui Mock Interface', () => {
     // Clear mock config
     suiMockConfig.clearConfig();
 
-    // Clean up test data - find customer by wallet address
-    const customer = await db.query.customers.findFirst({
-      where: eq(customers.walletAddress, testWalletAddress)
-    });
-
-    // Clear tracking objects for this address (they exist independently)
-    await db.delete(mockTrackingObjects)
-      .where(eq(mockTrackingObjects.userAddress, testWalletAddress));
-
-    if (customer) {
-      await db.delete(mockSuiTransactions)
-        .where(eq(mockSuiTransactions.customerId, customer.customerId));
-
-      // Clear all dependent tables to avoid foreign key constraint violations
-      await db.delete(usageRecords)
-        .where(eq(usageRecords.customerId, customer.customerId));
-      await db.delete(escrowTransactions)
-        .where(eq(escrowTransactions.customerId, customer.customerId));
-      await db.delete(ledgerEntries)
-        .where(eq(ledgerEntries.customerId, customer.customerId));
-      await db.delete(billingRecords)
-        .where(eq(billingRecords.customerId, customer.customerId));
-      await db.delete(sealKeys)
-        .where(eq(sealKeys.customerId, customer.customerId));
-      await db.delete(serviceInstances)
-        .where(eq(serviceInstances.customerId, customer.customerId));
-      await db.delete(apiKeys)
-        .where(eq(apiKeys.customerId, customer.customerId));
-      await db.delete(refreshTokens)
-        .where(eq(refreshTokens.customerId, customer.customerId));
-      await db.delete(userActivityLogs)
-        .where(eq(userActivityLogs.customerId, customer.customerId));
-
-      await db.delete(customers)
-        .where(eq(customers.customerId, customer.customerId));
-    }
+    // Clean up test data using shared helper
+    await cleanupCustomerByWallet(testWalletAddress);
   });
 
   describe('Basic Operations', () => {

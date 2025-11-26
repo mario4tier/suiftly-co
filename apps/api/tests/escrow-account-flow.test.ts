@@ -8,28 +8,26 @@
  * 4. Account creation during deposit/withdraw updates DB
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { db } from '@suiftly/database';
-import { customers, mockSuiTransactions } from '@suiftly/database/schema';
+import { customers } from '@suiftly/database/schema';
 import { eq } from 'drizzle-orm';
 import { getSuiService } from '../src/services/sui';
 import { MockSuiService } from '../src/services/sui/mock';
+import { cleanupCustomerByWallet } from './helpers/cleanup.js';
 
 describe('Escrow Account Flow', () => {
   const testWallet = '0x1234567890123456789012345678901234567890123456789012345678901234';
   const testEscrowAddress = '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890';
 
   beforeEach(async () => {
-    // Clean up any existing test data - delete in correct order to avoid FK constraints
-    await db.delete(mockSuiTransactions);
-    // Delete all test customers to ensure clean slate
-    await db.delete(customers).where(eq(customers.walletAddress, testWallet));
+    // Clean up any existing test data using shared helper
+    await cleanupCustomerByWallet(testWallet);
   });
 
   afterEach(async () => {
-    // Clean up after each test to ensure no data leaks
-    await db.delete(mockSuiTransactions);
-    await db.delete(customers).where(eq(customers.walletAddress, testWallet));
+    // Clean up after each test using shared helper
+    await cleanupCustomerByWallet(testWallet);
   });
 
   it('should handle client-reported escrow address correctly', async () => {
