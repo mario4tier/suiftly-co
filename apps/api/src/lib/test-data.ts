@@ -105,11 +105,10 @@ export async function resetCustomerTestData(options: TestDataResetOptions = {}) 
       .update(customers)
       .set({
         currentBalanceUsdCents: balanceUsdCents,
-        maxMonthlyUsdCents: spendingLimitUsdCents,
-        currentMonthChargedUsdCents: 0,
-        lastMonthChargedUsdCents: 0,
+        spendingLimitUsdCents: spendingLimitUsdCents,
+        currentPeriodChargedUsdCents: 0,
         escrowContractId: clearEscrowAccount ? null : customer.escrowContractId,
-        currentMonthStart: new Date().toISOString().split('T')[0],
+        currentPeriodStart: new Date().toISOString().split('T')[0],
         updatedAt: new Date(),
       })
       .where(eq(customers.customerId, customerId));
@@ -166,8 +165,8 @@ export async function getCustomerTestData(walletAddress: string = MOCK_WALLET_AD
       customerId: customer.customerId,
       walletAddress: customer.walletAddress,
       balanceUsd: (customer.currentBalanceUsdCents ?? 0) / 100,
-      spendingLimitUsd: (customer.maxMonthlyUsdCents ?? 0) / 100,
-      currentPeriodChargedUsd: (customer.currentMonthChargedUsdCents ?? 0) / 100,
+      spendingLimitUsd: (customer.spendingLimitUsdCents ?? 0) / 100,
+      currentPeriodChargedUsd: (customer.currentPeriodChargedUsdCents ?? 0) / 100,
     },
     services: services.map(s => ({
       serviceType: s.serviceType,
