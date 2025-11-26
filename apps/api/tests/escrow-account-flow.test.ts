@@ -51,6 +51,10 @@ describe('Escrow Account Flow', () => {
       customerId,
       walletAddress: testWallet,
       escrowContractId: testEscrowAddress,
+      currentBalanceUsdCents: 0,
+      currentPeriodChargedUsdCents: 0,
+      currentPeriodStart: new Date(),
+      spendingLimitUsdCents: 0, // 0 = unlimited
     });
 
     // Step 4: Verify customer record now has escrow address
