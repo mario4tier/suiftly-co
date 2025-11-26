@@ -685,8 +685,6 @@ Each service page has **2 major modes of operation**:
 │                │ Total Monthly Fee           $11.00││
 │                └───────────────────────────────────┘│
 │                                                     │
-│  Pending Per-Request Charges: $0.00 [See Details]   |
-│                                                     │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -705,9 +703,6 @@ Each service page has **2 major modes of operation**:
   - Displays other various items that are included or can be add-on.
   - When applicable, display which portion of the included/paid items are being used e.g (0 of 3),(3 of 3)
   - Total monthly is shown.
-
-- **Pending Per-Request Charges**
-  - Shows only pending total, [See Details] Will bring up the stats page which covers usage breakdown.
 
 **Note:** When gRPC and GraphQL are implemented in the future, they will use similar interactive form and pricing model as Seal.
 
@@ -1040,9 +1035,6 @@ All abuse throttling are to be implemented later.
 │  │  [ Adjust Spending Limit ]             │          │
 │  └────────────────────────────────────────┘          │
 │                                                       │
-│  Pending Per-Request Charges           $12.45        │
-│  Last Month Charged (December 2024)     $54.20       │
-│                                                       │
 │  Next Scheduled Payment              $58.00  [›]     │
 │  February 1, 2025                                     │
 │  ┌────────────────────────────────────────┐          │
@@ -1114,9 +1106,7 @@ All abuse throttling are to be implemented later.
      - Show note: "Escrow account will be created on your first deposit via Sui wallet"
      - Escrow account is automatically created on first deposit transaction
 
-2. **Current Charges (Below Escrow Box)**
-   - **Pending Per-Request Charges:** Accumulated usage charges not yet billed
-   - **Last Month Charged:** What was charged last month (for reference)
+2. **Next Scheduled Payment (Below Escrow Box)**
    - **Next Scheduled Payment:** What will be charged on 1st of next month
      - Chevron expands to show itemized breakdown
      - Includes: subscription fees + pending usage charges

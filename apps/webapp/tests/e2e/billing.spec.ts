@@ -52,10 +52,6 @@ test.describe('Billing Page - No Escrow Account', () => {
     await expect(page.locator('button:has-text("Adjust Spending Limit")')).toBeVisible();
     await expect(page.locator('button:has-text("Adjust Spending Limit")')).toBeEnabled();
 
-    // Should NOT show current charges section (only when account exists)
-    await expect(page.locator('text=Pending Per-Request Charges')).not.toBeVisible();
-    await expect(page.locator('text=Last Month Charged')).not.toBeVisible();
-
     console.log('✅ Zero balance displayed correctly when no escrow account exists');
   });
 });
@@ -104,9 +100,7 @@ test.describe('Billing Page', () => {
     await expect(page.locator('button:has-text("Withdraw")')).toBeVisible();
     await expect(page.locator('button:has-text("Adjust Spending Limit")')).toBeVisible();
 
-    // Should show current charges section
-    await expect(page.locator('text=Pending Per-Request Charges')).toBeVisible();
-    await expect(page.locator('text=Last Month Charged')).toBeVisible();
+    // Should show next scheduled payment section
     await expect(page.locator('text=Next Scheduled Payment')).toBeVisible();
 
     console.log('✅ Escrow account with balance displayed correctly');

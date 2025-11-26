@@ -861,21 +861,6 @@ export function SealInteractiveForm({
               </table>
             </div>
           </div>
-
-          {/* Pending Per-Request Charges */}
-          <div className="flex items-center justify-between p-4 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/30">
-            <div>
-              <span className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                Pending Per-Request Charges:
-              </span>
-              <span className="ml-2 text-sm font-semibold text-gray-900 dark:text-gray-100">
-                $0.00
-              </span>
-            </div>
-            <Button variant="link" size="sm" className="text-[#f38020] hover:text-[#d97019]">
-              See Details
-            </Button>
-          </div>
         </TabsContent>
 
         {/* X-API-Key Tab */}

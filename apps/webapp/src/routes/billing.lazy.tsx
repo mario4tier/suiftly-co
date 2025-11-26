@@ -350,23 +350,9 @@ function BillingPage() {
         </p>
       </Card>
 
-      {/* Current Charges */}
+      {/* Next Scheduled Payment */}
       {found && (
         <>
-          <div className="mb-6 space-y-2">
-            <div className="flex justify-between py-2">
-              <span className="text-gray-600">Pending Per-Request Charges</span>
-              <span className="font-medium">$0.00</span>
-            </div>
-            <div className="flex justify-between py-2">
-              <span className="text-gray-600">
-                Last Month Charged ({new Date(new Date().setMonth(new Date().getMonth() - 1)).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })})
-              </span>
-              <span className="font-medium">$0.00</span>
-            </div>
-          </div>
-
-          {/* Next Scheduled Payment */}
           <Card className="p-4 mb-6">
             <button
               onClick={() => setNextPaymentExpanded(!nextPaymentExpanded)}
