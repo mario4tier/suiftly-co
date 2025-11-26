@@ -5,15 +5,8 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1763944365011,
-      "tag": "0000_strange_puppet_master",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1763987429893,
-      "tag": "0001_pale_exiles",
+      "when": 1764175928038,
+      "tag": "0000_unknown_viper",
       "breakpoints": true
     }
   ]

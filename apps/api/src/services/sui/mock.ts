@@ -6,9 +6,9 @@
  *
  * Mock account state stored in customers table:
  * - currentBalanceUsdCents: Balance in USDC cents (1:1 with USD for MVP)
- * - maxMonthlyUsdCents: 28-day spending limit
- * - currentMonthChargedUsdCents: Amount charged this 28-day period
- * - currentMonthStart: Start of current 28-day period
+ * - spendingLimitUsdCents: 28-day spending limit
+ * - currentPeriodChargedUsdCents: Amount charged this 28-day period
+ * - currentPeriodStart: Start of current 28-day period
  * - escrowContractId: Simulated shared account address
  *
  * Mock transactions stored in mock_sui_transactions table:
@@ -75,12 +75,12 @@ export class MockSuiService implements ISuiService {
 
     // Check if 28-day period has elapsed and reset if needed
     const now = dbClock.now().getTime();
-    const periodStart = customer.currentMonthStart
-      ? new Date(customer.currentMonthStart).getTime()
+    const periodStart = customer.currentPeriodStart
+      ? new Date(customer.currentPeriodStart).getTime()
       : now;
     const elapsed = now - periodStart;
 
-    let currentPeriodChargedUsdCents = customer.currentMonthChargedUsdCents ?? 0;
+    let currentPeriodChargedUsdCents = customer.currentPeriodChargedUsdCents ?? 0;
     let currentPeriodStartMs = periodStart;
 
     if (elapsed >= PERIOD_DURATION_MS) {
@@ -94,7 +94,7 @@ export class MockSuiService implements ISuiService {
       userAddress,
       suiftlyAddress: SUIFTLY_ADDRESS,
       balanceUsdCents: customer.currentBalanceUsdCents ?? 0,
-      spendingLimitUsdCents: customer.maxMonthlyUsdCents ?? SPENDING_LIMIT.DEFAULT_USD * 100,
+      spendingLimitUsdCents: customer.spendingLimitUsdCents ?? SPENDING_LIMIT.DEFAULT_USD * 100,
       currentPeriodChargedUsdCents,
       currentPeriodStartMs,
       // Mock doesn't use tracking objects
@@ -176,13 +176,12 @@ export class MockSuiService implements ISuiService {
           escrowContractId: accountAddress,
           status: 'active',
           currentBalanceUsdCents: 0,
-          maxMonthlyUsdCents:
+          spendingLimitUsdCents:
             initialSpendingLimitUsdCents !== undefined
               ? initialSpendingLimitUsdCents
               : SPENDING_LIMIT.DEFAULT_USD * 100,
-          currentMonthChargedUsdCents: 0,
-          lastMonthChargedUsdCents: 0,
-          currentMonthStart: now.toISOString().split('T')[0],
+          currentPeriodChargedUsdCents: 0,
+          currentPeriodStart: now.toISOString().split('T')[0],
           createdAt: now,
           updatedAt: now,
         }).returning();
@@ -192,11 +191,11 @@ export class MockSuiService implements ISuiService {
           .update(customers)
           .set({
             escrowContractId: accountAddress,
-            maxMonthlyUsdCents:
+            spendingLimitUsdCents:
               initialSpendingLimitUsdCents !== undefined
                 ? initialSpendingLimitUsdCents
                 : SPENDING_LIMIT.DEFAULT_USD * 100,
-            currentMonthStart: now.toISOString().split('T')[0],
+            currentPeriodStart: now.toISOString().split('T')[0],
             updatedAt: now,
           })
           .where(eq(customers.walletAddress, userAddress))
@@ -325,13 +324,12 @@ export class MockSuiService implements ISuiService {
           escrowContractId: accountAddress,
           status: 'active',
           currentBalanceUsdCents: 0,
-          maxMonthlyUsdCents:
+          spendingLimitUsdCents:
             initialSpendingLimitUsdCents !== undefined
               ? initialSpendingLimitUsdCents
               : SPENDING_LIMIT.DEFAULT_USD * 100,
-          currentMonthChargedUsdCents: 0,
-          lastMonthChargedUsdCents: 0,
-          currentMonthStart: now.toISOString().split('T')[0],
+          currentPeriodChargedUsdCents: 0,
+          currentPeriodStart: now.toISOString().split('T')[0],
           createdAt: now,
           updatedAt: now,
         }).returning();
@@ -340,11 +338,11 @@ export class MockSuiService implements ISuiService {
           .update(customers)
           .set({
             escrowContractId: accountAddress,
-            maxMonthlyUsdCents:
+            spendingLimitUsdCents:
               initialSpendingLimitUsdCents !== undefined
                 ? initialSpendingLimitUsdCents
                 : SPENDING_LIMIT.DEFAULT_USD * 100,
-            currentMonthStart: now.toISOString().split('T')[0],
+            currentPeriodStart: now.toISOString().split('T')[0],
             updatedAt: now,
           })
           .where(eq(customers.walletAddress, userAddress))
@@ -494,12 +492,12 @@ export class MockSuiService implements ISuiService {
 
     // Check if 28-day period has elapsed
     const now = dbClock.now().getTime();
-    const periodStart = customer.currentMonthStart
-      ? new Date(customer.currentMonthStart).getTime()
+    const periodStart = customer.currentPeriodStart
+      ? new Date(customer.currentPeriodStart).getTime()
       : now;
     const elapsed = now - periodStart;
 
-    let currentPeriodCharged = customer.currentMonthChargedUsdCents ?? 0;
+    let currentPeriodCharged = customer.currentPeriodChargedUsdCents ?? 0;
     let needsPeriodReset = false;
 
     if (elapsed >= PERIOD_DURATION_MS) {
@@ -509,7 +507,7 @@ export class MockSuiService implements ISuiService {
     }
 
     // Check spending limit (unless forced exceeded)
-    const spendingLimit = customer.maxMonthlyUsdCents ?? SPENDING_LIMIT.DEFAULT_USD * 100;
+    const spendingLimit = customer.spendingLimitUsdCents ?? SPENDING_LIMIT.DEFAULT_USD * 100;
     if (suiMockConfig.isScenarioEnabled('spendingLimitExceeded') ||
         (spendingLimit > 0 && currentPeriodCharged + amountUsdCents > spendingLimit)) {
       const result = {
@@ -538,13 +536,12 @@ export class MockSuiService implements ISuiService {
     const newPeriodCharged = currentPeriodCharged + amountUsdCents;
     const updateData: Record<string, unknown> = {
       currentBalanceUsdCents: newBalance,
-      currentMonthChargedUsdCents: newPeriodCharged,
+      currentPeriodChargedUsdCents: newPeriodCharged,
       updatedAt: new Date(),
     };
 
     if (needsPeriodReset) {
-      updateData.currentMonthStart = dbClock.now().toISOString().split('T')[0];
-      updateData.lastMonthChargedUsdCents = customer.currentMonthChargedUsdCents ?? 0;
+      updateData.currentPeriodStart = dbClock.now().toISOString().split('T')[0];
     }
 
     await db
@@ -700,10 +697,9 @@ export class MockSuiService implements ISuiService {
           escrowContractId: accountAddress,
           status: 'active',
           currentBalanceUsdCents: 0,
-          maxMonthlyUsdCents: newLimitUsdCents,
-          currentMonthChargedUsdCents: 0,
-          lastMonthChargedUsdCents: 0,
-          currentMonthStart: now.toISOString().split('T')[0],
+          spendingLimitUsdCents: newLimitUsdCents,
+          currentPeriodChargedUsdCents: 0,
+          currentPeriodStart: now.toISOString().split('T')[0],
           createdAt: now,
           updatedAt: now,
         }).returning();
@@ -712,8 +708,8 @@ export class MockSuiService implements ISuiService {
           .update(customers)
           .set({
             escrowContractId: accountAddress,
-            maxMonthlyUsdCents: newLimitUsdCents,
-            currentMonthStart: now.toISOString().split('T')[0],
+            spendingLimitUsdCents: newLimitUsdCents,
+            currentPeriodStart: now.toISOString().split('T')[0],
             updatedAt: now,
           })
           .where(eq(customers.walletAddress, userAddress))
@@ -724,7 +720,7 @@ export class MockSuiService implements ISuiService {
       await db
         .update(customers)
         .set({
-          maxMonthlyUsdCents: newLimitUsdCents,
+          spendingLimitUsdCents: newLimitUsdCents,
           updatedAt: dbClock.now(),
         })
         .where(eq(customers.walletAddress, userAddress));

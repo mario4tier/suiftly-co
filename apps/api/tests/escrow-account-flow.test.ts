@@ -132,10 +132,9 @@ describe('Escrow Account Flow', () => {
       walletAddress: testWallet,
       escrowContractId: testEscrowAddress,
       currentBalanceUsdCents: 0,
-      currentMonthChargedUsdCents: 0,
-      lastMonthChargedUsdCents: 0,
-      currentMonthStart: new Date(),
-      maxMonthlyUsdCents: 0, // 0 = unlimited
+      currentPeriodChargedUsdCents: 0,
+      currentPeriodStart: new Date(),
+      spendingLimitUsdCents: 0, // 0 = unlimited
     });
 
     // Deposit funds first
@@ -187,10 +186,9 @@ describe('Escrow Account Flow', () => {
       walletAddress: testWallet,
       escrowContractId: testEscrowAddress,
       currentBalanceUsdCents: 0,
-      currentMonthChargedUsdCents: 0,
-      lastMonthChargedUsdCents: 0,
-      currentMonthStart: new Date(),
-      maxMonthlyUsdCents: 0, // 0 = unlimited
+      currentPeriodChargedUsdCents: 0,
+      currentPeriodStart: new Date(),
+      spendingLimitUsdCents: 0, // 0 = unlimited
     });
 
     // Step 2: Deposit using DB escrow address

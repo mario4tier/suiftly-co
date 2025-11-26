@@ -165,11 +165,11 @@ export const customers = pgTable('customers', {
   walletAddress: varchar('wallet_address', { length: FIELD_LIMITS.SUI_ADDRESS }).notNull().unique(),
   escrowContractId: varchar('escrow_contract_id', { length: FIELD_LIMITS.SUI_ADDRESS }),
   status: customerStatusEnum('status').notNull().default('active'),  // ← Changed to enum
-  maxMonthlyUsdCents: bigint('max_monthly_usd_cents', { mode: 'number' }),
+  spendingLimitUsdCents: bigint('max_monthly_usd_cents', { mode: 'number' }),
   currentBalanceUsdCents: bigint('current_balance_usd_cents', { mode: 'number' }),
-  currentMonthChargedUsdCents: bigint('current_month_charged_usd_cents', { mode: 'number' }),
-  lastMonthChargedUsdCents: bigint('last_month_charged_usd_cents', { mode: 'number' }),
-  currentMonthStart: date('current_month_start'),
+  currentPeriodChargedUsdCents: bigint('current_month_charged_usd_cents', { mode: 'number' }),
+  : bigint('last_month_charged_usd_cents', { mode: 'number' }),
+  currentPeriodStart: date('current_month_start'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
 }, (table) => ({
@@ -338,11 +338,11 @@ export const customerSchema = z.object({
   walletAddress: walletAddressSchema,
   escrowContractId: z.string().regex(/^0x[a-fA-F0-9]{64}$/).nullable().optional(),
   status: customerStatusSchema,
-  maxMonthlyUsdCents: spendingLimitSchema.nullable().optional(),
+  spendingLimitUsdCents: spendingLimitSchema.nullable().optional(),
   currentBalanceUsdCents: z.number().int().nonnegative().nullable().optional(),
-  currentMonthChargedUsdCents: z.number().int().nonnegative().nullable().optional(),
-  lastMonthChargedUsdCents: z.number().int().nonnegative().nullable().optional(),
-  currentMonthStart: z.string().date().nullable().optional(),
+  currentPeriodChargedUsdCents: z.number().int().nonnegative().nullable().optional(),
+  : z.number().int().nonnegative().nullable().optional(),
+  currentPeriodStart: z.string().date().nullable().optional(),
   createdAt: z.date().or(z.string().datetime()),
   updatedAt: z.date().or(z.string().datetime()),
 });
@@ -362,9 +362,9 @@ export const customerPublicSchema = customerSchema.pick({
   walletAddress: true,
   status: true,
   currentBalanceUsdCents: true,
-  maxMonthlyUsdCents: true,
-  currentMonthChargedUsdCents: true,
-  lastMonthChargedUsdCents: true,
+  spendingLimitUsdCents: true,
+  currentPeriodChargedUsdCents: true,
+  : true,
 });
 ```
 

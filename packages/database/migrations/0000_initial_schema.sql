@@ -4,6 +4,21 @@ CREATE TYPE "public"."service_state" AS ENUM('not_provisioned', 'provisioning', 
 CREATE TYPE "public"."service_tier" AS ENUM('starter', 'pro', 'enterprise');--> statement-breakpoint
 CREATE TYPE "public"."service_type" AS ENUM('seal', 'grpc', 'graphql');--> statement-breakpoint
 CREATE TYPE "public"."transaction_type" AS ENUM('deposit', 'withdraw', 'charge', 'credit');--> statement-breakpoint
+CREATE TABLE "admin_notifications" (
+	"notification_id" serial PRIMARY KEY NOT NULL,
+	"severity" varchar(20) NOT NULL,
+	"category" varchar(50) NOT NULL,
+	"code" varchar(100) NOT NULL,
+	"message" text NOT NULL,
+	"details" text,
+	"customer_id" varchar(50),
+	"invoice_id" varchar(100),
+	"acknowledged" boolean DEFAULT false NOT NULL,
+	"acknowledged_at" timestamp with time zone,
+	"acknowledged_by" varchar(100),
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
 CREATE TABLE "api_keys" (
 	"api_key_fp" integer PRIMARY KEY NOT NULL,
 	"api_key_id" varchar(150) NOT NULL,
@@ -82,11 +97,10 @@ CREATE TABLE "customers" (
 	"wallet_address" varchar(66) NOT NULL,
 	"escrow_contract_id" varchar(66),
 	"status" "customer_status" DEFAULT 'active' NOT NULL,
-	"max_monthly_usd_cents" bigint,
+	"spending_limit_usd_cents" bigint,
 	"current_balance_usd_cents" bigint,
-	"current_month_charged_usd_cents" bigint,
-	"last_month_charged_usd_cents" bigint,
-	"current_month_start" date,
+	"current_period_charged_usd_cents" bigint,
+	"current_period_start" date,
 	"paid_once" boolean DEFAULT false NOT NULL,
 	"grace_period_start" date,
 	"grace_period_notified_at" timestamp with time zone[],
@@ -300,6 +314,11 @@ ALTER TABLE "usage_records" ADD CONSTRAINT "usage_records_customer_id_customers_
 ALTER TABLE "haproxy_raw_logs" ADD CONSTRAINT "haproxy_raw_logs_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "user_activity_logs" ADD CONSTRAINT "user_activity_logs_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "mock_sui_transactions" ADD CONSTRAINT "mock_sui_transactions_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "idx_admin_notif_severity" ON "admin_notifications" USING btree ("severity");--> statement-breakpoint
+CREATE INDEX "idx_admin_notif_category" ON "admin_notifications" USING btree ("category");--> statement-breakpoint
+CREATE INDEX "idx_admin_notif_acknowledged" ON "admin_notifications" USING btree ("acknowledged") WHERE "admin_notifications"."acknowledged" = false;--> statement-breakpoint
+CREATE INDEX "idx_admin_notif_created" ON "admin_notifications" USING btree ("created_at");--> statement-breakpoint
+CREATE INDEX "idx_admin_notif_customer" ON "admin_notifications" USING btree ("customer_id") WHERE "admin_notifications"."customer_id" IS NOT NULL;--> statement-breakpoint
 CREATE INDEX "idx_customer_service" ON "api_keys" USING btree ("customer_id","service_type","is_user_enabled");--> statement-breakpoint
 CREATE INDEX "idx_created_at" ON "auth_nonces" USING btree ("created_at");--> statement-breakpoint
 CREATE INDEX "idx_refresh_customer" ON "refresh_tokens" USING btree ("customer_id");--> statement-breakpoint

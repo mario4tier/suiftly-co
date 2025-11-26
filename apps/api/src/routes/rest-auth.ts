@@ -188,11 +188,11 @@ export async function registerAuthRoutes(server: FastifyInstance) {
             customerId,
             walletAddress,
             status: 'active',
-            maxMonthlyUsdCents: 25000, // $250 default from CONSTANTS.md
+            spendingLimitUsdCents: 25000, // $250 default from CONSTANTS.md
             currentBalanceUsdCents: 0,
-            currentMonthChargedUsdCents: 0,
+            currentPeriodChargedUsdCents: 0,
             lastMonthChargedUsdCents: 0,
-            currentMonthStart: new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1)).toISOString().split('T')[0],
+            currentPeriodStart: new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1)).toISOString().split('T')[0],
           });
           inserted = true;
         } catch (error: any) {

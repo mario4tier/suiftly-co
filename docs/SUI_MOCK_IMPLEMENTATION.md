@@ -104,9 +104,9 @@ apps/api/src/server.ts    # Test API endpoints for mock control
 
 **Storage:** Uses existing `customers` table fields:
 - `currentBalanceUsdCents` - Balance in USDC cents
-- `maxMonthlyUsdCents` - 28-day spending limit
-- `currentMonthChargedUsdCents` - Charged this period
-- `currentMonthStart` - Period start date
+- `spendingLimitUsdCents` - 28-day spending limit
+- `currentPeriodChargedUsdCents` - Charged this period
+- `currentPeriodStart` - Period start date
 - `escrowContractId` - Simulated shared account address
 
 **Behavior:**

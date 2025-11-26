@@ -81,8 +81,8 @@ async function validateSubscription(
   // NOTE: Balance/spending limit enforcement happens at charge time (service-first pattern)
   const currentBalance = customer.currentBalanceUsdCents ?? 0;
   const required = priceUsdCents;
-  const currentPeriodCharged = customer.currentMonthChargedUsdCents ?? 0;
-  const spendingLimit = customer.maxMonthlyUsdCents ?? 25000; // $250 default
+  const currentPeriodCharged = customer.currentPeriodChargedUsdCents ?? 0;
+  const spendingLimit = customer.spendingLimitUsdCents ?? 25000; // $250 default
 
   // 5. Add warnings for low balance or spending limit concerns
   if (currentBalance < required) {

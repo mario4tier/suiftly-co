@@ -85,10 +85,9 @@ describe('DRAFT Invoice Date and Credit Bugs', () => {
       escrowContractId: '0xESCROW4000',
       status: 'active',
       currentBalanceUsdCents: 10000, // $100
-      maxMonthlyUsdCents: 25000, // $250
-      currentMonthChargedUsdCents: 0,
-      lastMonthChargedUsdCents: 0,
-      currentMonthStart: '2025-11-01',
+      spendingLimitUsdCents: 25000, // $250
+      currentPeriodChargedUsdCents: 0,
+      currentPeriodStart: '2025-11-01',
       paidOnce: false,
       createdAt: clock.now(),
       updatedAt: clock.now(),
@@ -183,7 +182,7 @@ describe('DRAFT Invoice Date and Credit Bugs', () => {
 
       // Update customer month start
       await db.update(customers)
-        .set({ currentMonthStart: '2025-11-01' })
+        .set({ currentPeriodStart: '2025-11-01' })
         .where(eq(customers.customerId, testCustomerId));
 
       await handleSubscriptionBilling(
@@ -216,7 +215,7 @@ describe('DRAFT Invoice Date and Credit Bugs', () => {
 
       // Update customer month start
       await db.update(customers)
-        .set({ currentMonthStart: '2025-01-01' })
+        .set({ currentPeriodStart: '2025-01-01' })
         .where(eq(customers.customerId, testCustomerId));
 
       await handleSubscriptionBilling(

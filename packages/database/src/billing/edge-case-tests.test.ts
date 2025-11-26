@@ -83,10 +83,9 @@ describe('Billing Edge Cases', () => {
       escrowContractId: '0xESCROW5000',
       status: 'active',
       currentBalanceUsdCents: 10000,
-      maxMonthlyUsdCents: 25000,
-      currentMonthChargedUsdCents: 0,
-      lastMonthChargedUsdCents: 0,
-      currentMonthStart: '2025-01-01',
+      spendingLimitUsdCents: 25000,
+      currentPeriodChargedUsdCents: 0,
+      currentPeriodStart: '2025-01-01',
       paidOnce: false,
       createdAt: clock.now(),
       updatedAt: clock.now(),
@@ -191,7 +190,7 @@ describe('Billing Edge Cases', () => {
       clock.setTime(new Date('2024-02-15T00:00:00Z'));
 
       await db.update(customers)
-        .set({ currentMonthStart: '2024-02-01' })
+        .set({ currentPeriodStart: '2024-02-01' })
         .where(eq(customers.customerId, testCustomerId));
 
       await handleSubscriptionBilling(
@@ -221,7 +220,7 @@ describe('Billing Edge Cases', () => {
       clock.setTime(new Date('2025-02-15T00:00:00Z'));
 
       await db.update(customers)
-        .set({ currentMonthStart: '2025-02-01' })
+        .set({ currentPeriodStart: '2025-02-01' })
         .where(eq(customers.customerId, testCustomerId));
 
       await handleSubscriptionBilling(

@@ -96,10 +96,9 @@ describe('Service Billing Integration (Phase 2)', () => {
       escrowContractId: '0xESCROW2000',
       status: 'active',
       currentBalanceUsdCents: 10000, // $100.00
-      maxMonthlyUsdCents: 25000, // $250.00
-      currentMonthChargedUsdCents: 0,
-      lastMonthChargedUsdCents: 0,
-      currentMonthStart: '2025-01-01',
+      spendingLimitUsdCents: 25000, // $250.00
+      currentPeriodChargedUsdCents: 0,
+      currentPeriodStart: '2025-01-01',
       paidOnce: false,
       createdAt: clock.now(),
       updatedAt: clock.now(),

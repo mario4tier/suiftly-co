@@ -32,11 +32,10 @@ describe('API Key Database Integration', () => {
           customerId: testCustomerId,
           walletAddress: '0x' + randomBytes(32).toString('hex'),
           status: 'active',
-          maxMonthlyUsdCents: 25000,
+          spendingLimitUsdCents: 25000,
           currentBalanceUsdCents: 0,
-          currentMonthChargedUsdCents: 0,
-          lastMonthChargedUsdCents: 0,
-          currentMonthStart: new Date().toISOString().split('T')[0],
+          currentPeriodChargedUsdCents: 0,
+          currentPeriodStart: new Date().toISOString().split('T')[0],
         });
         inserted = true;
       } catch (error: any) {
