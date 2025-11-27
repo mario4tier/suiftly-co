@@ -4,7 +4,17 @@
  * Complete billing engine with service integration and tier change/cancellation support.
  */
 
-// Core processor
+// Unified Periodic Job (THE main entry point for background billing)
+export {
+  runPeriodicBillingJob,
+  runPeriodicJobForCustomer,
+} from './periodic-job';
+
+export type {
+  PeriodicJobResult,
+} from './periodic-job';
+
+// Core processor (internal - prefer runPeriodicBillingJob for production)
 export {
   processBilling,
   processCustomerBilling,

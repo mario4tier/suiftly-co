@@ -800,6 +800,66 @@ if (config.NODE_ENV !== 'production') {
     });
   });
 
+  // ========================================
+  // Unified Periodic Billing Job Endpoint
+  // ========================================
+  // Triggers THE SAME job that runs every 5 minutes in production.
+  // Single-threaded, deterministic order, handles ALL billing operations.
+  // See BILLING_DESIGN.md for detailed execution phases.
+
+  server.post('/test/billing/run-periodic-job', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    const body = request.body as any;
+    const customerId = body.customerId; // Optional: process single customer
+
+    try {
+      const { db } = await import('@suiftly/database');
+      const { runPeriodicBillingJob, runPeriodicJobForCustomer } = await import('@suiftly/database');
+      const { getSuiService } = await import('./services/sui/index.js');
+
+      const clock = dbClockProvider.getClock();
+      const suiServiceForBilling = getSuiService();
+
+      const billingConfig = {
+        clock,
+        gracePeriodDays: 14,
+        maxRetryAttempts: 3,
+        retryIntervalHours: 24,
+        usageChargeThresholdCents: 500, // $5 threshold
+      };
+
+      let result;
+      if (customerId) {
+        // Process single customer (for targeted testing)
+        result = await runPeriodicJobForCustomer(
+          db,
+          customerId,
+          billingConfig,
+          suiServiceForBilling
+        );
+      } else {
+        // Process all customers (full periodic job)
+        result = await runPeriodicBillingJob(
+          db,
+          billingConfig,
+          suiServiceForBilling
+        );
+      }
+
+      reply.send({
+        success: result.errors.length === 0,
+        result,
+      });
+    } catch (error: any) {
+      console.error('[PERIODIC JOB ERROR]', error);
+      reply.code(500).send({
+        success: false,
+        error: error.message || String(error),
+      });
+    }
+  });
+
   // Graceful shutdown endpoint - allows tests to cleanly shutdown server
   server.post('/test/shutdown', {
     config: { rateLimit: false },
