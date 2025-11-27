@@ -91,27 +91,10 @@ test.describe('DBClock Test Examples', () => {
     expect(periodInfo.end).toBe('2024-02-26T00:00:00.000Z');
   });
 
-  test('can use auto-advancing clock for real-time simulation', async ({ request }) => {
-    // Set mock clock with auto-advance at 100x speed
-    await setMockClock(request, '2024-01-01T00:00:00Z', {
-      autoAdvance: true,
-      timeScale: 100, // 100x speed
-    });
-
-    const startStatus = await getClockStatus(request);
-    const startTime = new Date(startStatus.currentTime).getTime();
-
-    // Wait 100ms real time = 10 seconds simulated time
-    await new Promise(resolve => setTimeout(resolve, 100));
-
-    const endStatus = await getClockStatus(request);
-    const endTime = new Date(endStatus.currentTime).getTime();
-
-    const elapsedMs = endTime - startTime;
-    // Should be approximately 10 seconds (10000ms) simulated
-    expect(elapsedMs).toBeGreaterThan(9000);
-    expect(elapsedMs).toBeLessThan(11000);
-  });
+  // NOTE: Auto-advancing clock (autoAdvance: true, timeScale: X) is tested in
+  // packages/shared/src/db-clock/db-clock.test.ts as a unit test.
+  // E2E tests for auto-advancing are inherently flaky due to CI timing variance.
+  // All real billing tests use explicit advanceClock() calls which are deterministic.
 
   test('clock resets between tests', async ({ request, page }) => {
     // This test runs after the others, but clock should be real time again
