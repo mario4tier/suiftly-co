@@ -15,7 +15,16 @@ import { testDelayManager } from '../lib/test-delays';
 import { getTierPriceUsdCents } from '../lib/config-cache';
 import { getSuiService } from '../services/sui/index.js';
 import { storeApiKey } from '../lib/api-keys';
-import { handleSubscriptionBilling } from '@suiftly/database/billing';
+import {
+  handleSubscriptionBilling,
+  handleTierUpgrade,
+  scheduleTierDowngrade,
+  cancelScheduledTierChange,
+  scheduleCancellation,
+  undoCancellation,
+  canProvisionService,
+  getTierChangeOptions,
+} from '@suiftly/database/billing';
 import { dbClock } from '@suiftly/shared/db-clock';
 
 // Zod schemas for input validation
@@ -572,5 +581,260 @@ export const servicesRouter = router({
         .returning();
 
       return updated;
+    }),
+
+  // ==========================================================================
+  // Phase 1C: Tier Changes and Cancellation
+  // ==========================================================================
+
+  /**
+   * Get tier change options for a service
+   * Returns available tiers with pricing and effective dates
+   */
+  getTierOptions: protectedProcedure
+    .input(z.object({
+      serviceType: serviceTypeSchema,
+    }))
+    .query(async ({ ctx, input }) => {
+      if (!ctx.user) {
+        throw new TRPCError({
+          code: 'UNAUTHORIZED',
+          message: 'Not authenticated',
+        });
+      }
+
+      const options = await getTierChangeOptions(
+        db,
+        ctx.user.customerId,
+        input.serviceType as 'seal' | 'grpc' | 'graphql',
+        dbClock
+      );
+
+      if (!options) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Service not found',
+        });
+      }
+
+      return options;
+    }),
+
+  /**
+   * Upgrade tier (immediate effect with pro-rated charge)
+   * Per BILLING_DESIGN.md R13.1
+   */
+  upgradeTier: protectedProcedure
+    .input(z.object({
+      serviceType: serviceTypeSchema,
+      newTier: serviceTierSchema,
+    }))
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.user) {
+        throw new TRPCError({
+          code: 'UNAUTHORIZED',
+          message: 'Not authenticated',
+        });
+      }
+
+      // Apply test delay if configured
+      await testDelayManager.applyDelay('tierChange');
+
+      const suiService = getSuiService();
+
+      const result = await handleTierUpgrade(
+        db,
+        ctx.user.customerId,
+        input.serviceType as 'seal' | 'grpc' | 'graphql',
+        input.newTier as 'starter' | 'pro' | 'enterprise',
+        suiService,
+        dbClock
+      );
+
+      if (!result.success) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: result.error || 'Upgrade failed',
+        });
+      }
+
+      return {
+        success: true,
+        newTier: result.newTier,
+        chargeAmountUsdCents: result.chargeAmountUsdCents,
+        invoiceId: result.invoiceId,
+      };
+    }),
+
+  /**
+   * Schedule tier downgrade (takes effect at start of next billing period)
+   * Per BILLING_DESIGN.md R13.2
+   */
+  scheduleTierDowngrade: protectedProcedure
+    .input(z.object({
+      serviceType: serviceTypeSchema,
+      newTier: serviceTierSchema,
+    }))
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.user) {
+        throw new TRPCError({
+          code: 'UNAUTHORIZED',
+          message: 'Not authenticated',
+        });
+      }
+
+      // Apply test delay if configured
+      await testDelayManager.applyDelay('tierChange');
+
+      const result = await scheduleTierDowngrade(
+        db,
+        ctx.user.customerId,
+        input.serviceType as 'seal' | 'grpc' | 'graphql',
+        input.newTier as 'starter' | 'pro' | 'enterprise',
+        dbClock
+      );
+
+      if (!result.success) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: result.error || 'Downgrade scheduling failed',
+        });
+      }
+
+      return {
+        success: true,
+        scheduledTier: result.scheduledTier,
+        effectiveDate: result.effectiveDate,
+      };
+    }),
+
+  /**
+   * Cancel a scheduled tier change
+   */
+  cancelScheduledTierChange: protectedProcedure
+    .input(z.object({
+      serviceType: serviceTypeSchema,
+    }))
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.user) {
+        throw new TRPCError({
+          code: 'UNAUTHORIZED',
+          message: 'Not authenticated',
+        });
+      }
+
+      const result = await cancelScheduledTierChange(
+        db,
+        ctx.user.customerId,
+        input.serviceType as 'seal' | 'grpc' | 'graphql',
+        dbClock
+      );
+
+      if (!result.success) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: result.error || 'Failed to cancel tier change',
+        });
+      }
+
+      return { success: true };
+    }),
+
+  /**
+   * Schedule subscription cancellation (takes effect at end of billing period)
+   * Per BILLING_DESIGN.md R13.3
+   */
+  scheduleCancellation: protectedProcedure
+    .input(z.object({
+      serviceType: serviceTypeSchema,
+    }))
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.user) {
+        throw new TRPCError({
+          code: 'UNAUTHORIZED',
+          message: 'Not authenticated',
+        });
+      }
+
+      // Apply test delay if configured
+      await testDelayManager.applyDelay('cancellation');
+
+      const result = await scheduleCancellation(
+        db,
+        ctx.user.customerId,
+        input.serviceType as 'seal' | 'grpc' | 'graphql',
+        dbClock
+      );
+
+      if (!result.success) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: result.error || 'Cancellation scheduling failed',
+        });
+      }
+
+      return {
+        success: true,
+        effectiveDate: result.effectiveDate,
+      };
+    }),
+
+  /**
+   * Undo a scheduled cancellation
+   * Per BILLING_DESIGN.md R13.4
+   */
+  undoCancellation: protectedProcedure
+    .input(z.object({
+      serviceType: serviceTypeSchema,
+    }))
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.user) {
+        throw new TRPCError({
+          code: 'UNAUTHORIZED',
+          message: 'Not authenticated',
+        });
+      }
+
+      const result = await undoCancellation(
+        db,
+        ctx.user.customerId,
+        input.serviceType as 'seal' | 'grpc' | 'graphql',
+        dbClock
+      );
+
+      if (!result.success) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: result.error || 'Failed to undo cancellation',
+        });
+      }
+
+      return { success: true };
+    }),
+
+  /**
+   * Check if service can be provisioned (anti-abuse check)
+   * Per BILLING_DESIGN.md R13.6
+   */
+  canProvision: protectedProcedure
+    .input(z.object({
+      serviceType: serviceTypeSchema,
+    }))
+    .query(async ({ ctx, input }) => {
+      if (!ctx.user) {
+        throw new TRPCError({
+          code: 'UNAUTHORIZED',
+          message: 'Not authenticated',
+        });
+      }
+
+      const result = await canProvisionService(
+        db,
+        ctx.user.customerId,
+        input.serviceType as 'seal' | 'grpc' | 'graphql',
+        dbClock
+      );
+
+      return result;
     }),
 });

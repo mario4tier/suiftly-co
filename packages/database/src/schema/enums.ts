@@ -26,14 +26,15 @@ export const serviceTypeEnum = pgEnum('service_type', [
   'graphql'
 ]);
 
-// Service states (6 distinct states - see UI_DESIGN.md)
+// Service states (7 distinct states - see UI_DESIGN.md and BILLING_DESIGN.md R13)
 export const serviceStateEnum = pgEnum('service_state', [
   'not_provisioned',
   'provisioning',
   'disabled',
   'enabled',
   'suspended_maintenance',
-  'suspended_no_payment'
+  'suspended_no_payment',
+  'cancellation_pending'  // Added in Phase 1C for 7-day grace period after billing period ends
 ]);
 
 // Service tiers

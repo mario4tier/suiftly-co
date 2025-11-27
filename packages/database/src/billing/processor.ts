@@ -1,21 +1,23 @@
 /**
- * Single-Thread Billing Processor (Phase 1B)
+ * Single-Thread Billing Processor (Phase 1B + Phase 1C)
  *
  * Main billing engine that processes all billing operations sequentially.
  * Called periodically (every 5 minutes) to handle:
  * - Monthly subscription billing (1st of month)
+ * - Scheduled tier changes (1st of month) [Phase 1C]
+ * - Scheduled cancellations (1st of month) [Phase 1C]
  * - Payment retries for failed invoices
  * - Grace period management (14-day expiration)
  * - Payment reconciliation after deposits
  *
- * See BILLING_DESIGN.md Phase 1B for detailed requirements.
+ * See BILLING_DESIGN.md Phase 1B and R13 for detailed requirements.
  *
  * IMPORTANT: All operations use customer-level locking to prevent race conditions.
  */
 
 import { eq, and, sql, inArray } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
-import { billingRecords, customers } from '../schema';
+import { billingRecords, customers, serviceInstances } from '../schema';
 import { withCustomerLock } from './locking';
 import { processInvoicePayment } from './payments';
 import {
@@ -28,6 +30,8 @@ import {
 import { withIdempotency, generateMonthlyBillingKey } from './idempotency';
 import { ensureInvoiceValid } from './validation';
 import { ValidationError } from './errors';
+import { applyScheduledTierChanges, processScheduledCancellations } from './tier-changes';
+import { recalculateDraftInvoice } from './service-billing';
 import type { BillingProcessorConfig, CustomerBillingResult, BillingOperation } from './types';
 import type { DBClock } from '@suiftly/shared/db-clock';
 import type { ISuiService } from '@suiftly/shared/sui-service';
@@ -147,6 +151,34 @@ async function processMonthlyBilling(
     tx,
     idempotencyKey,
     async () => {
+      // Phase 1C: Process scheduled tier changes BEFORE billing
+      // This ensures customers are billed at new tier rate
+      const tierChangesApplied = await applyScheduledTierChanges(tx, customerId, config.clock);
+      if (tierChangesApplied > 0) {
+        result.operations.push({
+          type: 'reconciliation',
+          timestamp: config.clock.now(),
+          description: `Applied ${tierChangesApplied} scheduled tier change(s)`,
+          success: true,
+        });
+        // Recalculate DRAFT invoice after tier changes
+        await recalculateDraftInvoice(tx, customerId, config.clock);
+      }
+
+      // Phase 1C: Process scheduled cancellations BEFORE billing
+      // Cancelled services transition to cancellation_pending, removed from DRAFT
+      const cancellationsProcessed = await processScheduledCancellations(tx, customerId, config.clock);
+      if (cancellationsProcessed > 0) {
+        result.operations.push({
+          type: 'reconciliation',
+          timestamp: config.clock.now(),
+          description: `Processed ${cancellationsProcessed} scheduled cancellation(s)`,
+          success: true,
+        });
+        // Recalculate DRAFT invoice after cancellations
+        await recalculateDraftInvoice(tx, customerId, config.clock);
+      }
+
       // Transition DRAFT → PENDING and attempt payment
       for (const invoice of draftInvoices) {
         // CRITICAL: Validate invoice before processing
@@ -200,11 +232,17 @@ async function processMonthlyBilling(
           // Clear grace period if customer was in one
           await clearGracePeriod(tx, customerId);
 
-          // Mark customer as having paid at least once
+          // Mark customer as having paid at least once (for grace period eligibility)
           await tx
             .update(customers)
             .set({ paidOnce: true })
             .where(eq(customers.customerId, customerId));
+
+          // Mark all active services as having paid at least once (for tier change/cancellation behavior)
+          await tx
+            .update(serviceInstances)
+            .set({ paidOnce: true })
+            .where(eq(serviceInstances.customerId, customerId));
         } else {
           // Payment failed
           result.operations.push({
@@ -318,11 +356,17 @@ async function retryFailedPayments(
       // Clear grace period if applicable
       await clearGracePeriod(tx, customerId);
 
-      // Mark customer as having paid
+      // Mark customer as having paid (for grace period eligibility)
       await tx
         .update(customers)
         .set({ paidOnce: true })
         .where(eq(customers.customerId, customerId));
+
+      // Mark all active services as having paid at least once (for tier change/cancellation behavior)
+      await tx
+        .update(serviceInstances)
+        .set({ paidOnce: true })
+        .where(eq(serviceInstances.customerId, customerId));
     } else {
       result.operations.push({
         type: 'payment_retry',

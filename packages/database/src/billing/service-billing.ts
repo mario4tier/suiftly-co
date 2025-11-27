@@ -10,9 +10,9 @@
  * See BILLING_DESIGN.md for detailed requirements.
  */
 
-import { eq } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
-import { serviceInstances } from '../schema';
+import { serviceInstances, customers } from '../schema';
 import { withCustomerLock } from './locking';
 import { getOrCreateDraftInvoice, createAndChargeImmediately, updateDraftInvoiceAmount } from './invoices';
 import { processInvoicePayment } from './payments';
@@ -86,6 +86,26 @@ export async function handleSubscriptionBilling(
       suiService,
       clock
     );
+
+    // If payment succeeded, mark both service and customer as having paid at least once
+    if (paymentResult.fullyPaid) {
+      // Service-level paidOnce: Unlocks key operations (generate/import) and changes tier change behavior
+      await tx
+        .update(serviceInstances)
+        .set({ paidOnce: true })
+        .where(
+          and(
+            eq(serviceInstances.customerId, customerId),
+            eq(serviceInstances.serviceType, serviceType as any)
+          )
+        );
+
+      // Customer-level paidOnce: Enables grace period eligibility on future payment failures
+      await tx
+        .update(customers)
+        .set({ paidOnce: true })
+        .where(eq(customers.customerId, customerId));
+    }
 
     // Get or create DRAFT for next billing cycle
     // This shows the customer what they'll be charged on the 1st of next month

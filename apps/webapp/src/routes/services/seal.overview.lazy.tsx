@@ -8,9 +8,10 @@ import { useState, useEffect } from 'react';
 import { DashboardLayout } from '../../components/layout/DashboardLayout';
 import { SealConfigForm } from '../../components/services/SealConfigForm';
 import { SealInteractiveForm } from '../../components/services/SealInteractiveForm';
+import { ChangeTierModal } from '../../components/services/ChangeTierModal';
 import { Switch } from '../../components/ui/switch';
 import { TextRoute } from '../../components/ui/text-route';
-import { AlertCircle, CheckCircle, PauseCircle, AlertTriangle, Loader2 } from 'lucide-react';
+import { AlertCircle, CheckCircle, PauseCircle, AlertTriangle, Loader2, Clock } from 'lucide-react';
 import { type ServiceStatus } from '@suiftly/shared/schemas';
 import { type ServiceState, type ServiceTier } from '@suiftly/shared/constants';
 import { trpc } from '../../lib/trpc';
@@ -24,6 +25,7 @@ function SealOverviewPage() {
   const [tierSelected, setTierSelected] = useState(false);
   const [isToggling, setIsToggling] = useState(false);
   const [localIsEnabled, setLocalIsEnabled] = useState(false);
+  const [changeTierModalOpen, setChangeTierModalOpen] = useState(false);
 
   // Fetch services using React Query hook
   const { data: services, isLoading, refetch } = trpc.services.list.useQuery();
@@ -123,6 +125,15 @@ function SealOverviewPage() {
           textColor: 'text-red-900 dark:text-red-200',
           message: 'Service suspended due to payment issues. Contact support or deposit to your account to restore service.',
         };
+      case 'cancellation_pending':
+        return {
+          icon: Clock,
+          bgColor: 'bg-gray-50 dark:bg-gray-900/20',
+          borderColor: 'border-gray-300 dark:border-gray-700',
+          iconColor: 'text-gray-600 dark:text-gray-400',
+          textColor: 'text-gray-900 dark:text-gray-200',
+          message: 'Cancellation in progress. Service will be deleted in 7 days. Contact support if you need to restore access.',
+        };
       default:
         return null;
     }
@@ -196,12 +207,17 @@ function SealOverviewPage() {
             isEnabled={isUserEnabled}
             isToggling={isToggling}
             onToggleService={handleToggleService}
-            onChangePlan={() => {
-              // TODO: Implement plan change functionality
-              toast.info('Plan changes will be available soon');
-            }}
+            onChangePlan={() => setChangeTierModalOpen(true)}
           />
         )}
+
+        {/* Change Tier Modal */}
+        <ChangeTierModal
+          isOpen={changeTierModalOpen}
+          onClose={() => setChangeTierModalOpen(false)}
+          serviceType="seal"
+          onSuccess={() => refetch()}
+        />
       </div>
     </DashboardLayout>
   );

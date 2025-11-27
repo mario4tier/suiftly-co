@@ -1,0 +1,465 @@
+/**
+ * Change Tier Modal (Phase 1C)
+ *
+ * Modal for managing service tier changes and cancellation.
+ * Supports:
+ * - Tier upgrades (immediate effect with pro-rated charge)
+ * - Tier downgrades (scheduled for end of billing period)
+ * - Cancellation (scheduled for end of billing period)
+ * - Undo cancellation
+ *
+ * Per BILLING_DESIGN.md R13.
+ */
+
+import { useState } from "react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { AlertTriangle, Check, ArrowUp, ArrowDown, Calendar, Loader2, XCircle } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { trpc } from "@/lib/trpc";
+import { toast } from "sonner";
+import type { ServiceType, ServiceTier } from "@suiftly/shared/constants";
+
+interface ChangeTierModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  serviceType: ServiceType;
+  onSuccess?: () => void;
+}
+
+export function ChangeTierModal({
+  isOpen,
+  onClose,
+  serviceType,
+  onSuccess,
+}: ChangeTierModalProps) {
+  const [selectedTier, setSelectedTier] = useState<ServiceTier | null>(null);
+  const [confirmDialog, setConfirmDialog] = useState<{
+    type: 'upgrade' | 'downgrade' | 'cancel' | 'undo-cancel';
+    tier?: ServiceTier;
+  } | null>(null);
+
+  const utils = trpc.useUtils();
+
+  // Fetch tier options from API
+  const { data: tierOptions, isLoading, error } = trpc.services.getTierOptions.useQuery(
+    { serviceType },
+    { enabled: isOpen }
+  );
+
+  // Mutations
+  const upgradeMutation = trpc.services.upgradeTier.useMutation({
+    onSuccess: (data) => {
+      utils.services.list.invalidate();
+      utils.services.getTierOptions.invalidate();
+      const chargeText = data.chargeAmountUsdCents > 0
+        ? ` You were charged $${(data.chargeAmountUsdCents / 100).toFixed(2)}.`
+        : '';
+      toast.success(`Upgraded to ${data.newTier.toUpperCase()}.${chargeText}`);
+      onSuccess?.();
+      onClose();
+    },
+    onError: (error) => {
+      toast.error(error.message || 'Failed to upgrade tier');
+    },
+  });
+
+  const downgradeMutation = trpc.services.scheduleTierDowngrade.useMutation({
+    onSuccess: (data) => {
+      utils.services.list.invalidate();
+      utils.services.getTierOptions.invalidate();
+      const effectiveDate = new Date(data.effectiveDate).toLocaleDateString();
+      toast.success(`Downgrade to ${data.scheduledTier.toUpperCase()} scheduled for ${effectiveDate}`);
+      onSuccess?.();
+      onClose();
+    },
+    onError: (error) => {
+      toast.error(error.message || 'Failed to schedule downgrade');
+    },
+  });
+
+  const cancelMutation = trpc.services.scheduleCancellation.useMutation({
+    onSuccess: (data) => {
+      utils.services.list.invalidate();
+      utils.services.getTierOptions.invalidate();
+      const effectiveDate = new Date(data.effectiveDate).toLocaleDateString();
+      toast.success(`Cancellation scheduled. Service will end on ${effectiveDate}`);
+      onSuccess?.();
+      onClose();
+    },
+    onError: (error) => {
+      toast.error(error.message || 'Failed to schedule cancellation');
+    },
+  });
+
+  const undoCancelMutation = trpc.services.undoCancellation.useMutation({
+    onSuccess: () => {
+      utils.services.list.invalidate();
+      utils.services.getTierOptions.invalidate();
+      toast.success('Cancellation undone. Your subscription will continue.');
+      onSuccess?.();
+      onClose();
+    },
+    onError: (error) => {
+      toast.error(error.message || 'Failed to undo cancellation');
+    },
+  });
+
+  const isProcessing = upgradeMutation.isPending || downgradeMutation.isPending ||
+    cancelMutation.isPending || undoCancelMutation.isPending;
+
+  const handleTierSelect = (tier: ServiceTier) => {
+    if (!tierOptions) return;
+
+    const option = tierOptions.availableTiers.find(t => t.tier === tier);
+    if (!option || option.isCurrentTier) return;
+
+    setSelectedTier(tier);
+
+    if (option.isUpgrade) {
+      setConfirmDialog({ type: 'upgrade', tier });
+    } else if (option.isDowngrade) {
+      setConfirmDialog({ type: 'downgrade', tier });
+    }
+  };
+
+  const handleCancelSubscription = () => {
+    setConfirmDialog({ type: 'cancel' });
+  };
+
+  const handleUndoCancellation = () => {
+    setConfirmDialog({ type: 'undo-cancel' });
+  };
+
+  const handleConfirm = async () => {
+    if (!confirmDialog) return;
+
+    switch (confirmDialog.type) {
+      case 'upgrade':
+        if (confirmDialog.tier) {
+          await upgradeMutation.mutateAsync({
+            serviceType,
+            newTier: confirmDialog.tier,
+          });
+        }
+        break;
+      case 'downgrade':
+        if (confirmDialog.tier) {
+          await downgradeMutation.mutateAsync({
+            serviceType,
+            newTier: confirmDialog.tier,
+          });
+        }
+        break;
+      case 'cancel':
+        await cancelMutation.mutateAsync({ serviceType });
+        break;
+      case 'undo-cancel':
+        await undoCancelMutation.mutateAsync({ serviceType });
+        break;
+    }
+
+    setConfirmDialog(null);
+  };
+
+  const formatPrice = (cents: number) => {
+    return `$${(cents / 100).toFixed(2)}`;
+  };
+
+  const formatDate = (date: Date | string) => {
+    return new Date(date).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    });
+  };
+
+  // Get tier display info
+  const getTierDisplayInfo = (tier: ServiceTier) => {
+    const tierNames: Record<ServiceTier, string> = {
+      starter: 'STARTER',
+      pro: 'PRO',
+      enterprise: 'ENTERPRISE',
+    };
+    return tierNames[tier];
+  };
+
+  return (
+    <>
+      <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
+        <DialogContent className="sm:max-w-[500px]">
+          <DialogHeader>
+            <DialogTitle>Change Plan</DialogTitle>
+            <DialogDescription>
+              Select a new plan or manage your subscription
+            </DialogDescription>
+          </DialogHeader>
+
+          {isLoading ? (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
+            </div>
+          ) : error ? (
+            <div className="py-8 text-center text-red-600 dark:text-red-400">
+              Failed to load tier options. Please try again.
+            </div>
+          ) : tierOptions ? (
+            <div className="space-y-4 py-4">
+              {/* Cancellation Warning */}
+              {tierOptions.cancellationScheduled && tierOptions.cancellationEffectiveDate && (
+                <div className="rounded-lg border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-900/20 p-4">
+                  <div className="flex items-start gap-3">
+                    <AlertTriangle className="h-5 w-5 text-amber-600 dark:text-amber-500 flex-shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-sm font-semibold text-amber-800 dark:text-amber-200">
+                        Cancellation Scheduled
+                      </p>
+                      <p className="text-sm text-amber-700 dark:text-amber-300 mt-1">
+                        Your subscription will end on {formatDate(tierOptions.cancellationEffectiveDate)}.
+                        You can undo this cancellation below.
+                      </p>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="mt-3 border-amber-600 text-amber-700 hover:bg-amber-100 dark:border-amber-500 dark:text-amber-300 dark:hover:bg-amber-900/30"
+                        onClick={handleUndoCancellation}
+                        disabled={isProcessing}
+                      >
+                        Undo Cancellation
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Current Tier Header */}
+              <div className="text-sm text-gray-600 dark:text-gray-400">
+                Current plan: <span className="font-semibold text-gray-900 dark:text-gray-100">{getTierDisplayInfo(tierOptions.currentTier)}</span>
+              </div>
+
+              {/* Tier Options */}
+              <div className="space-y-3">
+                {tierOptions.availableTiers.map((option) => {
+                  const isSelected = selectedTier === option.tier;
+                  const isCurrent = option.isCurrentTier;
+
+                  return (
+                    <div
+                      key={option.tier}
+                      onClick={() => !isCurrent && !tierOptions.cancellationScheduled && handleTierSelect(option.tier as ServiceTier)}
+                      className={`
+                        relative rounded-lg transition-all border-2 p-4
+                        ${isCurrent
+                          ? 'border-[#f38020] bg-[#f38020]/5 cursor-default'
+                          : tierOptions.cancellationScheduled
+                            ? 'border-gray-200 dark:border-gray-700 opacity-50 cursor-not-allowed'
+                            : isSelected
+                              ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 cursor-pointer'
+                              : 'border-gray-200 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-500 cursor-pointer'
+                        }
+                      `}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2">
+                            <h4 className="text-base font-bold text-gray-900 dark:text-gray-100">
+                              {getTierDisplayInfo(option.tier as ServiceTier)}
+                            </h4>
+                            {isCurrent && (
+                              <span className="px-2 py-0.5 text-xs font-semibold rounded-full bg-[#f38020] text-white">
+                                CURRENT
+                              </span>
+                            )}
+                            {option.isUpgrade && !isCurrent && (
+                              <ArrowUp className="h-4 w-4 text-green-600 dark:text-green-500" />
+                            )}
+                            {option.isDowngrade && !isCurrent && (
+                              <ArrowDown className="h-4 w-4 text-amber-600 dark:text-amber-500" />
+                            )}
+                          </div>
+
+                          {/* Pricing info */}
+                          <div className="mt-1 text-sm text-gray-600 dark:text-gray-400">
+                            {formatPrice(option.priceUsdCents)}/month
+                          </div>
+
+                          {/* Upgrade charge or downgrade effective date */}
+                          {!isCurrent && !tierOptions.cancellationScheduled && (
+                            <div className="mt-2 text-xs">
+                              {option.isUpgrade && option.upgradeChargeCents !== undefined && (
+                                <span className="text-green-700 dark:text-green-400">
+                                  {option.upgradeChargeCents > 0
+                                    ? `Immediate upgrade: ${formatPrice(option.upgradeChargeCents)} pro-rated charge`
+                                    : 'Immediate upgrade: No charge (grace period)'}
+                                </span>
+                              )}
+                              {option.isDowngrade && option.effectiveDate && (
+                                <span className="flex items-center gap-1 text-amber-700 dark:text-amber-400">
+                                  <Calendar className="h-3 w-3" />
+                                  Takes effect {formatDate(option.effectiveDate)}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Selection indicator */}
+                        {isCurrent && (
+                          <Check className="h-5 w-5 text-[#f38020]" />
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Cancel Subscription Button */}
+              {!tierOptions.cancellationScheduled && (
+                <div className="pt-4 border-t border-gray-200 dark:border-gray-700">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-red-600 hover:text-red-700 hover:bg-red-50 dark:text-red-400 dark:hover:text-red-300 dark:hover:bg-red-900/20"
+                    onClick={handleCancelSubscription}
+                    disabled={isProcessing}
+                  >
+                    <XCircle className="h-4 w-4 mr-2" />
+                    Cancel Subscription
+                  </Button>
+                </div>
+              )}
+            </div>
+          ) : null}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={onClose} disabled={isProcessing}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Confirmation Dialog */}
+      <AlertDialog open={!!confirmDialog} onOpenChange={(open) => !open && setConfirmDialog(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {confirmDialog?.type === 'upgrade' && 'Confirm Upgrade'}
+              {confirmDialog?.type === 'downgrade' && 'Confirm Downgrade'}
+              {confirmDialog?.type === 'cancel' && 'Cancel Subscription?'}
+              {confirmDialog?.type === 'undo-cancel' && 'Undo Cancellation?'}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirmDialog?.type === 'upgrade' && confirmDialog.tier && tierOptions && (
+                <>
+                  <p>
+                    You are upgrading from <strong>{getTierDisplayInfo(tierOptions.currentTier)}</strong> to{' '}
+                    <strong>{getTierDisplayInfo(confirmDialog.tier)}</strong>.
+                  </p>
+                  {(() => {
+                    const option = tierOptions.availableTiers.find(t => t.tier === confirmDialog.tier);
+                    if (option?.upgradeChargeCents !== undefined && option.upgradeChargeCents > 0) {
+                      return (
+                        <p className="mt-2">
+                          You will be charged <strong>{formatPrice(option.upgradeChargeCents)}</strong> now
+                          (pro-rated for the remaining days in the billing period).
+                        </p>
+                      );
+                    }
+                    return (
+                      <p className="mt-2">
+                        No charge today (grace period). Your next invoice will reflect the new tier.
+                      </p>
+                    );
+                  })()}
+                  <p className="mt-2 text-green-700 dark:text-green-400">
+                    The upgrade takes effect immediately.
+                  </p>
+                </>
+              )}
+
+              {confirmDialog?.type === 'downgrade' && confirmDialog.tier && tierOptions && (
+                <>
+                  <p>
+                    You are scheduling a downgrade from <strong>{getTierDisplayInfo(tierOptions.currentTier)}</strong> to{' '}
+                    <strong>{getTierDisplayInfo(confirmDialog.tier)}</strong>.
+                  </p>
+                  {(() => {
+                    const option = tierOptions.availableTiers.find(t => t.tier === confirmDialog.tier);
+                    if (option?.effectiveDate) {
+                      return (
+                        <p className="mt-2 text-amber-700 dark:text-amber-400">
+                          The downgrade will take effect on <strong>{formatDate(option.effectiveDate)}</strong>.
+                          You can cancel this change anytime before then.
+                        </p>
+                      );
+                    }
+                    return null;
+                  })()}
+                </>
+              )}
+
+              {confirmDialog?.type === 'cancel' && tierOptions && (
+                <>
+                  <p>
+                    Are you sure you want to cancel your <strong>{getTierDisplayInfo(tierOptions.currentTier)}</strong> subscription?
+                  </p>
+                  <p className="mt-2">
+                    Your service will continue until the end of the current billing period.
+                    After that, you will have a 7-day grace period before your data is deleted.
+                  </p>
+                  <p className="mt-2 text-amber-700 dark:text-amber-400">
+                    You can undo this cancellation anytime before the billing period ends.
+                  </p>
+                </>
+              )}
+
+              {confirmDialog?.type === 'undo-cancel' && (
+                <>
+                  <p>
+                    Your subscription will continue as normal and you will be billed at the start of the next billing period.
+                  </p>
+                </>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isProcessing}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleConfirm}
+              disabled={isProcessing}
+              className={
+                confirmDialog?.type === 'cancel'
+                  ? 'bg-red-600 hover:bg-red-700 dark:bg-red-600 dark:hover:bg-red-700'
+                  : ''
+              }
+            >
+              {isProcessing ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Processing...
+                </>
+              ) : (
+                <>
+                  {confirmDialog?.type === 'upgrade' && 'Confirm Upgrade'}
+                  {confirmDialog?.type === 'downgrade' && 'Schedule Downgrade'}
+                  {confirmDialog?.type === 'cancel' && 'Cancel Subscription'}
+                  {confirmDialog?.type === 'undo-cancel' && 'Keep Subscription'}
+                </>
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
+}

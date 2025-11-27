@@ -9,6 +9,8 @@ interface DelayConfig {
   validateSubscription?: number; // ms
   subscribe?: number; // ms
   sealFormMutation?: number; // ms - applies to all seal form mutations (toggle, config update, etc.)
+  tierChange?: number; // ms - applies to tier upgrade/downgrade operations (Phase 1C)
+  cancellation?: number; // ms - applies to cancellation operations (Phase 1C)
   // Add more endpoints as needed
 }
 

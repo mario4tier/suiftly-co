@@ -1,7 +1,7 @@
 /**
- * Billing Processor Module (Phase 1B + Phase 2)
+ * Billing Processor Module (Phase 1B + Phase 2 + Phase 1C)
  *
- * Complete billing engine with service integration.
+ * Complete billing engine with service integration and tier change/cancellation support.
  */
 
 // Core processor
@@ -74,6 +74,41 @@ export {
 export type {
   SubscriptionBillingResult,
 } from './service-billing';
+
+// Tier change and cancellation (Phase 1C)
+export {
+  handleTierUpgrade,
+  scheduleTierDowngrade,
+  cancelScheduledTierChange,
+  scheduleCancellation,
+  undoCancellation,
+  canProvisionService,
+  canPerformKeyOperation,
+  getTierChangeOptions,
+  applyScheduledTierChanges,
+  processScheduledCancellations,
+} from './tier-changes';
+
+export type {
+  TierUpgradeResult,
+  TierDowngradeResult,
+  CancellationResult,
+  UndoCancellationResult,
+  CanProvisionResult,
+  CanPerformKeyOperationResult,
+  TierChangeOptions,
+} from './tier-changes';
+
+// Cancellation cleanup job (Phase 1C)
+export {
+  processCancellationCleanup,
+  getServicesApproachingDeletion,
+  cleanupOldCancellationHistory,
+} from './cancellation-cleanup';
+
+export type {
+  CancellationCleanupResult,
+} from './cancellation-cleanup';
 
 // Invoice validation (defensive checks)
 export {

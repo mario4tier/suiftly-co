@@ -13,6 +13,7 @@ export * from './auth';
 export * from './system';
 export * from './billing'; // Phase 1A billing tables
 export * from './admin'; // Admin notifications
+export * from './cancellation-history'; // Phase 1C cancellation tracking
 
 // Mock tables (test/development only - NOT for production use)
 export * from './mock';

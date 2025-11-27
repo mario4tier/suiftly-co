@@ -1351,7 +1351,101 @@ await db.insert(billing_idempotency, { key: idempotencyKey, response: result });
   - Idempotency enforcement (prevent double-billing)
   - All tests use MockDBClock for deterministic time manipulation
 
-**Phase 1C merged into 1B** - Credit and payment logic implemented together for coherence
+### Phase 1C: Tier Change & Cancellation ⏳ PENDING
+**Goal:** Implement tier change and cancellation functionality (see R13 for detailed requirements)
+**Prerequisites:** Phase 1B complete (billing processor, credits, payments)
+**Location:** `packages/database/src/billing/tier-changes.ts` (new file)
+
+**Critical: DBClock for All Timestamps**
+All database timestamps MUST originate from the `DBClock` component to enable deterministic testing:
+- `clock.now()` for all `TIMESTAMPTZ` fields
+- `clock.today()` for all `DATE` fields
+- Never use `new Date()` or `Date.now()` directly in billing code
+- Tests use `MockDBClock` to simulate time-based scenarios (billing period transitions, cooldown expiry, etc.)
+
+**Tasks:**
+
+- [ ] **Database Migration**
+  - Add `cancellation_pending` to `service_state` enum
+  - Add new columns to `service_instances`: `scheduled_tier`, `scheduled_tier_effective_date`, `cancellation_scheduled_for`, `cancellation_effective_at`
+  - Create `service_cancellation_history` table
+
+- [ ] **Tier Upgrade Implementation**
+  - Implement `handleTierUpgrade()` in `tier-changes.ts`
+  - Pro-rated charge calculation (reuse `calculateProRatedUpgradeCharge`)
+  - Immediate payment processing with `withCustomerLock()`
+  - DRAFT invoice recalculation
+  - Unit tests: mid-month upgrade, grace period (≤2 days), payment failure rollback
+
+- [ ] **Tier Downgrade Implementation**
+  - Implement `scheduleTierDowngrade()` in `tier-changes.ts`
+  - Monthly billing job: apply scheduled tier changes on 1st of month
+  - DRAFT invoice updates for scheduled changes
+  - Unit tests: schedule downgrade, cancel scheduled downgrade, multiple tier changes
+
+- [ ] **Cancellation Implementation**
+  - Implement `scheduleCancellation()` - sets flag, updates DRAFT
+  - Implement `undoCancellation()` - clears flag, restores DRAFT
+  - Monthly billing job: transition to `cancellation_pending` state
+  - Unit tests: cancel during period, undo cancel, period-end transition
+
+- [ ] **Cleanup Job Implementation**
+  - Implement `processCancellationCleanup()` cron job
+  - Delete related records (API keys, Seal keys, packages)
+  - Record in cancellation history
+  - Reset service to `not_provisioned`
+  - Unit tests: cleanup after 7 days, verify data deletion, cooldown recording
+
+- [ ] **Anti-Abuse Implementation**
+  - Implement `canProvisionService()` check
+  - Block re-provisioning during `cancellation_pending`
+  - Block re-provisioning during cooldown period
+  - Unit tests: block during pending, block during cooldown, allow after cooldown expires
+
+- [ ] **API Endpoints & Integration Tests**
+  - `POST /services/:type/upgrade` - immediate upgrade
+  - `POST /services/:type/downgrade` - schedule downgrade
+  - `POST /services/:type/cancel` - schedule cancellation
+  - `POST /services/:type/undo-cancel` - undo cancellation
+  - `GET /services/:type/change-options` - get available tiers with pricing
+  - **API tests with MockDBClock:**
+    - Test upgrade charge calculation at various dates
+    - Test downgrade effective date calculation
+    - Test cancellation → billing period end → cleanup flow (simulate 30+ day journey)
+    - Test cooldown period enforcement and expiry
+    - Test concurrent tier change requests (idempotency)
+
+- [ ] **Frontend (Change Tier Modal)**
+  - Modal component with tier selection
+  - Dynamic pricing display (pro-rated for upgrades)
+  - Cancellation option with warnings
+  - Confirmation dialogs
+  - Toast messages for all actions (including undo instructions)
+  - Banner display for scheduled changes/cancellation
+
+**Test Scenarios (Time-Based with MockDBClock):**
+```typescript
+// Example: Full cancellation journey
+clock.setTime(new Date('2025-01-15')); // Mid-month
+await scheduleCancellation(customerId, serviceType, clock);
+// Service still active, cancellation_scheduled_for = 2025-01-31
+
+clock.setTime(new Date('2025-02-01')); // Billing period ends
+await processMonthlyBilling(clock);
+// Service state → cancellation_pending, cancellation_effective_at = 2025-02-08
+
+clock.setTime(new Date('2025-02-08')); // 7 days later
+await processCancellationCleanup(clock);
+// Service state → not_provisioned, data deleted, cooldown recorded
+
+clock.setTime(new Date('2025-02-10')); // During cooldown
+const result = await canProvisionService(customerId, serviceType, clock);
+expect(result.allowed).toBe(false); // Blocked
+
+clock.setTime(new Date('2025-02-15')); // Cooldown expired
+const result2 = await canProvisionService(customerId, serviceType, clock);
+expect(result2.allowed).toBe(true); // Allowed
+```
 
 ### Phase 2: Service Integration ⏳ IN PROGRESS
 **Status:** Core service billing complete (8 tests), usage metering and dashboard pending
@@ -1409,6 +1503,644 @@ await db.insert(billing_idempotency, { key: idempotencyKey, response: result });
 
 ---
 
+## R13: Tier Change and Cancellation
+
+This section defines the complete requirements for tier changes (upgrades/downgrades) and subscription cancellation, including anti-abuse measures and state management.
+
+### Overview
+
+| Action | Timing | Billing Impact | Service Impact | Reversible |
+|--------|--------|----------------|----------------|------------|
+| **Tier Upgrade** | Immediate | Pro-rated charge for remaining days | Immediate new tier | No (charged) |
+| **Tier Downgrade** | End of billing period | No immediate charge | Current tier until period end | Yes (until period end) |
+| **Cancellation** | End of billing period | Removed from DRAFT invoice | Service continues until period end | Yes (until period end) |
+| **Re-enable after Cancel** | Immediate (during period) | Re-added to DRAFT invoice | No change (still active) | N/A |
+
+### R13.1: Tier Upgrade (Immediate Effect)
+
+**Trigger:** Customer selects higher-priced tier from "Change Tier" modal.
+
+**Business Rules:**
+1. **Immediate activation:** New tier takes effect immediately upon successful payment
+2. **Pro-rated charge:** Customer pays only the difference for remaining days in the billing period
+3. **Grace period:** If ≤2 days remaining in billing period, charge is $0 (avoids timezone edge cases)
+4. **Payment required:** Upgrade ONLY activates if payment succeeds; failure keeps current tier
+
+**Charge Calculation:**
+```
+upgrade_charge = (new_tier_price − old_tier_price) × (days_remaining / days_in_month)
+
+Where:
+  days_remaining = days from upgrade date to end of month (inclusive)
+
+If days_remaining ≤ 2:
+  upgrade_charge = $0 (grace period - new tier still activates)
+```
+
+**Examples:**
+```
+Scenario 1: Mid-month upgrade
+- Current: Starter ($9/mo), Upgrading to: Pro ($29/mo)
+- Date: Jan 15 (17 days remaining in 31-day month)
+- Charge: ($29 - $9) × (17/31) = $20 × 0.548 = $10.97
+
+Scenario 2: Late-month upgrade (grace period)
+- Current: Starter ($9/mo), Upgrading to: Pro ($29/mo)
+- Date: Jan 30 (2 days remaining)
+- Charge: $0 (grace period, new tier active immediately)
+
+Scenario 3: Enterprise upgrade
+- Current: Pro ($29/mo), Upgrading to: Enterprise ($185/mo)
+- Date: Jan 10 (22 days remaining in 31-day month)
+- Charge: ($185 - $29) × (22/31) = $156 × 0.71 = $110.71
+```
+
+**State Transitions:**
+```
+[User clicks "Upgrade to Pro"]
+        │
+        ├─ Calculate pro-rated charge
+        │
+        ├─ Validate: balance >= charge AND within spending limit
+        │
+        ├─ On validation fail:
+        │   └─ Show error: "Insufficient balance. Deposit $X to upgrade."
+        │      Return (no state change)
+        │
+        ├─ Attempt immediate charge
+        │
+        ├─ On charge fail:
+        │   └─ Show error: "Payment failed. Please try again."
+        │      Return (no state change)
+        │
+        └─ On success:
+            ├─ Update service_instances.tier = new_tier
+            ├─ Update DRAFT invoice for next billing cycle
+            ├─ Create billing_record (type=upgrade, status=paid)
+            └─ Return success + toast: "Upgraded to Pro tier. $10.97 charged."
+```
+
+**Database Changes:**
+```sql
+-- On successful upgrade
+UPDATE service_instances
+SET tier = 'pro',
+    updated_at = NOW()
+WHERE instance_id = ?;
+
+-- Recalculate DRAFT for next month (will use new tier price)
+-- Handled by recalculateDraftInvoice()
+```
+
+### R13.2: Tier Downgrade (Scheduled Effect)
+
+**Trigger:** Customer selects lower-priced tier from "Change Tier" modal.
+
+**Business Rules:**
+1. **Scheduled activation:** New tier takes effect at start of next billing period (1st of month)
+2. **No immediate charge:** Customer already paid for current tier through end of period
+3. **No refund:** Current period is non-refundable (service continues at current tier)
+4. **Reversible:** Customer can change their mind before period ends
+5. **Multiple changes:** Last scheduled tier before period end wins
+
+**State Management:**
+```sql
+-- New fields on service_instances
+ALTER TABLE service_instances ADD COLUMN
+  scheduled_tier service_tier,          -- NULL = no change scheduled
+  scheduled_tier_effective_date DATE;   -- When change takes effect (1st of next month)
+```
+
+**State Transitions:**
+```
+[User clicks "Downgrade to Starter"]
+        │
+        ├─ No immediate charge (already paid for current period)
+        │
+        ├─ Set scheduled_tier = 'starter'
+        │
+        ├─ Set scheduled_tier_effective_date = first day of next month
+        │
+        ├─ Update DRAFT invoice (uses scheduled_tier for projection)
+        │
+        └─ Return success + toast:
+           "Tier change to Starter scheduled for [DATE].
+            You'll continue with Pro features until then."
+```
+
+**Monthly Billing Process (1st of month):**
+```
+For each service with scheduled_tier IS NOT NULL:
+  │
+  ├─ If scheduled_tier_effective_date <= TODAY:
+  │   ├─ Update tier = scheduled_tier
+  │   ├─ Clear scheduled_tier = NULL
+  │   ├─ Clear scheduled_tier_effective_date = NULL
+  │   └─ Log: "Tier changed from [old] to [new]"
+  │
+  └─ Bill at new tier rate
+```
+
+**UI Display (when downgrade scheduled):**
+```
+┌─────────────────────────────────────────────────────────────┐
+│ ℹ️ Tier change scheduled                                    │
+│    Your service will change from Pro to Starter on Feb 1.   │
+│    [Cancel Change] [Keep Pro]                               │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### R13.3: Subscription Cancellation
+
+**Trigger:** Customer clicks "Cancel Subscription" in "Change Tier" modal.
+
+**Key Principle:** Cancellation is **NOT immediate**. The customer has paid for the billing period and the service continues operating normally until the period ends. The cancellation is simply a flag indicating "do not renew."
+
+**Business Rules:**
+1. **Service continues:** Service remains fully operational until end of billing period
+2. **No refund:** Current billing period is non-refundable (already paid)
+3. **Freely reversible:** Customer can un-cancel anytime before billing period ends
+4. **DRAFT impact:** Service removed from next month's DRAFT invoice
+5. **End of period:** Service enters `cancellation_pending` state (7-day data retention)
+6. **Anti-abuse:** 7-day block on re-provisioning after subscription actually ends
+
+**Database Schema:**
+```sql
+-- New field on service_instances (tracks scheduled cancellation)
+ALTER TABLE service_instances ADD COLUMN
+  cancellation_scheduled_for DATE;  -- NULL = not cancelled; DATE = when cancellation takes effect
+
+-- New state value for post-billing-period phase
+ALTER TYPE service_state ADD VALUE 'cancellation_pending' AFTER 'suspended_no_payment';
+
+-- Additional fields for cancellation_pending state
+ALTER TABLE service_instances ADD COLUMN
+  cancellation_effective_at TIMESTAMPTZ;  -- When full cleanup will occur (7 days after period end)
+```
+
+**Cancellation Flow (During Billing Period):**
+```
+[User clicks "Cancel Subscription"]
+        │
+        ├─ Show confirmation modal:
+        │   "Are you sure you want to cancel your Seal subscription?
+        │    • Your service will continue working until [END_OF_BILLING_PERIOD]
+        │    • You can change your mind anytime before then
+        │    • After [END_OF_BILLING_PERIOD], you have 7 days before data is deleted
+        │    • No refund for current billing period"
+        │
+        ├─ User confirms
+        │
+        ├─ Update service instance:
+        │   └─ cancellation_scheduled_for = end of current billing period
+        │      (Service state remains 'enabled' or 'disabled' - no change!)
+        │
+        ├─ Update DRAFT invoice: remove this service (no charge next month)
+        │
+        └─ Show toast:
+           "Subscription cancelled. Your service will remain active until
+            [END_DATE]. To keep your service, click 'Keep Subscription'
+            in the Change Tier menu anytime before then."
+```
+
+**UI Display (Cancellation Scheduled, Service Still Active):**
+```
+┌─────────────────────────────────────────────────────────────┐
+│ ℹ️ Cancellation Scheduled                                   │
+│    Your subscription ends on [END_DATE]. Service is still   │
+│    fully active until then.                                 │
+│                                                              │
+│    Changed your mind? [Keep Subscription]                   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Toast Message (on cancellation):**
+```
+┌─────────────────────────────────────────────────────────────┐
+│ ✓ Subscription cancelled                                    │
+│                                                              │
+│   Your service remains active until [END_DATE].             │
+│   To undo: Click "Change Tier" → "Keep Subscription"        │
+│                                                    [Dismiss] │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### R13.4: Re-enabling During Billing Period (Undo Cancellation)
+
+**Trigger:** Customer clicks "Keep Subscription" or selects a tier while cancellation is scheduled.
+
+**Business Rules:**
+1. **No charge:** Customer already paid for this period
+2. **No impact:** Simply clears the cancellation flag
+3. **DRAFT restored:** Service re-added to next month's DRAFT invoice
+4. **Tier changes:** If selecting a different tier, apply upgrade/downgrade rules
+
+**Un-Cancel Flow (Same Tier):**
+```
+[User clicks "Keep Subscription"]
+        │
+        ├─ Clear cancellation_scheduled_for = NULL
+        │
+        ├─ Update DRAFT invoice: re-add this service
+        │
+        └─ Show toast: "Great! Your subscription will continue as normal."
+```
+
+**Un-Cancel Flow (Different Tier):**
+```
+[User selects "Enterprise" while cancellation is scheduled]
+        │
+        ├─ Clear cancellation_scheduled_for = NULL
+        │
+        ├─ If new tier > current tier:
+        │   └─ Apply upgrade rules (R13.1) - pro-rated charge
+        │
+        ├─ If new tier < current tier:
+        │   └─ Apply downgrade rules (R13.2) - schedule for next period
+        │
+        ├─ Update DRAFT invoice accordingly
+        │
+        └─ Show appropriate toast
+```
+
+### R13.5: End of Billing Period Transition
+
+**Trigger:** Monthly billing job runs on 1st of month.
+
+**Process for Cancelled Services:**
+```
+For each service where cancellation_scheduled_for <= TODAY:
+  │
+  ├─ Transition state: current_state → 'cancellation_pending'
+  │
+  ├─ Set cancellation_effective_at = NOW() + 7 days
+  │
+  ├─ Set is_user_enabled = false (service now returns 503)
+  │
+  ├─ Clear cancellation_scheduled_for = NULL
+  │
+  └─ Log: "Service entered cancellation_pending state"
+```
+
+**State Definition (State 7: Cancellation Pending):**
+
+| Aspect | Description |
+|--------|-------------|
+| **Meaning** | Billing period ended, 7-day grace before full deletion |
+| **Service Status** | Disabled (keys return 503) |
+| **Billing** | No charges (subscription has ended) |
+| **Configuration** | Read-only (can view, cannot edit) |
+| **Keys** | Preserved but inactive (return 503) |
+| **Duration** | 7 days from billing period end |
+| **Re-subscribe** | Blocked during this period (anti-abuse) |
+| **After Period** | State → `not_provisioned`, all service data deleted |
+
+**UI Display (Cancellation Pending - After Billing Period):**
+```
+┌─────────────────────────────────────────────────────────────┐
+│ ⚠️ Subscription Ended                                       │
+│    Your service data will be permanently deleted on [DATE]. │
+│                                                              │
+│    To resubscribe, please wait until [DATE + 7 days] or     │
+│    contact support@mhax.io for immediate assistance.        │
+│                                                              │
+│    [Contact Support]                                        │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### R13.6: Anti-Abuse: Re-Provisioning Block
+
+**Problem:** Malicious users could exploit the system by:
+- Subscribing to capture promotional credits
+- Cancelling at end of period
+- Immediately re-subscribing to capture more promos
+- Repeat cycle
+
+**Solution:** 7-day block on re-provisioning the SAME service type after subscription ends.
+
+**Business Rules:**
+1. **Invisible until needed:** Customer only sees this if they try to re-subscribe
+2. **Trigger:** When billing period ends and service enters `cancellation_pending`
+3. **Duration:** 7 days from when `cancellation_pending` started
+4. **Scope:** Per customer + service type (can subscribe to other services)
+5. **Bypass:** Contact support@mhax.io for legitimate cases
+
+**Implementation:**
+```typescript
+async function canProvisionService(
+  customerId: number,
+  serviceType: string
+): Promise<{ allowed: boolean; reason?: string; availableAt?: Date }> {
+
+  // Check if service is in cancellation_pending state
+  const existingService = await db.query.serviceInstances.findFirst({
+    where: and(
+      eq(serviceInstances.customerId, customerId),
+      eq(serviceInstances.serviceType, serviceType)
+    )
+  });
+
+  if (existingService?.state === 'cancellation_pending') {
+    return {
+      allowed: false,
+      reason: 'cancellation_pending',
+      availableAt: existingService.cancellationEffectiveAt
+    };
+  }
+
+  // Check cancellation history for recent deletions
+  const recentCancellation = await db.query.serviceCancellationHistory.findFirst({
+    where: and(
+      eq(serviceCancellationHistory.customerId, customerId),
+      eq(serviceCancellationHistory.serviceType, serviceType),
+      gt(serviceCancellationHistory.cooldownExpiresAt, new Date())
+    )
+  });
+
+  if (recentCancellation) {
+    return {
+      allowed: false,
+      reason: 'cooldown_period',
+      availableAt: recentCancellation.cooldownExpiresAt
+    };
+  }
+
+  return { allowed: true };
+}
+```
+
+**Database Schema:**
+```sql
+-- Track cancellation history for anti-abuse
+CREATE TABLE service_cancellation_history (
+  id SERIAL PRIMARY KEY,
+  customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
+  service_type service_type NOT NULL,
+  billing_period_ended_at TIMESTAMPTZ NOT NULL,   -- When subscription actually ended
+  deleted_at TIMESTAMPTZ NOT NULL,                -- When service was fully deleted
+  cooldown_expires_at TIMESTAMPTZ NOT NULL,       -- When re-provisioning is allowed
+
+  INDEX idx_cancellation_customer_service (customer_id, service_type),
+  INDEX idx_cancellation_cooldown (cooldown_expires_at)
+);
+```
+
+**UI Display (Blocked by Cooldown):**
+```
+┌─────────────────────────────────────────────────────────────┐
+│ ⚠️ Service temporarily unavailable                          │
+│                                                              │
+│   You recently cancelled your Seal subscription.            │
+│   New subscriptions will be available on [DATE].            │
+│                                                              │
+│   Need immediate access? Contact support@mhax.io            │
+│                                                              │
+│                                            [Contact Support] │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### R13.7: Cancellation Cleanup Job
+
+**Purpose:** Delete expired `cancellation_pending` services after 7-day grace period.
+
+**Trigger:** Daily cron job (recommended: run hourly for timely cleanup)
+
+**Process:**
+```typescript
+async function processCancellationCleanup(clock: DBClock): Promise<void> {
+  const now = clock.now();
+
+  // Find all services past their cancellation effective date
+  const expiredCancellations = await db.select()
+    .from(serviceInstances)
+    .where(
+      and(
+        eq(serviceInstances.state, 'cancellation_pending'),
+        lte(serviceInstances.cancellationEffectiveAt, now)
+      )
+    );
+
+  for (const service of expiredCancellations) {
+    await db.transaction(async (tx) => {
+      // 1. Record in cancellation history (for cooldown enforcement)
+      await tx.insert(serviceCancellationHistory).values({
+        customerId: service.customerId,
+        serviceType: service.serviceType,
+        billingPeriodEndedAt: service.cancellationEffectiveAt, // When period ended
+        deletedAt: now,
+        cooldownExpiresAt: clock.addDays(7) // 7-day cooldown from deletion
+      });
+
+      // 2. Delete related records
+      // Delete API keys for this service
+      await tx.delete(apiKeys)
+        .where(and(
+          eq(apiKeys.customerId, service.customerId),
+          eq(apiKeys.serviceType, service.serviceType)
+        ));
+
+      // Delete Seal keys and packages (if Seal service)
+      if (service.serviceType === 'seal') {
+        await tx.execute(sql`
+          DELETE FROM seal_packages
+          WHERE seal_key_id IN (
+            SELECT seal_key_id FROM seal_keys
+            WHERE customer_id = ${service.customerId}
+          )
+        `);
+
+        await tx.delete(sealKeys)
+          .where(eq(sealKeys.customerId, service.customerId));
+      }
+
+      // 3. Reset service instance to not_provisioned
+      await tx.update(serviceInstances)
+        .set({
+          state: 'not_provisioned',
+          tier: 'starter',
+          isUserEnabled: true,
+          subscriptionChargePending: true,
+          config: null,
+          enabledAt: null,
+          disabledAt: null,
+          cancellationScheduledFor: null,
+          cancellationEffectiveAt: null,
+          scheduledTier: null,
+          scheduledTierEffectiveDate: null
+        })
+        .where(eq(serviceInstances.instanceId, service.instanceId));
+
+      // 4. Log the cleanup
+      await tx.insert(userActivityLogs).values({
+        customerId: service.customerId,
+        clientIp: '0.0.0.0',
+        message: `Service ${service.serviceType} deleted after cancellation grace period`
+      });
+    });
+  }
+}
+```
+
+### R13.8: "Change Tier" Modal Design
+
+**Entry Point:** "Change Tier" button on service configuration page.
+
+**Modal Layout:**
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Change Your Plan                                      [X]  │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│  Current Plan: Pro ($29/month)                              │
+│                                                              │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │ ○ Starter - $9/month                                │    │
+│  │   • 10 req/sec guaranteed                           │    │
+│  │   • No burst capacity                               │    │
+│  │   ⚠️ Takes effect Feb 1 (current tier until then)   │    │
+│  └─────────────────────────────────────────────────────┘    │
+│                                                              │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │ ● Pro - $29/month (Current)                         │    │
+│  │   • 100 req/sec guaranteed                          │    │
+│  │   • Burst up to 500 req/sec                         │    │
+│  └─────────────────────────────────────────────────────┘    │
+│                                                              │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │ ○ Enterprise - $185/month                           │    │
+│  │   • 1000 req/sec guaranteed                         │    │
+│  │   • Burst up to 5000 req/sec                        │    │
+│  │   💰 Upgrade now: $110.71 (pro-rated)               │    │
+│  └─────────────────────────────────────────────────────┘    │
+│                                                              │
+│  ──────────────────────────────────────────────────────────  │
+│                                                              │
+│  ○ Cancel Subscription                                      │
+│    Service continues until Jan 31. You can undo anytime.    │
+│                                                              │
+├─────────────────────────────────────────────────────────────┤
+│                          [Cancel]  [Confirm Change]         │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Dynamic Content:**
+- Upgrade tiers show pro-rated charge amount
+- Downgrade tiers show effective date ("Takes effect [DATE]")
+- Cancel option shows end date and reversibility
+- Confirm button text changes based on selection:
+  - "Upgrade Now ($X.XX)"
+  - "Schedule Downgrade"
+  - "Cancel Subscription"
+  - "Keep Subscription" (if cancellation was previously scheduled)
+
+### R13.9: State Machine Summary
+
+```
+                    ┌──────────────────────────────────────────────────┐
+                    │              (1) not_provisioned                  │
+                    │                                                   │
+                    │  No subscription for this service                │
+                    └─────────────────────┬────────────────────────────┘
+                                          │
+                                          │ Subscribe + payment
+                                          │ (blocked if in cooldown)
+                                          ▼
+                    ┌──────────────────────────────────────────────────┐
+                    │              (2) provisioning                     │
+                    │              (transient ~50ms)                    │
+                    └─────────────────────┬────────────────────────────┘
+                                          │
+                                          │ Payment success
+                                          ▼
+┌───────────────────────────────────────────────────────────────────────────────┐
+│                                                                               │
+│   ACTIVE SUBSCRIPTION ZONE                                                    │
+│   (Service operational, user can toggle enable/disable)                       │
+│   (User can schedule cancellation - service keeps working)                    │
+│                                                                               │
+│   ┌─────────────────────────┐         ┌─────────────────────────┐            │
+│   │     (3) disabled        │◄───────►│     (4) enabled         │            │
+│   │                         │ toggle  │                         │            │
+│   │  Subscribed, OFF        │         │  Serving traffic        │            │
+│   └─────────────────────────┘         └─────────────────────────┘            │
+│                                                                               │
+│   • Cancel: sets cancellation_scheduled_for = end_of_period                  │
+│   • Undo cancel: clears cancellation_scheduled_for (no impact)               │
+│   • Service continues normally until billing period ends                      │
+│                                                                               │
+└───────────────────────────────────────────────────────────────────────────────┘
+                                          │
+                                          │ Billing period ends
+                                          │ (if cancellation_scheduled_for is set)
+                                          ▼
+                    ┌──────────────────────────────────────────────────┐
+                    │         (7) cancellation_pending                  │
+                    │                                                   │
+                    │  7-day grace period before full deletion         │
+                    │  Service disabled, data preserved                 │
+                    │  Re-subscribe blocked (contact support)          │
+                    └─────────────────────┬────────────────────────────┘
+                                          │
+                                          │ 7 days expire
+                                          │ (cleanup job runs)
+                                          ▼
+                    ┌──────────────────────────────────────────────────┐
+                    │              Cleanup Process                      │
+                    │                                                   │
+                    │  • Delete API keys, Seal keys, packages          │
+                    │  • Record in cancellation_history                │
+                    │  • Reset to not_provisioned                      │
+                    │  • Start 7-day re-provisioning cooldown          │
+                    └─────────────────────┬────────────────────────────┘
+                                          │
+                                          │
+                                          ▼
+                    ┌──────────────────────────────────────────────────┐
+                    │              (1) not_provisioned                  │
+                    │              (with 7-day cooldown)                │
+                    │                                                   │
+                    │  After cooldown expires → can re-subscribe       │
+                    └──────────────────────────────────────────────────┘
+```
+
+### R13.10: Summary of Database Changes
+
+**New Enum Value:**
+```sql
+ALTER TYPE service_state ADD VALUE 'cancellation_pending' AFTER 'suspended_no_payment';
+```
+
+**Modified `service_instances` Table:**
+```sql
+ALTER TABLE service_instances ADD COLUMN
+  -- Tier change scheduling
+  scheduled_tier service_tier,                   -- For scheduled downgrades
+  scheduled_tier_effective_date DATE,            -- When downgrade takes effect
+
+  -- Cancellation scheduling (during billing period - service still active)
+  cancellation_scheduled_for DATE,               -- End of billing period when cancel takes effect
+
+  -- Cancellation pending state (after billing period ends)
+  cancellation_effective_at TIMESTAMPTZ;         -- When full deletion will occur
+```
+
+**New Table:**
+```sql
+CREATE TABLE service_cancellation_history (
+  id SERIAL PRIMARY KEY,
+  customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
+  service_type service_type NOT NULL,
+  billing_period_ended_at TIMESTAMPTZ NOT NULL,
+  deleted_at TIMESTAMPTZ NOT NULL,
+  cooldown_expires_at TIMESTAMPTZ NOT NULL,
+
+  INDEX idx_cancellation_customer_service (customer_id, service_type),
+  INDEX idx_cancellation_cooldown (cooldown_expires_at)
+);
+```
+
+---
+
 ## Missing Requirements to Address
 
 ### Critical for MVP
@@ -1439,19 +2171,22 @@ await db.insert(billing_idempotency, { key: idempotencyKey, response: result });
 
 ---
 
-**Document Version:** 2.3
-**Last Updated:** 2025-01-22
+**Document Version:** 2.4
+**Last Updated:** 2025-01-27
 **Status:** Draft - MVP Implementation Ready
 
 **Summary:**
-This billing design supports usage-based infrastructure services with multi-source payment capabilities (credits + escrow for MVP, Stripe deferred to Phase 3). Key features include partial payment tracking, 14-day grace periods for established customers, and proper separation between on-chain escrow transactions and off-chain credits.
+This billing design supports usage-based infrastructure services with multi-source payment capabilities (credits + escrow for MVP, Stripe deferred to Phase 3). Key features include partial payment tracking, 14-day grace periods for established customers, tier change management (immediate upgrades, scheduled downgrades), and subscription cancellation with anti-abuse protections.
 
 **Key Design Decisions:**
 - **MVP Focus:** Credits + Escrow only (Stripe and tax deferred to Phase 3)
-- **Tables:** `escrow_transactions` (on-chain), `customer_credits` (off-chain), `billing_records` (invoices), `invoice_payments` (payment tracking)
+- **Tables:** `escrow_transactions` (on-chain), `customer_credits` (off-chain), `billing_records` (invoices), `invoice_payments` (payment tracking), `service_cancellation_history` (anti-abuse)
 - **Payment Order:** Credits (oldest expiring first) → Escrow → Stripe (Phase 3)
 - **Grace Period:** 14 days for customers with `paid_once = TRUE` only
 - **Billing Model:** Prepay + Reconcile (charge full month upfront, credit on next 1st)
+- **Tier Upgrade:** Immediate effect with pro-rated charge for remaining days (≤2 days = $0 grace period)
+- **Tier Downgrade:** Scheduled for end of billing period (no immediate charge, reversible)
+- **Cancellation:** Service continues until billing period ends; 7-day data retention after; 7-day re-provisioning cooldown
 - **Concurrency Control:** PostgreSQL advisory locks (`pg_advisory_xact_lock`) on customer_id for all charging operations
 - **Overpayment Handling:** Automatically added to customer's withdrawable balance (no manual refund processing)
 - **Credit Expiration:** 1 year default, reconciliation credits never expire, promotional credits customizable
