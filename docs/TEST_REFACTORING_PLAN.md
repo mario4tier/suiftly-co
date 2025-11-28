@@ -396,25 +396,25 @@ export default {
 
 ## Migration Checklist
 
-### Phase 1: Create Unified Periodic Job
-- [ ] Create `packages/database/src/billing/periodic-job.ts`
-- [ ] Integrate `processBilling()` into unified job
-- [ ] Integrate `processCancellationCleanup()` into unified job
-- [ ] Add housekeeping (idempotency cleanup, history cleanup)
-- [ ] Export `runPeriodicBillingJob()` from billing index
+### Phase 1: Create Unified Periodic Job ✅ COMPLETE
+- [x] Create `packages/database/src/billing/periodic-job.ts`
+- [x] Integrate `processBilling()` into unified job
+- [x] Integrate `processCancellationCleanup()` into unified job
+- [x] Add housekeeping (idempotency cleanup, history cleanup)
+- [x] Export `runPeriodicBillingJob()` from billing index
 
-### Phase 2: Create Test API Endpoint
-- [ ] Create `/test/billing/run-periodic-job` endpoint
-- [ ] Create `/test/clock/advance` endpoint
-- [ ] Ensure production safety checks
+### Phase 2: Create Test API Endpoint ✅ COMPLETE
+- [x] Create `/test/billing/run-periodic-job` endpoint
+- [x] Create `/test/clock/advance` endpoint (already exists as `/test/clock/set`)
+- [x] Ensure production safety checks
 
-### Phase 3: Rename Existing Tests with `ut-` Prefix
-- [ ] Rename `tier-changes.test.ts` → `ut-tier-changes.test.ts`
-- [ ] Rename `billing.test.ts` → `ut-billing.test.ts`
-- [ ] Rename `service-billing.test.ts` → `ut-service-billing.test.ts`
-- [ ] Rename `validation.test.ts` → `ut-validation.test.ts`
-- [ ] Rename `edge-case-tests.test.ts` → `ut-edge-cases.test.ts`
-- [ ] Rename `draft-invoice-bugs.test.ts` → `ut-draft-invoice.test.ts`
+### Phase 3: Rename Existing Tests with `ut-` Prefix ✅ COMPLETE
+- [x] Rename `tier-changes.test.ts` → `ut-tier-changes.test.ts`
+- [x] Rename `billing.test.ts` → `ut-billing.test.ts`
+- [x] Rename `service-billing.test.ts` → `ut-service-billing.test.ts`
+- [x] Rename `validation.test.ts` → `ut-validation.test.ts`
+- [x] Rename `edge-case-tests.test.ts` → `ut-edge-cases.test.ts`
+- [x] Rename `draft-invoice-bugs.test.ts` → `ut-draft-invoice.test.ts`
 
 ### Phase 4: Extract Integration Tests to API Tests
 - [ ] Move "Full Cancellation Journey" from unit test to `api-cancellation.test.ts`
