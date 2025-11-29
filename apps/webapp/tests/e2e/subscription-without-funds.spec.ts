@@ -164,8 +164,8 @@ test.describe('Subscription Without Funds', () => {
     console.log('✅ Billing page shows pending subscription notification with correct amount');
   });
 
-  test('Next Scheduled Payment excludes services with pending subscription charges', async ({ page }) => {
-    // First, deposit $1 to create escrow account (so "Next Scheduled Payment" section is visible)
+  test('Next Scheduled Payment/Refund excludes services with pending subscription charges', async ({ page }) => {
+    // First, deposit $1 to create escrow account (so "Next Scheduled Payment/Refund" section is visible)
     // Navigate to billing page
     await page.locator('nav').getByRole('link', { name: /Billing & Payments/i }).click();
     await page.waitForURL('/billing', { timeout: 5000 });
@@ -190,24 +190,25 @@ test.describe('Subscription Without Funds', () => {
     await page.locator('nav').getByRole('link', { name: /Billing & Payments/i }).click();
     await page.waitForURL('/billing', { timeout: 5000 });
 
-    // Verify "Next Scheduled Payment" section shows $0.00
-    const nextPaymentSection = page.locator('button:has-text("Next Scheduled Payment")').locator('..');
+    // Verify "Next Scheduled Payment/Refund" section shows $0.00
+    const nextPaymentButton = page.locator('button').filter({ hasText: /Next Scheduled (Payment|Refund)/ });
+    const nextPaymentSection = nextPaymentButton.locator('..');
     await expect(nextPaymentSection).toContainText('$0.00', { timeout: 5000 });
 
-    // Expand "Next Scheduled Payment" section
-    await page.locator('button:has-text("Next Scheduled Payment")').click();
+    // Expand "Next Scheduled Payment/Refund" section
+    await nextPaymentButton.click();
     await page.waitForTimeout(500);
 
     // Within the expanded section, should NOT contain Seal service (because subscriptionChargePending is true)
     // The expanded content is in a div that comes after the button
-    const expandedContent = page.locator('button:has-text("Next Scheduled Payment")').locator('../..');
+    const expandedContent = nextPaymentButton.locator('../..');
 
     // Should show "No upcoming charges" (the fallback message when there are no line items)
     // This proves that Seal service is NOT included in the DRAFT invoice
     await expect(expandedContent).toContainText('No upcoming charges');
 
     console.log('  → Shows "No upcoming charges" (proves Seal is excluded from DRAFT invoice)');
-    console.log('✅ Next Scheduled Payment excludes pending subscription');
+    console.log('✅ Next Scheduled Payment/Refund excludes pending subscription');
   });
 
   test('Billing notification disappears after depositing sufficient funds', async ({ page, request }) => {
@@ -241,8 +242,8 @@ test.describe('Subscription Without Funds', () => {
     console.log('✅ Notification disappears after depositing funds');
   });
 
-  test('Next Scheduled Payment updates immediately after deposit activates subscription', async ({ page }) => {
-    // First, create escrow account with small deposit so "Next Scheduled Payment" section is visible
+  test('Next Scheduled Payment/Refund updates immediately after deposit activates subscription', async ({ page }) => {
+    // First, create escrow account with small deposit so "Next Scheduled Payment/Refund" section is visible
     await page.locator('nav').getByRole('link', { name: /Billing & Payments/i }).click();
     await page.waitForURL('/billing', { timeout: 5000 });
 
@@ -263,8 +264,8 @@ test.describe('Subscription Without Funds', () => {
     await page.locator('nav').getByRole('link', { name: /Billing & Payments/i }).click();
     await page.waitForURL('/billing', { timeout: 5000 });
 
-    // Verify Next Scheduled Payment shows $0.00 (service has pending charge)
-    const nextPaymentSection = page.locator('button:has-text("Next Scheduled Payment")').locator('..');
+    // Verify Next Scheduled Payment/Refund shows $0.00 (service has pending charge)
+    const nextPaymentSection = page.locator('button').filter({ hasText: /Next Scheduled (Payment|Refund)/ }).locator('..');
     await expect(nextPaymentSection).toContainText('$0.00', { timeout: 5000 });
 
     // Deposit funds ($30 to cover the $29 subscription)
@@ -279,7 +280,7 @@ test.describe('Subscription Without Funds', () => {
     // Give React Query time to invalidate and refetch
     await page.waitForTimeout(1000);
 
-    // Next Scheduled Payment should now be updated (no longer $0.00)
+    // Next Scheduled Payment/Refund should now be updated (no longer $0.00)
     // The exact amount will be less than $29 due to proration credit for partial month
     // WITHOUT needing to navigate away and come back
     await expect(nextPaymentSection).not.toContainText('$0.00', { timeout: 5000 });
@@ -288,10 +289,10 @@ test.describe('Subscription Without Funds', () => {
     const amountMatch = await nextPaymentSection.textContent();
     const hasPositiveAmount = amountMatch && /\$[1-9]\d*\.\d{2}/.test(amountMatch);
     if (!hasPositiveAmount) {
-      throw new Error('Expected Next Scheduled Payment to show a positive amount after subscription activation');
+      throw new Error('Expected Next Scheduled Payment/Refund to show a positive amount after subscription activation');
     }
 
-    console.log('  → Next Scheduled Payment updated from $0.00 to positive amount (includes proration credit)');
-    console.log('✅ Next Scheduled Payment updates immediately after subscription activation');
+    console.log('  → Next Scheduled Payment/Refund updated from $0.00 to positive amount (includes proration credit)');
+    console.log('✅ Next Scheduled Payment/Refund updates immediately after subscription activation');
   });
 });

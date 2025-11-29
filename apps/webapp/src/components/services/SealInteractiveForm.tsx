@@ -11,6 +11,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { Info, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ActionButton } from "@/components/ui/action-button";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -706,14 +707,12 @@ export function SealInteractiveForm({
               <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
                 Monthly Charges - {currentTier.name}
               </h3>
-              <Button
-                variant="outline"
-                size="sm"
+              <ActionButton
                 onClick={onChangePlan}
                 disabled={isReadOnly}
               >
                 Change Plan
-              </Button>
+              </ActionButton>
             </div>
 
             {/* Monthly Charges Table */}

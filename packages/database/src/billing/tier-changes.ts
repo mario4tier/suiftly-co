@@ -31,7 +31,6 @@ export interface TierUpgradeResult {
   newTier: ServiceTier;
   chargeAmountUsdCents: number;
   invoiceId?: string;
-  immediateUnpaid?: boolean; // True if tier changed immediately because user hasn't paid yet
   error?: string;
 }
 
@@ -39,14 +38,12 @@ export interface TierDowngradeResult {
   success: boolean;
   scheduledTier: ServiceTier;
   effectiveDate: Date;
-  immediateUnpaid?: boolean; // True if tier changed immediately because user hasn't paid yet
   error?: string;
 }
 
 export interface CancellationResult {
   success: boolean;
   effectiveDate: Date;
-  immediateUnpaid?: boolean; // True if cancelled immediately because user hasn't paid yet
   error?: string;
 }
 
@@ -79,7 +76,12 @@ export interface TierChangeOptions {
     isCurrentTier: boolean;
     isUpgrade: boolean;
     isDowngrade: boolean;
+    isScheduled: boolean; // True if this tier is the currently scheduled change
   }>;
+  // Scheduled tier change info (downgrade only - upgrades are immediate)
+  scheduledTier?: ServiceTier;
+  scheduledTierEffectiveDate?: Date;
+  // Cancellation info
   cancellationScheduled: boolean;
   cancellationEffectiveDate?: Date;
 }
@@ -158,11 +160,28 @@ export async function handleTierUpgrade(
         })
         .where(eq(serviceInstances.instanceId, service.instanceId));
 
+      // Update pending billing record to reflect the new tier price
+      // This ensures reconcilePayments charges the correct amount
+      await tx
+        .update(billingRecords)
+        .set({
+          amountUsdCents: newTierPrice,
+        })
+        .where(
+          and(
+            eq(billingRecords.customerId, customerId),
+            // Only update non-paid, non-draft records (pending or failed)
+            sql`${billingRecords.status} NOT IN ('paid', 'draft')`
+          )
+        );
+
+      // Recalculate DRAFT invoice to reflect the new tier
+      await recalculateDraftInvoice(tx, customerId, clock);
+
       return {
         success: true,
         newTier,
         chargeAmountUsdCents: 0,
-        immediateUnpaid: true,
       };
     }
 
@@ -329,11 +348,28 @@ export async function scheduleTierDowngrade(
         })
         .where(eq(serviceInstances.instanceId, service.instanceId));
 
+      // Update pending billing record to reflect the new tier price
+      // This ensures reconcilePayments charges the correct amount
+      await tx
+        .update(billingRecords)
+        .set({
+          amountUsdCents: newTierPrice,
+        })
+        .where(
+          and(
+            eq(billingRecords.customerId, customerId),
+            // Only update non-paid, non-draft records (pending or failed)
+            sql`${billingRecords.status} NOT IN ('paid', 'draft')`
+          )
+        );
+
+      // Recalculate DRAFT invoice to reflect the new tier
+      await recalculateDraftInvoice(tx, customerId, clock);
+
       return {
         success: true,
         scheduledTier: newTier,
         effectiveDate: clock.now(), // Effective immediately
-        immediateUnpaid: true,
       };
     }
 
@@ -467,7 +503,6 @@ export async function scheduleCancellation(
       return {
         success: true,
         effectiveDate: clock.now(), // Effective immediately
-        immediateUnpaid: true,
       };
     }
 
@@ -726,11 +761,19 @@ export async function getTierChangeOptions(
   const currentTierPrice = getTierPriceUsdCents(service.tier);
   const tiers: ServiceTier[] = ['starter', 'pro', 'enterprise'];
 
+  // Get currently scheduled tier (if any) from the service
+  const scheduledTier = service.scheduledTier as ServiceTier | null;
+  const scheduledTierEffectiveDate = service.scheduledTierEffectiveDate
+    ? new Date(service.scheduledTierEffectiveDate)
+    : undefined;
+
   const availableTiers = tiers.map((tier) => {
     const priceUsdCents = TIER_PRICES_USD_CENTS[tier];
     const isCurrentTier = tier === service.tier;
     const isUpgrade = priceUsdCents > currentTierPrice;
     const isDowngrade = priceUsdCents < currentTierPrice;
+    // This tier is scheduled if it matches the currently scheduled downgrade
+    const isScheduled = tier === scheduledTier;
 
     let upgradeChargeCents: number | undefined;
     let effectiveDate: Date | undefined;
@@ -760,6 +803,7 @@ export async function getTierChangeOptions(
       isCurrentTier,
       isUpgrade,
       isDowngrade,
+      isScheduled,
     };
   });
 
@@ -767,6 +811,10 @@ export async function getTierChangeOptions(
     currentTier: service.tier,
     paidOnce: service.paidOnce,
     availableTiers,
+    // Scheduled tier change info (downgrade only - upgrades are immediate)
+    scheduledTier: scheduledTier ?? undefined,
+    scheduledTierEffectiveDate,
+    // Cancellation info
     cancellationScheduled: !!service.cancellationScheduledFor,
     cancellationEffectiveDate: service.cancellationScheduledFor
       ? new Date(service.cancellationScheduledFor)

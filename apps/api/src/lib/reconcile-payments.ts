@@ -20,6 +20,8 @@ import { serviceInstances, ledgerEntries, customers } from '@suiftly/database/sc
 import { eq, and } from 'drizzle-orm';
 import { getSuiService } from '../services/sui/index.js';
 import { getTierPriceUsdCents } from './config-cache';
+import { issueCredit } from '@suiftly/database/billing';
+import { dbClock } from '@suiftly/shared/db-clock';
 
 interface ReconcileResult {
   customerId: number;
@@ -92,14 +94,20 @@ export async function reconcilePayments(customerId: number): Promise<ReconcileRe
       });
 
       if (chargeResult.success) {
-        // Charge succeeded - clear pending state and record in ledger
+        // Charge succeeded - clear pending state, set paidOnce, issue credit, record in ledger
         await db.transaction(async (tx) => {
-          // Clear pending flag
+          // Clear pending flag and set paidOnce
           await tx.update(serviceInstances)
             .set({
               subscriptionChargePending: false,
+              paidOnce: true,
             })
             .where(eq(serviceInstances.instanceId, service.instanceId));
+
+          // Set customer paidOnce (enables grace period on future payment failures)
+          await tx.update(customers)
+            .set({ paidOnce: true })
+            .where(eq(customers.customerId, customerId));
 
           // Record charge in ledger
           await tx.insert(ledgerEntries).values({
@@ -109,6 +117,29 @@ export async function reconcilePayments(customerId: number): Promise<ReconcileRe
             description: `${service.serviceType} ${service.tier} tier subscription`,
             createdAt: new Date(),
           });
+
+          // Issue reconciliation credit for partial month
+          // Calculate based on current tier price (not original subscription tier)
+          const today = dbClock.today();
+          const daysInMonth = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 1, 0)).getUTCDate();
+          const dayOfMonth = today.getUTCDate();
+          const daysUsed = daysInMonth - dayOfMonth + 1;
+          const daysNotUsed = daysInMonth - daysUsed;
+
+          const reconciliationCreditCents = Math.floor(
+            (priceUsdCents * daysNotUsed) / daysInMonth
+          );
+
+          if (reconciliationCreditCents > 0) {
+            await issueCredit(
+              tx,
+              customerId,
+              reconciliationCreditCents,
+              'reconciliation',
+              `Partial month credit for ${service.serviceType} (${daysNotUsed}/${daysInMonth} days unused)`,
+              null // Never expires
+            );
+          }
         });
 
         result.chargesSucceeded++;

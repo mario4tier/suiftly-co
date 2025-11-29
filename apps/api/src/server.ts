@@ -247,6 +247,7 @@ if (config.NODE_ENV !== 'production') {
             ledger_entries,
             user_activity_logs,
             service_instances,
+            service_cancellation_history,
             seal_keys,
             auth_nonces,
             refresh_tokens,
@@ -815,7 +816,7 @@ if (config.NODE_ENV !== 'production') {
 
     try {
       const { db } = await import('@suiftly/database');
-      const { runPeriodicBillingJob, runPeriodicJobForCustomer } = await import('@suiftly/database');
+      const { runPeriodicBillingJob, runPeriodicJobForCustomer } = await import('@suiftly/database/billing');
       const { getSuiService } = await import('./services/sui/index.js');
 
       const clock = dbClockProvider.getClock();

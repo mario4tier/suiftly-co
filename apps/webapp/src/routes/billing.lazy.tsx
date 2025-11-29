@@ -359,7 +359,9 @@ function BillingPage() {
               className="w-full flex items-center justify-between text-left"
             >
               <div>
-                <div className="font-medium">Next Scheduled Payment</div>
+                <div className="font-medium">
+                  {(nextPaymentData?.totalUsd ?? 0) < 0 ? 'Next Scheduled Refund' : 'Next Scheduled Payment'}
+                </div>
                 <div className="text-sm text-gray-500">
                   {nextPaymentData?.dueDate
                     ? new Date(nextPaymentData.dueDate).toLocaleDateString('en-US', {
@@ -401,7 +403,7 @@ function BillingPage() {
                         </div>
                       ))}
                       <div className="flex justify-between pt-2 border-t font-bold">
-                        <span>Total Charge:</span>
+                        <span>{(nextPaymentData?.totalUsd ?? 0) < 0 ? 'Total Refund:' : 'Total Charge:'}</span>
                         <span>${(nextPaymentData?.totalUsd ?? 0).toFixed(2)}</span>
                       </div>
                     </>

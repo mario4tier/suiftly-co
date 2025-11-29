@@ -100,8 +100,8 @@ test.describe('Billing Page', () => {
     await expect(page.locator('button:has-text("Withdraw")')).toBeVisible();
     await expect(page.locator('button:has-text("Adjust Spending Limit")')).toBeVisible();
 
-    // Should show next scheduled payment section
-    await expect(page.locator('text=Next Scheduled Payment')).toBeVisible();
+    // Should show next scheduled payment/refund section
+    await expect(page.locator('text=/Next Scheduled (Payment|Refund)/')).toBeVisible();
 
     console.log('✅ Escrow account with balance displayed correctly');
   });
@@ -155,20 +155,20 @@ test.describe('Billing Page', () => {
     await page.click('text=Billing');
     await page.waitForURL('/billing', { timeout: 5000 });
 
-    // Next Scheduled Payment should be visible
-    await expect(page.locator('text=Next Scheduled Payment')).toBeVisible();
+    // Next Scheduled Payment/Refund should be visible
+    await expect(page.locator('text=/Next Scheduled (Payment|Refund)/')).toBeVisible();
 
     // Should NOT show details initially
     await expect(page.locator('text=No upcoming charges')).not.toBeVisible();
 
     // Click to expand
-    await page.locator('text=Next Scheduled Payment').click();
+    await page.locator('text=/Next Scheduled (Payment|Refund)/').click();
 
     // Should now show details (no subscriptions = "No upcoming charges")
     await expect(page.locator('text=No upcoming charges')).toBeVisible();
 
     // Click again to collapse
-    await page.locator('text=Next Scheduled Payment').click();
+    await page.locator('text=/Next Scheduled (Payment|Refund)/').click();
 
     // Should hide details
     await expect(page.locator('text=No upcoming charges')).not.toBeVisible();
@@ -256,8 +256,8 @@ test.describe('Billing Page', () => {
     await page.click('text=Billing');
     await page.waitForURL('/billing', { timeout: 5000 });
 
-    // Expand Next Scheduled Payment section
-    await page.locator('text=Next Scheduled Payment').click();
+    // Expand Next Scheduled Payment/Refund section
+    await page.locator('text=/Next Scheduled (Payment|Refund)/').click();
 
     // Should show line items for subscribed service (even if service is DISABLED)
     // Billing rule: Subscriptions are charged regardless of isUserEnabled toggle state
@@ -267,10 +267,11 @@ test.describe('Billing Page', () => {
     // Should show Pro tier line item and partial month credit
     // Note: Don't check specific amounts - they vary by date (unless DBClock is set)
     await expect(page.locator('text=Seal Pro tier')).toBeVisible();
-    await expect(page.locator('text=Seal partial month credit')).toBeVisible();
+    // Credit format: "Seal Pro partial month credit (Month)"
+    await expect(page.locator('text=/Seal Pro partial month credit \\(/i')).toBeVisible();
 
-    // Should show Total Charge label
-    await expect(page.locator('text=Total Charge:')).toBeVisible();
+    // Should show Total Charge/Refund label
+    await expect(page.locator('text=/Total (Charge|Refund):/')).toBeVisible();
 
     console.log('✅ Next scheduled payment shows correct amount after subscription');
   });

@@ -15,7 +15,7 @@
 import { db } from '@suiftly/database';
 import { getTierPriceUsdCents } from '@suiftly/shared/pricing';
 import { customerCredits, serviceInstances } from '@suiftly/database/schema';
-import { eq, and, sql, gt } from 'drizzle-orm';
+import { eq, and, sql, gt, isNull } from 'drizzle-orm';
 import { dbClock } from '@suiftly/shared/db-clock';
 
 /**
@@ -53,19 +53,23 @@ export async function buildDraftLineItems(
 ): Promise<InvoiceLineItem[]> {
   const lineItems: InvoiceLineItem[] = [];
 
-  // Get subscribed services (exclude services with pending initial charge)
+  // Get subscribed services (exclude services with pending initial charge or scheduled cancellation)
   const services = await db.query.serviceInstances.findMany({
     where: and(
       eq(serviceInstances.customerId, customerId),
-      eq(serviceInstances.subscriptionChargePending, false)
+      eq(serviceInstances.subscriptionChargePending, false),
+      isNull(serviceInstances.cancellationScheduledFor)
     ),
   });
 
   // Add line item for each service
   for (const service of services) {
-    const tierPrice = getTierPriceUsdCents(service.tier);
+    // Use scheduled tier if present (for scheduled downgrades), otherwise current tier
+    // This ensures DRAFT invoice line items reflect what will ACTUALLY be charged
+    const effectiveTier = service.scheduledTier || service.tier;
+    const tierPrice = getTierPriceUsdCents(effectiveTier);
     const serviceName = service.serviceType.charAt(0).toUpperCase() + service.serviceType.slice(1);
-    const tierName = service.tier.charAt(0).toUpperCase() + service.tier.slice(1);
+    const tierName = effectiveTier.charAt(0).toUpperCase() + effectiveTier.slice(1);
 
     lineItems.push({
       description: `${serviceName} ${tierName} tier`,
@@ -96,10 +100,14 @@ export async function buildDraftLineItems(
     const creditsCents = Number(credits[0]?.total ?? 0);
 
     if (creditsCents > 0) {
-      // Credit description includes service name and month for clarity
+      // Credit description includes service name, tier, and month for clarity
+      // Use CURRENT tier (not scheduled), since credit was generated from what user paid for
       const serviceName = services.length === 1
         ? services[0].serviceType.charAt(0).toUpperCase() + services[0].serviceType.slice(1)
         : 'Service'; // Fallback if multiple services (rare for partial month credit)
+      const tierName = services.length === 1
+        ? services[0].tier.charAt(0).toUpperCase() + services[0].tier.slice(1)
+        : ''; // Omit tier if multiple services
 
       // Credit is for the month BEFORE the DRAFT invoice due date
       // Example: December 1st DRAFT invoice → credit is for November partial month
@@ -118,8 +126,10 @@ export async function buildDraftLineItems(
         timeZone: 'UTC'
       });
 
+      // Format: "Seal Starter partial month credit (November)"
+      const tierPart = tierName ? ` ${tierName}` : '';
       lineItems.push({
-        description: `${serviceName} partial month credit (${monthName})`,
+        description: `${serviceName}${tierPart} partial month credit (${monthName})`,
         amountUsd: -(creditsCents / 100),
         type: 'credit',
       });

@@ -902,7 +902,6 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         expect(result.success).toBe(true);
         expect(result.newTier).toBe('enterprise');
         expect(result.chargeAmountUsdCents).toBe(0);
-        expect(result.immediateUnpaid).toBe(true);
 
         // Verify tier was updated immediately
         const service = await db.query.serviceInstances.findFirst({
@@ -923,7 +922,6 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
 
         expect(result.success).toBe(true);
         expect(result.scheduledTier).toBe('starter');
-        expect(result.immediateUnpaid).toBe(true);
 
         // Effective date should be now (immediate)
         const now = clock.now();
@@ -949,7 +947,6 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         );
 
         expect(result.success).toBe(true);
-        expect(result.immediateUnpaid).toBe(true);
 
         // Effective date should be now (immediate)
         const now = clock.now();

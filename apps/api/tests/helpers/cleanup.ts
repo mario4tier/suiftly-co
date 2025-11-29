@@ -18,6 +18,7 @@ import {
   invoicePayments,
   sealKeys,
   serviceInstances,
+  serviceCancellationHistory,
   apiKeys,
   refreshTokens,
   userActivityLogs,
@@ -51,6 +52,8 @@ export async function cleanupCustomerById(customerId: number) {
     .where(eq(customerCredits.customerId, customerId));
   await db.delete(sealKeys)
     .where(eq(sealKeys.customerId, customerId));
+  await db.delete(serviceCancellationHistory)
+    .where(eq(serviceCancellationHistory.customerId, customerId));
   await db.delete(serviceInstances)
     .where(eq(serviceInstances.customerId, customerId));
   await db.delete(apiKeys)

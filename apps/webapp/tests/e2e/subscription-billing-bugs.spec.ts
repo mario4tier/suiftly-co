@@ -49,15 +49,17 @@ test.describe('Subscription Billing - Bug Detection', () => {
     await page.click('text=Billing');
     await page.waitForURL('/billing', { timeout: 5000 });
 
-    // Expand Next Scheduled Payment
-    await page.locator('text=Next Scheduled Payment').click();
+    // Expand Next Scheduled Payment/Refund
+    // Use text selector for regex pattern
+    await page.locator('text=/Next Scheduled (Payment|Refund)/').click();
 
     // BUG DETECTION: Check the entire card (not just date section)
     // The button contains both date and amount in separate divs
-    const nextPaymentButton = page.locator('button:has-text("Next Scheduled Payment")');
+    // Use filter instead of has-text with regex for better compatibility
+    const nextPaymentButton = page.locator('button').filter({ hasText: /Next Scheduled (Payment|Refund)/ });
     const fullText = await nextPaymentButton.textContent();
 
-    console.log('Next Scheduled Payment text:', fullText);
+    console.log('Next Scheduled Payment/Refund text:', fullText);
 
     // Should show next month's 1st day (not current month's last day)
     // Calculate expected next billing date dynamically
@@ -79,14 +81,14 @@ test.describe('Subscription Billing - Bug Detection', () => {
 
     // Expanded section should show line items with service name (no colons)
     await expect(page.locator('text=Seal Pro tier')).toBeVisible();
-    // Credit includes month name in format: "Seal partial month credit (November)"
-    await expect(page.locator('text=/Seal partial month credit \\(/i')).toBeVisible();
-    await expect(page.locator('text=Total Charge')).toBeVisible();
+    // Credit includes tier and month name in format: "Seal Pro partial month credit (November)"
+    await expect(page.locator('text=/Seal Pro partial month credit \\(/i')).toBeVisible();
+    await expect(page.locator('text=/Total (Charge|Refund)/')).toBeVisible();
 
     // Verify line items exist in expanded section (amounts vary by date)
     const expandedSection = page.locator('text=Seal Pro tier').locator('../..');
     await expect(expandedSection).toContainText('$29.00'); // Seal Pro subscription (fixed price)
-    await expect(expandedSection).toContainText('Total Charge'); // Total label exists
+    await expect(expandedSection).toContainText(/Total (Charge|Refund)/); // Total label exists
   });
 
   test('BUG 2: Reconciliation credit created for unused days in partial month', async ({ page }) => {
@@ -423,6 +425,151 @@ test.describe('Month Boundary Edge Cases', () => {
     expect(reconCredit.originalAmountUsdCents).toBe(expectedCredit);
 
     console.log(`✅ Dec 31 last second: Credit = $${reconCredit.originalAmountUsdCents / 100} (expected $${expectedCredit / 100})`);
+
+    await resetClock(page.request);
+  });
+});
+
+/**
+ * Scheduled Change Date Display Tests
+ * Ensures dates are displayed correctly without timezone shift
+ * BUG: Date stored as "2025-12-01" was showing as "November 30, 2025" due to local timezone conversion
+ */
+test.describe('Scheduled Change Date Display', () => {
+  test('scheduled downgrade shows correct date (not off by one day)', async ({ page }) => {
+    // Set clock to Nov 15, 2025 - mid-month for a clear scheduled downgrade scenario
+    await setMockClock(page.request, '2025-11-15T12:00:00Z');
+
+    await resetCustomer(page.request, {
+      balanceUsdCents: 20000, // $200 to cover enterprise
+      spendingLimitUsdCents: 25000,
+      clearEscrowAccount: true,
+    });
+
+    await page.request.post(`${API_BASE}/test/wallet/deposit`, {
+      data: {
+        walletAddress: MOCK_WALLET_ADDRESS,
+        amountUsd: 200,
+        initialSpendingLimitUsd: 250,
+      },
+    });
+
+    await page.goto('/');
+    await page.click('button:has-text("Mock Wallet")');
+    await page.waitForURL('/dashboard', { timeout: 10000 });
+
+    // Subscribe to Enterprise tier first
+    await page.click('text=Seal');
+    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
+
+    // Select Enterprise tier and subscribe
+    await page.getByRole('heading', { name: 'ENTERPRISE' }).click();
+    await page.locator('label:has-text("Agree to")').click();
+    await page.locator('button:has-text("Subscribe to Service")').click();
+    await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
+
+    // Navigate to overview to schedule downgrade
+    await page.click('text=Overview');
+    await page.waitForURL(/\/services\/seal\/overview/, { timeout: 5000 });
+
+    // Click Change Plan to open modal
+    await page.locator('button:has-text("Change Plan")').click();
+    await expect(page.getByLabel('Change Plan')).toBeVisible({ timeout: 5000 });
+
+    // Select Starter tier (downgrade) - click the tier heading in the modal
+    await page.locator('h4:has-text("STARTER")').click();
+
+    // Confirm downgrade
+    await page.locator('button:has-text("Schedule Downgrade")').click();
+
+    // Wait for modal to close and page to update
+    await expect(page.getByLabel('Change Plan')).not.toBeVisible({ timeout: 5000 });
+
+    // Check the banner on overview page shows correct date: December 1, 2025
+    // The downgrade takes effect on the 1st of next month
+    const downgradeBanner = page.locator('[data-testid="downgrade-scheduled-banner"]');
+    await expect(downgradeBanner).toBeVisible({ timeout: 5000 });
+
+    // CRITICAL: Must show "December 1, 2025" NOT "November 30, 2025"
+    await expect(downgradeBanner).toContainText('December 1, 2025');
+    await expect(downgradeBanner).toContainText('Starter');
+
+    // Also verify the modal shows the same correct date
+    await page.locator('button:has-text("Change Plan")').click();
+
+    // Wait for modal to open and check the downgrade banner inside the modal dialog
+    const modalDialog = page.getByLabel('Change Plan');
+    await expect(modalDialog.locator('text=Downgrade Scheduled')).toBeVisible({ timeout: 5000 });
+
+    // Modal should also show December 1, 2025
+    await expect(modalDialog).toContainText('December 1, 2025');
+
+    await resetClock(page.request);
+  });
+
+  test('scheduled cancellation shows correct date (not off by one day)', async ({ page }) => {
+    // Set clock to Nov 15, 2025
+    await setMockClock(page.request, '2025-11-15T12:00:00Z');
+
+    await resetCustomer(page.request, {
+      balanceUsdCents: 5000,
+      spendingLimitUsdCents: 25000,
+      clearEscrowAccount: true,
+    });
+
+    await page.request.post(`${API_BASE}/test/wallet/deposit`, {
+      data: {
+        walletAddress: MOCK_WALLET_ADDRESS,
+        amountUsd: 50,
+        initialSpendingLimitUsd: 250,
+      },
+    });
+
+    await page.goto('/');
+    await page.click('button:has-text("Mock Wallet")');
+    await page.waitForURL('/dashboard', { timeout: 10000 });
+
+    // Subscribe to Pro tier
+    await page.click('text=Seal');
+    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
+    await page.locator('label:has-text("Agree to")').click();
+    await page.locator('button:has-text("Subscribe to Service")').click();
+    await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
+
+    // Navigate to overview to schedule cancellation
+    await page.click('text=Overview');
+    await page.waitForURL(/\/services\/seal\/overview/, { timeout: 5000 });
+
+    // Click Change Plan to open modal
+    await page.locator('button:has-text("Change Plan")').click();
+    await expect(page.getByLabel('Change Plan')).toBeVisible({ timeout: 5000 });
+
+    // Click Cancel Subscription
+    await page.locator('button:has-text("Cancel Subscription")').click();
+
+    // Confirm cancellation
+    await page.locator('button:has-text("Cancel Subscription")').last().click();
+
+    // Wait for modal to close
+    await expect(page.getByLabel('Change Plan')).not.toBeVisible({ timeout: 5000 });
+
+    // Check the banner on overview page shows correct date: November 30, 2025
+    // Cancellation takes effect at end of current billing period (last day of month)
+    const cancellationBanner = page.locator('[data-testid="cancellation-scheduled-banner"]');
+    await expect(cancellationBanner).toBeVisible({ timeout: 5000 });
+
+    // CRITICAL: Must show "November 30, 2025" NOT "November 29, 2025"
+    await expect(cancellationBanner).toContainText('November 30, 2025');
+
+    // Also verify the modal shows the same correct date
+    await page.locator('button:has-text("Change Plan")').click();
+
+    // Wait for modal to open and check the cancellation banner inside the modal dialog
+    const modalDialog = page.getByLabel('Change Plan');
+    await expect(modalDialog.locator('text=Cancellation Scheduled')).toBeVisible({ timeout: 5000 });
+
+    // Modal should also show November 30, 2025
+    await expect(modalDialog).toContainText('November 30, 2025');
 
     await resetClock(page.request);
   });

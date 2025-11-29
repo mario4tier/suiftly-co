@@ -88,6 +88,7 @@ export async function handleSubscriptionBilling(
     );
 
     // If payment succeeded, mark both service and customer as having paid at least once
+    // and issue reconciliation credit (all in same transaction)
     if (paymentResult.fullyPaid) {
       // Service-level paidOnce: Unlocks key operations (generate/import) and changes tier change behavior
       await tx
@@ -105,6 +106,35 @@ export async function handleSubscriptionBilling(
         .update(customers)
         .set({ paidOnce: true })
         .where(eq(customers.customerId, customerId));
+
+      // Calculate reconciliation credit for partial month (applied on next 1st)
+      // Per BILLING_DESIGN.md: credit = amount_paid × (days_not_used / days_in_month)
+      // Where: days_used = from purchase date to end of month, inclusive
+      // IMPORTANT: Only issue credit when payment succeeds - if user changes tier
+      // before paying, they shouldn't get credit based on the original tier price
+      const today = clock.today();
+      const daysInMonth = getDaysInMonth(today.getUTCFullYear(), today.getUTCMonth() + 1);
+      const dayOfMonth = today.getUTCDate();
+
+      // Days used = from today (inclusive) to end of month
+      const daysUsed = daysInMonth - dayOfMonth + 1; // +1 because today is included
+      const daysNotUsed = daysInMonth - daysUsed;
+
+      const reconciliationCreditCents = Math.floor(
+        (monthlyPriceUsdCents * daysNotUsed) / daysInMonth
+      );
+
+      // Issue reconciliation credit (never expires)
+      if (reconciliationCreditCents > 0) {
+        await issueCredit(
+          tx,
+          customerId,
+          reconciliationCreditCents,
+          'reconciliation',
+          `Partial month credit for ${serviceType} (${daysNotUsed}/${daysInMonth} days unused)`,
+          null // Never expires
+        );
+      }
     }
 
     // Get or create DRAFT for next billing cycle
@@ -113,33 +143,6 @@ export async function handleSubscriptionBilling(
 
     // Update DRAFT to include this subscription
     await recalculateDraftInvoice(tx, customerId, clock);
-
-    // Calculate reconciliation credit for partial month (applied on next 1st)
-    // Per BILLING_DESIGN.md: credit = amount_paid × (days_not_used / days_in_month)
-    // Where: days_used = from purchase date to end of month, inclusive
-    const today = clock.today();
-    const daysInMonth = getDaysInMonth(today.getUTCFullYear(), today.getUTCMonth() + 1);
-    const dayOfMonth = today.getUTCDate();
-
-    // Days used = from today (inclusive) to end of month
-    const daysUsed = daysInMonth - dayOfMonth + 1; // +1 because today is included
-    const daysNotUsed = daysInMonth - daysUsed;
-
-    const reconciliationCreditCents = Math.floor(
-      (monthlyPriceUsdCents * daysNotUsed) / daysInMonth
-    );
-
-    // Issue reconciliation credit (never expires)
-    if (reconciliationCreditCents > 0) {
-      await issueCredit(
-        tx,
-        customerId,
-        reconciliationCreditCents,
-        'reconciliation',
-        `Partial month credit for ${serviceType} (${daysNotUsed}/${daysInMonth} days unused)`,
-        null // Never expires
-      );
-    }
 
     return {
       invoiceId,

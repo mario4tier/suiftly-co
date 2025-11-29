@@ -7,7 +7,7 @@
 
 import { db } from '@suiftly/database';
 import {
-  customers, serviceInstances, ledgerEntries, apiKeys, sealKeys,
+  customers, serviceInstances, serviceCancellationHistory, ledgerEntries, apiKeys, sealKeys,
   refreshTokens, billingRecords, escrowTransactions, usageRecords,
   haproxyRawLogs, userActivityLogs, mockSuiTransactions,
   invoicePayments, customerCredits, billingIdempotency, adminNotifications
@@ -62,25 +62,30 @@ export async function resetCustomerTestData(options: TestDataResetOptions = {}) 
 
   // Delete all related data and update customer in transaction
   await db.transaction(async (tx) => {
-    // 1. Delete service instances
+    // 1. Delete service cancellation history first (references customerId)
+    await tx
+      .delete(serviceCancellationHistory)
+      .where(eq(serviceCancellationHistory.customerId, customerId));
+
+    // 2. Delete service instances
     const deletedServices = await tx
       .delete(serviceInstances)
       .where(eq(serviceInstances.customerId, customerId))
       .returning();
 
-    // 2. Delete API keys
+    // 3. Delete API keys
     const deletedApiKeys = await tx
       .delete(apiKeys)
       .where(eq(apiKeys.customerId, customerId))
       .returning();
 
-    // 3. Delete Seal keys
+    // 4. Delete Seal keys
     const deletedSealKeys = await tx
       .delete(sealKeys)
       .where(eq(sealKeys.customerId, customerId))
       .returning();
 
-    // 4. Delete all other related data (in correct order for foreign keys)
+    // 5. Delete all other related data (in correct order for foreign keys)
     // New billing tables (Phase 1A/2) - delete before billing_records
     await tx.delete(adminNotifications).where(eq(adminNotifications.customerId, String(customerId)));
     await tx.delete(billingIdempotency); // No customer_id column, delete all for simplicity
@@ -97,10 +102,10 @@ export async function resetCustomerTestData(options: TestDataResetOptions = {}) 
     await tx.delete(userActivityLogs).where(eq(userActivityLogs.customerId, customerId));
     await tx.delete(mockSuiTransactions).where(eq(mockSuiTransactions.customerId, customerId));
 
-    // 5. Clear Sui mock config (reset delays and failure injections)
+    // 6. Clear Sui mock config (reset delays and failure injections)
     suiMockConfig.clearConfig();
 
-    // 6. Update customer with new balance/spending limit
+    // 7. Update customer with new balance/spending limit
     await tx
       .update(customers)
       .set({
