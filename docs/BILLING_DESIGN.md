@@ -9,6 +9,7 @@ Billing system for Suiftly infrastructure services supporting:
 - Tax compliance (post-MVP)
 
 **Related Documents:**
+- [TIME_DESIGN.md](./TIME_DESIGN.md) - UTC convention, DBClock abstraction, testing with time
 - [ESCROW_DESIGN.md](./ESCROW_DESIGN.md) - On-chain escrow account (crypto path)
 - [CUSTOMER_SERVICE_SCHEMA.md](./CUSTOMER_SERVICE_SCHEMA.md) - Database schema
 - [UI_DESIGN.md](./UI_DESIGN.md) - Service states and pricing display

@@ -248,7 +248,7 @@ export async function recalculateDraftInvoice(
 /**
  * Get number of days in a month (UTC-based)
  *
- * Per UTC_CONVENTION.md: All date calculations use UTC to avoid timezone bugs.
+ * Per TIME_DESIGN.md: All date calculations use UTC to avoid timezone bugs.
  *
  * @param year Full year (e.g., 2025)
  * @param month Month (1-12, NOT 0-indexed)

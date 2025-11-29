@@ -658,7 +658,7 @@ export const billingRouter = router({
     // Calculate total (sum of all line items)
     const totalUsd = lineItems.reduce((sum, item) => sum + item.amountUsd, 0);
 
-    // Per UTC_CONVENTION.md: All timestamps are UTC
+    // Per TIME_DESIGN.md: All timestamps are UTC
     // WORKAROUND: Database plain timestamp is interpreted as local time by node-postgres
     // Extract date components and re-create as UTC to get correct ISO string
     const dueDate = draft.billingPeriodStart
