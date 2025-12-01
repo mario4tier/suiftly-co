@@ -11,7 +11,7 @@
  */
 
 import { eq, and, sql } from 'drizzle-orm';
-import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import type { Database, DatabaseOrTransaction } from '../db';
 import { billingRecords, serviceInstances, customerCredits } from '../schema';
 import { getTierPriceUsdCents, ADDON_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
 import { ValidationError } from './errors';
@@ -51,15 +51,17 @@ export interface InvoiceValidationResult {
  * @returns Validation result with any issues found
  */
 export async function validateInvoiceBeforeCharging(
-  tx: NodePgDatabase<any>,
+  tx: DatabaseOrTransaction,
   invoiceId: string
 ): Promise<InvoiceValidationResult> {
   const issues: ValidationIssue[] = [];
 
   // Get invoice
-  const invoice = await tx.query.billingRecords.findFirst({
-    where: eq(billingRecords.id, invoiceId),
-  });
+  const [invoice] = await tx
+    .select()
+    .from(billingRecords)
+    .where(eq(billingRecords.id, invoiceId))
+    .limit(1);
 
   if (!invoice) {
     return {
@@ -128,16 +130,17 @@ export async function validateInvoiceBeforeCharging(
  * @returns Validation issue if mismatch found, null otherwise
  */
 async function validateDraftMatchesServices(
-  tx: NodePgDatabase<any>,
+  tx: DatabaseOrTransaction,
   customerId: number,
   draftAmountCents: number
 ): Promise<ValidationIssue | null> {
   // Get all subscribed services
   // NOTE: Service existence = subscription. is_user_enabled is just on/off toggle.
   // Validation must match billing logic - bill for subscribed services regardless of toggle.
-  const services = await tx.query.serviceInstances.findMany({
-    where: eq(serviceInstances.customerId, customerId)
-  });
+  const services = await tx
+    .select()
+    .from(serviceInstances)
+    .where(eq(serviceInstances.customerId, customerId));
 
   // Calculate expected total
   let expectedTotalCents = 0;
@@ -191,7 +194,7 @@ async function validateDraftMatchesServices(
  * @returns Array of validation issues
  */
 async function detectDuplicateServiceCharges(
-  tx: NodePgDatabase<any>,
+  tx: DatabaseOrTransaction,
   customerId: number,
   excludeInvoiceId: string
 ): Promise<ValidationIssue[]> {
@@ -238,7 +241,7 @@ async function detectDuplicateServiceCharges(
  * @returns Array of validation issues
  */
 async function detectOrphanedReconciliationCredits(
-  tx: NodePgDatabase<any>,
+  tx: DatabaseOrTransaction,
   customerId: number
 ): Promise<ValidationIssue[]> {
   const issues: ValidationIssue[] = [];
@@ -261,10 +264,11 @@ async function detectOrphanedReconciliationCredits(
 
   // Get subscribed services (existence = subscription, not toggle state)
   // This must match billing logic: subscription = billed, regardless of is_user_enabled
-  const subscribedServices = await tx.query.serviceInstances.findMany({
-    where: eq(serviceInstances.customerId, customerId)
-    // NO check for is_user_enabled - that's just an on/off toggle
-  });
+  const subscribedServices = await tx
+    .select()
+    .from(serviceInstances)
+    .where(eq(serviceInstances.customerId, customerId));
+  // NO check for is_user_enabled - that's just an on/off toggle
 
   // If we have reconciliation credits but NO subscribed services, that's suspicious
   // This means service was cancelled but credit wasn't voided
@@ -298,7 +302,7 @@ async function detectOrphanedReconciliationCredits(
  * @throws Error if validation fails with critical errors
  */
 export async function ensureInvoiceValid(
-  tx: NodePgDatabase<any>,
+  tx: DatabaseOrTransaction,
   invoiceId: string
 ): Promise<void> {
   const validation = await validateInvoiceBeforeCharging(tx, invoiceId);

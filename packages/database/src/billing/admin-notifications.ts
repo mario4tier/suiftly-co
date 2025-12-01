@@ -5,7 +5,7 @@
  * Used for billing validation failures, system errors, etc.
  */
 
-import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import type { Database, DatabaseOrTransaction } from '../db';
 import { adminNotifications } from '../schema/admin';
 
 /**
@@ -50,7 +50,7 @@ export interface LogInternalErrorParams {
  * ```
  */
 export async function logInternalError(
-  tx: NodePgDatabase<any>,
+  tx: DatabaseOrTransaction,
   params: LogInternalErrorParams
 ): Promise<number> {
   // Log to console for immediate visibility
@@ -90,7 +90,7 @@ export async function logInternalError(
  * @param customerId Optional customer ID for context
  */
 export async function logValidationIssues(
-  tx: NodePgDatabase<any>,
+  tx: DatabaseOrTransaction,
   invoiceId: string,
   issues: Array<{ severity: string; code: string; message: string; details?: any }>,
   customerId?: number

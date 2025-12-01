@@ -14,7 +14,7 @@
  */
 
 import { eq, and, lte, sql } from 'drizzle-orm';
-import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import type { Database, DatabaseOrTransaction } from '../db';
 import {
   serviceInstances,
   serviceCancellationHistory,
@@ -69,7 +69,7 @@ const COOLDOWN_PERIOD_DAYS = 7;
  * @returns Cleanup result
  */
 export async function processCancellationCleanup(
-  db: NodePgDatabase<any>,
+  db: Database,
   clock: DBClock
 ): Promise<CancellationCleanupResult> {
   const now = clock.now();
@@ -135,7 +135,7 @@ export async function processCancellationCleanup(
  * @param clock DBClock for timestamps
  */
 async function processServiceDeletion(
-  db: NodePgDatabase<any>,
+  db: Database,
   customerId: number,
   serviceType: ServiceType,
   previousTier: ServiceTier,
@@ -230,7 +230,7 @@ async function processServiceDeletion(
  * @returns Services approaching deadline
  */
 export async function getServicesApproachingDeletion(
-  db: NodePgDatabase<any>,
+  db: Database,
   clock: DBClock,
   daysUntilDeletion: number = 1
 ): Promise<
@@ -276,7 +276,7 @@ export async function getServicesApproachingDeletion(
  * @returns Number of records deleted
  */
 export async function cleanupOldCancellationHistory(
-  db: NodePgDatabase<any>,
+  db: Database,
   clock: DBClock,
   retentionDays: number = 365
 ): Promise<number> {

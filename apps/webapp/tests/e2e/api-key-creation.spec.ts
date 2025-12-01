@@ -167,6 +167,10 @@ test.describe('API Key Creation on Subscription', () => {
     });
     expect(depositResponse.ok()).toBe(true);
 
+    // Reload to clear React Query cache after database reset
+    await page.reload();
+    await page.waitForURL('/dashboard', { timeout: 5000 });
+
     // Navigate and subscribe
     await page.click('text=Seal');
     await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
@@ -215,6 +219,10 @@ test.describe('API Key Creation on Subscription', () => {
       },
     });
     expect(depositResponse.ok()).toBe(true);
+
+    // Reload to clear React Query cache after database reset
+    await page.reload();
+    await page.waitForURL('/dashboard', { timeout: 5000 });
 
     // Navigate and subscribe
     await page.click('text=Seal');

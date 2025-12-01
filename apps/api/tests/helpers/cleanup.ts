@@ -22,6 +22,7 @@ import {
   apiKeys,
   refreshTokens,
   userActivityLogs,
+  haproxyRawLogs,
 } from '@suiftly/database/schema';
 import { eq } from 'drizzle-orm';
 
@@ -64,6 +65,8 @@ export async function cleanupCustomerById(customerId: number) {
     .where(eq(userActivityLogs.customerId, customerId));
   await db.delete(mockSuiTransactions)
     .where(eq(mockSuiTransactions.customerId, customerId));
+  await db.delete(haproxyRawLogs)
+    .where(eq(haproxyRawLogs.customerId, customerId));
 
   // Delete the customer last
   await db.delete(customers)

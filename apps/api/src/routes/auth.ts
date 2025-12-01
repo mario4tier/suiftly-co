@@ -153,7 +153,7 @@ export const authRouter = router({
         .where(eq(customers.walletAddress, walletAddress))
         .limit(1);
 
-      let customerId: number;
+      let customerId = 0; // Initialize to satisfy TypeScript (will be set below)
 
       if (customer.length === 0) {
         // New customer - generate random ID with collision retry
@@ -171,7 +171,6 @@ export const authRouter = router({
               spendingLimitUsdCents: 25000, // $250 default from CONSTANTS.md
               currentBalanceUsdCents: 0,
               currentPeriodChargedUsdCents: 0,
-              lastMonthChargedUsdCents: 0,
               currentPeriodStart: new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1)).toISOString().split('T')[0],
             });
             inserted = true;

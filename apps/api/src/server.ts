@@ -69,7 +69,7 @@ await server.register(fastifyTRPCPlugin, {
   trpcOptions: {
     router: appRouter,
     createContext,
-    onError({ path, error }) {
+    onError({ path, error }: { path?: string; error: Error }) {
       console.error(`[tRPC Error] ${path}:`, error.message);
     },
   },
@@ -111,7 +111,7 @@ if (config.NODE_ENV !== 'production') {
     return {
       environment: config.NODE_ENV,
       mockAuth: config.MOCK_AUTH,
-      shortJWTExpiry: config.ENABLE_SHORT_JWT_EXPIRY === true,
+      shortJWTExpiry: process.env.ENABLE_SHORT_JWT_EXPIRY === 'true',
       hasRuntimeJWTOverride: hasRuntimeJWTOverride(),
       jwtConfig: {
         accessTokenExpiry: jwtConfig.accessTokenExpiry,
@@ -854,6 +854,197 @@ if (config.NODE_ENV !== 'production') {
       });
     } catch (error: any) {
       console.error('[PERIODIC JOB ERROR]', error);
+      reply.code(500).send({
+        success: false,
+        error: error.message || String(error),
+      });
+    }
+  });
+
+  // ========================================
+  // Stats Test Endpoints (STATS_DESIGN.md D6)
+  // ========================================
+
+  // Insert mock HAProxy logs for testing stats
+  server.post('/test/stats/mock-logs', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    const body = request.body as any;
+
+    // Validate required fields
+    if (!body.customerId || !body.serviceType || !body.count || !body.timestamp) {
+      reply.code(400).send({
+        success: false,
+        error: 'Missing required fields: customerId, serviceType, count, timestamp',
+      });
+      return;
+    }
+
+    try {
+      const { db } = await import('@suiftly/database');
+      const { insertMockHAProxyLogs, refreshStatsAggregate } = await import('@suiftly/database/stats');
+
+      const timestamp = typeof body.timestamp === 'string'
+        ? new Date(body.timestamp)
+        : new Date(body.timestamp);
+
+      if (isNaN(timestamp.getTime())) {
+        reply.code(400).send({
+          success: false,
+          error: 'Invalid timestamp format',
+        });
+        return;
+      }
+
+      const count = await insertMockHAProxyLogs(db, body.customerId, {
+        serviceType: body.serviceType,
+        network: body.network ?? 1,
+        count: body.count,
+        timestamp,
+        statusCode: body.statusCode ?? 200,
+        trafficType: body.trafficType ?? 1,
+        responseTimeMs: body.responseTimeMs ?? 50,
+        bytesSent: body.bytesSent ?? 1024,
+        spreadAcrossHours: body.spreadAcrossHours,
+      });
+
+      // Optionally refresh the aggregate (default: true for tests)
+      if (body.refreshAggregate !== false) {
+        await refreshStatsAggregate(db);
+      }
+
+      reply.send({
+        success: true,
+        inserted: count,
+        timestamp: timestamp.toISOString(),
+      });
+    } catch (error: any) {
+      console.error('[MOCK LOGS ERROR]', error);
+      reply.code(500).send({
+        success: false,
+        error: error.message || String(error),
+      });
+    }
+  });
+
+  // Insert mixed success/error logs for dashboard testing
+  server.post('/test/stats/mock-mixed-logs', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    const body = request.body as any;
+
+    if (!body.customerId || !body.serviceType || !body.count || !body.timestamp) {
+      reply.code(400).send({
+        success: false,
+        error: 'Missing required fields: customerId, serviceType, count, timestamp',
+      });
+      return;
+    }
+
+    try {
+      const { db } = await import('@suiftly/database');
+      const { insertMockMixedLogs, refreshStatsAggregate } = await import('@suiftly/database/stats');
+
+      const timestamp = typeof body.timestamp === 'string'
+        ? new Date(body.timestamp)
+        : new Date(body.timestamp);
+
+      // Convert old-style { success, clientError, serverError } to new format
+      // { guaranteed, burst, dropped, clientError, serverError }
+      const rawDist = body.distribution ?? {};
+      const distribution = {
+        // If 'success' is provided, split it into guaranteed (70%) and burst (30%)
+        guaranteed: rawDist.guaranteed ?? (rawDist.success ? Math.floor(rawDist.success * 0.7) : 50),
+        burst: rawDist.burst ?? (rawDist.success ? rawDist.success - Math.floor(rawDist.success * 0.7) : 20),
+        dropped: rawDist.dropped ?? 0,
+        clientError: rawDist.clientError ?? 15,
+        serverError: rawDist.serverError ?? 5,
+      };
+
+      const result = await insertMockMixedLogs(db, body.customerId, {
+        serviceType: body.serviceType,
+        network: body.network ?? 1,
+        count: body.count,
+        timestamp,
+        trafficType: body.trafficType ?? 1,
+        responseTimeMs: body.responseTimeMs ?? 50,
+        spreadAcrossHours: body.spreadAcrossHours,
+      }, distribution);
+
+      if (body.refreshAggregate !== false) {
+        await refreshStatsAggregate(db);
+      }
+
+      reply.send({
+        success: true,
+        inserted: result,
+        total: result.success + result.clientError + result.serverError,
+      });
+    } catch (error: any) {
+      console.error('[MOCK MIXED LOGS ERROR]', error);
+      reply.code(500).send({
+        success: false,
+        error: error.message || String(error),
+      });
+    }
+  });
+
+  // Manually refresh stats aggregate
+  server.post('/test/stats/refresh', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    try {
+      const { db } = await import('@suiftly/database');
+      const { refreshStatsAggregate } = await import('@suiftly/database/stats');
+
+      const body = request.body as any;
+      const startTime = body.startTime ? new Date(body.startTime) : undefined;
+      const endTime = body.endTime ? new Date(body.endTime) : undefined;
+
+      await refreshStatsAggregate(db, startTime, endTime);
+
+      reply.send({
+        success: true,
+        message: 'Stats aggregate refreshed',
+      });
+    } catch (error: any) {
+      console.error('[REFRESH STATS ERROR]', error);
+      reply.code(500).send({
+        success: false,
+        error: error.message || String(error),
+      });
+    }
+  });
+
+  // Clear logs for a customer
+  server.post('/test/stats/clear-logs', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    try {
+      const { db } = await import('@suiftly/database');
+      const { clearCustomerLogs, clearAllLogs, refreshStatsAggregate } = await import('@suiftly/database/stats');
+
+      const body = request.body as any;
+
+      if (body.customerId) {
+        await clearCustomerLogs(db, body.customerId);
+      } else {
+        await clearAllLogs(db);
+      }
+
+      // Refresh aggregate after clearing
+      if (body.refreshAggregate !== false) {
+        await refreshStatsAggregate(db);
+      }
+
+      reply.send({
+        success: true,
+        message: body.customerId
+          ? `Cleared logs for customer ${body.customerId}`
+          : 'Cleared all logs',
+      });
+    } catch (error: any) {
+      console.error('[CLEAR LOGS ERROR]', error);
       reply.code(500).send({
         success: false,
         error: error.message || String(error),

@@ -26,7 +26,7 @@ Stats system for Suiftly services serving three purposes:
 | Field | Description | Use |
 |-------|-------------|-----|
 | `customer_id` | Customer identifier (from API key) | Billing, stats grouping |
-| `service_type` | 1=Seal, 2=SSFN, 3=Sealo | Per-service stats |
+| `service_type` | 1=Seal, 2=gRPC, 3=GraphQL | Per-service stats |
 | `network` | 0=testnet, 1=mainnet | Network filtering |
 | `traffic_type` | 1=guaranteed, 2=burst, 3-6=denied/dropped | Billable vs non-billable |
 | `bytes_sent` | Response body size | Ops monitoring (infra only) |
@@ -72,12 +72,23 @@ Detailed stats accessible via dedicated route per service.
 |-------------|---------|
 | **Time ranges** | Last 24h, 7d, 30d |
 | **Granularity** | Hourly (24h), daily (7d/30d) |
-| **Metrics (MVP)** | Request count (usage), avg response time (rt) |
+| **Metrics (MVP)** | Traffic breakdown (stacked), avg response time (rt) |
 | **Per-service** | Separate stats page per service instance |
 | **Real-time** | < 5 minute delay acceptable |
 
+**Traffic Chart (stacked bar):**
+
+| Category | Source | Color | Description |
+|----------|--------|-------|-------------|
+| **Guaranteed** | traffic_type=1, status 2xx | Green | Successfully served guaranteed traffic |
+| **Burst** | traffic_type=2, status 2xx | Blue | Successfully served burst traffic |
+| **Dropped** | traffic_type IN (3-6) | Yellow | Not served - exceeded guaranteed (burst disabled) or burst congestion |
+| **Client Errors** | status 4xx | Orange | Client-side errors (bad request, auth, etc.) |
+| **Server Errors** | status 5xx | Red | Server-side errors |
+
+**Legend with info (i):** Explains each category, particularly that "Dropped" represents requests not served due to exceeding guaranteed traffic (when burst disabled) or excessive burst congestion (pro/enterprise).
+
 **Post-MVP:**
-- Client errors (4xx), server errors (5xx) breakdown
 - p95 rt (available in `stats_per_hour` if needed)
 - 1h debugging view (`stats_per_min`)
 - Enterprise grouping: per Seal-Key, per API-Key, per Region
@@ -100,7 +111,7 @@ Detailed stats accessible via dedicated route per service.
 
 | Requirement | Target |
 |-------------|--------|
-| Write throughput | 10,000 events/sec per service type (Seal/SSFN/Sealo) |
+| Write throughput | 10,000 events/sec per service type (Seal/gRPC/GraphQL) |
 | Query rt (Service Stats Page) | < 500ms for 30-day range |
 | Billing aggregation | < 10s for all customers |
 | Dashboard staleness | MVP accepts ~1h (hourly aggregate refresh) |
@@ -179,12 +190,198 @@ HAProxy → rsyslog → Fluentd → haproxy_raw_logs (7d)
 
 ---
 
-## Design (TODO)
+## Design
 
-Design section to be added after requirements are finalized.
+### D1: TimescaleDB + DBClock Compatibility
+
+**Key insight:** Continuous aggregates operate on *data timestamps* (the `timestamp` column in `haproxy_raw_logs`), not query time. DBClock controls *when* the billing job runs, not *which data* is aggregated.
+
+| Concern | Solution |
+|---------|----------|
+| Aggregate refresh | Real-time (TimescaleDB background worker) |
+| Billing period boundaries | Computed using DBClock at query time |
+| Test data | Insert with mock `timestamp` values, force refresh |
+
+**Implication:** No special DBClock integration needed in continuous aggregates. The existing periodic job pattern works unchanged.
+
+### D2: Schema (MVP)
+
+**Continuous Aggregate:** `stats_per_hour`
+
+```sql
+CREATE MATERIALIZED VIEW stats_per_hour
+WITH (timescaledb.continuous) AS
+SELECT
+  time_bucket('1 hour', timestamp) AS bucket,
+  customer_id,
+  service_type,
+  network,
+  -- Traffic breakdown (for stacked Traffic chart)
+  COUNT(*) FILTER (WHERE traffic_type = 1 AND status_code >= 200 AND status_code < 300) AS guaranteed_success_count,
+  COUNT(*) FILTER (WHERE traffic_type = 2 AND status_code >= 200 AND status_code < 300) AS burst_success_count,
+  COUNT(*) FILTER (WHERE traffic_type IN (3, 4, 5, 6)) AS dropped_count,
+  -- Error breakdown (shared across traffic types)
+  COUNT(*) FILTER (WHERE status_code >= 400 AND status_code < 500) AS client_error_count,
+  COUNT(*) FILTER (WHERE status_code >= 500) AS server_error_count,
+  -- Billing (guaranteed + burst, regardless of status)
+  COUNT(*) FILTER (WHERE traffic_type IN (1, 2)) AS billable_requests,
+  -- Legacy/summary (all 2xx)
+  COUNT(*) FILTER (WHERE status_code >= 200 AND status_code < 300) AS success_count,
+  -- Performance
+  AVG(time_total) AS avg_response_time_ms,
+  SUM(bytes_sent) AS total_bytes
+FROM haproxy_raw_logs
+WHERE customer_id IS NOT NULL
+GROUP BY bucket, customer_id, service_type, network;
+```
+
+**Traffic chart uses:** `guaranteed_success_count`, `burst_success_count`, `dropped_count`, `client_error_count`, `server_error_count`
+
+**Dashboard summary uses:** `success_count`, `client_error_count`, `server_error_count`
+
+**Billing uses:** `billable_requests`
+
+**Refresh policy:** Every 5 minutes, lag 10 minutes.
+
+**Retention:** 90 days (TimescaleDB policy).
+
+### D3: Periodic Job Integration
+
+**Two concerns:**
+1. **Stats aggregation** - Automatic (TimescaleDB continuous aggregate refresh)
+2. **Usage billing** - Part of existing `runPeriodicBillingJob()`
+
+**Updated Periodic Job Phases (1st of month):**
+```
+1. Apply scheduled tier changes
+2. Process scheduled cancellations
+3. ADD USAGE CHARGES ← NEW: Query stats, add line items to DRAFT
+4. DRAFT → PENDING
+5. Attempt payment
+```
+
+**Function:** `addUsageChargesToDraft()` in `packages/database/src/billing/usage-charges.ts`
+
+**Flow:**
+1. Query `stats_per_hour` for each customer: `WHERE bucket >= last_billed_timestamp AND bucket < billing_period_end`
+2. Sum `billable_requests` per service_type
+3. Create `invoice_line_items` (type: `usage`) on DRAFT invoice
+4. Update `last_billed_timestamp` on `service_instances`
+
+**Idempotency:** Use existing `billing_idempotency` table with key: `usage-{customerId}-{year}-{month}`.
+
+**Schema addition:**
+```sql
+ALTER TABLE service_instances ADD COLUMN last_billed_timestamp TIMESTAMP;
+```
+
+**Housekeeping (existing phase 5):** Add `stats_per_hour` retention cleanup if needed (TimescaleDB policy handles this, but verify).
+
+### D4: Stats API
+
+| Endpoint | Query |
+|----------|-------|
+| `GET /stats/summary` | `stats_per_hour` last 24h, sum success/client_error/server_error |
+| `GET /stats/traffic` | `stats_per_hour` for time range, return traffic breakdown per bucket |
+| `GET /stats/rt` | `stats_per_hour` for time range, return avg_response_time_ms per bucket |
+
+**Traffic endpoint returns per bucket:**
+- `guaranteed` - guaranteed_success_count
+- `burst` - burst_success_count
+- `dropped` - dropped_count
+- `clientError` - client_error_count
+- `serverError` - server_error_count
+
+**Time range:** Query param `range`: `24h`, `7d`, `30d`. Uses DBClock for "now".
+
+**File:** `packages/database/src/stats/queries.ts`
+
+### D5: Test Strategy (3 Levels)
+
+**Pattern:** Same as billing tests.
+
+| Level | Location | Purpose |
+|-------|----------|---------|
+| **Unit (ut-)** | `packages/database/src/stats/ut-*.test.ts` | Query logic, aggregation math |
+| **API** | `apps/api/tests/api-stats.test.ts` | Endpoint contracts, auth |
+| **E2E** | `apps/webapp/tests/e2e/stats-*.spec.ts` | Dashboard display, graphs |
+
+### D6: Mock Data Strategy
+
+**Test helper:** `insertMockHAProxyLogs()`
+
+```typescript
+// packages/database/src/stats/test-helpers.ts
+export async function insertMockHAProxyLogs(
+  db: NodePgDatabase,
+  customerId: number,
+  options: {
+    serviceType: 1 | 2 | 3;
+    network: 0 | 1;
+    count: number;
+    timestamp: Date;       // Mock timestamp (from DBClock)
+    statusCode?: number;   // Default: 200
+    trafficType?: number;  // Default: 1 (guaranteed)
+    responseTimeMs?: number; // Default: 50
+  }
+): Promise<void>;
+
+export async function refreshStatsAggregate(db: NodePgDatabase): Promise<void> {
+  await db.execute(sql`CALL refresh_continuous_aggregate('stats_per_hour', NULL, NULL)`);
+}
+```
+
+**Test API endpoint:** `POST /test/stats/mock-logs` (insert logs + refresh aggregate)
+
+**Usage in tests:**
+```typescript
+// 1. Set mock clock to billing period
+await setMockClock(request, '2024-01-15T00:00:00Z');
+
+// 2. Insert mock HAProxy logs with timestamps in the billing period
+await request.post('/test/stats/mock-logs', {
+  customerId: 1,
+  serviceType: 1,
+  count: 1000,
+  timestamp: '2024-01-10T12:00:00Z'
+});
+
+// 3. Advance to 1st of next month, run billing job
+await setMockClock(request, '2024-02-01T00:00:00Z');
+await request.post('/test/billing/run-periodic-job');
+
+// 4. Verify usage line item on invoice
+```
+
+### D7: Implementation Order
+
+1. **Schema:** Add continuous aggregate + `last_billed_timestamp` column
+2. **Test helpers:** `insertMockHAProxyLogs()`, `refreshStatsAggregate()`
+3. **Unit tests:** Write tests for query functions (TDD)
+4. **Query functions:** `packages/database/src/stats/queries.ts`
+5. **Billing integration:** Add `processUsageCharges()` to periodic job
+6. **API tests:** Write tests for stats endpoints
+7. **Stats API:** tRPC routes in `apps/api/src/routes/stats.ts`
+8. **E2E tests:** Dashboard summary, stats page
+9. **UI components:** Dashboard stats, stats page graphs
+
+### D8: Files to Create/Modify
+
+| File | Action |
+|------|--------|
+| `packages/database/src/stats/queries.ts` | Create - stats query functions |
+| `packages/database/src/stats/test-helpers.ts` | Create - mock data insertion |
+| `packages/database/src/stats/ut-stats.test.ts` | Create - unit tests |
+| `packages/database/src/billing/usage-charges.ts` | Create - `addUsageChargesToDraft()` |
+| `packages/database/src/billing/processor.ts` | Modify - call usage charges |
+| `apps/api/src/routes/stats.ts` | Create - tRPC routes |
+| `apps/api/src/server.ts` | Modify - add `/test/stats/*` endpoints |
+| `apps/api/tests/api-stats.test.ts` | Create - API tests |
+| `apps/webapp/tests/e2e/stats-dashboard.spec.ts` | Create - E2E tests |
+| `packages/database/migrations/` | New migration - continuous aggregate + column |
 
 ---
 
-**Version:** 1.4
+**Version:** 1.5
 **Last Updated:** 2025-01-29
-**Status:** Requirements Draft
+**Status:** Design Draft

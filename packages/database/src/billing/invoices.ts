@@ -7,7 +7,7 @@
  */
 
 import { eq, and, sql } from 'drizzle-orm';
-import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import type { Database, DatabaseOrTransaction } from '../db';
 import { billingRecords, customers } from '../schema';
 import type { DBClock } from '@suiftly/shared/db-clock';
 
@@ -45,7 +45,7 @@ export interface CreateInvoiceParams {
  * @returns Created invoice ID
  */
 export async function createInvoice(
-  tx: NodePgDatabase<any>,
+  tx: DatabaseOrTransaction,
   params: CreateInvoiceParams,
   clock: DBClock
 ): Promise<string> {
@@ -82,17 +82,19 @@ export async function createInvoice(
  * @returns Existing or newly created DRAFT invoice ID
  */
 export async function getOrCreateDraftInvoice(
-  tx: NodePgDatabase<any>,
+  tx: DatabaseOrTransaction,
   customerId: number,
   clock: DBClock
 ): Promise<string> {
   // Check for existing DRAFT
-  const existingDraft = await tx.query.billingRecords.findFirst({
-    where: and(
+  const [existingDraft] = await tx
+    .select()
+    .from(billingRecords)
+    .where(and(
       eq(billingRecords.customerId, customerId),
       eq(billingRecords.status, 'draft')
-    ),
-  });
+    ))
+    .limit(1);
 
   if (existingDraft) {
     return existingDraft.id;
@@ -136,7 +138,7 @@ export async function getOrCreateDraftInvoice(
  * @returns Invoice number
  */
 export async function generateInvoiceNumber(
-  tx: NodePgDatabase<any>,
+  tx: DatabaseOrTransaction,
   clock: DBClock
 ): Promise<string> {
   const today = clock.today();
@@ -168,7 +170,7 @@ export async function generateInvoiceNumber(
  * @param newAmountUsdCents New total amount
  */
 export async function updateDraftInvoiceAmount(
-  tx: NodePgDatabase<any>,
+  tx: DatabaseOrTransaction,
   draftInvoiceId: string,
   newAmountUsdCents: number
 ): Promise<void> {
@@ -187,7 +189,7 @@ export async function updateDraftInvoiceAmount(
  * @param draftInvoiceId DRAFT invoice ID
  */
 export async function transitionDraftToPending(
-  tx: NodePgDatabase<any>,
+  tx: DatabaseOrTransaction,
   draftInvoiceId: string
 ): Promise<void> {
   await tx
@@ -208,7 +210,7 @@ export async function transitionDraftToPending(
  * @returns Invoice ID
  */
 export async function createAndChargeImmediately(
-  tx: NodePgDatabase<any>,
+  tx: DatabaseOrTransaction,
   params: CreateInvoiceParams,
   clock: DBClock
 ): Promise<string> {
@@ -231,7 +233,7 @@ export async function createAndChargeImmediately(
  * @param reason Reason for voiding
  */
 export async function voidInvoice(
-  tx: NodePgDatabase<any>,
+  tx: DatabaseOrTransaction,
   invoiceId: string,
   reason: string
 ): Promise<void> {

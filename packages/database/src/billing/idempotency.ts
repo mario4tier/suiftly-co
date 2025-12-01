@@ -8,8 +8,8 @@
  */
 
 import { eq, lt } from 'drizzle-orm';
-import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { billingIdempotency } from '../schema';
+import type { Database, DatabaseOrTransaction } from '../db';
 import type { IdempotencyResult } from './types';
 
 /**
@@ -35,14 +35,16 @@ import type { IdempotencyResult } from './types';
  * @returns Result (either cached or freshly computed)
  */
 export async function withIdempotency<T>(
-  tx: NodePgDatabase<any>,
+  tx: DatabaseOrTransaction,
   idempotencyKey: string,
   operation: () => Promise<T>
 ): Promise<IdempotencyResult<T>> {
   // Check if we've seen this key before
-  const existing = await tx.query.billingIdempotency.findFirst({
-    where: eq(billingIdempotency.idempotencyKey, idempotencyKey),
-  });
+  const [existing] = await tx
+    .select()
+    .from(billingIdempotency)
+    .where(eq(billingIdempotency.idempotencyKey, idempotencyKey))
+    .limit(1);
 
   if (existing) {
     // Return cached result
@@ -117,7 +119,7 @@ export function generateUsageBillingKey(
  * @returns Number of records deleted
  */
 export async function cleanupIdempotencyRecords(
-  tx: NodePgDatabase<any>,
+  tx: DatabaseOrTransaction,
   maxAgeHours: number = 24,
   currentTime?: Date
 ): Promise<number> {

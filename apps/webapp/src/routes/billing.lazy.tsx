@@ -389,9 +389,9 @@ function BillingPage() {
             {nextPaymentExpanded && (
               <div className="mt-4 pt-4 border-t space-y-2">
                 <div className="text-sm">
-                  {nextPaymentData?.lineItems && nextPaymentData.lineItems.length > 0 ? (
+                  {nextPaymentData && 'lineItems' in nextPaymentData && nextPaymentData.lineItems.length > 0 ? (
                     <>
-                      {nextPaymentData.lineItems.map((item, index) => (
+                      {nextPaymentData.lineItems.map((item: { description: string; amountUsd: number }, index: number) => (
                         <div
                           key={index}
                           className={`flex justify-between mb-1 ${item.amountUsd < 0 ? 'text-green-600' : 'text-gray-600'}`}

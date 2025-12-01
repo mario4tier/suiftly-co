@@ -17,6 +17,10 @@ const API_BASE = 'http://localhost:3000';
 
 test.describe('Subscription Billing - Bug Detection', () => {
   test('BUG 1: Next Scheduled Payment shows 1st of next month (not last day of current month)', async ({ page }) => {
+    // Freeze time to November 15, 2025 for deterministic credit calculation
+    // Mid-month ensures a meaningful partial month credit will be created
+    await setMockClock(page.request, '2025-11-15T12:00:00Z');
+
     // Reset customer
     await resetCustomer(page.request, {
       balanceUsdCents: 0,
@@ -62,17 +66,9 @@ test.describe('Subscription Billing - Bug Detection', () => {
     console.log('Next Scheduled Payment/Refund text:', fullText);
 
     // Should show next month's 1st day (not current month's last day)
-    // Calculate expected next billing date dynamically
-    const now = new Date();
-    const nextBillingDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
-    const expectedMonth = nextBillingDate.toLocaleDateString('en-US', {
-      month: 'long',
-      day: 'numeric',
-      timeZone: 'UTC'
-    });
-
-    console.log('Expected next billing date:', expectedMonth);
-    await expect(nextPaymentButton).toContainText(expectedMonth.split(' ')[0]); // Month name
+    // With DBClock set to Nov 15, 2025, next billing date is December 1, 2025
+    console.log('Expected next billing date: December 1');
+    await expect(nextPaymentButton).toContainText('December'); // Month name
     await expect(nextPaymentButton).toContainText('1'); // Day 1
 
     // Should show NET charge (not $0.00) - actual amount varies by date

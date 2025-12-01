@@ -45,6 +45,77 @@ export async function setupTimescaleDB() {
   `);
   console.log('✓ Added retention policy (2 days)');
 
+  // =========================================================================
+  // Stats Continuous Aggregate (STATS_DESIGN.md D2)
+  // =========================================================================
+
+  // Create continuous aggregate for hourly stats (STATS_DESIGN.md D2)
+  // Uses SUM(repeat) instead of COUNT(*) to support pre-aggregated logs from HAProxy
+  // When repeat=1 (default), SUM(repeat) equals COUNT(*). When repeat>1, it properly counts
+  // all the requests that a single aggregated log entry represents.
+  await db.execute(sql`
+    CREATE MATERIALIZED VIEW IF NOT EXISTS stats_per_hour
+    WITH (timescaledb.continuous) AS
+    SELECT
+      time_bucket('1 hour', timestamp) AS bucket,
+      customer_id,
+      service_type,
+      network,
+      -- Traffic breakdown (for stacked Traffic chart)
+      -- Uses SUM(repeat) to support pre-aggregated logs
+      SUM(repeat) FILTER (WHERE traffic_type = 1 AND status_code >= 200 AND status_code < 300) AS guaranteed_success_count,
+      SUM(repeat) FILTER (WHERE traffic_type = 2 AND status_code >= 200 AND status_code < 300) AS burst_success_count,
+      SUM(repeat) FILTER (WHERE traffic_type IN (3, 4, 5, 6)) AS dropped_count,
+      -- Error breakdown (exclude dropped traffic - those have their own category)
+      SUM(repeat) FILTER (WHERE status_code >= 400 AND status_code < 500 AND traffic_type NOT IN (3, 4, 5, 6)) AS client_error_count,
+      SUM(repeat) FILTER (WHERE status_code >= 500 AND traffic_type NOT IN (3, 4, 5, 6)) AS server_error_count,
+      -- Billing (guaranteed + burst, regardless of status)
+      SUM(repeat) FILTER (WHERE traffic_type IN (1, 2)) AS billable_requests,
+      -- Legacy/summary (all 2xx)
+      SUM(repeat) FILTER (WHERE status_code >= 200 AND status_code < 300) AS success_count,
+      -- Performance (weighted average for pre-aggregated logs)
+      SUM(time_total * repeat)::double precision / NULLIF(SUM(repeat), 0) AS avg_response_time_ms,
+      SUM(bytes_sent * repeat) AS total_bytes
+    FROM haproxy_raw_logs
+    WHERE customer_id IS NOT NULL
+    GROUP BY bucket, customer_id, service_type, network;
+  `);
+  console.log('✓ Created stats_per_hour continuous aggregate');
+
+  // Add refresh policy: refresh every 5 minutes, with 10 minute lag
+  await db.execute(sql`
+    SELECT add_continuous_aggregate_policy('stats_per_hour',
+      start_offset => INTERVAL '1 day',
+      end_offset => INTERVAL '10 minutes',
+      schedule_interval => INTERVAL '5 minutes',
+      if_not_exists => TRUE
+    );
+  `);
+  console.log('✓ Added stats_per_hour refresh policy');
+
+  // Add retention policy: keep 90 days of hourly stats
+  await db.execute(sql`
+    SELECT add_retention_policy('stats_per_hour', INTERVAL '90 days', if_not_exists => TRUE);
+  `);
+  console.log('✓ Added stats_per_hour retention policy (90 days)');
+
+  // Create indexes on continuous aggregate for efficient queries
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS idx_stats_per_hour_customer_bucket
+    ON stats_per_hour (customer_id, bucket DESC);
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS idx_stats_per_hour_service_bucket
+    ON stats_per_hour (service_type, bucket DESC);
+  `);
+  console.log('✓ Created stats_per_hour indexes');
+
+  // Transfer ownership to deploy user for runtime operations
+  // This allows the API to read stats and refresh the aggregate for testing
+  // Note: refresh_continuous_aggregate requires being the owner
+  await db.execute(sql`ALTER MATERIALIZED VIEW stats_per_hour OWNER TO deploy`);
+  console.log('✓ Transferred stats_per_hour ownership to deploy');
+
   console.log('✅ TimescaleDB setup complete');
 }
 

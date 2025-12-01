@@ -623,7 +623,7 @@ export async function reEnableApiKey(apiKey: string, customerId: number): Promis
  */
 export async function getApiKeys(
   customerId: number,
-  serviceType: string,
+  serviceType: 'seal' | 'grpc' | 'graphql',
   includeInactive = false
 ) {
   const conditions = [

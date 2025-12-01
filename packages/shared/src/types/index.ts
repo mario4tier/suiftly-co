@@ -13,12 +13,12 @@ export type CustomerUpdate = z.infer<typeof schemas.customerUpdateSchema>;
 export type CustomerPublic = z.infer<typeof schemas.customerPublicSchema>;
 export type CustomerStatus = z.infer<typeof schemas.customerStatusSchema>;
 
-// Service types
-export type ServiceInstance = z.infer<typeof schemas.serviceInstanceSchema>;
-export type ServiceCreate = z.infer<typeof schemas.serviceCreateSchema>;
-export type ServiceUpdate = z.infer<typeof schemas.serviceUpdateSchema>;
-export type ServiceType = z.infer<typeof schemas.serviceTypeSchema>;
-export type ServiceTier = z.infer<typeof schemas.serviceTierSchema>;
+// Service types - reusing existing types from constants
+// Note: schemas not yet implemented, using re-exports
+export type { ServiceType, ServiceTier } from '../constants';
+// export type ServiceInstance = z.infer<typeof schemas.serviceInstanceSchema>;
+// export type ServiceCreate = z.infer<typeof schemas.serviceCreateSchema>;
+// export type ServiceUpdate = z.infer<typeof schemas.serviceUpdateSchema>;
 
 // API Key types
 export type ApiKey = z.infer<typeof schemas.apiKeySchema>;
@@ -40,7 +40,7 @@ export type LedgerEntry = z.infer<typeof schemas.ledgerEntrySchema>;
 export type BillingRecord = z.infer<typeof schemas.billingRecordSchema>;
 export type DepositRequest = z.infer<typeof schemas.depositRequestSchema>;
 export type WithdrawRequest = z.infer<typeof schemas.withdrawRequestSchema>;
-export type UpdateMonthlyLimit = z.infer<typeof schemas.updateMonthlyLimitSchema>;
+// export type UpdateMonthlyLimit = z.infer<typeof schemas.updateMonthlyLimitSchema>;
 export type TransactionType = z.infer<typeof schemas.escrowTransactionSchema.shape.txType>;
 export type BillingStatus = z.infer<typeof schemas.billingRecordSchema.shape.status>;
 

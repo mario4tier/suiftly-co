@@ -50,6 +50,11 @@ export const haproxyRawLogs = pgTable('haproxy_raw_logs', {
   // Backend routing
   backendId: smallint('backend_id').default(0),
   terminationState: text('termination_state'),
+
+  // Pre-aggregated log support (future)
+  // When HAProxy sends aggregated entries, this indicates how many identical requests this row represents
+  // Default 1 = single request (current behavior). >1 = pre-aggregated count.
+  repeat: integer('repeat').notNull().default(1),
 }, (table) => ({
   idxLogsCustomerTime: index('idx_logs_customer_time').on(table.customerId, table.timestamp.desc()).where(sql`${table.customerId} IS NOT NULL`),
   idxLogsServerTime: index('idx_logs_server_time').on(table.serverId, table.timestamp.desc()),

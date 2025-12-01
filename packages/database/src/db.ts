@@ -46,3 +46,8 @@ export const db = drizzle(pool, { schema });
 // Export database type for use in billing modules
 // This preserves schema types when passing transactions around
 export type Database = typeof db;
+
+// Transaction type - used in billing modules for functions that can work
+// with either the main db connection or a transaction
+// Uses Omit to remove $client which isn't available on transactions
+export type DatabaseOrTransaction = Omit<Database, '$client'>;

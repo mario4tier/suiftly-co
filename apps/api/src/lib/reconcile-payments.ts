@@ -90,7 +90,7 @@ export async function reconcilePayments(customerId: number): Promise<ReconcileRe
         userAddress: customer.walletAddress,
         amountUsdCents: priceUsdCents,
         description: `${service.serviceType} ${service.tier} tier subscription`,
-        escrowAddress: customer.escrowContractId,
+        escrowAddress: customer.escrowContractId ?? '', // Use empty string if no escrow (mock mode)
       });
 
       if (chargeResult.success) {
@@ -113,7 +113,7 @@ export async function reconcilePayments(customerId: number): Promise<ReconcileRe
           await tx.insert(ledgerEntries).values({
             customerId,
             type: 'charge',
-            amountUsdCents: BigInt(priceUsdCents),
+            amountUsdCents: priceUsdCents,
             description: `${service.serviceType} ${service.tier} tier subscription`,
             createdAt: new Date(),
           });
@@ -213,7 +213,7 @@ export async function chargeMonthlySubscription(instanceId: number): Promise<boo
     userAddress: customer.walletAddress,
     amountUsdCents: priceUsdCents,
     description: `${service.serviceType} ${service.tier} tier subscription`,
-    escrowAddress: customer.escrowContractId,
+    escrowAddress: customer.escrowContractId ?? '', // Use empty string if no escrow (mock mode)
   });
 
   if (chargeResult.success) {
@@ -221,7 +221,7 @@ export async function chargeMonthlySubscription(instanceId: number): Promise<boo
     await db.insert(ledgerEntries).values({
       customerId: service.customerId,
       type: 'charge',
-      amountUsdCents: BigInt(priceUsdCents),
+      amountUsdCents: priceUsdCents,
       description: `${service.serviceType} ${service.tier} tier subscription`,
       createdAt: new Date(),
     });

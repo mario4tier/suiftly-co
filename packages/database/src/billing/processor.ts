@@ -16,8 +16,8 @@
  */
 
 import { eq, and, sql, inArray } from 'drizzle-orm';
-import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { billingRecords, customers, serviceInstances } from '../schema';
+import type { Database, DatabaseOrTransaction } from '../db';
 import { withCustomerLock } from './locking';
 import { processInvoicePayment } from './payments';
 import {
@@ -48,7 +48,7 @@ import type { ISuiService } from '@suiftly/shared/sui-service';
  * @returns Result of billing operations
  */
 export async function processCustomerBilling(
-  db: NodePgDatabase<any>,
+  db: Database,
   customerId: number,
   config: BillingProcessorConfig,
   suiService: ISuiService
@@ -117,7 +117,7 @@ export async function processCustomerBilling(
  * @returns Billing result
  */
 async function processMonthlyBilling(
-  tx: NodePgDatabase<any>,
+  tx: DatabaseOrTransaction,
   customerId: number,
   config: BillingProcessorConfig,
   suiService: ISuiService
@@ -300,7 +300,7 @@ async function processMonthlyBilling(
  * @returns Billing result
  */
 async function retryFailedPayments(
-  tx: NodePgDatabase<any>,
+  tx: DatabaseOrTransaction,
   customerId: number,
   config: BillingProcessorConfig,
   suiService: ISuiService
@@ -397,7 +397,7 @@ async function retryFailedPayments(
  * @returns Billing result
  */
 async function checkGracePeriodExpiration(
-  tx: NodePgDatabase<any>,
+  tx: DatabaseOrTransaction,
   customerId: number,
   config: BillingProcessorConfig
 ): Promise<CustomerBillingResult> {
@@ -442,7 +442,7 @@ async function checkGracePeriodExpiration(
  * @returns Array of billing results (one per customer)
  */
 export async function processBilling(
-  db: NodePgDatabase<any>,
+  db: Database,
   config: BillingProcessorConfig,
   suiService: ISuiService
 ): Promise<CustomerBillingResult[]> {

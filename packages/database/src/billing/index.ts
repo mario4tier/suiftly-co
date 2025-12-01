@@ -120,6 +120,16 @@ export type {
   CancellationCleanupResult,
 } from './cancellation-cleanup';
 
+// Usage charges (STATS_DESIGN.md D3)
+export {
+  addUsageChargesToDraft,
+  getUsageChargePreview,
+} from './usage-charges';
+
+export type {
+  UsageChargeResult,
+} from './usage-charges';
+
 // Invoice validation (defensive checks)
 export {
   validateInvoiceBeforeCharging,

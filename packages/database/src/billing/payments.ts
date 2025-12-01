@@ -9,7 +9,7 @@
  */
 
 import { eq, sql } from 'drizzle-orm';
-import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import type { Database, DatabaseOrTransaction } from '../db';
 import { billingRecords, invoicePayments, escrowTransactions, customers } from '../schema';
 import { applyCreditsToInvoice } from './credits';
 import type { InvoicePaymentResult, BillingError } from './types';
@@ -30,15 +30,17 @@ import type { ISuiService } from '@suiftly/shared/sui-service';
  * @returns Payment result with success/failure details
  */
 export async function processInvoicePayment(
-  tx: NodePgDatabase<any>,
+  tx: DatabaseOrTransaction,
   billingRecordId: string,
   suiService: ISuiService,
   clock: DBClock
 ): Promise<InvoicePaymentResult> {
   // Get invoice details
-  const invoice = await tx.query.billingRecords.findFirst({
-    where: eq(billingRecords.id, billingRecordId),
-  });
+  const [invoice] = await tx
+    .select()
+    .from(billingRecords)
+    .where(eq(billingRecords.id, billingRecordId))
+    .limit(1);
 
   if (!invoice) {
     return {
@@ -104,9 +106,11 @@ export async function processInvoicePayment(
   // Step 2: Charge escrow for remaining amount
   if (creditResult.remainingInvoiceAmountCents > 0) {
     // Get customer wallet address
-    const customer = await tx.query.customers.findFirst({
-      where: eq(customers.customerId, customerId),
-    });
+    const [customer] = await tx
+      .select()
+      .from(customers)
+      .where(eq(customers.customerId, customerId))
+      .limit(1);
 
     if (!customer) {
       result.error = {
@@ -225,7 +229,7 @@ export async function processInvoicePayment(
  * @returns Total amount paid in cents
  */
 export async function getInvoicePaidAmount(
-  tx: NodePgDatabase<any>,
+  tx: DatabaseOrTransaction,
   billingRecordId: string
 ): Promise<number> {
   const payments = await tx

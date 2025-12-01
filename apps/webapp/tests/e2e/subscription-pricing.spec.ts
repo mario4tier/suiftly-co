@@ -30,6 +30,10 @@ test.describe('Subscription Pricing Validation', () => {
       },
     });
 
+    // Reload to clear React Query cache after database reset
+    await page.reload();
+    await page.waitForURL('/dashboard', { timeout: 5000 });
+
     // Navigate to seal service page
     await page.click('text=Seal');
     await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
@@ -59,6 +63,10 @@ test.describe('Subscription Pricing Validation', () => {
         clearEscrowAccount: true,
       },
     });
+
+    // Reload to clear React Query cache after database reset
+    await page.reload();
+    await page.waitForURL('/dashboard', { timeout: 5000 });
 
     // Navigate to seal service page
     await page.click('text=Seal');
@@ -95,6 +103,10 @@ test.describe('Subscription Pricing Validation', () => {
       },
     });
 
+    // Reload to clear React Query cache after database reset
+    await page.reload();
+    await page.waitForURL('/dashboard', { timeout: 5000 });
+
     // Navigate to seal service page
     await page.click('text=Seal');
     await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
@@ -125,6 +137,10 @@ test.describe('Subscription Pricing Validation', () => {
         clearEscrowAccount: true,
       },
     });
+
+    // Reload to clear React Query cache after database reset
+    await page.reload();
+    await page.waitForURL('/dashboard', { timeout: 5000 });
 
     // Navigate to seal service page
     await page.click('text=Seal');
@@ -162,6 +178,10 @@ test.describe('Subscription Pricing Validation', () => {
       },
     });
 
+    // Reload to clear React Query cache after database reset
+    await page.reload();
+    await page.waitForURL('/dashboard', { timeout: 5000 });
+
     // Navigate to seal service page
     await page.click('text=Seal');
     await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
@@ -193,6 +213,10 @@ test.describe('Subscription Pricing Validation', () => {
         clearEscrowAccount: true,
       },
     });
+
+    // Reload to clear React Query cache after database reset
+    await page.reload();
+    await page.waitForURL('/dashboard', { timeout: 5000 });
 
     // Navigate to seal service page
     await page.click('text=Seal');
@@ -230,6 +254,10 @@ test.describe('Subscription Pricing Validation', () => {
       },
     });
 
+    // Reload to clear React Query cache after database reset
+    await page.reload();
+    await page.waitForURL('/dashboard', { timeout: 5000 });
+
     // Navigate to seal service page
     await page.click('text=Seal');
     await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
@@ -260,6 +288,10 @@ test.describe('Subscription Pricing Validation', () => {
         spendingLimitUsdCents: 25000, // $250
       },
     });
+
+    // Reload to clear React Query cache after database reset
+    await page.reload();
+    await page.waitForURL('/dashboard', { timeout: 5000 });
 
     // Navigate to seal service page
     await page.click('text=Seal');

@@ -16,8 +16,8 @@
  */
 
 import { eq, and, sql, lt, isNotNull } from 'drizzle-orm';
-import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { customers, serviceInstances } from '../schema';
+import type { Database, DatabaseOrTransaction } from '../db';
 import type { DBClock } from '@suiftly/shared/db-clock';
 import type { BillingOperation } from './types';
 
@@ -33,13 +33,15 @@ import type { BillingOperation } from './types';
  * @returns true if grace period started, false if not applicable
  */
 export async function startGracePeriod(
-  tx: NodePgDatabase<any>,
+  tx: DatabaseOrTransaction,
   customerId: number,
   clock: DBClock
 ): Promise<boolean> {
-  const customer = await tx.query.customers.findFirst({
-    where: eq(customers.customerId, customerId),
-  });
+  const [customer] = await tx
+    .select()
+    .from(customers)
+    .where(eq(customers.customerId, customerId))
+    .limit(1);
 
   if (!customer) {
     return false;
@@ -75,7 +77,7 @@ export async function startGracePeriod(
  * @param customerId Customer ID
  */
 export async function clearGracePeriod(
-  tx: NodePgDatabase<any>,
+  tx: DatabaseOrTransaction,
   customerId: number
 ): Promise<void> {
   await tx
@@ -99,14 +101,16 @@ export async function clearGracePeriod(
  * @returns true if grace period expired and customer should be suspended
  */
 export async function isGracePeriodExpired(
-  tx: NodePgDatabase<any>,
+  tx: DatabaseOrTransaction,
   customerId: number,
   clock: DBClock,
   gracePeriodDays: number = 14
 ): Promise<boolean> {
-  const customer = await tx.query.customers.findFirst({
-    where: eq(customers.customerId, customerId),
-  });
+  const [customer] = await tx
+    .select()
+    .from(customers)
+    .where(eq(customers.customerId, customerId))
+    .limit(1);
 
   if (!customer || !customer.gracePeriodStart || !customer.paidOnce) {
     return false; // No grace period or not applicable
@@ -131,7 +135,7 @@ export async function isGracePeriodExpired(
  * @returns Number of services affected
  */
 export async function suspendCustomerForNonPayment(
-  tx: NodePgDatabase<any>,
+  tx: DatabaseOrTransaction,
   customerId: number
 ): Promise<number> {
   // Update customer status
@@ -165,7 +169,7 @@ export async function suspendCustomerForNonPayment(
  * @param customerId Customer ID
  */
 export async function resumeCustomerAccount(
-  tx: NodePgDatabase<any>,
+  tx: DatabaseOrTransaction,
   customerId: number
 ): Promise<void> {
   await tx
@@ -191,7 +195,7 @@ export async function resumeCustomerAccount(
  * @returns Array of customer IDs to suspend
  */
 export async function getCustomersWithExpiredGracePeriod(
-  tx: NodePgDatabase<any>,
+  tx: DatabaseOrTransaction,
   clock: DBClock,
   gracePeriodDays: number = 14
 ): Promise<number[]> {
@@ -222,7 +226,7 @@ export async function getCustomersWithExpiredGracePeriod(
  * @param clock DBClock for timestamp
  */
 export async function recordGracePeriodNotification(
-  tx: NodePgDatabase<any>,
+  tx: DatabaseOrTransaction,
   customerId: number,
   clock: DBClock
 ): Promise<void> {

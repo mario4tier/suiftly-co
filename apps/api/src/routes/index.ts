@@ -12,6 +12,7 @@ import { servicesRouter } from './services';
 import { sealRouter } from './seal';
 import { activityRouter } from './activity';
 import { billingRouter } from './billing';
+import { statsRouter } from './stats';
 
 export const appRouter = router({
   test: testRouter,
@@ -20,6 +21,7 @@ export const appRouter = router({
   seal: sealRouter,
   activity: activityRouter,
   billing: billingRouter,
+  stats: statsRouter,
 });
 
 export type AppRouter = typeof appRouter;

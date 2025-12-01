@@ -20,11 +20,11 @@
  * See BILLING_DESIGN.md for detailed requirements.
  */
 
-import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
-import { processBilling, type CustomerBillingResult } from './processor';
+import type { Database, DatabaseOrTransaction } from '../db';
+import { processBilling } from './processor';
 import { processCancellationCleanup, cleanupOldCancellationHistory, type CancellationCleanupResult } from './cancellation-cleanup';
 import { cleanupIdempotencyRecords } from './idempotency';
-import type { BillingProcessorConfig } from './types';
+import type { BillingProcessorConfig, CustomerBillingResult } from './types';
 import type { DBClock } from '@suiftly/shared/db-clock';
 import type { ISuiService } from '@suiftly/shared/sui-service';
 
@@ -72,7 +72,7 @@ export interface PeriodicJobResult {
  * @returns Comprehensive result of all phases
  */
 export async function runPeriodicBillingJob(
-  db: NodePgDatabase<any>,
+  db: Database,
   config: BillingProcessorConfig,
   suiService: ISuiService
 ): Promise<PeriodicJobResult> {
@@ -147,10 +147,11 @@ export async function runPeriodicBillingJob(
     // - Clean up old cancellation history (beyond cooldown period)
 
     // Clean up idempotency records older than 90 days
-    const idempotencyCutoff = new Date(config.clock.now().getTime() - 90 * 24 * 60 * 60 * 1000);
+    const idempotencyAgeHours = 90 * 24; // 90 days in hours
     result.phases.housekeeping.idempotencyRecordsDeleted = await cleanupIdempotencyRecords(
       db,
-      idempotencyCutoff
+      idempotencyAgeHours,
+      config.clock.now() // Use clock for consistent time in tests
     );
 
     // Clean up cancellation history older than 30 days (cooldown is 7 days, keep some buffer)
@@ -181,7 +182,7 @@ export async function runPeriodicBillingJob(
  * @returns Result for the single customer
  */
 export async function runPeriodicJobForCustomer(
-  db: NodePgDatabase<any>,
+  db: Database,
   customerId: number,
   config: BillingProcessorConfig,
   suiService: ISuiService

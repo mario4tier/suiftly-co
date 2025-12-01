@@ -11,7 +11,7 @@
  */
 
 import { eq, and } from 'drizzle-orm';
-import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import type { Database, DatabaseOrTransaction } from '../db';
 import { serviceInstances, customers } from '../schema';
 import { withCustomerLock } from './locking';
 import { getOrCreateDraftInvoice, createAndChargeImmediately, updateDraftInvoiceAmount } from './invoices';
@@ -54,7 +54,7 @@ export interface SubscriptionBillingResult {
  * @returns Subscription billing result
  */
 export async function handleSubscriptionBilling(
-  db: NodePgDatabase<any>,
+  db: Database,
   customerId: number,
   serviceType: string,
   tier: string,
@@ -182,7 +182,7 @@ export async function handleSubscriptionBilling(
  * @throws Error if DRAFT validation fails (critical billing error)
  */
 export async function recalculateDraftInvoice(
-  tx: NodePgDatabase<any>,
+  tx: DatabaseOrTransaction,
   customerId: number,
   clock: DBClock
 ): Promise<void> {
@@ -192,9 +192,10 @@ export async function recalculateDraftInvoice(
   // Get all subscribed services
   // NOTE: Service existence = subscription. is_user_enabled is just on/off toggle.
   // Customers are billed for subscribed services regardless of toggle state.
-  const services = await tx.query.serviceInstances.findMany({
-    where: eq(serviceInstances.customerId, customerId)
-  });
+  const services = await tx
+    .select()
+    .from(serviceInstances)
+    .where(eq(serviceInstances.customerId, customerId));
 
   // Calculate total from tier prices + add-ons
   let totalUsdCents = 0;

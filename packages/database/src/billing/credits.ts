@@ -10,7 +10,7 @@
  */
 
 import { eq, and, gt, sql, asc } from 'drizzle-orm';
-import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import type { Database, DatabaseOrTransaction } from '../db';
 import { customerCredits, invoicePayments } from '../schema';
 import type { CreditApplicationResult } from './types';
 import type { DBClock } from '@suiftly/shared/db-clock';
@@ -30,7 +30,7 @@ import type { DBClock } from '@suiftly/shared/db-clock';
  * @returns Details of credits applied
  */
 export async function applyCreditsToInvoice(
-  tx: NodePgDatabase<any>,
+  tx: DatabaseOrTransaction,
   customerId: number,
   billingRecordId: string,
   invoiceAmountCents: number,
@@ -125,7 +125,7 @@ export async function applyCreditsToInvoice(
  * @returns Created credit ID
  */
 export async function issueCredit(
-  tx: NodePgDatabase<any>,
+  tx: DatabaseOrTransaction,
   customerId: number,
   amountCents: number,
   reason: string,
@@ -158,7 +158,7 @@ export async function issueCredit(
  * @returns Total available credits in cents (excluding expired)
  */
 export async function getAvailableCredits(
-  tx: NodePgDatabase<any>,
+  tx: DatabaseOrTransaction,
   customerId: number,
   clock: DBClock
 ): Promise<number> {

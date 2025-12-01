@@ -32,6 +32,9 @@ export const serviceInstances = pgTable('service_instances', {
   // After period ends: state → cancellation_pending, cancellation_effective_at = +7 days
   cancellationScheduledFor: date('cancellation_scheduled_for'),
   cancellationEffectiveAt: timestamp('cancellation_effective_at', { withTimezone: true }),
+
+  // Usage billing: tracks last billed timestamp to prevent double-billing (STATS_DESIGN.md D3)
+  lastBilledTimestamp: timestamp('last_billed_timestamp'),
 }, (table) => ({
   uniqueCustomerService: unique().on(table.customerId, table.serviceType),
   // Index for efficient service-type iteration (backend synchronization)

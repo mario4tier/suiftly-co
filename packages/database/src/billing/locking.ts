@@ -8,7 +8,7 @@
  */
 
 import { sql } from 'drizzle-orm';
-import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import type { Database, DatabaseOrTransaction } from '../db';
 
 /**
  * Execute a function with an exclusive customer lock
@@ -23,9 +23,9 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
  * @throws Error if lock cannot be acquired within timeout (10 seconds)
  */
 export async function withCustomerLock<T>(
-  db: NodePgDatabase<any>,
+  db: Database,
   customerId: number,
-  fn: (tx: NodePgDatabase<any>) => Promise<T>
+  fn: (tx: DatabaseOrTransaction) => Promise<T>
 ): Promise<T> {
   return await db.transaction(async (tx) => {
     // Set lock timeout to prevent indefinite waiting
@@ -50,7 +50,7 @@ export async function withCustomerLock<T>(
  * @returns true if lock acquired, false if already locked by another session
  */
 export async function tryCustomerLock(
-  tx: NodePgDatabase<any>,
+  tx: DatabaseOrTransaction,
   customerId: number
 ): Promise<boolean> {
   const result = await tx.execute<{ pg_try_advisory_xact_lock: boolean }>(

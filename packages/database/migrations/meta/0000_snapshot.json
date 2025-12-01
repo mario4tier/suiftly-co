@@ -1,5 +1,5 @@
 {
-  "id": "0c46b7b5-12c9-4d81-b7ea-97d6d970e75d",
+  "id": "e0563820-b028-40c5-9afa-8f83d2396556",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -862,6 +862,121 @@
       },
       "isRLSEnabled": false
     },
+    "public.service_cancellation_history": {
+      "name": "service_cancellation_history",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "customer_id": {
+          "name": "customer_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "service_type": {
+          "name": "service_type",
+          "type": "service_type",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "previous_tier": {
+          "name": "previous_tier",
+          "type": "service_tier",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "billing_period_ended_at": {
+          "name": "billing_period_ended_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "deleted_at": {
+          "name": "deleted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "cooldown_expires_at": {
+          "name": "cooldown_expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "idx_cancellation_customer_service": {
+          "name": "idx_cancellation_customer_service",
+          "columns": [
+            {
+              "expression": "customer_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "service_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_cancellation_cooldown": {
+          "name": "idx_cancellation_cooldown",
+          "columns": [
+            {
+              "expression": "cooldown_expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "service_cancellation_history_customer_id_customers_customer_id_fk": {
+          "name": "service_cancellation_history_customer_id_customers_customer_id_fk",
+          "tableFrom": "service_cancellation_history",
+          "tableTo": "customers",
+          "columnsFrom": [
+            "customer_id"
+          ],
+          "columnsTo": [
+            "customer_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.customers": {
       "name": "customers",
       "schema": "",
@@ -1468,6 +1583,13 @@
           "notNull": true,
           "default": true
         },
+        "paid_once": {
+          "name": "paid_once",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
         "config": {
           "name": "config",
           "type": "jsonb",
@@ -1482,6 +1604,37 @@
         },
         "disabled_at": {
           "name": "disabled_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "scheduled_tier": {
+          "name": "scheduled_tier",
+          "type": "service_tier",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "scheduled_tier_effective_date": {
+          "name": "scheduled_tier_effective_date",
+          "type": "date",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cancellation_scheduled_for": {
+          "name": "cancellation_scheduled_for",
+          "type": "date",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cancellation_effective_at": {
+          "name": "cancellation_effective_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_billed_timestamp": {
+          "name": "last_billed_timestamp",
           "type": "timestamp",
           "primaryKey": false,
           "notNull": false
@@ -1505,6 +1658,60 @@
             }
           ],
           "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_service_cancellation_scheduled": {
+          "name": "idx_service_cancellation_scheduled",
+          "columns": [
+            {
+              "expression": "cancellation_scheduled_for",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"service_instances\".\"cancellation_scheduled_for\" IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_service_cancellation_pending": {
+          "name": "idx_service_cancellation_pending",
+          "columns": [
+            {
+              "expression": "state",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "cancellation_effective_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"service_instances\".\"state\" = 'cancellation_pending'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_service_scheduled_tier": {
+          "name": "idx_service_scheduled_tier",
+          "columns": [
+            {
+              "expression": "scheduled_tier_effective_date",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"service_instances\".\"scheduled_tier\" IS NOT NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -2097,6 +2304,13 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "repeat": {
+          "name": "repeat",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
         }
       },
       "indexes": {
@@ -2693,7 +2907,8 @@
         "disabled",
         "enabled",
         "suspended_maintenance",
-        "suspended_no_payment"
+        "suspended_no_payment",
+        "cancellation_pending"
       ]
     },
     "public.service_tier": {

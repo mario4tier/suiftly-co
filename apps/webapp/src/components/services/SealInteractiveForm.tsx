@@ -211,7 +211,7 @@ export function SealInteractiveForm({
 
         return old.map(key =>
           key.id === variables.sealKeyId.toString()
-            ? { ...key, name: variables.name }
+            ? { ...key, name: variables.name ?? null }
             : key
         );
       });
@@ -272,7 +272,7 @@ export function SealInteractiveForm({
           ...key,
           packages: key.packages.map(pkg =>
             pkg.id === variables.packageId.toString()
-              ? { ...pkg, name: variables.name }
+              ? { ...pkg, name: variables.name ?? null }
               : pkg
           ),
         }));
@@ -601,7 +601,7 @@ export function SealInteractiveForm({
     });
   };
 
-  const handlePackageModalSubmit = async (data: { packageAddress: string; name: string }) => {
+  const handlePackageModalSubmit = async (data: { packageAddress: string; name?: string }) => {
     if (currentSealKeyId) {
       await addPackageMutation.mutateAsync({
         sealKeyId: parseInt(currentSealKeyId, 10),
@@ -871,7 +871,6 @@ export function SealInteractiveForm({
               apiKeys={formattedApiKeys}
               maxApiKeys={usageStats?.apiKeys.total ?? 2}
               isReadOnly={isReadOnly}
-              onCopyKey={handleCopyApiKey}
               onRevokeKey={handleRevokeApiKey}
               onReEnableKey={handleReEnableApiKey}
               onDeleteKey={handleDeleteApiKey}

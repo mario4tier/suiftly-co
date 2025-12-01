@@ -11,7 +11,7 @@
  */
 
 import { eq, and, lte, gt, isNotNull, sql } from 'drizzle-orm';
-import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import type { Database, DatabaseOrTransaction } from '../db';
 import { serviceInstances, serviceCancellationHistory, customers, billingRecords } from '../schema';
 import { withCustomerLock } from './locking';
 import { createAndChargeImmediately, getOrCreateDraftInvoice, updateDraftInvoiceAmount } from './invoices';
@@ -108,7 +108,7 @@ export interface TierChangeOptions {
  * @returns Upgrade result
  */
 export async function handleTierUpgrade(
-  db: NodePgDatabase<any>,
+  db: Database,
   customerId: number,
   serviceType: ServiceType,
   newTier: ServiceTier,
@@ -117,12 +117,14 @@ export async function handleTierUpgrade(
 ): Promise<TierUpgradeResult> {
   return await withCustomerLock(db, customerId, async (tx) => {
     // 1. Get current service
-    const service = await tx.query.serviceInstances.findFirst({
-      where: and(
+    const [service] = await tx
+      .select()
+      .from(serviceInstances)
+      .where(and(
         eq(serviceInstances.customerId, customerId),
         eq(serviceInstances.serviceType, serviceType)
-      ),
-    });
+      ))
+      .limit(1);
 
     if (!service) {
       return {
@@ -297,7 +299,7 @@ export async function handleTierUpgrade(
  * @returns Downgrade result
  */
 export async function scheduleTierDowngrade(
-  db: NodePgDatabase<any>,
+  db: Database,
   customerId: number,
   serviceType: ServiceType,
   newTier: ServiceTier,
@@ -305,12 +307,14 @@ export async function scheduleTierDowngrade(
 ): Promise<TierDowngradeResult> {
   return await withCustomerLock(db, customerId, async (tx) => {
     // 1. Get current service
-    const service = await tx.query.serviceInstances.findFirst({
-      where: and(
+    const [service] = await tx
+      .select()
+      .from(serviceInstances)
+      .where(and(
         eq(serviceInstances.customerId, customerId),
         eq(serviceInstances.serviceType, serviceType)
-      ),
-    });
+      ))
+      .limit(1);
 
     if (!service) {
       return {
@@ -405,18 +409,20 @@ export async function scheduleTierDowngrade(
  * Customer continues at current tier.
  */
 export async function cancelScheduledTierChange(
-  db: NodePgDatabase<any>,
+  db: Database,
   customerId: number,
   serviceType: ServiceType,
   clock: DBClock
 ): Promise<{ success: boolean; error?: string }> {
   return await withCustomerLock(db, customerId, async (tx) => {
-    const service = await tx.query.serviceInstances.findFirst({
-      where: and(
+    const [service] = await tx
+      .select()
+      .from(serviceInstances)
+      .where(and(
         eq(serviceInstances.customerId, customerId),
         eq(serviceInstances.serviceType, serviceType)
-      ),
-    });
+      ))
+      .limit(1);
 
     if (!service) {
       return { success: false, error: 'Service not found' };
@@ -461,19 +467,21 @@ export async function cancelScheduledTierChange(
  * @returns Cancellation result
  */
 export async function scheduleCancellation(
-  db: NodePgDatabase<any>,
+  db: Database,
   customerId: number,
   serviceType: ServiceType,
   clock: DBClock
 ): Promise<CancellationResult> {
   return await withCustomerLock(db, customerId, async (tx) => {
     // 1. Get current service
-    const service = await tx.query.serviceInstances.findFirst({
-      where: and(
+    const [service] = await tx
+      .select()
+      .from(serviceInstances)
+      .where(and(
         eq(serviceInstances.customerId, customerId),
         eq(serviceInstances.serviceType, serviceType)
-      ),
-    });
+      ))
+      .limit(1);
 
     if (!service) {
       return {
@@ -545,18 +553,20 @@ export async function scheduleCancellation(
  * @returns Undo result
  */
 export async function undoCancellation(
-  db: NodePgDatabase<any>,
+  db: Database,
   customerId: number,
   serviceType: ServiceType,
   clock: DBClock
 ): Promise<UndoCancellationResult> {
   return await withCustomerLock(db, customerId, async (tx) => {
-    const service = await tx.query.serviceInstances.findFirst({
-      where: and(
+    const [service] = await tx
+      .select()
+      .from(serviceInstances)
+      .where(and(
         eq(serviceInstances.customerId, customerId),
         eq(serviceInstances.serviceType, serviceType)
-      ),
-    });
+      ))
+      .limit(1);
 
     if (!service) {
       return { success: false, error: 'Service not found' };
@@ -609,7 +619,7 @@ export async function undoCancellation(
  * @returns Provision check result
  */
 export async function canProvisionService(
-  db: NodePgDatabase<any>,
+  db: Database,
   customerId: number,
   serviceType: ServiceType,
   clock: DBClock
@@ -617,12 +627,14 @@ export async function canProvisionService(
   const now = clock.now();
 
   // 1. Check if service already exists
-  const existingService = await db.query.serviceInstances.findFirst({
-    where: and(
+  const [existingService] = await db
+    .select()
+    .from(serviceInstances)
+    .where(and(
       eq(serviceInstances.customerId, customerId),
       eq(serviceInstances.serviceType, serviceType)
-    ),
-  });
+    ))
+    .limit(1);
 
   if (existingService) {
     // Check if it's in cancellation_pending state
@@ -646,13 +658,15 @@ export async function canProvisionService(
   }
 
   // 2. Check cancellation history for cooldown period
-  const recentCancellation = await db.query.serviceCancellationHistory.findFirst({
-    where: and(
+  const [recentCancellation] = await db
+    .select()
+    .from(serviceCancellationHistory)
+    .where(and(
       eq(serviceCancellationHistory.customerId, customerId),
       eq(serviceCancellationHistory.serviceType, serviceType),
       gt(serviceCancellationHistory.cooldownExpiresAt, now)
-    ),
-  });
+    ))
+    .limit(1);
 
   if (recentCancellation) {
     return {
@@ -683,17 +697,19 @@ export async function canProvisionService(
  * @returns Whether operation is allowed
  */
 export async function canPerformKeyOperation(
-  db: NodePgDatabase<any>,
+  db: Database,
   customerId: number,
   serviceType: ServiceType
 ): Promise<CanPerformKeyOperationResult> {
   // Get the service instance
-  const service = await db.query.serviceInstances.findFirst({
-    where: and(
+  const [service] = await db
+    .select()
+    .from(serviceInstances)
+    .where(and(
       eq(serviceInstances.customerId, customerId),
       eq(serviceInstances.serviceType, serviceType)
-    ),
-  });
+    ))
+    .limit(1);
 
   if (!service) {
     return {
@@ -742,17 +758,19 @@ export async function canPerformKeyOperation(
  * @returns Tier change options
  */
 export async function getTierChangeOptions(
-  db: NodePgDatabase<any>,
+  db: Database,
   customerId: number,
   serviceType: ServiceType,
   clock: DBClock
 ): Promise<TierChangeOptions | null> {
-  const service = await db.query.serviceInstances.findFirst({
-    where: and(
+  const [service] = await db
+    .select()
+    .from(serviceInstances)
+    .where(and(
       eq(serviceInstances.customerId, customerId),
       eq(serviceInstances.serviceType, serviceType)
-    ),
-  });
+    ))
+    .limit(1);
 
   if (!service) {
     return null;
@@ -838,7 +856,7 @@ export async function getTierChangeOptions(
  * @returns Number of tier changes applied
  */
 export async function applyScheduledTierChanges(
-  tx: NodePgDatabase<any>,
+  tx: DatabaseOrTransaction,
   customerId: number,
   clock: DBClock
 ): Promise<number> {
@@ -886,7 +904,7 @@ export async function applyScheduledTierChanges(
  * @returns Number of cancellations processed
  */
 export async function processScheduledCancellations(
-  tx: NodePgDatabase<any>,
+  tx: DatabaseOrTransaction,
   customerId: number,
   clock: DBClock
 ): Promise<number> {
@@ -959,7 +977,7 @@ function getFirstOfNextMonth(clock: DBClock): Date {
  * Uses scheduled_tier for billing amount if present.
  */
 async function recalculateDraftInvoiceWithScheduledTier(
-  tx: NodePgDatabase<any>,
+  tx: DatabaseOrTransaction,
   customerId: number,
   clock: DBClock
 ): Promise<void> {
@@ -967,9 +985,10 @@ async function recalculateDraftInvoiceWithScheduledTier(
   const draftId = await getOrCreateDraftInvoice(tx, customerId, clock);
 
   // Get all services, using scheduled_tier where applicable
-  const services = await tx.query.serviceInstances.findMany({
-    where: eq(serviceInstances.customerId, customerId),
-  });
+  const services = await tx
+    .select()
+    .from(serviceInstances)
+    .where(eq(serviceInstances.customerId, customerId));
 
   let totalUsdCents = 0;
 
@@ -994,7 +1013,7 @@ async function recalculateDraftInvoiceWithScheduledTier(
  * Excludes services with cancellation_scheduled_for set.
  */
 async function recalculateDraftInvoiceWithCancellation(
-  tx: NodePgDatabase<any>,
+  tx: DatabaseOrTransaction,
   customerId: number,
   clock: DBClock
 ): Promise<void> {
@@ -1002,9 +1021,10 @@ async function recalculateDraftInvoiceWithCancellation(
   const draftId = await getOrCreateDraftInvoice(tx, customerId, clock);
 
   // Get all services, excluding cancelled ones
-  const services = await tx.query.serviceInstances.findMany({
-    where: eq(serviceInstances.customerId, customerId),
-  });
+  const services = await tx
+    .select()
+    .from(serviceInstances)
+    .where(eq(serviceInstances.customerId, customerId));
 
   let totalUsdCents = 0;
 

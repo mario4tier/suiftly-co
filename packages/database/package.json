@@ -6,9 +6,11 @@
   "exports": {
     ".": "./src/index.ts",
     "./schema": "./src/schema/index.ts",
-    "./billing": "./src/billing/index.ts"
+    "./billing": "./src/billing/index.ts",
+    "./stats": "./src/stats/index.ts"
   },
   "scripts": {
+    "build": "tsc -p tsconfig.build.json --noEmit",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/migrate.ts && tsx src/timescale-setup.ts",
     "db:push": "drizzle-kit push && tsx src/timescale-setup.ts",

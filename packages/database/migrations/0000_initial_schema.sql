@@ -92,6 +92,17 @@ CREATE TABLE "invoice_payments" (
   )
 );
 --> statement-breakpoint
+CREATE TABLE "service_cancellation_history" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"customer_id" integer NOT NULL,
+	"service_type" "service_type" NOT NULL,
+	"previous_tier" "service_tier" NOT NULL,
+	"billing_period_ended_at" timestamp with time zone NOT NULL,
+	"deleted_at" timestamp with time zone NOT NULL,
+	"cooldown_expires_at" timestamp with time zone NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
 CREATE TABLE "customers" (
 	"customer_id" integer PRIMARY KEY NOT NULL,
 	"wallet_address" varchar(66) NOT NULL,
@@ -171,6 +182,7 @@ CREATE TABLE "service_instances" (
 	"scheduled_tier_effective_date" date,
 	"cancellation_scheduled_for" date,
 	"cancellation_effective_at" timestamp with time zone,
+	"last_billed_timestamp" timestamp,
 	CONSTRAINT "service_instances_customer_id_service_type_unique" UNIQUE("customer_id","service_type")
 );
 --> statement-breakpoint
@@ -238,7 +250,8 @@ CREATE TABLE "haproxy_raw_logs" (
 	"time_connect" integer,
 	"time_response" integer,
 	"backend_id" smallint DEFAULT 0,
-	"termination_state" text
+	"termination_state" text,
+	"repeat" integer DEFAULT 1 NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE "user_activity_logs" (
@@ -300,17 +313,6 @@ CREATE TABLE "mock_tracking_objects" (
 	CONSTRAINT "mock_tracking_objects_tracking_address_unique" UNIQUE("tracking_address")
 );
 --> statement-breakpoint
-CREATE TABLE "service_cancellation_history" (
-	"id" serial PRIMARY KEY NOT NULL,
-	"customer_id" integer NOT NULL,
-	"service_type" "service_type" NOT NULL,
-	"previous_tier" "service_tier" NOT NULL,
-	"billing_period_ended_at" timestamp with time zone NOT NULL,
-	"deleted_at" timestamp with time zone NOT NULL,
-	"cooldown_expires_at" timestamp with time zone NOT NULL,
-	"created_at" timestamp with time zone DEFAULT now() NOT NULL
-);
---> statement-breakpoint
 ALTER TABLE "api_keys" ADD CONSTRAINT "api_keys_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "refresh_tokens" ADD CONSTRAINT "refresh_tokens_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "billing_idempotency" ADD CONSTRAINT "billing_idempotency_billing_record_id_billing_records_id_fk" FOREIGN KEY ("billing_record_id") REFERENCES "public"."billing_records"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
@@ -319,6 +321,7 @@ ALTER TABLE "invoice_line_items" ADD CONSTRAINT "invoice_line_items_billing_reco
 ALTER TABLE "invoice_payments" ADD CONSTRAINT "invoice_payments_billing_record_id_billing_records_id_fk" FOREIGN KEY ("billing_record_id") REFERENCES "public"."billing_records"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "invoice_payments" ADD CONSTRAINT "invoice_payments_credit_id_customer_credits_credit_id_fk" FOREIGN KEY ("credit_id") REFERENCES "public"."customer_credits"("credit_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "invoice_payments" ADD CONSTRAINT "invoice_payments_escrow_transaction_id_escrow_transactions_tx_id_fk" FOREIGN KEY ("escrow_transaction_id") REFERENCES "public"."escrow_transactions"("tx_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "service_cancellation_history" ADD CONSTRAINT "service_cancellation_history_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "billing_records" ADD CONSTRAINT "billing_records_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "escrow_transactions" ADD CONSTRAINT "escrow_transactions_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "ledger_entries" ADD CONSTRAINT "ledger_entries_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
@@ -330,7 +333,6 @@ ALTER TABLE "usage_records" ADD CONSTRAINT "usage_records_customer_id_customers_
 ALTER TABLE "haproxy_raw_logs" ADD CONSTRAINT "haproxy_raw_logs_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "user_activity_logs" ADD CONSTRAINT "user_activity_logs_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "mock_sui_transactions" ADD CONSTRAINT "mock_sui_transactions_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "service_cancellation_history" ADD CONSTRAINT "service_cancellation_history_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "idx_admin_notif_severity" ON "admin_notifications" USING btree ("severity");--> statement-breakpoint
 CREATE INDEX "idx_admin_notif_category" ON "admin_notifications" USING btree ("category");--> statement-breakpoint
 CREATE INDEX "idx_admin_notif_acknowledged" ON "admin_notifications" USING btree ("acknowledged") WHERE "admin_notifications"."acknowledged" = false;--> statement-breakpoint
@@ -347,6 +349,8 @@ CREATE INDEX "idx_line_items_billing" ON "invoice_line_items" USING btree ("bill
 CREATE INDEX "idx_payment_billing_record" ON "invoice_payments" USING btree ("billing_record_id");--> statement-breakpoint
 CREATE INDEX "idx_payment_credit" ON "invoice_payments" USING btree ("credit_id") WHERE "invoice_payments"."credit_id" IS NOT NULL;--> statement-breakpoint
 CREATE INDEX "idx_payment_escrow" ON "invoice_payments" USING btree ("escrow_transaction_id") WHERE "invoice_payments"."escrow_transaction_id" IS NOT NULL;--> statement-breakpoint
+CREATE INDEX "idx_cancellation_customer_service" ON "service_cancellation_history" USING btree ("customer_id","service_type");--> statement-breakpoint
+CREATE INDEX "idx_cancellation_cooldown" ON "service_cancellation_history" USING btree ("cooldown_expires_at");--> statement-breakpoint
 CREATE INDEX "idx_wallet" ON "customers" USING btree ("wallet_address");--> statement-breakpoint
 CREATE INDEX "idx_customer_status" ON "customers" USING btree ("status") WHERE "customers"."status" != 'active';--> statement-breakpoint
 CREATE INDEX "idx_customer_period" ON "billing_records" USING btree ("customer_id","billing_period_start");--> statement-breakpoint
@@ -357,10 +361,8 @@ CREATE INDEX "idx_customer_created" ON "ledger_entries" USING btree ("customer_i
 CREATE INDEX "idx_ledger_tx_digest" ON "ledger_entries" USING btree ("tx_digest") WHERE "ledger_entries"."tx_digest" IS NOT NULL;--> statement-breakpoint
 CREATE INDEX "idx_service_type_state" ON "service_instances" USING btree ("service_type","state");--> statement-breakpoint
 CREATE INDEX "idx_service_cancellation_scheduled" ON "service_instances" USING btree ("cancellation_scheduled_for") WHERE "service_instances"."cancellation_scheduled_for" IS NOT NULL;--> statement-breakpoint
-CREATE INDEX "idx_service_cancellation_pending" ON "service_instances" USING btree ("state", "cancellation_effective_at") WHERE "service_instances"."state" = 'cancellation_pending';--> statement-breakpoint
+CREATE INDEX "idx_service_cancellation_pending" ON "service_instances" USING btree ("state","cancellation_effective_at") WHERE "service_instances"."state" = 'cancellation_pending';--> statement-breakpoint
 CREATE INDEX "idx_service_scheduled_tier" ON "service_instances" USING btree ("scheduled_tier_effective_date") WHERE "service_instances"."scheduled_tier" IS NOT NULL;--> statement-breakpoint
-CREATE INDEX "idx_cancellation_customer_service" ON "service_cancellation_history" USING btree ("customer_id", "service_type");--> statement-breakpoint
-CREATE INDEX "idx_cancellation_cooldown" ON "service_cancellation_history" USING btree ("cooldown_expires_at");--> statement-breakpoint
 CREATE INDEX "idx_seal_customer" ON "seal_keys" USING btree ("customer_id");--> statement-breakpoint
 CREATE INDEX "idx_seal_instance" ON "seal_keys" USING btree ("instance_id");--> statement-breakpoint
 CREATE INDEX "idx_seal_public_key" ON "seal_keys" USING btree ("public_key");--> statement-breakpoint

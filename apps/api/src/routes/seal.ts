@@ -515,7 +515,7 @@ export const sealRouter = router({
 
         // Check if balance is sufficient for subscription
         const monthlyPriceUsdCents = getTierPriceUsdCents(service.tier);
-        if (customer.currentBalanceUsdCents < monthlyPriceUsdCents) {
+        if ((customer.currentBalanceUsdCents ?? 0) < monthlyPriceUsdCents) {
           throw new TRPCError({
             code: 'PAYMENT_REQUIRED',
             message: 'Insufficient funds. Deposit to proceed via Billing page.',

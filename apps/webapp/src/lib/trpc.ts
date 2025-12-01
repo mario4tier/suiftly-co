@@ -43,10 +43,12 @@ export const vanillaTrpc = createTRPCClient<AppRouter>({
   links: [
     httpBatchLink({
       url: '/i/api',
-      credentials: 'include',
       headers() {
         const token = getAccessToken();
         return token ? { Authorization: `Bearer ${token}` } : {};
+      },
+      fetch(url, options) {
+        return fetch(url, { ...options, credentials: 'include' });
       },
     }),
   ],
@@ -57,7 +59,6 @@ export function getTRPCLinks() {
   return [
     httpBatchLink({
       url: '/i/api', // Same-origin (dev: proxied, prod: served by Fastify)
-      credentials: 'include', // Send cookies (for refresh token)
 
       // Add Authorization header with access token
       headers() {
@@ -67,7 +68,8 @@ export function getTRPCLinks() {
 
       // Custom fetch with auto-refresh on 401
       async fetch(url, options) {
-        let response = await fetch(url, options);
+        // Add credentials: 'include' to send cookies (for refresh token)
+        let response = await fetch(url, { ...options, credentials: 'include' });
 
         // If access token expired (401), try refresh once
         if (response.status === 401) {
@@ -102,6 +104,7 @@ export function getTRPCLinks() {
 
                 response = await fetch(url, {
                   ...options,
+                  credentials: 'include',
                   headers: newHeaders,
                 });
               }

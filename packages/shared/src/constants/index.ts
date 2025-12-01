@@ -62,6 +62,21 @@ export const SERVICE_TYPE = {
   GRAPHQL: 'graphql',
 } as const satisfies Record<string, ServiceType>;
 
+// Service Type to Database Number Mapping
+// Database uses integer IDs for service_type in haproxy_raw_logs
+export const SERVICE_TYPE_NUMBER = {
+  [SERVICE_TYPE.SEAL]: 1,
+  [SERVICE_TYPE.GRPC]: 2,
+  [SERVICE_TYPE.GRAPHQL]: 3,
+} as const satisfies Record<ServiceType, number>;
+
+// Reverse mapping: number to service type
+export const SERVICE_NUMBER_TO_TYPE = {
+  1: SERVICE_TYPE.SEAL,
+  2: SERVICE_TYPE.GRPC,
+  3: SERVICE_TYPE.GRAPHQL,
+} as const satisfies Record<number, ServiceType>;
+
 // Service States (6 distinct states - see UI_DESIGN.md)
 export const SERVICE_STATE = {
   NOT_PROVISIONED: 'not_provisioned',
@@ -130,3 +145,12 @@ export const FIELD_LIMITS = {
   // System versioning
   VAULT_VERSION: 64,        // MA/MM vault version hashes
 } as const;
+
+// Usage-Based Pricing (cents per 1000 requests)
+// MVP pricing: $0.001 per request = 0.1 cents per request
+// Value stored as: cents per 1000 requests (e.g., 100 = $1.00 per 1000 requests)
+export const USAGE_PRICING_CENTS_PER_1000 = {
+  [SERVICE_TYPE.SEAL]: 100,     // 100 cents per 1000 requests = $0.001/request
+  [SERVICE_TYPE.GRPC]: 100,     // Same for MVP
+  [SERVICE_TYPE.GRAPHQL]: 100,  // Same for MVP
+} as const satisfies Record<ServiceType, number>;
