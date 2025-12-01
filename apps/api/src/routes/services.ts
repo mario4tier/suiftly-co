@@ -318,27 +318,31 @@ export const servicesRouter = router({
           };
         }
 
-        // 7. Payment succeeded - clear pending flag but keep service OFF
-        //    Service remains disabled to allow user to provision/configure before enabling
-        await db
-          .update(serviceInstances)
-          .set({
-            state: SERVICE_STATE.DISABLED, // Keep disabled - user must manually enable after config
-            subscriptionChargePending: false,
-            isUserEnabled: false, // Service stays OFF - user enables when ready
-          })
-          .where(eq(serviceInstances.instanceId, service.instanceId));
+        // 7. Payment succeeded - clear pending flag and record ledger entry atomically
+        //    IMPORTANT: These must be in a transaction to prevent double-billing
+        //    if server crashes after billing succeeds but before clearing the pending flag
+        await db.transaction(async (tx) => {
+          // Clear pending flag, keep service OFF for user to configure before enabling
+          await tx
+            .update(serviceInstances)
+            .set({
+              state: SERVICE_STATE.DISABLED, // Keep disabled - user must manually enable after config
+              subscriptionChargePending: false,
+              isUserEnabled: false, // Service stays OFF - user enables when ready
+            })
+            .where(eq(serviceInstances.instanceId, service.instanceId));
 
-        // Note: DRAFT invoice already calculated correctly by handleSubscriptionBilling()
-        // It includes all subscribed services regardless of enable/disable toggle state
+          // Note: DRAFT invoice already calculated correctly by handleSubscriptionBilling()
+          // It includes all subscribed services regardless of enable/disable toggle state
 
-        // 8. Record charge in ledger
-        await db.insert(ledgerEntries).values({
-          customerId: ctx.user!.customerId,
-          type: 'charge',
-          amountUsdCents: priceUsdCents,
-          description: `${input.serviceType} ${input.tier} tier subscription`,
-          createdAt: new Date(),
+          // Record charge in ledger
+          await tx.insert(ledgerEntries).values({
+            customerId: ctx.user!.customerId,
+            type: 'charge',
+            amountUsdCents: priceUsdCents,
+            description: `${input.serviceType} ${input.tier} tier subscription`,
+            createdAt: new Date(),
+          });
         });
 
         // 9. Return service with API key

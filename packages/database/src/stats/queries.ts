@@ -353,7 +353,7 @@ export async function getTrafficStats(
  *
  * Used by billing to calculate usage charges.
  *
- * @param db Database instance
+ * @param db Database or transaction instance
  * @param customerId Customer ID
  * @param serviceType Service type
  * @param startTime Start of billing period
@@ -361,7 +361,7 @@ export async function getTrafficStats(
  * @returns Total billable request count
  */
 export async function getBillableRequestCount(
-  db: Database,
+  db: DatabaseOrTransaction,
   customerId: number,
   serviceType: number,
   startTime: Date,

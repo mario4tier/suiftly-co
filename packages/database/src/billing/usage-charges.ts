@@ -5,14 +5,13 @@
  * Called as part of the monthly billing process on the 1st of each month.
  */
 
-import { eq, and, sql } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import type { Database, DatabaseOrTransaction } from '../db';
 import { billingRecords, invoiceLineItems, serviceInstances } from '../schema';
 import { getBillableRequestCount } from '../stats/queries';
 import type { DBClock } from '@suiftly/shared/db-clock';
 import {
   SERVICE_TYPE_NUMBER,
-  SERVICE_NUMBER_TO_TYPE,
   USAGE_PRICING_CENTS_PER_1000,
   type ServiceType,
 } from '@suiftly/shared';
@@ -50,20 +49,24 @@ export interface UsageChargeResult {
  * Queries stats_per_hour for billable requests since last_billed_timestamp,
  * calculates charges per service type, and adds line items to the invoice.
  *
- * @param db Database instance
+ * IMPORTANT: This function performs multiple writes (line items, timestamps, totals)
+ * that must be atomic. The caller MUST wrap this in a transaction to prevent
+ * double-billing on partial failures.
+ *
+ * @param tx Database or transaction instance (caller should provide transaction context)
  * @param customerId Customer ID
  * @param invoiceId DRAFT invoice ID to add charges to
  * @param clock DBClock for time reference
  * @returns Result with total charges and line items added
  */
 export async function addUsageChargesToDraft(
-  db: Database,
+  tx: DatabaseOrTransaction,
   customerId: number,
   invoiceId: string,
   clock: DBClock
 ): Promise<UsageChargeResult> {
   // 1. Verify invoice exists and is in DRAFT status
-  const [invoice] = await db
+  const [invoice] = await tx
     .select()
     .from(billingRecords)
     .where(eq(billingRecords.id, invoiceId))
@@ -88,7 +91,7 @@ export async function addUsageChargesToDraft(
   }
 
   // 2. Get all service instances for this customer
-  const services = await db
+  const services = await tx
     .select()
     .from(serviceInstances)
     .where(eq(serviceInstances.customerId, customerId));
@@ -127,7 +130,7 @@ export async function addUsageChargesToDraft(
 
     // 5. Query stats for billable requests
     const requestCount = await getBillableRequestCount(
-      db,
+      tx,
       customerId,
       serviceTypeNum,
       billingPeriodStart,
@@ -149,7 +152,7 @@ export async function addUsageChargesToDraft(
     }
 
     // 7. Add line item
-    await db.insert(invoiceLineItems).values({
+    await tx.insert(invoiceLineItems).values({
       billingRecordId: invoiceId,
       description: `Usage: ${serviceTypeName.charAt(0).toUpperCase() + serviceTypeName.slice(1)} - ${requestCount.toLocaleString()} requests`,
       amountUsdCents: chargeCents,
@@ -161,7 +164,7 @@ export async function addUsageChargesToDraft(
     lineItemsAdded++;
 
     // 8. Update last_billed_timestamp
-    await db.update(serviceInstances)
+    await tx.update(serviceInstances)
       .set({ lastBilledTimestamp: billingPeriodEnd })
       .where(eq(serviceInstances.instanceId, service.instanceId));
   }
@@ -169,7 +172,7 @@ export async function addUsageChargesToDraft(
   // 9. Update invoice total
   if (totalUsageChargesCents > 0) {
     const currentAmount = Number(invoice.amountUsdCents ?? 0);
-    await db.update(billingRecords)
+    await tx.update(billingRecords)
       .set({ amountUsdCents: currentAmount + totalUsageChargesCents })
       .where(eq(billingRecords.id, invoiceId));
   }

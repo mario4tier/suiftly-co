@@ -74,7 +74,7 @@ export async function setupTimescaleDB() {
       -- Legacy/summary (all 2xx)
       SUM(repeat) FILTER (WHERE status_code >= 200 AND status_code < 300) AS success_count,
       -- Performance (weighted average for pre-aggregated logs)
-      SUM(time_total * repeat)::double precision / NULLIF(SUM(repeat), 0) AS avg_response_time_ms,
+      SUM(time_total::bigint * repeat)::double precision / NULLIF(SUM(repeat), 0) AS avg_response_time_ms,
       SUM(bytes_sent * repeat) AS total_bytes
     FROM haproxy_raw_logs
     WHERE customer_id IS NOT NULL
