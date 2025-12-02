@@ -12,6 +12,7 @@ import {
   billingRecords,
   customerCredits,
   invoicePayments,
+  invoiceLineItems,
   serviceInstances,
   escrowTransactions,
   billingIdempotency,
@@ -305,7 +306,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       expect(service?.scheduledTierEffectiveDate).toBeNull();
     });
 
-    it('should clear scheduled cancellation when upgrading', async () => {
+    it('should reject upgrade when cancellation is scheduled', async () => {
       // First schedule cancellation
       await db.update(serviceInstances)
         .set({
@@ -313,7 +314,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         })
         .where(eq(serviceInstances.instanceId, testInstanceId));
 
-      // Now upgrade (should clear cancellation)
+      // Attempt upgrade (should be blocked - user must undo cancellation first)
       const result = await handleTierUpgrade(
         db,
         testCustomerId,
@@ -323,12 +324,15 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         clock
       );
 
-      expect(result.success).toBe(true);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Cannot change tier while cancellation is scheduled');
 
+      // Cancellation should still be scheduled
       const service = await db.query.serviceInstances.findFirst({
         where: eq(serviceInstances.instanceId, testInstanceId),
       });
-      expect(service?.cancellationScheduledFor).toBeNull();
+      expect(service?.cancellationScheduledFor).toBe('2025-01-31');
+      expect(service?.tier).toBe('pro'); // Tier unchanged
     });
   });
 
@@ -375,7 +379,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       expect(result.error).toContain('Use upgrade for higher tiers');
     });
 
-    it('should clear cancellation when scheduling downgrade', async () => {
+    it('should reject downgrade when cancellation is scheduled', async () => {
       // First schedule cancellation
       await db.update(serviceInstances)
         .set({
@@ -383,7 +387,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         })
         .where(eq(serviceInstances.instanceId, testInstanceId));
 
-      // Now schedule downgrade (should clear cancellation)
+      // Attempt downgrade (should be blocked - user must undo cancellation first)
       const result = await scheduleTierDowngrade(
         db,
         testCustomerId,
@@ -392,13 +396,16 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         clock
       );
 
-      expect(result.success).toBe(true);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Cannot change tier while cancellation is scheduled');
 
+      // Cancellation should still be scheduled
       const service = await db.query.serviceInstances.findFirst({
         where: eq(serviceInstances.instanceId, testInstanceId),
       });
-      expect(service?.cancellationScheduledFor).toBeNull();
-      expect(service?.scheduledTier).toBe('starter');
+      expect(service?.cancellationScheduledFor).toBe('2025-01-31');
+      expect(service?.tier).toBe('pro'); // Tier unchanged
+      expect(service?.scheduledTier).toBeNull(); // No tier change scheduled
     });
 
     it('should allow canceling scheduled tier change', async () => {
@@ -1178,6 +1185,87 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
           where: eq(serviceInstances.instanceId, testInstanceId),
         });
         expect(service?.paidOnce).toBe(false);
+      });
+
+      it('should update pending billing record amount when upgrading (Copilot bug scenario)', async () => {
+        // This test verifies the fix for the potential bug identified by Copilot:
+        // When a user upgrades while having a pending payment, the pending billing
+        // record amount should be updated to match the new tier price.
+        //
+        // Scenario:
+        // 1. User subscribes to Pro ($29). Payment fails. Pending invoice for $29.
+        // 2. User upgrades to Enterprise ($185).
+        // 3. Pending billing record should be updated to $185 (not remain $29).
+        // 4. reconcilePayments should find the correct $185 record.
+
+        const PRO_PRICE_CENTS = 2900;      // $29
+        const ENTERPRISE_PRICE_CENTS = 18500; // $185
+
+        // 1. Create a pending billing record for the initial Pro tier
+        const [pendingInvoice] = await db.insert(billingRecords).values({
+          customerId: testCustomerId,
+          billingPeriodStart: clock.now(),
+          billingPeriodEnd: clock.addDays(30),
+          amountUsdCents: PRO_PRICE_CENTS,
+          type: 'charge',
+          status: 'pending',
+          dueDate: clock.now(),
+        }).returning();
+
+        // Create line item for the pending invoice
+        await db.insert(invoiceLineItems).values({
+          billingRecordId: pendingInvoice.id,
+          description: 'seal pro tier - first month',
+          amountUsdCents: PRO_PRICE_CENTS,
+          quantity: 1,
+        });
+
+        // Set service state to match pending payment scenario
+        await db.update(serviceInstances)
+          .set({
+            paidOnce: false,
+            subscriptionChargePending: true,
+          })
+          .where(eq(serviceInstances.instanceId, testInstanceId));
+
+        // Verify initial state
+        const initialInvoice = await db.query.billingRecords.findFirst({
+          where: eq(billingRecords.id, pendingInvoice.id),
+        });
+        expect(initialInvoice?.amountUsdCents).toBe(PRO_PRICE_CENTS);
+        expect(initialInvoice?.status).toBe('pending');
+
+        // 2. Upgrade to Enterprise
+        const result = await handleTierUpgrade(
+          db,
+          testCustomerId,
+          'seal',
+          'enterprise',
+          suiService,
+          clock
+        );
+
+        expect(result.success).toBe(true);
+        expect(result.newTier).toBe('enterprise');
+        expect(result.chargeAmountUsdCents).toBe(0); // No immediate charge when paidOnce = false
+
+        // 3. Verify the pending billing record amount was updated
+        const updatedInvoice = await db.query.billingRecords.findFirst({
+          where: eq(billingRecords.id, pendingInvoice.id),
+        });
+        expect(updatedInvoice?.amountUsdCents).toBe(ENTERPRISE_PRICE_CENTS);
+        expect(updatedInvoice?.status).toBe('pending'); // Still pending
+
+        // 4. Verify reconcilePayments would now match correctly
+        // (The billing record amount matches the new tier price)
+        const service = await db.query.serviceInstances.findFirst({
+          where: eq(serviceInstances.instanceId, testInstanceId),
+        });
+        expect(service?.tier).toBe('enterprise');
+        expect(service?.paidOnce).toBe(false);
+
+        // The pending billing record's amount now matches what reconcilePayments
+        // will look for when it calculates: getTierPriceUsdCents('enterprise') = $185
       });
     });
   });

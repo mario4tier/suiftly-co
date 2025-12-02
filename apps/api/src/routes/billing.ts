@@ -8,7 +8,7 @@ import { TRPCError } from '@trpc/server';
 import { router, protectedProcedure } from '../lib/trpc';
 import { getSuiService } from '../services/sui';
 import { db, logActivity } from '@suiftly/database';
-import { ledgerEntries, customers, billingRecords, customerCredits } from '@suiftly/database/schema';
+import { ledgerEntries, customers, billingRecords, customerCredits, invoiceLineItems } from '@suiftly/database/schema';
 import { eq, and, desc, sql, gt } from 'drizzle-orm';
 import { SPENDING_LIMIT } from '@suiftly/shared/constants';
 import { reconcilePayments } from '../lib/reconcile-payments';
@@ -90,7 +90,7 @@ export const billingRouter = router({
 
   /**
    * Get recent transaction history
-   * Returns ledger entries for the current user
+   * Returns combined ledger entries (deposits/withdrawals) and invoices (charges/refunds)
    */
   getTransactions: protectedProcedure
     .input(
@@ -124,31 +124,133 @@ export const billingRouter = router({
         };
       }
 
-      // Get ledger entries
-      const entries = await db.query.ledgerEntries.findMany({
-        where: eq(ledgerEntries.customerId, customer.customerId),
+      // Get ledger entries (deposits/withdrawals only - charges are in billing_records)
+      const ledgerResults = await db.query.ledgerEntries.findMany({
+        where: and(
+          eq(ledgerEntries.customerId, customer.customerId),
+          sql`${ledgerEntries.type} IN ('deposit', 'withdraw')`
+        ),
         orderBy: [desc(ledgerEntries.createdAt)],
-        limit,
-        offset,
       });
 
-      // Count total (using SQL COUNT aggregate for performance)
-      const [{ count: total }] = await db
-        .select({ count: sql<number>`count(*)::int` })
-        .from(ledgerEntries)
-        .where(eq(ledgerEntries.customerId, customer.customerId));
+      // Get billing records with their line items (invoices - charges/refunds, exclude drafts)
+      const invoiceResults = await db
+        .select({
+          id: billingRecords.id,
+          type: billingRecords.type,
+          status: billingRecords.status,
+          amountUsdCents: billingRecords.amountUsdCents,
+          txDigest: billingRecords.txDigest,
+          createdAt: billingRecords.createdAt,
+          invoiceNumber: billingRecords.invoiceNumber,
+          // Get first line item description (for single-item invoices)
+          lineItemDescription: invoiceLineItems.description,
+        })
+        .from(billingRecords)
+        .leftJoin(invoiceLineItems, eq(billingRecords.id, invoiceLineItems.billingRecordId))
+        .where(and(
+          eq(billingRecords.customerId, customer.customerId),
+          sql`${billingRecords.status} != 'draft'`
+        ))
+        .orderBy(desc(billingRecords.createdAt));
 
-      return {
-        transactions: entries.map((entry) => ({
+      // Group line items by invoice (in case of multiple line items)
+      const invoiceMap = new Map<string, {
+        id: string;
+        type: string;
+        status: string;
+        amountUsdCents: number;
+        txDigest: Buffer | null;
+        createdAt: Date;
+        invoiceNumber: string;
+        lineItemDescriptions: string[];
+      }>();
+
+      for (const row of invoiceResults) {
+        const existing = invoiceMap.get(row.id);
+        if (existing) {
+          if (row.lineItemDescription) {
+            existing.lineItemDescriptions.push(row.lineItemDescription);
+          }
+        } else {
+          invoiceMap.set(row.id, {
+            id: row.id,
+            type: row.type,
+            status: row.status,
+            amountUsdCents: Number(row.amountUsdCents),
+            txDigest: row.txDigest,
+            createdAt: row.createdAt,
+            invoiceNumber: row.invoiceNumber,
+            lineItemDescriptions: row.lineItemDescription ? [row.lineItemDescription] : [],
+          });
+        }
+      }
+
+      // Combine and format both sources
+      const allTransactions: Array<{
+        id: string;
+        type: string;
+        amountUsd: number;
+        description: string | null;
+        txDigest: string | null;
+        createdAt: string;
+        invoiceNumber?: string;
+        status?: string;
+        source: 'ledger' | 'invoice';
+      }> = [];
+
+      // Add ledger entries (deposits/withdrawals)
+      for (const entry of ledgerResults) {
+        allTransactions.push({
           id: entry.id,
           type: entry.type,
           amountUsd: Number(entry.amountUsdCents) / 100,
           description: entry.description,
           txDigest: entry.txDigest ? `0x${entry.txDigest.toString('hex')}` : null,
           createdAt: entry.createdAt.toISOString(),
-        })),
+          source: 'ledger',
+        });
+      }
+
+      // Add billing records (invoices - charges/credits)
+      for (const invoice of invoiceMap.values()) {
+        // Build description from line items
+        let invoiceDescription: string;
+        if (invoice.lineItemDescriptions.length === 0) {
+          invoiceDescription = invoice.type === 'charge' ? 'Charge' : 'Credit';
+        } else if (invoice.lineItemDescriptions.length === 1) {
+          invoiceDescription = invoice.lineItemDescriptions[0];
+        } else {
+          // Multiple line items: show first + count
+          invoiceDescription = `${invoice.lineItemDescriptions[0]} +${invoice.lineItemDescriptions.length - 1} more`;
+        }
+
+        allTransactions.push({
+          id: invoice.id,
+          type: invoice.type, // 'charge' or 'credit'
+          amountUsd: invoice.amountUsdCents / 100,
+          description: invoiceDescription,
+          txDigest: invoice.txDigest ? `0x${invoice.txDigest.toString('hex')}` : null,
+          createdAt: invoice.createdAt.toISOString(),
+          invoiceNumber: invoice.invoiceNumber,
+          status: invoice.status,
+          source: 'invoice',
+        });
+      }
+
+      // Sort by createdAt descending
+      allTransactions.sort((a, b) =>
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      );
+
+      // Apply pagination
+      const total = allTransactions.length;
+      const paginatedTransactions = allTransactions.slice(offset, offset + limit);
+
+      return {
+        transactions: paginatedTransactions,
         total,
-        hasMore: offset + entries.length < total,
+        hasMore: offset + paginatedTransactions.length < total,
       };
     }),
 

@@ -4,6 +4,7 @@ CREATE TYPE "public"."service_state" AS ENUM('not_provisioned', 'provisioning', 
 CREATE TYPE "public"."service_tier" AS ENUM('starter', 'pro', 'enterprise');--> statement-breakpoint
 CREATE TYPE "public"."service_type" AS ENUM('seal', 'grpc', 'graphql');--> statement-breakpoint
 CREATE TYPE "public"."transaction_type" AS ENUM('deposit', 'withdraw', 'charge', 'credit');--> statement-breakpoint
+CREATE SEQUENCE IF NOT EXISTS invoice_number_seq START WITH 148372;--> statement-breakpoint
 CREATE TABLE "admin_notifications" (
 	"notification_id" serial PRIMARY KEY NOT NULL,
 	"severity" varchar(20) NOT NULL,
@@ -130,7 +131,7 @@ CREATE TABLE "billing_records" (
 	"type" "transaction_type" NOT NULL,
 	"status" "billing_status" NOT NULL,
 	"tx_digest" "bytea",
-	"invoice_number" varchar(50),
+	"invoice_number" varchar(50) NOT NULL DEFAULT nextval('invoice_number_seq')::text,
 	"due_date" timestamp with time zone,
 	"amount_paid_usd_cents" bigint DEFAULT 0 NOT NULL,
 	"retry_count" integer DEFAULT 0,

@@ -136,6 +136,17 @@ export async function handleTierUpgradeLocked(
     };
   }
 
+  // 1.5. Block tier changes if cancellation is scheduled
+  // User must explicitly undo cancellation first to avoid confusing state transitions
+  if (service.cancellationScheduledFor) {
+    return {
+      success: false,
+      newTier,
+      chargeAmountUsdCents: 0,
+      error: 'Cannot change tier while cancellation is scheduled. Please undo the cancellation first.',
+    };
+  }
+
   // 2. Validate upgrade (new tier must be higher priced)
   const currentTierPrice = getTierPriceUsdCents(service.tier);
   const newTierPrice = getTierPriceUsdCents(newTier);
@@ -324,6 +335,17 @@ export async function scheduleTierDowngradeLocked(
       scheduledTier: newTier,
       effectiveDate: new Date(0),
       error: 'Service not found',
+    };
+  }
+
+  // 1.5. Block tier changes if cancellation is scheduled
+  // User must explicitly undo cancellation first to avoid confusing state transitions
+  if (service.cancellationScheduledFor) {
+    return {
+      success: false,
+      scheduledTier: newTier,
+      effectiveDate: new Date(0),
+      error: 'Cannot change tier while cancellation is scheduled. Please undo the cancellation first.',
     };
   }
 
@@ -1038,4 +1060,82 @@ async function recalculateDraftInvoiceWithCancellation(
   }
 
   await updateDraftInvoiceAmount(tx, draftId, totalUsdCents);
+}
+
+// ============================================================================
+// Convenience Wrappers (acquire lock internally)
+// For testing and internal use. API routes should use withCustomerLockForAPI.
+// ============================================================================
+
+/**
+ * Handle tier upgrade (convenience wrapper with internal locking)
+ */
+export async function handleTierUpgrade(
+  database: Database,
+  customerId: number,
+  serviceType: ServiceType,
+  newTier: ServiceTier,
+  suiService: ISuiService,
+  clock: DBClock
+): Promise<TierUpgradeResult> {
+  return await withCustomerLock(database, customerId, async (tx) => {
+    return await handleTierUpgradeLocked(tx, customerId, serviceType, newTier, suiService, clock);
+  });
+}
+
+/**
+ * Schedule tier downgrade (convenience wrapper with internal locking)
+ */
+export async function scheduleTierDowngrade(
+  database: Database,
+  customerId: number,
+  serviceType: ServiceType,
+  newTier: ServiceTier,
+  clock: DBClock
+): Promise<TierDowngradeResult> {
+  return await withCustomerLock(database, customerId, async (tx) => {
+    return await scheduleTierDowngradeLocked(tx, customerId, serviceType, newTier, clock);
+  });
+}
+
+/**
+ * Cancel scheduled tier change (convenience wrapper with internal locking)
+ */
+export async function cancelScheduledTierChange(
+  database: Database,
+  customerId: number,
+  serviceType: ServiceType,
+  clock: DBClock
+): Promise<{ success: boolean; error?: string }> {
+  return await withCustomerLock(database, customerId, async (tx) => {
+    return await cancelScheduledTierChangeLocked(tx, customerId, serviceType, clock);
+  });
+}
+
+/**
+ * Schedule cancellation (convenience wrapper with internal locking)
+ */
+export async function scheduleCancellation(
+  database: Database,
+  customerId: number,
+  serviceType: ServiceType,
+  clock: DBClock
+): Promise<CancellationResult> {
+  return await withCustomerLock(database, customerId, async (tx) => {
+    return await scheduleCancellationLocked(tx, customerId, serviceType, clock);
+  });
+}
+
+/**
+ * Undo cancellation (convenience wrapper with internal locking)
+ */
+export async function undoCancellation(
+  database: Database,
+  customerId: number,
+  serviceType: ServiceType,
+  clock: DBClock
+): Promise<UndoCancellationResult> {
+  return await withCustomerLock(database, customerId, async (tx) => {
+    return await undoCancellationLocked(tx, customerId, serviceType, clock);
+  });
 }

@@ -47,7 +47,8 @@ export const billingRecords = pgTable('billing_records', {
   txDigest: bytea('tx_digest'),
 
   // Phase 1A: Invoice metadata and multi-source payment tracking
-  invoiceNumber: varchar('invoice_number', { length: 50 }), // INV-2025-01-0001
+  // Auto-generated from invoice_number_seq (starts at 148372)
+  invoiceNumber: varchar('invoice_number', { length: 50 }).notNull().default(sql`nextval('invoice_number_seq')::text`),
   dueDate: timestamp('due_date', { withTimezone: true }),
 
   // Multi-source payment tracking (credits + escrow)

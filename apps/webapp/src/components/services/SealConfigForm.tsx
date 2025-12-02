@@ -151,7 +151,7 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
         </div>
         <p className="text-sm text-gray-600 dark:text-gray-400">
           ${perRequestCost}/req ($
-          {freqs_usd % 1 === 0 ? freqs_usd : freqs_usd.toFixed(2)} charged per{" "}
+          {freqs_usd % 1 === 0 ? freqs_usd : freqs_usd.toFixed(2)} per{" "}
           {freqs_count.toLocaleString()} successful requests)
         </p>
       </div>

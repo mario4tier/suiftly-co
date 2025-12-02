@@ -702,12 +702,23 @@ interface Transaction {
   description: string | null;
   txDigest: string | null;
   createdAt: string;
+  invoiceNumber?: string;
+  status?: string;
+  source: 'ledger' | 'invoice';
 }
 
 function TransactionItem({ transaction }: { transaction: Transaction }) {
+  // Always start collapsed
   const [expanded, setExpanded] = useState(false);
 
-  const date = new Date(transaction.createdAt).toLocaleDateString('en-US', {
+  // Short date format: "Dec 31" (no year)
+  const shortDate = new Date(transaction.createdAt).toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+  });
+
+  // Full date for expanded view
+  const fullDate = new Date(transaction.createdAt).toLocaleDateString('en-US', {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
@@ -718,6 +729,15 @@ function TransactionItem({ transaction }: { transaction: Transaction }) {
     minute: '2-digit',
   });
 
+  // Determine if this is a positive (green) or negative (red) transaction
+  const isPositive = transaction.type === 'deposit' || transaction.type === 'credit';
+
+  // Show the actual description (item name)
+  // Add (pending) suffix for pending invoices
+  const displayText = transaction.description
+    ? `${transaction.description}${transaction.status === 'pending' ? ' (pending)' : ''}`
+    : transaction.type;
+
   return (
     <div className="border-b border-gray-200 last:border-0">
       <button
@@ -725,32 +745,36 @@ function TransactionItem({ transaction }: { transaction: Transaction }) {
         className="w-full flex items-center justify-between py-2 px-1 text-left hover:bg-gray-50 transition-colors"
       >
         <div className="flex items-center gap-4 flex-1 min-w-0">
-          <div className="text-sm text-gray-600 w-24 flex-shrink-0">
-            {date}
+          <div className="text-sm text-gray-600 w-16 flex-shrink-0">
+            {shortDate}
           </div>
-          <div className="text-sm capitalize text-gray-700 w-20 flex-shrink-0">
+          <div className="text-sm capitalize text-gray-700 w-16 flex-shrink-0">
             {transaction.type}
           </div>
-          {transaction.description && (
-            <div className="text-sm text-gray-500 truncate flex-1 min-w-0">
-              {transaction.description}
-            </div>
-          )}
+          <div className="text-sm text-gray-500 truncate flex-1 min-w-0">
+            {displayText}
+          </div>
         </div>
         <div className="flex items-center gap-3 flex-shrink-0">
-          <span className={`text-sm font-medium ${transaction.type === 'deposit' || transaction.type === 'credit' ? 'text-green-600' : 'text-red-600'}`}>
-            {transaction.type === 'deposit' || transaction.type === 'credit' ? '+' : '-'}${Math.abs(transaction.amountUsd).toFixed(2)}
+          <span className={`text-sm font-medium ${isPositive ? 'text-green-600' : 'text-red-600'}`}>
+            {isPositive ? '+' : '-'}${Math.abs(transaction.amountUsd).toFixed(2)}
           </span>
           {expanded ? <ChevronDown className="w-3 h-3 text-gray-400" /> : <ChevronRight className="w-3 h-3 text-gray-400" />}
         </div>
       </button>
 
       {expanded && (
-        <div className="px-1 pb-3 space-y-1 text-sm text-gray-600">
+        <div className="px-1 pb-3 pl-6 space-y-1 text-sm text-gray-600">
           <div className="flex gap-2">
-            <span className="text-gray-500">Time:</span>
-            <span>{date} {time}</span>
+            <span className="text-gray-500">Date:</span>
+            <span>{fullDate} {time}</span>
           </div>
+          {transaction.invoiceNumber && (
+            <div className="flex gap-2">
+              <span className="text-gray-500">Invoice:</span>
+              <span>#{transaction.invoiceNumber}</span>
+            </div>
+          )}
           {transaction.txDigest && (
             <div className="flex gap-2">
               <span className="text-gray-500">TX:</span>

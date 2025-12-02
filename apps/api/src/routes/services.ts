@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import { router, protectedProcedure } from '../lib/trpc';
 import { db, withCustomerLockForAPI } from '@suiftly/database';
-import { customers, serviceInstances, ledgerEntries } from '@suiftly/database/schema';
+import { customers, serviceInstances } from '@suiftly/database/schema';
 import { eq, and, sql } from 'drizzle-orm';
 import { SERVICE_TYPE, SERVICE_TIER, SERVICE_STATE, BALANCE_LIMITS } from '@suiftly/shared/constants';
 import type { ValidationResult, ValidationError, ValidationWarning } from '@suiftly/shared/types';
@@ -317,27 +317,21 @@ export const servicesRouter = router({
           })
           .where(eq(serviceInstances.instanceId, newService.instanceId));
 
-        // 8. Record charge in ledger
-        await tx.insert(ledgerEntries).values({
-          customerId: ctx.user!.customerId,
-          type: 'charge',
-          amountUsdCents: priceUsdCents,
-          description: `${input.serviceType} ${input.tier} tier subscription`,
-          createdAt: new Date(),
-        });
+        // Note: Charges are recorded in billing_records (invoices), not ledger_entries
+        // Ledger entries are only for deposits/withdrawals from escrow
 
-          // 9. Return service with API key
-          return {
-            ...newService,
-            subscriptionChargePending: false,
-            isUserEnabled: false, // Service OFF - user must manually enable
-            apiKey: plainKey,
-            paymentPending: false,
-          };
-        },
-        { serviceType: input.serviceType, tier: input.tier }
-      );
-    }),
+        // 8. Return service with API key
+        return {
+          ...newService,
+          subscriptionChargePending: false,
+          isUserEnabled: false, // Service OFF - user must manually enable
+          apiKey: plainKey,
+          paymentPending: false,
+        };
+      },
+      { serviceType: input.serviceType, tier: input.tier }
+    );
+  }),
 
   /**
    * Get service by type for current user

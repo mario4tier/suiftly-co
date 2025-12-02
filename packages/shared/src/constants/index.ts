@@ -147,10 +147,10 @@ export const FIELD_LIMITS = {
 } as const;
 
 // Usage-Based Pricing (cents per 1000 requests)
-// MVP pricing: $0.001 per request = 0.1 cents per request
-// Value stored as: cents per 1000 requests (e.g., 100 = $1.00 per 1000 requests)
+// Pricing: $0.0001 per request = 0.01 cents per request = $1.00 per 10,000 requests
+// Value stored as: cents per 1000 requests (e.g., 10 = $1.00 per 10,000 requests)
 export const USAGE_PRICING_CENTS_PER_1000 = {
-  [SERVICE_TYPE.SEAL]: 100,     // 100 cents per 1000 requests = $0.001/request
-  [SERVICE_TYPE.GRPC]: 100,     // Same for MVP
-  [SERVICE_TYPE.GRAPHQL]: 100,  // Same for MVP
+  [SERVICE_TYPE.SEAL]: 10,      // 10 cents per 1000 requests = $0.0001/request
+  [SERVICE_TYPE.GRPC]: 10,      // Same pricing
+  [SERVICE_TYPE.GRAPHQL]: 10,   // Same pricing
 } as const satisfies Record<ServiceType, number>;

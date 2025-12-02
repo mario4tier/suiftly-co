@@ -16,8 +16,8 @@
  */
 
 import { db } from '@suiftly/database';
-import { serviceInstances, ledgerEntries, customers } from '@suiftly/database/schema';
-import { eq, and } from 'drizzle-orm';
+import { serviceInstances, customers, billingRecords, invoicePayments, escrowTransactions } from '@suiftly/database/schema';
+import { eq, and, desc } from 'drizzle-orm';
 import { getSuiService } from '../services/sui/index.js';
 import { getTierPriceUsdCents } from './config-cache';
 import { issueCredit } from '@suiftly/database/billing';
@@ -93,8 +93,10 @@ export async function reconcilePayments(customerId: number): Promise<ReconcileRe
         escrowAddress: customer.escrowContractId ?? '', // Use empty string if no escrow (mock mode)
       });
 
-      if (chargeResult.success) {
-        // Charge succeeded - clear pending state, set paidOnce, issue credit, record in ledger
+      if (chargeResult.success && chargeResult.digest) {
+        // Charge succeeded - clear pending state, set paidOnce, issue credit, update billing record
+        const txDigest = Buffer.from(chargeResult.digest.replace(/^0x/, ''), 'hex');
+
         await db.transaction(async (tx) => {
           // Clear pending flag and set paidOnce
           await tx.update(serviceInstances)
@@ -109,14 +111,53 @@ export async function reconcilePayments(customerId: number): Promise<ReconcileRe
             .set({ paidOnce: true })
             .where(eq(customers.customerId, customerId));
 
-          // Record charge in ledger
-          await tx.insert(ledgerEntries).values({
-            customerId,
-            type: 'charge',
-            amountUsdCents: priceUsdCents,
-            description: `${service.serviceType} ${service.tier} tier subscription`,
-            createdAt: new Date(),
-          });
+          // Find the pending billing record for this subscription
+          const [pendingBillingRecord] = await tx
+            .select()
+            .from(billingRecords)
+            .where(and(
+              eq(billingRecords.customerId, customerId),
+              eq(billingRecords.status, 'pending'),
+              eq(billingRecords.amountUsdCents, priceUsdCents)
+            ))
+            .orderBy(desc(billingRecords.createdAt))
+            .limit(1);
+
+          if (pendingBillingRecord) {
+            // Record escrow transaction
+            const [escrowTx] = await tx
+              .insert(escrowTransactions)
+              .values({
+                customerId,
+                txDigest: txDigest,
+                txType: 'charge',
+                amount: String(priceUsdCents / 100),
+                assetType: 'USDC',
+                timestamp: dbClock.now(),
+              })
+              .returning({ id: escrowTransactions.txId });
+
+            // Record invoice payment
+            await tx.insert(invoicePayments).values({
+              billingRecordId: pendingBillingRecord.id,
+              sourceType: 'escrow',
+              creditId: null,
+              escrowTransactionId: escrowTx.id,
+              amountUsdCents: priceUsdCents,
+            });
+
+            // Update billing record to paid
+            await tx
+              .update(billingRecords)
+              .set({
+                status: 'paid',
+                amountPaidUsdCents: priceUsdCents,
+                txDigest: txDigest,
+              })
+              .where(eq(billingRecords.id, pendingBillingRecord.id));
+
+            console.log(`[RECONCILE] Updated billing record ${pendingBillingRecord.id} to paid`);
+          }
 
           // Issue reconciliation credit for partial month
           // Calculate based on current tier price (not original subscription tier)
@@ -178,67 +219,3 @@ export async function reconcilePayments(customerId: number): Promise<ReconcileRe
   return result;
 }
 
-/**
- * Charge monthly subscription for a service (for scheduled billing)
- *
- * @param instanceId - Service instance ID to charge
- * @returns Whether charge succeeded
- */
-export async function chargeMonthlySubscription(instanceId: number): Promise<boolean> {
-  const service = await db.query.serviceInstances.findFirst({
-    where: eq(serviceInstances.instanceId, instanceId),
-  });
-
-  if (!service) {
-    console.error(`[MONTHLY_CHARGE] Service ${instanceId} not found`);
-    return false;
-  }
-
-  // Get customer for wallet address
-  const customer = await db.query.customers.findFirst({
-    where: eq(customers.customerId, service.customerId),
-  });
-
-  if (!customer) {
-    console.error(`[MONTHLY_CHARGE] Customer ${service.customerId} not found`);
-    return false;
-  }
-
-  // Get tier price
-  const priceUsdCents = getTierPriceUsdCents(service.tier);
-  const suiService = getSuiService();
-
-  // Attempt to charge
-  const chargeResult = await suiService.charge({
-    userAddress: customer.walletAddress,
-    amountUsdCents: priceUsdCents,
-    description: `${service.serviceType} ${service.tier} tier subscription`,
-    escrowAddress: customer.escrowContractId ?? '', // Use empty string if no escrow (mock mode)
-  });
-
-  if (chargeResult.success) {
-    // Record charge in ledger
-    await db.insert(ledgerEntries).values({
-      customerId: service.customerId,
-      type: 'charge',
-      amountUsdCents: priceUsdCents,
-      description: `${service.serviceType} ${service.tier} tier subscription`,
-      createdAt: new Date(),
-    });
-
-    console.log(`[MONTHLY_CHARGE] Successfully charged monthly subscription for service ${instanceId}`);
-    return true;
-  } else {
-    // Charge failed - mark as pending
-    await db.transaction(async (tx) => {
-      await tx.update(serviceInstances)
-        .set({
-          subscriptionChargePending: true,
-        })
-        .where(eq(serviceInstances.instanceId, instanceId));
-    });
-
-    console.log(`[MONTHLY_CHARGE] Charge failed for service ${instanceId}, marked as pending: ${chargeResult.error}`);
-    return false;
-  }
-}
