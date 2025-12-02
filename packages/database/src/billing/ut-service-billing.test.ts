@@ -14,6 +14,7 @@ import {
   serviceInstances,
   escrowTransactions,
   billingIdempotency,
+  mockSuiTransactions,
 } from '../schema';
 import { MockDBClock } from '@suiftly/shared/db-clock';
 import type { ISuiService, TransactionResult, ChargeParams } from '@suiftly/shared/sui-service';
@@ -21,8 +22,9 @@ import {
   handleSubscriptionBilling,
   recalculateDraftInvoice,
   calculateProRatedUpgradeCharge,
-  getOrCreateDraftInvoice,
 } from './service-billing';
+import { getOrCreateDraftInvoice } from './invoices';
+import { unsafeAsLockedTransaction } from './test-helpers';
 import { eq, and, sql } from 'drizzle-orm';
 
 // Simple mock Sui service for testing
@@ -82,6 +84,7 @@ describe('Service Billing Integration (Phase 2)', () => {
     await db.execute(sql`TRUNCATE TABLE customer_credits CASCADE`);
     await db.execute(sql`TRUNCATE TABLE service_instances CASCADE`);
     await db.execute(sql`TRUNCATE TABLE escrow_transactions CASCADE`);
+    await db.execute(sql`TRUNCATE TABLE mock_sui_transactions CASCADE`);
     await db.execute(sql`TRUNCATE TABLE customers CASCADE`);
   });
 
@@ -114,6 +117,7 @@ describe('Service Billing Integration (Phase 2)', () => {
     await db.delete(customerCredits);
     await db.delete(serviceInstances);
     await db.delete(escrowTransactions);
+    await db.delete(mockSuiTransactions);
     await db.delete(customers);
   });
 
@@ -178,7 +182,6 @@ describe('Service Billing Integration (Phase 2)', () => {
         isUserEnabled: true, // Service is enabled
         subscriptionChargePending: false,
         config: { tier: 'pro' },
-        createdAt: clock.now(),
       });
 
       // Handle billing (creates/updates DRAFT)
@@ -255,12 +258,11 @@ describe('Service Billing Integration (Phase 2)', () => {
           purchasedPackages: 5, // 5 extra packages @ $2 each
           purchasedApiKeys: 0,
         },
-        createdAt: clock.now(),
       });
 
       // Recalculate DRAFT
       await db.transaction(async (tx) => {
-        await recalculateDraftInvoice(tx, testCustomerId, clock);
+        await recalculateDraftInvoice(unsafeAsLockedTransaction(tx), testCustomerId, clock);
       });
 
       // Verify DRAFT amount includes tier + add-ons
@@ -283,12 +285,11 @@ describe('Service Billing Integration (Phase 2)', () => {
         tier: 'pro',
         isUserEnabled: true, // Service is ON
         config: { tier: 'pro' },
-        createdAt: clock.now(),
       });
 
       // Calculate initial DRAFT
       await db.transaction(async (tx) => {
-        await recalculateDraftInvoice(tx, testCustomerId, clock);
+        await recalculateDraftInvoice(unsafeAsLockedTransaction(tx), testCustomerId, clock);
       });
 
       const draftWithServiceOn = await db.query.billingRecords.findFirst({
@@ -307,7 +308,7 @@ describe('Service Billing Integration (Phase 2)', () => {
 
       // Recalculate DRAFT (simulate "something changed")
       await db.transaction(async (tx) => {
-        await recalculateDraftInvoice(tx, testCustomerId, clock);
+        await recalculateDraftInvoice(unsafeAsLockedTransaction(tx), testCustomerId, clock);
       });
 
       const draftAfterToggleOff = await db.query.billingRecords.findFirst({
@@ -330,7 +331,7 @@ describe('Service Billing Integration (Phase 2)', () => {
 
       // Recalculate again
       await db.transaction(async (tx) => {
-        await recalculateDraftInvoice(tx, testCustomerId, clock);
+        await recalculateDraftInvoice(unsafeAsLockedTransaction(tx), testCustomerId, clock);
       });
 
       const draftAfterToggleOn = await db.query.billingRecords.findFirst({

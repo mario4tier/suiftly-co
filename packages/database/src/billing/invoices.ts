@@ -8,6 +8,7 @@
 
 import { eq, and, sql } from 'drizzle-orm';
 import type { Database, DatabaseOrTransaction } from '../db';
+import type { LockedTransaction } from './locking';
 import { billingRecords, customers } from '../schema';
 import type { DBClock } from '@suiftly/shared/db-clock';
 
@@ -82,7 +83,7 @@ export async function createInvoice(
  * @returns Existing or newly created DRAFT invoice ID
  */
 export async function getOrCreateDraftInvoice(
-  tx: DatabaseOrTransaction,
+  tx: LockedTransaction,
   customerId: number,
   clock: DBClock
 ): Promise<string> {
@@ -170,7 +171,7 @@ export async function generateInvoiceNumber(
  * @param newAmountUsdCents New total amount
  */
 export async function updateDraftInvoiceAmount(
-  tx: DatabaseOrTransaction,
+  tx: LockedTransaction,
   draftInvoiceId: string,
   newAmountUsdCents: number
 ): Promise<void> {
@@ -210,7 +211,7 @@ export async function transitionDraftToPending(
  * @returns Invoice ID
  */
 export async function createAndChargeImmediately(
-  tx: DatabaseOrTransaction,
+  tx: LockedTransaction,
   params: CreateInvoiceParams,
   clock: DBClock
 ): Promise<string> {

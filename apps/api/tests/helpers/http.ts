@@ -30,7 +30,7 @@ export async function trpcQuery<T>(
     },
   });
 
-  const data = await response.json();
+  const data = await response.json() as { result?: { data: T }; error?: any };
   return data;
 }
 
@@ -55,7 +55,7 @@ export async function trpcMutation<T>(
     body: JSON.stringify(input),
   });
 
-  const data = await response.json();
+  const data = await response.json() as { result?: { data: T }; error?: any };
   return data;
 }
 
@@ -94,7 +94,7 @@ export async function restCall<T>(
   const status = response.status;
 
   try {
-    const data = await response.json();
+    const data = await response.json() as T | undefined;
     if (!response.ok) {
       // Extract error from response body if present
       const errorMsg = (data as any)?.error || (data as any)?.message || `HTTP ${status}`;

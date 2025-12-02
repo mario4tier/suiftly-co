@@ -13,7 +13,7 @@
 import { eq, and } from 'drizzle-orm';
 import type { Database, DatabaseOrTransaction } from '../db';
 import { serviceInstances, customers } from '../schema';
-import { withCustomerLock } from './locking';
+import { withCustomerLock, type LockedTransaction } from './locking';
 import { getOrCreateDraftInvoice, createAndChargeImmediately, updateDraftInvoiceAmount } from './invoices';
 import { processInvoicePayment } from './payments';
 import { issueCredit } from './credits';
@@ -35,7 +35,7 @@ export interface SubscriptionBillingResult {
 }
 
 /**
- * Handle billing for new service subscription
+ * Handle billing for new service subscription (PUBLIC ENTRY POINT)
  *
  * Creates DRAFT invoice if it doesn't exist, adds subscription to it,
  * and attempts immediate payment for the first month.
@@ -63,6 +63,42 @@ export async function handleSubscriptionBilling(
   clock: DBClock
 ): Promise<SubscriptionBillingResult> {
   return await withCustomerLock(db, customerId, async (tx) => {
+    return await handleSubscriptionBillingLocked(
+      tx,
+      customerId,
+      serviceType,
+      tier,
+      monthlyPriceUsdCents,
+      suiService,
+      clock
+    );
+  });
+}
+
+/**
+ * Handle billing for new service subscription (INTERNAL - REQUIRES LOCK)
+ *
+ * Use this when you already hold the customer lock via withCustomerLock().
+ * For standalone calls, use handleSubscriptionBilling() instead.
+ *
+ * @param tx Locked transaction handle
+ * @param customerId Customer ID
+ * @param serviceType Service type
+ * @param tier Service tier
+ * @param monthlyPriceUsdCents Monthly subscription price in cents
+ * @param suiService Sui service for payment
+ * @param clock DBClock for timestamps
+ * @returns Subscription billing result
+ */
+export async function handleSubscriptionBillingLocked(
+  tx: LockedTransaction,
+  customerId: number,
+  serviceType: string,
+  tier: string,
+  monthlyPriceUsdCents: number,
+  suiService: ISuiService,
+  clock: DBClock
+): Promise<SubscriptionBillingResult> {
     // Create immediate invoice for first month (full rate)
     const invoiceId = await createAndChargeImmediately(
       tx,
@@ -144,14 +180,13 @@ export async function handleSubscriptionBilling(
     // Update DRAFT to include this subscription
     await recalculateDraftInvoice(tx, customerId, clock);
 
-    return {
-      invoiceId,
-      amountUsdCents: monthlyPriceUsdCents,
-      paymentSuccessful: paymentResult.fullyPaid,
-      subscriptionChargePending: !paymentResult.fullyPaid,
-      error: paymentResult.error?.message,
-    };
-  });
+  return {
+    invoiceId,
+    amountUsdCents: monthlyPriceUsdCents,
+    paymentSuccessful: paymentResult.fullyPaid,
+    subscriptionChargePending: !paymentResult.fullyPaid,
+    error: paymentResult.error?.message,
+  };
 }
 
 /**
@@ -182,7 +217,7 @@ export async function handleSubscriptionBilling(
  * @throws Error if DRAFT validation fails (critical billing error)
  */
 export async function recalculateDraftInvoice(
-  tx: DatabaseOrTransaction,
+  tx: LockedTransaction,
   customerId: number,
   clock: DBClock
 ): Promise<void> {

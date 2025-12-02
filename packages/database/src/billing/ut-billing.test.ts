@@ -7,7 +7,7 @@
 
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 import { db } from '../db';
-import { customers, billingRecords, customerCredits, invoicePayments, serviceInstances, escrowTransactions, billingIdempotency } from '../schema';
+import { customers, billingRecords, customerCredits, invoicePayments, serviceInstances, escrowTransactions, billingIdempotency, mockSuiTransactions } from '../schema';
 import { MockDBClock } from '@suiftly/shared/db-clock';
 import type { ISuiService, TransactionResult, ChargeParams } from '@suiftly/shared/sui-service';
 import {
@@ -22,6 +22,7 @@ import {
   withIdempotency,
   generateMonthlyBillingKey,
 } from './index';
+import { unsafeAsLockedTransaction } from './test-helpers';
 import type { BillingProcessorConfig } from './types';
 import { eq, sql } from 'drizzle-orm';
 
@@ -111,6 +112,7 @@ describe('Billing Processor (Phase 1B)', () => {
     await db.execute(sql`TRUNCATE TABLE customer_credits CASCADE`);
     await db.execute(sql`TRUNCATE TABLE service_instances CASCADE`);
     await db.execute(sql`TRUNCATE TABLE escrow_transactions CASCADE`);
+    await db.execute(sql`TRUNCATE TABLE mock_sui_transactions CASCADE`);
     await db.execute(sql`TRUNCATE TABLE customers CASCADE`);
   });
 
@@ -144,6 +146,7 @@ describe('Billing Processor (Phase 1B)', () => {
     await db.delete(customerCredits); // References customers
     await db.delete(serviceInstances); // References customers
     await db.delete(escrowTransactions); // References customers
+    await db.delete(mockSuiTransactions); // References customers
     await db.delete(customers); // No dependencies
   });
 
@@ -196,7 +199,7 @@ describe('Billing Processor (Phase 1B)', () => {
       // Apply credits
       const result = await db.transaction(async (tx) => {
         return await applyCreditsToInvoice(
-          tx,
+          unsafeAsLockedTransaction(tx),
           testCustomerId,
           invoice.id,
           2500,
@@ -260,7 +263,7 @@ describe('Billing Processor (Phase 1B)', () => {
       }).returning();
 
       const result = await db.transaction(async (tx) => {
-        return await applyCreditsToInvoice(tx, testCustomerId, invoice.id, 2500, clock);
+        return await applyCreditsToInvoice(unsafeAsLockedTransaction(tx), testCustomerId, invoice.id, 2500, clock);
       });
 
       // Should only apply the valid credit ($20.00)
@@ -290,7 +293,7 @@ describe('Billing Processor (Phase 1B)', () => {
 
       // Process payment (should use $15 credit + $35 escrow)
       const result = await db.transaction(async (tx) => {
-        return await processInvoicePayment(tx, invoice.id, suiService, clock);
+        return await processInvoicePayment(unsafeAsLockedTransaction(tx), invoice.id, suiService, clock);
       });
 
       expect(result.fullyPaid).toBe(true);
@@ -337,7 +340,7 @@ describe('Billing Processor (Phase 1B)', () => {
 
       // Process payment
       const result = await db.transaction(async (tx) => {
-        return await processInvoicePayment(tx, invoice.id, suiService, clock);
+        return await processInvoicePayment(unsafeAsLockedTransaction(tx), invoice.id, suiService, clock);
       });
 
       // Payment should fail (insufficient escrow)
@@ -374,7 +377,6 @@ describe('Billing Processor (Phase 1B)', () => {
         tier: 'pro',
         isUserEnabled: true,
         config: { tier: 'pro' },
-        createdAt: clock.now(),
       });
 
       // Create a DRAFT invoice for Jan 2025
@@ -461,7 +463,6 @@ describe('Billing Processor (Phase 1B)', () => {
         tier: 'pro',
         isUserEnabled: true,
         config: { tier: 'pro' },
-        createdAt: clock.now(),
       });
 
       // Set customer as having paid before
@@ -538,7 +539,6 @@ describe('Billing Processor (Phase 1B)', () => {
         serviceType: 'seal',
         tier: 'pro',
         isUserEnabled: true,
-        createdAt: clock.now(),
       });
 
       // Advance time to Jan 16 (15 days later = grace period expired)

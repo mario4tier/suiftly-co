@@ -6,7 +6,7 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import { router, protectedProcedure } from '../lib/trpc';
-import { db } from '@suiftly/database';
+import { db, withCustomerLockForAPI } from '@suiftly/database';
 import { sealKeys, sealPackages, serviceInstances, apiKeys, configGlobal, customers } from '@suiftly/database/schema';
 import { eq, and, sql, isNull } from 'drizzle-orm';
 import { SERVICE_TYPE } from '@suiftly/shared/constants';
@@ -140,72 +140,80 @@ export const sealRouter = router({
         });
       }
 
-      // Verify the seal key belongs to the user
-      const key = await db.query.sealKeys.findFirst({
-        where: and(
-          eq(sealKeys.sealKeyId, input.sealKeyId),
-          eq(sealKeys.customerId, ctx.user.customerId)
-        ),
-      });
+      // Use customer lock to prevent race condition on package limit check
+      return await withCustomerLockForAPI(
+        ctx.user.customerId,
+        'createPackage',
+        async (tx) => {
+          // Verify the seal key belongs to the user
+          const key = await tx.query.sealKeys.findFirst({
+            where: and(
+              eq(sealKeys.sealKeyId, input.sealKeyId),
+              eq(sealKeys.customerId, ctx.user!.customerId)
+            ),
+          });
 
-      if (!key) {
-        throw new TRPCError({
-          code: 'NOT_FOUND',
-          message: 'Seal key not found',
-        });
-      }
+          if (!key) {
+            throw new TRPCError({
+              code: 'NOT_FOUND',
+              message: 'Seal key not found',
+            });
+          }
 
-      // Check package count limit (max 10 per key)
-      const existingPackages = await db.query.sealPackages.findMany({
-        where: and(
-          eq(sealPackages.sealKeyId, input.sealKeyId),
-          eq(sealPackages.isUserEnabled, true)
-        ),
-      });
+          // Check package count limit (max 10 per key)
+          const existingPackages = await tx.query.sealPackages.findMany({
+            where: and(
+              eq(sealPackages.sealKeyId, input.sealKeyId),
+              eq(sealPackages.isUserEnabled, true)
+            ),
+          });
 
-      if (existingPackages.length >= 10) {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: 'Maximum package limit reached (10 per seal key)',
-        });
-      }
+          if (existingPackages.length >= 10) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'Maximum package limit reached (10 per seal key)',
+            });
+          }
 
-      // Convert hex address to Buffer
-      const addressBuffer = Buffer.from(input.packageAddress.slice(2), 'hex');
+          // Convert hex address to Buffer
+          const addressBuffer = Buffer.from(input.packageAddress.slice(2), 'hex');
 
-      // Auto-generate name if not provided (package-1, package-2, etc.)
-      let packageName = input.name;
-      if (!packageName) {
-        // Find all existing package names for this seal key that match "package-X" pattern
-        const existingNames = existingPackages
-          .map(p => p.name)
-          .filter((n): n is string => !!n && /^package-\d+$/.test(n));
+          // Auto-generate name if not provided (package-1, package-2, etc.)
+          let packageName = input.name;
+          if (!packageName) {
+            // Find all existing package names for this seal key that match "package-X" pattern
+            const existingNames = existingPackages
+              .map((p: typeof existingPackages[number]) => p.name)
+              .filter((n): n is string => !!n && /^package-\d+$/.test(n));
 
-        // Extract numbers and find the highest
-        const numbers = existingNames.map(n => parseInt(n.replace('package-', ''), 10));
-        const nextNumber = numbers.length > 0 ? Math.max(...numbers) + 1 : 1;
-        packageName = `package-${nextNumber}`;
-      }
+            // Extract numbers and find the highest
+            const numbers = existingNames.map((n: string) => parseInt(n.replace('package-', ''), 10));
+            const nextNumber = numbers.length > 0 ? Math.max(...numbers) + 1 : 1;
+            packageName = `package-${nextNumber}`;
+          }
 
-      // Create the package
-      const [newPackage] = await db
-        .insert(sealPackages)
-        .values({
-          sealKeyId: input.sealKeyId,
-          packageAddress: addressBuffer,
-          name: packageName,
-        })
-        .returning();
+          // Create the package
+          const [newPackage] = await tx
+            .insert(sealPackages)
+            .values({
+              sealKeyId: input.sealKeyId,
+              packageAddress: addressBuffer,
+              name: packageName,
+            })
+            .returning();
 
-      return {
-        id: newPackage.packageId.toString(),
-        packageId: newPackage.packageId,
-        name: newPackage.name,
-        packageAddress: `0x${newPackage.packageAddress.toString('hex')}`,
-        packageAddressPreview: `0x${newPackage.packageAddress.toString('hex').slice(0, 6)}...${newPackage.packageAddress.toString('hex').slice(-4)}`,
-        isUserEnabled: newPackage.isUserEnabled,
-        createdAt: newPackage.createdAt,
-      };
+          return {
+            id: newPackage.packageId.toString(),
+            packageId: newPackage.packageId,
+            name: newPackage.name,
+            packageAddress: `0x${newPackage.packageAddress.toString('hex')}`,
+            packageAddressPreview: `0x${newPackage.packageAddress.toString('hex').slice(0, 6)}...${newPackage.packageAddress.toString('hex').slice(-4)}`,
+            isUserEnabled: newPackage.isUserEnabled,
+            createdAt: newPackage.createdAt,
+          };
+        },
+        { sealKeyId: input.sealKeyId }
+      );
     }),
 
   /**
@@ -464,10 +472,6 @@ export const sealRouter = router({
       // No input needed - name is auto-generated
     }))
     .mutation(async ({ ctx, input }) => {
-      // ====================================================================
-      // VALIDATION PHASE - Perform ALL checks before expensive operations
-      // ====================================================================
-
       if (!ctx.user) {
         throw new TRPCError({
           code: 'UNAUTHORIZED',
@@ -475,151 +479,166 @@ export const sealRouter = router({
         });
       }
 
-      // Verify user has an active Seal service subscription
-      const service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, ctx.user.customerId),
-          eq(serviceInstances.serviceType, SERVICE_TYPE.SEAL)
-        ),
-      });
+      // Use customer lock to prevent race condition on seal key limit check
+      // NOTE: Lock is held during key generation (EXPENSIVE) to ensure atomicity
+      // This is acceptable since key creation is infrequent and the alternative
+      // (two concurrent requests both generating keys) wastes more resources
+      return await withCustomerLockForAPI(
+        ctx.user.customerId,
+        'createKey',
+        async (tx) => {
+          // ====================================================================
+          // VALIDATION PHASE - Perform ALL checks before expensive operations
+          // ====================================================================
 
-      if (!service) {
-        throw new TRPCError({
-          code: 'NOT_FOUND',
-          message: 'You must have an active Seal service subscription to create seal keys',
-        });
-      }
-
-      // Check if subscription charge is pending (payment gate logic)
-      // This is the same validation used when trying to enable the service
-      if (service.subscriptionChargePending) {
-        // Get customer to check account status
-        const customer = await db.query.customers.findFirst({
-          where: eq(customers.customerId, ctx.user.customerId),
-        });
-
-        if (!customer) {
-          throw new TRPCError({
-            code: 'NOT_FOUND',
-            message: 'Customer not found',
+          // Verify user has an active Seal service subscription
+          const service = await tx.query.serviceInstances.findFirst({
+            where: and(
+              eq(serviceInstances.customerId, ctx.user!.customerId),
+              eq(serviceInstances.serviceType, SERVICE_TYPE.SEAL)
+            ),
           });
-        }
 
-        // Check if escrow account exists
-        if (!customer.escrowContractId) {
-          throw new TRPCError({
-            code: 'PAYMENT_REQUIRED',
-            message: 'Subscription payment pending. Add funds via Billing.',
+          if (!service) {
+            throw new TRPCError({
+              code: 'NOT_FOUND',
+              message: 'You must have an active Seal service subscription to create seal keys',
+            });
+          }
+
+          // Check if subscription charge is pending (payment gate logic)
+          // This is the same validation used when trying to enable the service
+          if (service.subscriptionChargePending) {
+            // Get customer to check account status
+            const customer = await tx.query.customers.findFirst({
+              where: eq(customers.customerId, ctx.user!.customerId),
+            });
+
+            if (!customer) {
+              throw new TRPCError({
+                code: 'NOT_FOUND',
+                message: 'Customer not found',
+              });
+            }
+
+            // Check if escrow account exists
+            if (!customer.escrowContractId) {
+              throw new TRPCError({
+                code: 'PAYMENT_REQUIRED',
+                message: 'Subscription payment pending. Add funds via Billing.',
+              });
+            }
+
+            // Check if balance is sufficient for subscription
+            const monthlyPriceUsdCents = getTierPriceUsdCents(service.tier);
+            if ((customer.currentBalanceUsdCents ?? 0) < monthlyPriceUsdCents) {
+              throw new TRPCError({
+                code: 'PAYMENT_REQUIRED',
+                message: 'Insufficient funds. Deposit to proceed via Billing page.',
+              });
+            }
+
+            // Account exists with funds but charge still pending
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'Subscription payment pending. Please contact support if this persists.',
+            });
+          }
+
+          // Get configuration limits
+          const config = service.config as any || {};
+          const maxSealKeys = config.totalSealKeys || 1;
+
+          // Count active seal keys (excludes disabled keys)
+          const activeKeys = await tx.query.sealKeys.findMany({
+            where: and(
+              eq(sealKeys.instanceId, service.instanceId),
+              eq(sealKeys.isUserEnabled, true)
+            ),
           });
-        }
 
-        // Check if balance is sufficient for subscription
-        const monthlyPriceUsdCents = getTierPriceUsdCents(service.tier);
-        if ((customer.currentBalanceUsdCents ?? 0) < monthlyPriceUsdCents) {
-          throw new TRPCError({
-            code: 'PAYMENT_REQUIRED',
-            message: 'Insufficient funds. Deposit to proceed via Billing page.',
+          // Enforce seal key limit based on subscription tier
+          if (activeKeys.length >= maxSealKeys) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: `Maximum seal key limit reached (${maxSealKeys}). Disable an existing key or upgrade your subscription to create more keys.`,
+            });
+          }
+
+          // Find next available derivation index
+          // NOTE: We assign indices sequentially to make key management easier
+          // Even if a key is deleted, its index is never reused
+          const allKeys = await tx.query.sealKeys.findMany({
+            where: eq(sealKeys.instanceId, service.instanceId),
           });
-        }
 
-        // Account exists with funds but charge still pending
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: 'Subscription payment pending. Please contact support if this persists.',
-        });
-      }
+          const usedIndices = allKeys
+            .map((k: typeof allKeys[number]) => k.derivationIndex)
+            .filter((idx): idx is number => idx !== null);
 
-      // Get configuration limits
-      const config = service.config as any || {};
-      const maxSealKeys = config.totalSealKeys || 1;
+          const nextIndex = usedIndices.length === 0 ? 0 : Math.max(...usedIndices) + 1;
 
-      // Count active seal keys (excludes disabled keys)
-      const activeKeys = await db.query.sealKeys.findMany({
-        where: and(
-          eq(sealKeys.instanceId, service.instanceId),
-          eq(sealKeys.isUserEnabled, true)
-        ),
-      });
+          // Auto-generate name as "seal-key-N"
+          // Find highest N from existing "seal-key-N" names
+          const sealKeyPattern = /^seal-key-(\d+)$/;
+          const existingNumbers = allKeys
+            .map((k: typeof allKeys[number]) => k.name?.match(sealKeyPattern)?.[1])
+            .filter((n): n is string => n !== undefined)
+            .map((n: string) => parseInt(n, 10));
 
-      // Enforce seal key limit based on subscription tier
-      if (activeKeys.length >= maxSealKeys) {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: `Maximum seal key limit reached (${maxSealKeys}). Disable an existing key or upgrade your subscription to create more keys.`,
-        });
-      }
+          const nextKeyNumber = existingNumbers.length === 0 ? 1 : Math.max(...existingNumbers) + 1;
+          const autoGeneratedName = `seal-key-${nextKeyNumber}`;
 
-      // Find next available derivation index
-      // NOTE: We assign indices sequentially to make key management easier
-      // Even if a key is deleted, its index is never reused
-      const allKeys = await db.query.sealKeys.findMany({
-        where: eq(sealKeys.instanceId, service.instanceId),
-      });
+          // ====================================================================
+          // KEY GENERATION PHASE - EXPENSIVE OPERATION
+          // ====================================================================
 
-      const usedIndices = allKeys
-        .map(k => k.derivationIndex)
-        .filter((idx): idx is number => idx !== null);
+          // Generate seal key using seal-cli utility (or mock in development)
+          // This is the expensive operation - all validation is complete at this point
+          const { publicKey, encryptedPrivateKey } = await generateSealKey({
+            derivationIndex: nextIndex,
+            customerId: ctx.user!.customerId, // For mock deterministic generation
+          });
 
-      const nextIndex = usedIndices.length === 0 ? 0 : Math.max(...usedIndices) + 1;
+          // ====================================================================
+          // DATABASE STORAGE PHASE
+          // ====================================================================
 
-      // Auto-generate name as "seal-key-N"
-      // Find highest N from existing "seal-key-N" names
-      const sealKeyPattern = /^seal-key-(\d+)$/;
-      const existingNumbers = allKeys
-        .map(k => k.name?.match(sealKeyPattern)?.[1])
-        .filter((n): n is string => n !== undefined)
-        .map(n => parseInt(n, 10));
+          // Store the seal key in database
+          const [newKey] = await tx
+            .insert(sealKeys)
+            .values({
+              customerId: ctx.user!.customerId,
+              instanceId: service.instanceId,
+              name: autoGeneratedName,
+              derivationIndex: nextIndex,
+              publicKey,
+              encryptedPrivateKey: encryptedPrivateKey || null,
+              isUserEnabled: true,
+            })
+            .returning();
 
-      const nextKeyNumber = existingNumbers.length === 0 ? 1 : Math.max(...existingNumbers) + 1;
-      const autoGeneratedName = `seal-key-${nextKeyNumber}`;
+          // ====================================================================
+          // RESPONSE FORMATTING
+          // ====================================================================
 
-      // ====================================================================
-      // KEY GENERATION PHASE - EXPENSIVE OPERATION
-      // ====================================================================
+          // Format for UI display
+          const publicKeyHex = newKey.publicKey.toString('hex');
+          const keyPreview = `0x${publicKeyHex.slice(0, 6)}...${publicKeyHex.slice(-4)}`;
 
-      // Generate seal key using seal-cli utility (or mock in development)
-      // This is the expensive operation - all validation is complete at this point
-      const { publicKey, encryptedPrivateKey } = await generateSealKey({
-        derivationIndex: nextIndex,
-        customerId: ctx.user.customerId, // For mock deterministic generation
-      });
-
-      // ====================================================================
-      // DATABASE STORAGE PHASE
-      // ====================================================================
-
-      // Store the seal key in database
-      const [newKey] = await db
-        .insert(sealKeys)
-        .values({
-          customerId: ctx.user.customerId,
-          instanceId: service.instanceId,
-          name: autoGeneratedName,
-          derivationIndex: nextIndex,
-          publicKey,
-          encryptedPrivateKey: encryptedPrivateKey || null,
-          isUserEnabled: true,
-        })
-        .returning();
-
-      // ====================================================================
-      // RESPONSE FORMATTING
-      // ====================================================================
-
-      // Format for UI display
-      const publicKeyHex = newKey.publicKey.toString('hex');
-      const keyPreview = `0x${publicKeyHex.slice(0, 6)}...${publicKeyHex.slice(-4)}`;
-
-      return {
-        id: newKey.sealKeyId.toString(),
-        sealKeyId: newKey.sealKeyId,
-        name: newKey.name,
-        keyPreview,
-        publicKeyHex, // Full public key for export/verification
-        isUserEnabled: newKey.isUserEnabled,
-        createdAt: newKey.createdAt,
-        packages: [],
-      };
+          return {
+            id: newKey.sealKeyId.toString(),
+            sealKeyId: newKey.sealKeyId,
+            name: newKey.name,
+            keyPreview,
+            publicKeyHex, // Full public key for export/verification
+            isUserEnabled: newKey.isUserEnabled,
+            createdAt: newKey.createdAt,
+            packages: [],
+          };
+        },
+        { serviceType: 'seal' }
+      );
     }),
 
   /**
@@ -751,50 +770,66 @@ export const sealRouter = router({
         });
       }
 
-      // Get service instance
-      const service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, ctx.user.customerId),
-          eq(serviceInstances.serviceType, SERVICE_TYPE.SEAL)
-        ),
-      });
+      // Use customer lock to prevent race condition on API key limit check
+      return await withCustomerLockForAPI(
+        ctx.user.customerId,
+        'createApiKey',
+        async (tx) => {
+          // Get service instance
+          const service = await tx.query.serviceInstances.findFirst({
+            where: and(
+              eq(serviceInstances.customerId, ctx.user!.customerId),
+              eq(serviceInstances.serviceType, SERVICE_TYPE.SEAL)
+            ),
+          });
 
-      if (!service) {
-        throw new TRPCError({
-          code: 'NOT_FOUND',
-          message: 'Seal service not found',
-        });
-      }
+          if (!service) {
+            throw new TRPCError({
+              code: 'NOT_FOUND',
+              message: 'Seal service not found',
+            });
+          }
 
-      const config = service.config as any || {};
-      const maxApiKeys = config.totalApiKeys || 2;
+          const config = service.config as any || {};
+          const maxApiKeys = config.totalApiKeys || 2;
 
-      // Check current count (includes both active and revoked keys, excludes deleted)
-      // Business rule: Revoked keys count as "used" slots
-      const currentKeys = await getApiKeys(ctx.user.customerId, SERVICE_TYPE.SEAL, true);
+          // Check current count (includes both active and revoked keys, excludes deleted)
+          // Business rule: Revoked keys count as "used" slots
+          // Note: Using tx for consistent read within the lock
+          const currentKeys = await tx.query.apiKeys.findMany({
+            where: and(
+              eq(apiKeys.customerId, ctx.user!.customerId),
+              eq(apiKeys.serviceType, SERVICE_TYPE.SEAL),
+              isNull(apiKeys.deletedAt)
+            ),
+          });
 
-      if (currentKeys.length >= maxApiKeys) {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: `Maximum API key limit reached (${maxApiKeys}). Delete a revoked key to free up a slot.`,
-        });
-      }
+          if (currentKeys.length >= maxApiKeys) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: `Maximum API key limit reached (${maxApiKeys}). Delete a revoked key to free up a slot.`,
+            });
+          }
 
-      // Create new API key
-      const { plainKey, record } = await storeApiKey({
-        customerId: ctx.user.customerId,
-        serviceType: SERVICE_TYPE.SEAL,
-        sealType: input.sealType as SealType,
-        procGroup: input.procGroup,
-        metadata: {
-          createdVia: 'user_request',
+          // Create new API key (pass tx to ensure insert is in same transaction)
+          const { plainKey, record } = await storeApiKey({
+            customerId: ctx.user!.customerId,
+            serviceType: SERVICE_TYPE.SEAL,
+            sealType: input.sealType as SealType,
+            procGroup: input.procGroup,
+            metadata: {
+              createdVia: 'user_request',
+            },
+            tx, // Use the same transaction
+          });
+
+          return {
+            apiKey: plainKey, // Show only once!
+            created: record,
+          };
         },
-      });
-
-      return {
-        apiKey: plainKey, // Show only once!
-        created: record,
-      };
+        { serviceType: 'seal' }
+      );
     }),
 
   /**
@@ -961,39 +996,47 @@ export const sealRouter = router({
         });
       }
 
-      // Get service instance
-      const service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, ctx.user.customerId),
-          eq(serviceInstances.serviceType, SERVICE_TYPE.SEAL)
-        ),
-      });
+      // Use customer lock to prevent lost updates on config JSON
+      return await withCustomerLockForAPI(
+        ctx.user.customerId,
+        'toggleBurst',
+        async (tx) => {
+          // Get service instance
+          const service = await tx.query.serviceInstances.findFirst({
+            where: and(
+              eq(serviceInstances.customerId, ctx.user!.customerId),
+              eq(serviceInstances.serviceType, SERVICE_TYPE.SEAL)
+            ),
+          });
 
-      if (!service) {
-        throw new TRPCError({
-          code: 'NOT_FOUND',
-          message: 'Seal service not found',
-        });
-      }
+          if (!service) {
+            throw new TRPCError({
+              code: 'NOT_FOUND',
+              message: 'Seal service not found',
+            });
+          }
 
-      // Starter tier doesn't support burst
-      if (service.tier === 'starter') {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: 'Burst is only available for Pro and Enterprise tiers',
-        });
-      }
+          // Starter tier doesn't support burst
+          if (service.tier === 'starter') {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'Burst is only available for Pro and Enterprise tiers',
+            });
+          }
 
-      // Update config
-      const config = service.config as any || {};
-      config.burstEnabled = input.enabled;
+          // Update config
+          const config = service.config as any || {};
+          config.burstEnabled = input.enabled;
 
-      await db
-        .update(serviceInstances)
-        .set({ config })
-        .where(eq(serviceInstances.instanceId, service.instanceId));
+          await tx
+            .update(serviceInstances)
+            .set({ config })
+            .where(eq(serviceInstances.instanceId, service.instanceId));
 
-      return { success: true, burstEnabled: input.enabled };
+          return { success: true, burstEnabled: input.enabled };
+        },
+        { enabled: input.enabled }
+      );
     }),
 
   /**
@@ -1013,77 +1056,85 @@ export const sealRouter = router({
         });
       }
 
-      // Get service instance
-      const service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, ctx.user.customerId),
-          eq(serviceInstances.serviceType, SERVICE_TYPE.SEAL)
-        ),
-      });
-
-      if (!service) {
-        throw new TRPCError({
-          code: 'NOT_FOUND',
-          message: 'Seal service not found',
-        });
-      }
-
-      // Starter tier doesn't support IP allowlist
-      if (service.tier === 'starter') {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: 'IP Allowlist is only available for Pro and Enterprise tiers',
-        });
-      }
-
-      // Create a new config object so Drizzle detects changes
-      const config = { ...(service.config as any || {}) };
-
-      // If entries are provided, validate and update the IP list
-      if (input.entries !== undefined) {
-        const { ips, errors } = parseIpAddressList(input.entries);
-
-        if (errors.length > 0) {
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: `Invalid IP addresses:\n${errors.map(e => `• ${e.ip}: ${e.error}`).join('\n')}`,
+      // Use customer lock to prevent lost updates on config JSON
+      return await withCustomerLockForAPI(
+        ctx.user.customerId,
+        'updateIpAllowlist',
+        async (tx) => {
+          // Get service instance
+          const service = await tx.query.serviceInstances.findFirst({
+            where: and(
+              eq(serviceInstances.customerId, ctx.user!.customerId),
+              eq(serviceInstances.serviceType, SERVICE_TYPE.SEAL)
+            ),
           });
-        }
 
-        // Get actual tier limit from configGlobal
-        // This ensures customers with purchased additional capacity aren't blocked
-        const globalConfigRows = await db.select().from(configGlobal);
-        const configMap = new Map(globalConfigRows.map(c => [c.key, c.value]));
-        const ipv4Included = parseInt(configMap.get('fipv4_incl') || '2', 10);
+          if (!service) {
+            throw new TRPCError({
+              code: 'NOT_FOUND',
+              message: 'Seal service not found',
+            });
+          }
 
-        // Use customer-specific limit or fall back to default
-        const maxIpv4 = config.totalIpv4Allowlist || ipv4Included;
+          // Starter tier doesn't support IP allowlist
+          if (service.tier === 'starter') {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'IP Allowlist is only available for Pro and Enterprise tiers',
+            });
+          }
 
-        if (ips.length > maxIpv4) {
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: `Maximum ${maxIpv4} IPv4 addresses allowed for your configuration. You provided ${ips.length}.`,
-          });
-        }
+          // Create a new config object so Drizzle detects changes
+          const config = { ...(service.config as any || {}) };
 
-        // Update IP list
-        config.ipAllowlist = ips;
-      }
+          // If entries are provided, validate and update the IP list
+          if (input.entries !== undefined) {
+            const { ips, errors } = parseIpAddressList(input.entries);
 
-      // Always update the enabled flag (independent of IP list changes)
-      config.ipAllowlistEnabled = input.enabled;
+            if (errors.length > 0) {
+              throw new TRPCError({
+                code: 'BAD_REQUEST',
+                message: `Invalid IP addresses:\n${errors.map(e => `• ${e.ip}: ${e.error}`).join('\n')}`,
+              });
+            }
 
-      await db
-        .update(serviceInstances)
-        .set({ config })
-        .where(eq(serviceInstances.instanceId, service.instanceId));
+            // Get actual tier limit from configGlobal
+            // This ensures customers with purchased additional capacity aren't blocked
+            const globalConfigRows = await tx.select().from(configGlobal);
+            const configMap = new Map<string, string>(globalConfigRows.map((c: typeof globalConfigRows[number]) => [c.key, c.value ?? '']));
+            const ipv4Included = parseInt(configMap.get('fipv4_incl') || '2', 10);
 
-      return {
-        success: true,
-        enabled: input.enabled,
-        entries: config.ipAllowlist || [], // Return current IPs (may be unchanged)
-        errors: [],
-      };
+            // Use customer-specific limit or fall back to default
+            const maxIpv4 = config.totalIpv4Allowlist || ipv4Included;
+
+            if (ips.length > maxIpv4) {
+              throw new TRPCError({
+                code: 'BAD_REQUEST',
+                message: `Maximum ${maxIpv4} IPv4 addresses allowed for your configuration. You provided ${ips.length}.`,
+              });
+            }
+
+            // Update IP list
+            config.ipAllowlist = ips;
+          }
+
+          // Always update the enabled flag (independent of IP list changes)
+          config.ipAllowlistEnabled = input.enabled;
+
+          await tx
+            .update(serviceInstances)
+            .set({ config })
+            .where(eq(serviceInstances.instanceId, service.instanceId));
+
+          return {
+            success: true,
+            enabled: input.enabled,
+            entries: config.ipAllowlist || [], // Return current IPs (may be unchanged)
+            errors: [],
+          };
+        },
+        { enabled: input.enabled }
+      );
     }),
 
   /**

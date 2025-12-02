@@ -31,7 +31,7 @@ export async function login(walletAddress: string = TEST_WALLET): Promise<string
   if (!connectResponse.ok) {
     throw new Error(`Failed to connect: ${await connectResponse.text()}`);
   }
-  const { nonce } = await connectResponse.json();
+  const { nonce } = await connectResponse.json() as { nonce: string };
 
   // Step 2: Verify - POST /i/auth/verify with { walletAddress, signature, nonce }
   // In MOCK_AUTH mode, any signature is accepted
@@ -50,7 +50,7 @@ export async function login(walletAddress: string = TEST_WALLET): Promise<string
   }
 
   // Verify returns accessToken in the response body (for tRPC Authorization header)
-  const { accessToken } = await verifyResponse.json();
+  const { accessToken } = await verifyResponse.json() as { accessToken: string };
   if (!accessToken) {
     throw new Error(`Login succeeded but no access token returned`);
   }

@@ -101,12 +101,83 @@ DRAFT → PENDING → PAID/FAILED/VOIDED
 
 ## Concurrency Control
 
-All billing operations acquire customer-level lock:
+### Customer-Level Advisory Locks
+
+Write operations that modify billing state acquire a customer-level PostgreSQL advisory lock:
+
 ```sql
 SELECT pg_advisory_xact_lock(customer_id::bigint);
 ```
 
-Lock timeout: 10 seconds.
+**Lock timeout:** 10 seconds (throws error if not acquired).
+
+**Lock scope:** Transaction-scoped (`pg_advisory_xact_lock`) - auto-releases on commit/rollback.
+
+### When Locks Are Required
+
+Locks prevent race conditions between the **API Server** and **Global Manager**:
+
+| Operation | Lock? | Reason |
+|-----------|-------|--------|
+| Read invoice/service state | NO | MVCC provides consistent snapshot |
+| `handleSubscriptionBilling()` | YES | Creates invoice + charges |
+| `handleTierUpgrade()` | YES | Charges + updates service |
+| `scheduleTierDowngrade()` | YES | Read-modify-write pattern |
+| `scheduleCancellation()` | YES | Read-modify-write pattern |
+| `undoCancellation()` | YES | Updates service + recalculates DRAFT |
+| `cancelScheduledTierChange()` | YES | Read-modify-write pattern |
+| `processCustomerBilling()` | YES | Multi-step monthly billing |
+| `processServiceDeletion()` | YES | Deletes service + records history |
+
+### Design Principle: Minimize API Server Locks
+
+**Read-only operations NEVER need locks** - PostgreSQL MVCC guarantees consistent reads.
+
+**API Server** should minimize lock usage:
+- Dashboard reads: No lock (query directly)
+- Invoice preview: No lock (read-only calculation)
+- State changes: Lock required (via `withCustomerLock()`)
+
+**Global Manager** always uses locks for batch processing.
+
+### Lock Contention
+
+If API request hits lock timeout (Global Manager processing same customer):
+- Return HTTP 409 Conflict with retry message
+- User can retry in a few seconds
+
+### Re-entrancy Prevention
+
+PostgreSQL advisory locks are **NOT re-entrant** within the same session:
+
+```sql
+SELECT pg_advisory_xact_lock(123);  -- Acquires lock
+SELECT pg_advisory_xact_lock(123);  -- DEADLOCKS! (waits for itself forever)
+```
+
+**Solution: `LockedTransaction` branded type**
+
+```typescript
+// Type signals: "lock is already held, don't acquire again"
+export type LockedTransaction = DatabaseOrTransaction & { readonly __brand: 'LockedTransaction' };
+
+// Entry point: acquires lock, passes LockedTransaction
+export async function withCustomerLock<T>(
+  db: Database,
+  customerId: number,
+  fn: (tx: LockedTransaction) => Promise<T>
+): Promise<T>;
+
+// Internal function: accepts LockedTransaction, NEVER calls withCustomerLock
+async function updateInvoiceInternal(tx: LockedTransaction, invoiceId: string): Promise<void>;
+```
+
+**Rules:**
+1. Functions taking `LockedTransaction` must NEVER call `withCustomerLock()`
+2. Functions taking `DatabaseOrTransaction` are lock-agnostic (can be called with or without lock)
+3. Only API route handlers and Global Manager entry points should call `withCustomerLock()`
+
+**TypeScript enforces this**: If a function accidentally tries to pass `LockedTransaction` to `withCustomerLock()`, it will compile but the brand signals intent to developers reviewing code.
 
 ---
 

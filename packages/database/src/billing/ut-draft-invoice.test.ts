@@ -17,6 +17,7 @@ import {
   invoicePayments,
   billingIdempotency,
   adminNotifications,
+  mockSuiTransactions,
 } from '../schema';
 import { MockDBClock } from '@suiftly/shared/db-clock';
 import { handleSubscriptionBilling } from './service-billing';
@@ -72,6 +73,7 @@ describe('DRAFT Invoice Date and Credit Bugs', () => {
     await db.execute(sql`TRUNCATE TABLE customer_credits CASCADE`);
     await db.execute(sql`TRUNCATE TABLE service_instances CASCADE`);
     await db.execute(sql`TRUNCATE TABLE escrow_transactions CASCADE`);
+    await db.execute(sql`TRUNCATE TABLE mock_sui_transactions CASCADE`);
     await db.execute(sql`TRUNCATE TABLE customers CASCADE`);
   });
 
@@ -104,6 +106,7 @@ describe('DRAFT Invoice Date and Credit Bugs', () => {
     await db.delete(customerCredits);
     await db.delete(serviceInstances);
     await db.delete(escrowTransactions);
+    await db.delete(mockSuiTransactions);
     await db.delete(customers);
   });
 

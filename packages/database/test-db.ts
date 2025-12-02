@@ -30,9 +30,9 @@ async function testDatabase() {
       customerId: testCustomerId,
       walletAddress: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
       status: 'active' as const,
-      spendingLimitUsdCents: BigInt(25000), // $250
-      currentBalanceUsdCents: BigInt(10000), // $100
-      currentPeriodChargedUsdCents: BigInt(0),
+      spendingLimitUsdCents: 25000, // $250
+      currentBalanceUsdCents: 10000, // $100
+      currentPeriodChargedUsdCents: 0,
     };
 
     await db.insert(customers).values(testCustomer);

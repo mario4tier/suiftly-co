@@ -52,10 +52,17 @@ export {
   cleanupIdempotencyRecords,
 } from './idempotency';
 
-// Locking utilities
+// Locking utilities (re-exported from top-level)
+// Prefer importing directly from '@suiftly/database' for new code
 export {
+  withCustomerLockForAPI,
   withCustomerLock,
   tryCustomerLock,
+  unsafeAsLockedTransaction, // Test helper only
+} from './locking';
+
+export type {
+  LockedTransaction,
 } from './locking';
 
 // Invoice management (Phase 2)
@@ -77,6 +84,7 @@ export type {
 // Service billing integration (Phase 2)
 export {
   handleSubscriptionBilling,
+  handleSubscriptionBillingLocked,
   recalculateDraftInvoice,
   calculateProRatedUpgradeCharge,
 } from './service-billing';
@@ -86,12 +94,13 @@ export type {
 } from './service-billing';
 
 // Tier change and cancellation (Phase 1C)
+// Note: All functions accept LockedTransaction - call via withCustomerLockForAPI
 export {
-  handleTierUpgrade,
-  scheduleTierDowngrade,
-  cancelScheduledTierChange,
-  scheduleCancellation,
-  undoCancellation,
+  handleTierUpgradeLocked,
+  scheduleTierDowngradeLocked,
+  cancelScheduledTierChangeLocked,
+  scheduleCancellationLocked,
+  undoCancellationLocked,
   canProvisionService,
   canPerformKeyOperation,
   getTierChangeOptions,
@@ -122,7 +131,7 @@ export type {
 
 // Usage charges (STATS_DESIGN.md D3)
 export {
-  addUsageChargesToDraft,
+  updateUsageChargesToDraft,
   getUsageChargePreview,
 } from './usage-charges';
 

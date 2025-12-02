@@ -7,7 +7,7 @@
 import {
   customerSchema,
   walletAddressSchema,
-  serviceCreateSchema,
+  sealConfigSchema,
   apiKeyCreateSchema,
   walletConnectSchema,
   depositRequestSchema,
@@ -77,12 +77,17 @@ test('Invalid customer status rejected', () => {
   }
 });
 
-// Test 5: Valid service creation
-test('Valid service creation', () => {
-  serviceCreateSchema.parse({
-    customerId: 12345678,
-    serviceType: SERVICE_TYPE.SEAL,
+// Test 5: Valid seal config
+test('Valid seal config', () => {
+  sealConfigSchema.parse({
     tier: SERVICE_TIER.STARTER,
+    burstEnabled: false,
+    totalSealKeys: 1,
+    packagesPerSealKey: 3,
+    totalApiKeys: 2,
+    purchasedSealKeys: 0,
+    purchasedPackages: 0,
+    purchasedApiKeys: 0,
   });
 });
 

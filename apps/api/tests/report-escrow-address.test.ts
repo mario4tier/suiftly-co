@@ -5,7 +5,7 @@
  * against overwriting existing escrow addresses in the database.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { db } from '@suiftly/database';
 import { customers, mockSuiTransactions } from '@suiftly/database/schema';
 import { eq } from 'drizzle-orm';

@@ -17,8 +17,8 @@
 
 import { eq, and, sql, inArray } from 'drizzle-orm';
 import { billingRecords, customers, serviceInstances } from '../schema';
-import type { Database, DatabaseOrTransaction } from '../db';
-import { withCustomerLock } from './locking';
+import type { Database } from '../db';
+import { withCustomerLock, type LockedTransaction } from './locking';
 import { processInvoicePayment } from './payments';
 import {
   startGracePeriod,
@@ -32,6 +32,7 @@ import { ensureInvoiceValid } from './validation';
 import { ValidationError } from './errors';
 import { applyScheduledTierChanges, processScheduledCancellations } from './tier-changes';
 import { recalculateDraftInvoice } from './service-billing';
+import { updateUsageChargesToDraft } from './usage-charges';
 import type { BillingProcessorConfig, CustomerBillingResult, BillingOperation } from './types';
 import type { DBClock } from '@suiftly/shared/db-clock';
 import type { ISuiService } from '@suiftly/shared/sui-service';
@@ -117,7 +118,7 @@ export async function processCustomerBilling(
  * @returns Billing result
  */
 async function processMonthlyBilling(
-  tx: DatabaseOrTransaction,
+  tx: LockedTransaction,
   customerId: number,
   config: BillingProcessorConfig,
   suiService: ISuiService
@@ -177,6 +178,21 @@ async function processMonthlyBilling(
         });
         // Recalculate DRAFT invoice after cancellations
         await recalculateDraftInvoice(tx, customerId, config.clock);
+      }
+
+      // Phase: ADD USAGE CHARGES (STATS_DESIGN.md D3)
+      // Update usage charges on each DRAFT invoice based on stats_per_hour data
+      // Uses invoice's billingPeriodStart/billingPeriodEnd as the authoritative window
+      for (const invoice of draftInvoices) {
+        const usageResult = await updateUsageChargesToDraft(tx, customerId, invoice.id);
+        if (usageResult.success && usageResult.lineItemsAdded > 0) {
+          result.operations.push({
+            type: 'reconciliation',
+            timestamp: config.clock.now(),
+            description: `Added usage charges: ${usageResult.lineItemsAdded} service(s), $${(usageResult.totalUsageChargesCents / 100).toFixed(2)}`,
+            success: true,
+          });
+        }
       }
 
       // Transition DRAFT → PENDING and attempt payment
@@ -300,7 +316,7 @@ async function processMonthlyBilling(
  * @returns Billing result
  */
 async function retryFailedPayments(
-  tx: DatabaseOrTransaction,
+  tx: LockedTransaction,
   customerId: number,
   config: BillingProcessorConfig,
   suiService: ISuiService
@@ -397,7 +413,7 @@ async function retryFailedPayments(
  * @returns Billing result
  */
 async function checkGracePeriodExpiration(
-  tx: DatabaseOrTransaction,
+  tx: LockedTransaction,
   customerId: number,
   config: BillingProcessorConfig
 ): Promise<CustomerBillingResult> {

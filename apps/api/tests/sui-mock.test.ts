@@ -6,19 +6,19 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { MockSuiService } from './mock';
-import { suiMockConfig } from './mock-config';
-import { dbClockProvider, type DBClock } from '@suiftly/shared/db-clock';
+import { MockSuiService } from '../src/services/sui/mock';
+import { suiMockConfig } from '../src/services/sui/mock-config';
+import { dbClockProvider, type MockDBClock } from '@suiftly/shared/db-clock';
 import { db } from '@suiftly/database';
 import { customers, mockSuiTransactions, mockTrackingObjects } from '@suiftly/database/schema';
 import { eq, and, desc } from 'drizzle-orm';
-import { cleanupCustomerByWallet } from '../../../tests/helpers/cleanup.js';
+import { cleanupCustomerByWallet } from './helpers/cleanup.js';
 
 describe('Sui Mock Interface', () => {
   let mockSui: MockSuiService;
   let testCustomerId: number;
   let testWalletAddress: string;
-  let mockClock: DBClock | null = null;
+  let mockClock: MockDBClock | null = null;
 
   beforeEach(async () => {
     // Clear any previous mock config
@@ -393,6 +393,9 @@ describe('Sui Mock Interface', () => {
         initialSpendingLimitUsdCents: 20000,
       });
 
+      const account = await mockSui.getAccount(testWalletAddress);
+      const escrowAddress = account!.accountAddress;
+
       suiMockConfig.setConfig({
         forceChargeFailure: true,
         forceChargeFailureMessage: 'Transaction timeout',
@@ -402,6 +405,7 @@ describe('Sui Mock Interface', () => {
         userAddress: testWalletAddress,
         amountUsdCents: 1000,
         description: 'Test charge',
+        escrowAddress,
       });
 
       expect(result.success).toBe(false);
@@ -472,16 +476,21 @@ describe('Sui Mock Interface', () => {
         initialSpendingLimitUsdCents: 20000,
       });
 
+      const account = await mockSui.getAccount(testWalletAddress);
+      const escrowAddress = account!.accountAddress;
+
       await mockSui.charge({
         userAddress: testWalletAddress,
         amountUsdCents: 2000,
         description: 'Service charge',
+        escrowAddress,
       });
 
       await mockSui.credit({
         userAddress: testWalletAddress,
         amountUsdCents: 500,
         description: 'Refund',
+        escrowAddress,
       });
 
       await mockSui.withdraw({
@@ -731,11 +740,13 @@ describe('Sui Mock Interface', () => {
 
     it('should NOT auto-create account on charge', async () => {
       const newAddress = '0x' + 'f'.repeat(64);
+      const fakeEscrowAddress = '0x' + '1'.repeat(64); // Doesn't exist
 
       const result = await mockSui.charge({
         userAddress: newAddress,
         amountUsdCents: 1000,
         description: 'Test charge',
+        escrowAddress: fakeEscrowAddress,
       });
 
       expect(result.success).toBe(false);
@@ -748,11 +759,13 @@ describe('Sui Mock Interface', () => {
 
     it('should NOT auto-create account on credit', async () => {
       const newAddress = '0x' + '9'.repeat(64);
+      const fakeEscrowAddress = '0x' + '2'.repeat(64); // Doesn't exist
 
       const result = await mockSui.credit({
         userAddress: newAddress,
         amountUsdCents: 1000,
         description: 'Test credit',
+        escrowAddress: fakeEscrowAddress,
       });
 
       expect(result.success).toBe(false);

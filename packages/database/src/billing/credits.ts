@@ -11,6 +11,7 @@
 
 import { eq, and, gt, sql, asc } from 'drizzle-orm';
 import type { Database, DatabaseOrTransaction } from '../db';
+import type { LockedTransaction } from './locking';
 import { customerCredits, invoicePayments } from '../schema';
 import type { CreditApplicationResult } from './types';
 import type { DBClock } from '@suiftly/shared/db-clock';
@@ -30,7 +31,7 @@ import type { DBClock } from '@suiftly/shared/db-clock';
  * @returns Details of credits applied
  */
 export async function applyCreditsToInvoice(
-  tx: DatabaseOrTransaction,
+  tx: LockedTransaction,
   customerId: number,
   billingRecordId: string,
   invoiceAmountCents: number,

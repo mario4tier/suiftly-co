@@ -71,6 +71,7 @@ describe('Stats Queries', () => {
 
       expect(summary).toEqual({
         successCount: 0,
+        droppedCount: 0,
         clientErrorCount: 0,
         serverErrorCount: 0,
         totalRequests: 0,
@@ -136,12 +137,13 @@ describe('Stats Queries', () => {
         network: 1,
         count: 100,
         timestamp: new Date('2024-01-15T10:00:00Z'),
-      }, { success: 70, clientError: 20, serverError: 10 });
+      }, { guaranteed: 70, burst: 0, dropped: 0, clientError: 20, serverError: 10 });
       await refreshStatsAggregate(db);
 
       const summary = await getStatsSummary(db, TEST_CUSTOMER_ID, 1, clock);
 
       expect(summary.successCount).toBe(70);
+      expect(summary.droppedCount).toBe(0);
       expect(summary.clientErrorCount).toBe(20);
       expect(summary.serverErrorCount).toBe(10);
       expect(summary.totalRequests).toBe(100);

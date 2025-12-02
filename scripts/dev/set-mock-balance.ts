@@ -35,10 +35,9 @@ async function setMockBalance() {
     .update(customers)
     .set({
       currentBalanceUsdCents: balanceCents,
-      maxMonthlyUsdCents: 25000, // $250 spending limit (28-day)
-      currentMonthChargedUsdCents: 0,
-      currentMonthStart: new Date(),
-      updatedAt: new Date(),
+      spendingLimitUsdCents: 25000, // $250 spending limit (28-day)
+      currentPeriodChargedUsdCents: 0,
+      currentPeriodStart: new Date().toISOString().split('T')[0],
     })
     .where(eq(customers.customerId, customer.customerId));
 

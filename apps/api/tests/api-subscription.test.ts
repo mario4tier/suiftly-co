@@ -89,7 +89,7 @@ describe('API: Subscription Flow', () => {
       expect(service?.tier).toBe('starter');
     });
 
-    it('should prevent duplicate subscription to same service', async () => {
+    it('should return existing instance on duplicate subscription (idempotent)', async () => {
       await setClockTime('2025-01-05T00:00:00Z');
 
       // First subscription should succeed
@@ -99,15 +99,18 @@ describe('API: Subscription Flow', () => {
         accessToken
       );
       expect(first.result?.data).toBeDefined();
+      expect(first.result?.data.tier).toBe('starter');
 
-      // Second subscription should fail
+      // Second subscription should return existing instance (idempotent behavior)
+      // Note: Even though 'pro' tier is requested, the existing 'starter' is returned
       const second = await trpcMutation<any>(
         'services.subscribe',
         { serviceType: 'seal', tier: 'pro' },
         accessToken
       );
-      expect(second.error).toBeDefined();
-      expect(second.error?.message).toContain('Already subscribed');
+      expect(second.result?.data).toBeDefined();
+      expect(second.result?.data.tier).toBe('starter'); // Original tier preserved
+      expect(second.result?.data.apiKey).toBeNull(); // API key not returned again
     });
 
     it('should subscribe to different services independently', async () => {

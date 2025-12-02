@@ -11,9 +11,9 @@
  */
 
 import { eq, and, lte, gt, isNotNull, sql } from 'drizzle-orm';
-import type { Database, DatabaseOrTransaction } from '../db';
+import type { Database } from '../db';
 import { serviceInstances, serviceCancellationHistory, customers, billingRecords } from '../schema';
-import { withCustomerLock } from './locking';
+import { withCustomerLock, type LockedTransaction } from './locking';
 import { createAndChargeImmediately, getOrCreateDraftInvoice, updateDraftInvoiceAmount } from './invoices';
 import { processInvoicePayment } from './payments';
 import { recalculateDraftInvoice, calculateProRatedUpgradeCharge } from './service-billing';
@@ -91,7 +91,9 @@ export interface TierChangeOptions {
 // ============================================================================
 
 /**
- * Handle tier upgrade with immediate effect
+ * Handle tier upgrade with immediate effect (INTERNAL - REQUIRES LOCK)
+ *
+ * Call via withCustomerLockForAPI in API routes.
  *
  * Per BILLING_DESIGN.md R13.1:
  * - Immediate activation upon successful payment
@@ -99,7 +101,7 @@ export interface TierChangeOptions {
  * - Grace period (≤2 days remaining = $0 charge)
  * - Upgrade only activates if payment succeeds
  *
- * @param db Database instance
+ * @param tx Locked transaction (from withCustomerLock)
  * @param customerId Customer ID
  * @param serviceType Service type to upgrade
  * @param newTier New tier (must be higher than current)
@@ -107,175 +109,173 @@ export interface TierChangeOptions {
  * @param clock DBClock for timestamps
  * @returns Upgrade result
  */
-export async function handleTierUpgrade(
-  db: Database,
+export async function handleTierUpgradeLocked(
+  tx: LockedTransaction,
   customerId: number,
   serviceType: ServiceType,
   newTier: ServiceTier,
   suiService: ISuiService,
   clock: DBClock
 ): Promise<TierUpgradeResult> {
-  return await withCustomerLock(db, customerId, async (tx) => {
-    // 1. Get current service
-    const [service] = await tx
-      .select()
-      .from(serviceInstances)
-      .where(and(
-        eq(serviceInstances.customerId, customerId),
-        eq(serviceInstances.serviceType, serviceType)
-      ))
-      .limit(1);
+  // 1. Get current service
+  const [service] = await tx
+    .select()
+    .from(serviceInstances)
+    .where(and(
+      eq(serviceInstances.customerId, customerId),
+      eq(serviceInstances.serviceType, serviceType)
+    ))
+    .limit(1);
 
-    if (!service) {
-      return {
-        success: false,
-        newTier,
-        chargeAmountUsdCents: 0,
-        error: 'Service not found',
-      };
-    }
+  if (!service) {
+    return {
+      success: false,
+      newTier,
+      chargeAmountUsdCents: 0,
+      error: 'Service not found',
+    };
+  }
 
-    // 2. Validate upgrade (new tier must be higher priced)
-    const currentTierPrice = getTierPriceUsdCents(service.tier);
-    const newTierPrice = getTierPriceUsdCents(newTier);
+  // 2. Validate upgrade (new tier must be higher priced)
+  const currentTierPrice = getTierPriceUsdCents(service.tier);
+  const newTierPrice = getTierPriceUsdCents(newTier);
 
-    if (newTierPrice <= currentTierPrice) {
-      return {
-        success: false,
-        newTier,
-        chargeAmountUsdCents: 0,
-        error: 'New tier must have higher price than current tier. Use downgrade for lower tiers.',
-      };
-    }
+  if (newTierPrice <= currentTierPrice) {
+    return {
+      success: false,
+      newTier,
+      chargeAmountUsdCents: 0,
+      error: 'New tier must have higher price than current tier. Use downgrade for lower tiers.',
+    };
+  }
 
-    // 2.5. If user has never paid, allow immediate tier change without charge
-    // This handles the case where user subscribed but hasn't completed payment yet
-    if (!service.paidOnce) {
-      await tx
-        .update(serviceInstances)
-        .set({
-          tier: newTier,
-          // Clear any scheduled changes
-          scheduledTier: null,
-          scheduledTierEffectiveDate: null,
-          cancellationScheduledFor: null,
-        })
-        .where(eq(serviceInstances.instanceId, service.instanceId));
-
-      // Update pending billing record to reflect the new tier price
-      // This ensures reconcilePayments charges the correct amount
-      await tx
-        .update(billingRecords)
-        .set({
-          amountUsdCents: newTierPrice,
-        })
-        .where(
-          and(
-            eq(billingRecords.customerId, customerId),
-            // Only update non-paid, non-draft records (pending or failed)
-            sql`${billingRecords.status} NOT IN ('paid', 'draft')`
-          )
-        );
-
-      // Recalculate DRAFT invoice to reflect the new tier
-      await recalculateDraftInvoice(tx, customerId, clock);
-
-      return {
-        success: true,
-        newTier,
-        chargeAmountUsdCents: 0,
-      };
-    }
-
-    // 3. Calculate pro-rated charge
-    const chargeAmountCents = calculateProRatedUpgradeCharge(
-      currentTierPrice,
-      newTierPrice,
-      clock
-    );
-
-    // 4. If charge is $0 (grace period), upgrade immediately without payment
-    if (chargeAmountCents === 0) {
-      await tx
-        .update(serviceInstances)
-        .set({
-          tier: newTier,
-          // Clear any scheduled downgrade since we're upgrading
-          scheduledTier: null,
-          scheduledTierEffectiveDate: null,
-          // Clear any cancellation since user is upgrading
-          cancellationScheduledFor: null,
-        })
-        .where(eq(serviceInstances.instanceId, service.instanceId));
-
-      // Recalculate DRAFT invoice for next billing cycle
-      await recalculateDraftInvoice(tx, customerId, clock);
-
-      return {
-        success: true,
-        newTier,
-        chargeAmountUsdCents: 0,
-      };
-    }
-
-    // 5. Create immediate invoice for upgrade charge
-    const invoiceId = await createAndChargeImmediately(
-      tx,
-      {
-        customerId,
-        amountUsdCents: chargeAmountCents,
-        type: 'charge',
-        status: 'pending',
-        description: `${serviceType} tier upgrade: ${service.tier} → ${newTier} (pro-rated)`,
-        billingPeriodStart: clock.now(),
-        billingPeriodEnd: getEndOfMonth(clock),
-        dueDate: clock.now(),
-      },
-      clock
-    );
-
-    // 6. Attempt payment
-    const paymentResult = await processInvoicePayment(
-      tx,
-      invoiceId,
-      suiService,
-      clock
-    );
-
-    if (!paymentResult.fullyPaid) {
-      // Payment failed - don't upgrade
-      return {
-        success: false,
-        newTier,
-        chargeAmountUsdCents: chargeAmountCents,
-        invoiceId,
-        error: paymentResult.error?.message || 'Payment failed',
-      };
-    }
-
-    // 7. Payment succeeded - update tier immediately
+  // 2.5. If user has never paid, allow immediate tier change without charge
+  // This handles the case where user subscribed but hasn't completed payment yet
+  if (!service.paidOnce) {
     await tx
       .update(serviceInstances)
       .set({
         tier: newTier,
-        // Clear any scheduled downgrade
+        // Clear any scheduled changes
         scheduledTier: null,
         scheduledTierEffectiveDate: null,
-        // Clear any cancellation
         cancellationScheduledFor: null,
       })
       .where(eq(serviceInstances.instanceId, service.instanceId));
 
-    // 8. Recalculate DRAFT invoice for next billing cycle
+    // Update pending billing record to reflect the new tier price
+    // This ensures reconcilePayments charges the correct amount
+    await tx
+      .update(billingRecords)
+      .set({
+        amountUsdCents: newTierPrice,
+      })
+      .where(
+        and(
+          eq(billingRecords.customerId, customerId),
+          // Only update non-paid, non-draft records (pending or failed)
+          sql`${billingRecords.status} NOT IN ('paid', 'draft')`
+        )
+      );
+
+    // Recalculate DRAFT invoice to reflect the new tier
     await recalculateDraftInvoice(tx, customerId, clock);
 
     return {
       success: true,
       newTier,
+      chargeAmountUsdCents: 0,
+    };
+  }
+
+  // 3. Calculate pro-rated charge
+  const chargeAmountCents = calculateProRatedUpgradeCharge(
+    currentTierPrice,
+    newTierPrice,
+    clock
+  );
+
+  // 4. If charge is $0 (grace period), upgrade immediately without payment
+  if (chargeAmountCents === 0) {
+    await tx
+      .update(serviceInstances)
+      .set({
+        tier: newTier,
+        // Clear any scheduled downgrade since we're upgrading
+        scheduledTier: null,
+        scheduledTierEffectiveDate: null,
+        // Clear any cancellation since user is upgrading
+        cancellationScheduledFor: null,
+      })
+      .where(eq(serviceInstances.instanceId, service.instanceId));
+
+    // Recalculate DRAFT invoice for next billing cycle
+    await recalculateDraftInvoice(tx, customerId, clock);
+
+    return {
+      success: true,
+      newTier,
+      chargeAmountUsdCents: 0,
+    };
+  }
+
+  // 5. Create immediate invoice for upgrade charge
+  const invoiceId = await createAndChargeImmediately(
+    tx,
+    {
+      customerId,
+      amountUsdCents: chargeAmountCents,
+      type: 'charge',
+      status: 'pending',
+      description: `${serviceType} tier upgrade: ${service.tier} → ${newTier} (pro-rated)`,
+      billingPeriodStart: clock.now(),
+      billingPeriodEnd: getEndOfMonth(clock),
+      dueDate: clock.now(),
+    },
+    clock
+  );
+
+  // 6. Attempt payment
+  const paymentResult = await processInvoicePayment(
+    tx,
+    invoiceId,
+    suiService,
+    clock
+  );
+
+  if (!paymentResult.fullyPaid) {
+    // Payment failed - don't upgrade
+    return {
+      success: false,
+      newTier,
       chargeAmountUsdCents: chargeAmountCents,
       invoiceId,
+      error: paymentResult.error?.message || 'Payment failed',
     };
-  });
+  }
+
+  // 7. Payment succeeded - update tier immediately
+  await tx
+    .update(serviceInstances)
+    .set({
+      tier: newTier,
+      // Clear any scheduled downgrade
+      scheduledTier: null,
+      scheduledTierEffectiveDate: null,
+      // Clear any cancellation
+      cancellationScheduledFor: null,
+    })
+    .where(eq(serviceInstances.instanceId, service.instanceId));
+
+  // 8. Recalculate DRAFT invoice for next billing cycle
+  await recalculateDraftInvoice(tx, customerId, clock);
+
+  return {
+    success: true,
+    newTier,
+    chargeAmountUsdCents: chargeAmountCents,
+    invoiceId,
+  };
 }
 
 // ============================================================================
@@ -283,7 +283,10 @@ export async function handleTierUpgrade(
 // ============================================================================
 
 /**
- * Schedule tier downgrade for end of billing period
+ * Schedule tier downgrade for end of billing period (INTERNAL - REQUIRES LOCK)
+ *
+ * Use this when you already hold the customer lock via withCustomerLockForAPI().
+ * For standalone calls, use scheduleTierDowngrade() which acquires the lock.
  *
  * Per BILLING_DESIGN.md R13.2:
  * - Takes effect at start of next billing period (1st of month)
@@ -291,160 +294,158 @@ export async function handleTierUpgrade(
  * - Reversible before period ends
  * - Last scheduled tier before period end wins
  *
- * @param db Database instance
+ * @param tx Locked transaction (from withCustomerLockForAPI)
  * @param customerId Customer ID
  * @param serviceType Service type to downgrade
  * @param newTier New tier (must be lower than current)
  * @param clock DBClock for timestamps
  * @returns Downgrade result
  */
-export async function scheduleTierDowngrade(
-  db: Database,
+export async function scheduleTierDowngradeLocked(
+  tx: LockedTransaction,
   customerId: number,
   serviceType: ServiceType,
   newTier: ServiceTier,
   clock: DBClock
 ): Promise<TierDowngradeResult> {
-  return await withCustomerLock(db, customerId, async (tx) => {
-    // 1. Get current service
-    const [service] = await tx
-      .select()
-      .from(serviceInstances)
-      .where(and(
-        eq(serviceInstances.customerId, customerId),
-        eq(serviceInstances.serviceType, serviceType)
-      ))
-      .limit(1);
+  // 1. Get current service
+  const [service] = await tx
+    .select()
+    .from(serviceInstances)
+    .where(and(
+      eq(serviceInstances.customerId, customerId),
+      eq(serviceInstances.serviceType, serviceType)
+    ))
+    .limit(1);
 
-    if (!service) {
-      return {
-        success: false,
-        scheduledTier: newTier,
-        effectiveDate: new Date(0),
-        error: 'Service not found',
-      };
-    }
+  if (!service) {
+    return {
+      success: false,
+      scheduledTier: newTier,
+      effectiveDate: new Date(0),
+      error: 'Service not found',
+    };
+  }
 
-    // 2. Validate downgrade (new tier must be lower priced)
-    const currentTierPrice = getTierPriceUsdCents(service.tier);
-    const newTierPrice = getTierPriceUsdCents(newTier);
+  // 2. Validate downgrade (new tier must be lower priced)
+  const currentTierPrice = getTierPriceUsdCents(service.tier);
+  const newTierPrice = getTierPriceUsdCents(newTier);
 
-    if (newTierPrice >= currentTierPrice) {
-      return {
-        success: false,
-        scheduledTier: newTier,
-        effectiveDate: new Date(0),
-        error: 'New tier must have lower price than current tier. Use upgrade for higher tiers.',
-      };
-    }
+  if (newTierPrice >= currentTierPrice) {
+    return {
+      success: false,
+      scheduledTier: newTier,
+      effectiveDate: new Date(0),
+      error: 'New tier must have lower price than current tier. Use upgrade for higher tiers.',
+    };
+  }
 
-    // 2.5. If user has never paid, allow immediate tier change (no scheduling needed)
-    // This handles the case where user subscribed but hasn't completed payment yet
-    if (!service.paidOnce) {
-      await tx
-        .update(serviceInstances)
-        .set({
-          tier: newTier,
-          // Clear any scheduled changes
-          scheduledTier: null,
-          scheduledTierEffectiveDate: null,
-          cancellationScheduledFor: null,
-        })
-        .where(eq(serviceInstances.instanceId, service.instanceId));
-
-      // Update pending billing record to reflect the new tier price
-      // This ensures reconcilePayments charges the correct amount
-      await tx
-        .update(billingRecords)
-        .set({
-          amountUsdCents: newTierPrice,
-        })
-        .where(
-          and(
-            eq(billingRecords.customerId, customerId),
-            // Only update non-paid, non-draft records (pending or failed)
-            sql`${billingRecords.status} NOT IN ('paid', 'draft')`
-          )
-        );
-
-      // Recalculate DRAFT invoice to reflect the new tier
-      await recalculateDraftInvoice(tx, customerId, clock);
-
-      return {
-        success: true,
-        scheduledTier: newTier,
-        effectiveDate: clock.now(), // Effective immediately
-      };
-    }
-
-    // 3. Calculate effective date (1st of next month)
-    const effectiveDate = getFirstOfNextMonth(clock);
-
-    // 4. Schedule the downgrade
+  // 2.5. If user has never paid, allow immediate tier change (no scheduling needed)
+  // This handles the case where user subscribed but hasn't completed payment yet
+  if (!service.paidOnce) {
     await tx
       .update(serviceInstances)
       .set({
-        scheduledTier: newTier,
-        scheduledTierEffectiveDate: effectiveDate.toISOString().split('T')[0],
-        // Clear any cancellation since user is changing tier
+        tier: newTier,
+        // Clear any scheduled changes
+        scheduledTier: null,
+        scheduledTierEffectiveDate: null,
         cancellationScheduledFor: null,
       })
       .where(eq(serviceInstances.instanceId, service.instanceId));
 
-    // 5. Update DRAFT invoice to reflect scheduled change
-    await recalculateDraftInvoiceWithScheduledTier(tx, customerId, clock);
+    // Update pending billing record to reflect the new tier price
+    // This ensures reconcilePayments charges the correct amount
+    await tx
+      .update(billingRecords)
+      .set({
+        amountUsdCents: newTierPrice,
+      })
+      .where(
+        and(
+          eq(billingRecords.customerId, customerId),
+          // Only update non-paid, non-draft records (pending or failed)
+          sql`${billingRecords.status} NOT IN ('paid', 'draft')`
+        )
+      );
+
+    // Recalculate DRAFT invoice to reflect the new tier
+    await recalculateDraftInvoice(tx, customerId, clock);
 
     return {
       success: true,
       scheduledTier: newTier,
-      effectiveDate,
+      effectiveDate: clock.now(), // Effective immediately
     };
-  });
+  }
+
+  // 3. Calculate effective date (1st of next month)
+  const effectiveDate = getFirstOfNextMonth(clock);
+
+  // 4. Schedule the downgrade
+  await tx
+    .update(serviceInstances)
+    .set({
+      scheduledTier: newTier,
+      scheduledTierEffectiveDate: effectiveDate.toISOString().split('T')[0],
+      // Clear any cancellation since user is changing tier
+      cancellationScheduledFor: null,
+    })
+    .where(eq(serviceInstances.instanceId, service.instanceId));
+
+  // 5. Update DRAFT invoice to reflect scheduled change
+  await recalculateDraftInvoiceWithScheduledTier(tx, customerId, clock);
+
+  return {
+    success: true,
+    scheduledTier: newTier,
+    effectiveDate,
+  };
 }
 
 /**
- * Cancel a scheduled tier change
+ * Cancel a scheduled tier change (INTERNAL - REQUIRES LOCK)
  *
  * Clears scheduled_tier and scheduled_tier_effective_date.
  * Customer continues at current tier.
+ *
+ * @param tx Locked transaction (from withCustomerLockForAPI)
  */
-export async function cancelScheduledTierChange(
-  db: Database,
+export async function cancelScheduledTierChangeLocked(
+  tx: LockedTransaction,
   customerId: number,
   serviceType: ServiceType,
   clock: DBClock
 ): Promise<{ success: boolean; error?: string }> {
-  return await withCustomerLock(db, customerId, async (tx) => {
-    const [service] = await tx
-      .select()
-      .from(serviceInstances)
-      .where(and(
-        eq(serviceInstances.customerId, customerId),
-        eq(serviceInstances.serviceType, serviceType)
-      ))
-      .limit(1);
+  const [service] = await tx
+    .select()
+    .from(serviceInstances)
+    .where(and(
+      eq(serviceInstances.customerId, customerId),
+      eq(serviceInstances.serviceType, serviceType)
+    ))
+    .limit(1);
 
-    if (!service) {
-      return { success: false, error: 'Service not found' };
-    }
+  if (!service) {
+    return { success: false, error: 'Service not found' };
+  }
 
-    if (!service.scheduledTier) {
-      return { success: false, error: 'No tier change scheduled' };
-    }
+  if (!service.scheduledTier) {
+    return { success: false, error: 'No tier change scheduled' };
+  }
 
-    await tx
-      .update(serviceInstances)
-      .set({
-        scheduledTier: null,
-        scheduledTierEffectiveDate: null,
-      })
-      .where(eq(serviceInstances.instanceId, service.instanceId));
+  await tx
+    .update(serviceInstances)
+    .set({
+      scheduledTier: null,
+      scheduledTierEffectiveDate: null,
+    })
+    .where(eq(serviceInstances.instanceId, service.instanceId));
 
-    // Recalculate DRAFT to use current tier
-    await recalculateDraftInvoice(tx, customerId, clock);
+  // Recalculate DRAFT to use current tier
+  await recalculateDraftInvoice(tx, customerId, clock);
 
-    return { success: true };
-  });
+  return { success: true };
 }
 
 // ============================================================================
@@ -452,7 +453,7 @@ export async function cancelScheduledTierChange(
 // ============================================================================
 
 /**
- * Schedule subscription cancellation for end of billing period
+ * Schedule subscription cancellation for end of billing period (INTERNAL - REQUIRES LOCK)
  *
  * Per BILLING_DESIGN.md R13.3:
  * - Service continues operating until end of billing period
@@ -460,144 +461,140 @@ export async function cancelScheduledTierChange(
  * - Freely reversible before period ends
  * - Service removed from next month's DRAFT invoice
  *
- * @param db Database instance
+ * @param tx Locked transaction (from withCustomerLockForAPI)
  * @param customerId Customer ID
  * @param serviceType Service type to cancel
  * @param clock DBClock for timestamps
  * @returns Cancellation result
  */
-export async function scheduleCancellation(
-  db: Database,
+export async function scheduleCancellationLocked(
+  tx: LockedTransaction,
   customerId: number,
   serviceType: ServiceType,
   clock: DBClock
 ): Promise<CancellationResult> {
-  return await withCustomerLock(db, customerId, async (tx) => {
-    // 1. Get current service
-    const [service] = await tx
-      .select()
-      .from(serviceInstances)
-      .where(and(
-        eq(serviceInstances.customerId, customerId),
-        eq(serviceInstances.serviceType, serviceType)
-      ))
-      .limit(1);
+  // 1. Get current service
+  const [service] = await tx
+    .select()
+    .from(serviceInstances)
+    .where(and(
+      eq(serviceInstances.customerId, customerId),
+      eq(serviceInstances.serviceType, serviceType)
+    ))
+    .limit(1);
 
-    if (!service) {
-      return {
-        success: false,
-        effectiveDate: new Date(0),
-        error: 'Service not found',
-      };
-    }
+  if (!service) {
+    return {
+      success: false,
+      effectiveDate: new Date(0),
+      error: 'Service not found',
+    };
+  }
 
-    // 2. Validate service state - can only cancel active subscriptions
-    if (service.state === 'not_provisioned' || service.state === 'cancellation_pending') {
-      return {
-        success: false,
-        effectiveDate: new Date(0),
-        error: `Cannot cancel service in state: ${service.state}`,
-      };
-    }
+  // 2. Validate service state - can only cancel active subscriptions
+  if (service.state === 'not_provisioned' || service.state === 'cancellation_pending') {
+    return {
+      success: false,
+      effectiveDate: new Date(0),
+      error: `Cannot cancel service in state: ${service.state}`,
+    };
+  }
 
-    // 2.5. If user has never paid, allow immediate cancellation (delete service instance)
-    // This handles "change of mind" before first payment - no cost to us
-    // No cooldown period needed since they never actually used the service
-    if (!service.paidOnce) {
-      await tx
-        .delete(serviceInstances)
-        .where(eq(serviceInstances.instanceId, service.instanceId));
-
-      return {
-        success: true,
-        effectiveDate: clock.now(), // Effective immediately
-      };
-    }
-
-    // 3. Calculate effective date (end of current billing period = last day of month)
-    const effectiveDate = getEndOfMonth(clock);
-
-    // 4. Schedule the cancellation
+  // 2.5. If user has never paid, allow immediate cancellation (delete service instance)
+  // This handles "change of mind" before first payment - no cost to us
+  // No cooldown period needed since they never actually used the service
+  if (!service.paidOnce) {
     await tx
-      .update(serviceInstances)
-      .set({
-        cancellationScheduledFor: effectiveDate.toISOString().split('T')[0],
-        // Clear any scheduled tier change since service is being cancelled
-        scheduledTier: null,
-        scheduledTierEffectiveDate: null,
-      })
+      .delete(serviceInstances)
       .where(eq(serviceInstances.instanceId, service.instanceId));
-
-    // 5. Update DRAFT invoice to remove this service
-    await recalculateDraftInvoiceWithCancellation(tx, customerId, clock);
 
     return {
       success: true,
-      effectiveDate,
+      effectiveDate: clock.now(), // Effective immediately
     };
-  });
+  }
+
+  // 3. Calculate effective date (end of current billing period = last day of month)
+  const effectiveDate = getEndOfMonth(clock);
+
+  // 4. Schedule the cancellation
+  await tx
+    .update(serviceInstances)
+    .set({
+      cancellationScheduledFor: effectiveDate.toISOString().split('T')[0],
+      // Clear any scheduled tier change since service is being cancelled
+      scheduledTier: null,
+      scheduledTierEffectiveDate: null,
+    })
+    .where(eq(serviceInstances.instanceId, service.instanceId));
+
+  // 5. Update DRAFT invoice to remove this service
+  await recalculateDraftInvoiceWithCancellation(tx, customerId, clock);
+
+  return {
+    success: true,
+    effectiveDate,
+  };
 }
 
 /**
- * Undo a scheduled cancellation
+ * Undo a scheduled cancellation (INTERNAL - REQUIRES LOCK)
  *
  * Per BILLING_DESIGN.md R13.4:
  * - No charge (customer already paid for period)
  * - Simply clears cancellation flag
  * - Service re-added to next month's DRAFT invoice
  *
- * @param db Database instance
+ * @param tx Locked transaction (from withCustomerLockForAPI)
  * @param customerId Customer ID
  * @param serviceType Service type
  * @param clock DBClock for timestamps
  * @returns Undo result
  */
-export async function undoCancellation(
-  db: Database,
+export async function undoCancellationLocked(
+  tx: LockedTransaction,
   customerId: number,
   serviceType: ServiceType,
   clock: DBClock
 ): Promise<UndoCancellationResult> {
-  return await withCustomerLock(db, customerId, async (tx) => {
-    const [service] = await tx
-      .select()
-      .from(serviceInstances)
-      .where(and(
-        eq(serviceInstances.customerId, customerId),
-        eq(serviceInstances.serviceType, serviceType)
-      ))
-      .limit(1);
+  const [service] = await tx
+    .select()
+    .from(serviceInstances)
+    .where(and(
+      eq(serviceInstances.customerId, customerId),
+      eq(serviceInstances.serviceType, serviceType)
+    ))
+    .limit(1);
 
-    if (!service) {
-      return { success: false, error: 'Service not found' };
-    }
+  if (!service) {
+    return { success: false, error: 'Service not found' };
+  }
 
-    // Cannot undo if already in cancellation_pending state (billing period ended)
-    // Check state first since cancellationScheduledFor is cleared when transitioning to cancellation_pending
-    if (service.state === 'cancellation_pending') {
-      return {
-        success: false,
-        error: 'Cannot undo cancellation after billing period has ended. Contact support.',
-      };
-    }
+  // Cannot undo if already in cancellation_pending state (billing period ended)
+  // Check state first since cancellationScheduledFor is cleared when transitioning to cancellation_pending
+  if (service.state === 'cancellation_pending') {
+    return {
+      success: false,
+      error: 'Cannot undo cancellation after billing period has ended. Contact support.',
+    };
+  }
 
-    // Can only undo if cancellation is scheduled
-    if (!service.cancellationScheduledFor) {
-      return { success: false, error: 'No cancellation scheduled' };
-    }
+  // Can only undo if cancellation is scheduled
+  if (!service.cancellationScheduledFor) {
+    return { success: false, error: 'No cancellation scheduled' };
+  }
 
-    await tx
-      .update(serviceInstances)
-      .set({
-        cancellationScheduledFor: null,
-      })
-      .where(eq(serviceInstances.instanceId, service.instanceId));
+  await tx
+    .update(serviceInstances)
+    .set({
+      cancellationScheduledFor: null,
+    })
+    .where(eq(serviceInstances.instanceId, service.instanceId));
 
-    // Recalculate DRAFT to re-include this service
-    await recalculateDraftInvoice(tx, customerId, clock);
+  // Recalculate DRAFT to re-include this service
+  await recalculateDraftInvoice(tx, customerId, clock);
 
-    return { success: true };
-  });
+  return { success: true };
 }
 
 // ============================================================================
@@ -856,7 +853,7 @@ export async function getTierChangeOptions(
  * @returns Number of tier changes applied
  */
 export async function applyScheduledTierChanges(
-  tx: DatabaseOrTransaction,
+  tx: LockedTransaction,
   customerId: number,
   clock: DBClock
 ): Promise<number> {
@@ -904,7 +901,7 @@ export async function applyScheduledTierChanges(
  * @returns Number of cancellations processed
  */
 export async function processScheduledCancellations(
-  tx: DatabaseOrTransaction,
+  tx: LockedTransaction,
   customerId: number,
   clock: DBClock
 ): Promise<number> {
@@ -977,7 +974,7 @@ function getFirstOfNextMonth(clock: DBClock): Date {
  * Uses scheduled_tier for billing amount if present.
  */
 async function recalculateDraftInvoiceWithScheduledTier(
-  tx: DatabaseOrTransaction,
+  tx: LockedTransaction,
   customerId: number,
   clock: DBClock
 ): Promise<void> {
@@ -1013,7 +1010,7 @@ async function recalculateDraftInvoiceWithScheduledTier(
  * Excludes services with cancellation_scheduled_for set.
  */
 async function recalculateDraftInvoiceWithCancellation(
-  tx: DatabaseOrTransaction,
+  tx: LockedTransaction,
   customerId: number,
   clock: DBClock
 ): Promise<void> {

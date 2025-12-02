@@ -21,7 +21,7 @@ The **Global Manager** is a centralized worker process that runs on the primary 
 - **Graceful shutdown** - Handles SIGTERM/SIGINT properly
 
 **Terminology:**
-- **MA_VAULT** - Master Access vault containing critical customer configurations (API keys, rate limits, status)
+- **MA_VAULT** - Master API vault containing critical customer configurations (API keys, rate limits, status)
 - **MM_VAULT** - Master Mainnet vault containing encryption keys for Seal service (less critical, see appendix)
 - **Local Manager** - Distributed workers in the walrus project that consume MA_VAULT to update HAProxy configurations
 

@@ -17,7 +17,8 @@
 
 import { eq, and, sql, lt, isNotNull } from 'drizzle-orm';
 import { customers, serviceInstances } from '../schema';
-import type { Database, DatabaseOrTransaction } from '../db';
+import type { DatabaseOrTransaction } from '../db';
+import type { LockedTransaction } from './locking';
 import type { DBClock } from '@suiftly/shared/db-clock';
 import type { BillingOperation } from './types';
 
@@ -33,7 +34,7 @@ import type { BillingOperation } from './types';
  * @returns true if grace period started, false if not applicable
  */
 export async function startGracePeriod(
-  tx: DatabaseOrTransaction,
+  tx: LockedTransaction,
   customerId: number,
   clock: DBClock
 ): Promise<boolean> {
@@ -77,7 +78,7 @@ export async function startGracePeriod(
  * @param customerId Customer ID
  */
 export async function clearGracePeriod(
-  tx: DatabaseOrTransaction,
+  tx: LockedTransaction,
   customerId: number
 ): Promise<void> {
   await tx
@@ -135,7 +136,7 @@ export async function isGracePeriodExpired(
  * @returns Number of services affected
  */
 export async function suspendCustomerForNonPayment(
-  tx: DatabaseOrTransaction,
+  tx: LockedTransaction,
   customerId: number
 ): Promise<number> {
   // Update customer status
@@ -169,7 +170,7 @@ export async function suspendCustomerForNonPayment(
  * @param customerId Customer ID
  */
 export async function resumeCustomerAccount(
-  tx: DatabaseOrTransaction,
+  tx: LockedTransaction,
   customerId: number
 ): Promise<void> {
   await tx
@@ -226,7 +227,7 @@ export async function getCustomersWithExpiredGracePeriod(
  * @param clock DBClock for timestamp
  */
 export async function recordGracePeriodNotification(
-  tx: DatabaseOrTransaction,
+  tx: LockedTransaction,
   customerId: number,
   clock: DBClock
 ): Promise<void> {

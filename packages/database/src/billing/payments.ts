@@ -10,6 +10,7 @@
 
 import { eq, sql } from 'drizzle-orm';
 import type { Database, DatabaseOrTransaction } from '../db';
+import type { LockedTransaction } from './locking';
 import { billingRecords, invoicePayments, escrowTransactions, customers } from '../schema';
 import { applyCreditsToInvoice } from './credits';
 import type { InvoicePaymentResult, BillingError } from './types';
@@ -30,7 +31,7 @@ import type { ISuiService } from '@suiftly/shared/sui-service';
  * @returns Payment result with success/failure details
  */
 export async function processInvoicePayment(
-  tx: DatabaseOrTransaction,
+  tx: LockedTransaction,
   billingRecordId: string,
   suiService: ISuiService,
   clock: DBClock

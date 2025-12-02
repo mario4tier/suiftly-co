@@ -53,7 +53,7 @@ describe('Escrow Account Flow', () => {
       escrowContractId: testEscrowAddress,
       currentBalanceUsdCents: 0,
       currentPeriodChargedUsdCents: 0,
-      currentPeriodStart: new Date(),
+      currentPeriodStart: new Date().toISOString().split('T')[0],
       spendingLimitUsdCents: 0, // 0 = unlimited
     });
 
@@ -137,7 +137,7 @@ describe('Escrow Account Flow', () => {
       escrowContractId: testEscrowAddress,
       currentBalanceUsdCents: 0,
       currentPeriodChargedUsdCents: 0,
-      currentPeriodStart: new Date(),
+      currentPeriodStart: new Date().toISOString().split('T')[0],
       spendingLimitUsdCents: 0, // 0 = unlimited
     });
 
@@ -191,7 +191,7 @@ describe('Escrow Account Flow', () => {
       escrowContractId: testEscrowAddress,
       currentBalanceUsdCents: 0,
       currentPeriodChargedUsdCents: 0,
-      currentPeriodStart: new Date(),
+      currentPeriodStart: new Date().toISOString().split('T')[0],
       spendingLimitUsdCents: 0, // 0 = unlimited
     });
 

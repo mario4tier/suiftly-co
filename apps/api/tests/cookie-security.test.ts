@@ -45,7 +45,7 @@ async function ensureNormalJWTConfig(): Promise<void> {
       return;
     }
 
-    const serverConfig = await configResponse.json();
+    const serverConfig = await configResponse.json() as { shortJWTExpiry?: boolean };
 
     if (serverConfig.shortJWTExpiry) {
       console.log('[TEST SETUP] Server running with short JWT expiry - restarting with normal config...');
@@ -105,7 +105,7 @@ describe('Cookie Security Attributes', () => {
       }),
     });
 
-    const { nonce } = await connectResponse.json();
+    const { nonce } = await connectResponse.json() as { nonce: string };
 
     // Step 2: Verify signature (mock auth)
     const verifyResponse = await fetch(`${API_URL}/i/auth/verify`, {
@@ -144,7 +144,7 @@ describe('Cookie Security Attributes', () => {
   test('cookie should have Max-Age set for expiry', async () => {
     // Check server's actual configuration
     const configResponse = await fetch(`${API_URL}/test/config`);
-    const serverConfig = await configResponse.json();
+    const serverConfig = await configResponse.json() as { shortJWTExpiry?: boolean };
     const shortJWTExpiry = serverConfig.shortJWTExpiry;
 
     // Get nonce
@@ -156,7 +156,7 @@ describe('Cookie Security Attributes', () => {
       }),
     });
 
-    const { nonce } = await connectResponse.json();
+    const { nonce } = await connectResponse.json() as { nonce: string };
 
     // Verify signature
     const verifyResponse = await fetch(`${API_URL}/i/auth/verify`, {

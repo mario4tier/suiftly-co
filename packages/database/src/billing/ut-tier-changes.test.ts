@@ -20,6 +20,7 @@ import {
   sealKeys,
   sealPackages,
   userActivityLogs,
+  mockSuiTransactions,
 } from '../schema';
 import { MockDBClock } from '@suiftly/shared/db-clock';
 import type { ISuiService, TransactionResult, ChargeParams } from '@suiftly/shared/sui-service';
@@ -35,6 +36,7 @@ import {
   applyScheduledTierChanges,
   processScheduledCancellations,
 } from './tier-changes';
+import { unsafeAsLockedTransaction } from './test-helpers';
 import { processCancellationCleanup } from './cancellation-cleanup';
 import { processCustomerBilling } from './processor';
 import type { BillingProcessorConfig } from './types';
@@ -124,6 +126,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
     await db.execute(sql`TRUNCATE TABLE api_keys CASCADE`);
     await db.execute(sql`TRUNCATE TABLE service_instances CASCADE`);
     await db.execute(sql`TRUNCATE TABLE escrow_transactions CASCADE`);
+    await db.execute(sql`TRUNCATE TABLE mock_sui_transactions CASCADE`);
     await db.execute(sql`TRUNCATE TABLE customers CASCADE`);
   });
 
@@ -178,6 +181,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
     await db.delete(apiKeys);
     await db.delete(serviceInstances);
     await db.delete(escrowTransactions);
+    await db.delete(mockSuiTransactions);
     await db.delete(customers);
   });
 
@@ -437,7 +441,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
 
       // Apply tier changes
       await db.transaction(async (tx) => {
-        const count = await applyScheduledTierChanges(tx, testCustomerId, clock);
+        const count = await applyScheduledTierChanges(unsafeAsLockedTransaction(tx), testCustomerId, clock);
         expect(count).toBe(1);
       });
 
@@ -515,7 +519,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
 
       // Process cancellations
       await db.transaction(async (tx) => {
-        const count = await processScheduledCancellations(tx, testCustomerId, clock);
+        const count = await processScheduledCancellations(unsafeAsLockedTransaction(tx), testCustomerId, clock);
         expect(count).toBe(1);
       });
 

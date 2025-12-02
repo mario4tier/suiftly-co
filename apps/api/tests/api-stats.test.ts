@@ -42,7 +42,7 @@ async function insertMockLogs(options: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(options),
   });
-  return response.json();
+  return response.json() as Promise<{ success: boolean; inserted?: number; error?: string }>;
 }
 
 /**
@@ -60,7 +60,7 @@ async function insertMockMixedLogs(options: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(options),
   });
-  return response.json();
+  return response.json() as Promise<{ success: boolean; inserted?: any; error?: string }>;
 }
 
 /**
@@ -72,7 +72,7 @@ async function clearLogs(): Promise<{ success: boolean }> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({}),
   });
-  return response.json();
+  return response.json() as Promise<{ success: boolean }>;
 }
 
 describe('API: Stats Endpoints', () => {

@@ -1,12 +1,19 @@
 /**
  * Usage Charges (STATS_DESIGN.md D3)
  *
- * Adds usage-based charges to DRAFT invoices by querying stats_per_hour.
+ * Updates usage-based charges on DRAFT invoices by querying stats_per_hour.
  * Called as part of the monthly billing process on the 1st of each month.
+ *
+ * Key design: Uses the invoice's billingPeriodStart/billingPeriodEnd as the
+ * authoritative billing window. This ensures:
+ * - Only charges for the exact month the invoice is for
+ * - Idempotent: can be called multiple times safely
+ * - Tolerant: works when called on the 1st of the next month
  */
 
-import { eq } from 'drizzle-orm';
-import type { Database, DatabaseOrTransaction } from '../db';
+import { eq, sql } from 'drizzle-orm';
+import type { Database } from '../db';
+import type { LockedTransaction } from './locking';
 import { billingRecords, invoiceLineItems, serviceInstances } from '../schema';
 import { getBillableRequestCount } from '../stats/queries';
 import type { DBClock } from '@suiftly/shared/db-clock';
@@ -21,13 +28,13 @@ import {
 // ============================================================================
 
 /**
- * Result of adding usage charges to a DRAFT invoice
+ * Result of updating usage charges on a DRAFT invoice
  */
 export interface UsageChargeResult {
   success: boolean;
-  /** Total usage charges added in USD cents */
+  /** Total usage charges on the invoice in USD cents */
   totalUsageChargesCents: number;
-  /** Number of line items added */
+  /** Number of usage line items on the invoice */
   lineItemsAdded: number;
   /** Request counts per service type */
   requestCounts?: {
@@ -44,26 +51,33 @@ export interface UsageChargeResult {
 // ============================================================================
 
 /**
- * Add usage charges to a DRAFT invoice
+ * Update usage charges on a DRAFT invoice (idempotent upsert)
  *
- * Queries stats_per_hour for billable requests since last_billed_timestamp,
- * calculates charges per service type, and adds line items to the invoice.
+ * Queries stats_per_hour for billable requests within the invoice's billing period
+ * (billingPeriodStart to billingPeriodEnd), calculates charges per service type,
+ * and updates line items on the invoice.
  *
- * IMPORTANT: This function performs multiple writes (line items, timestamps, totals)
- * that must be atomic. The caller MUST wrap this in a transaction to prevent
- * double-billing on partial failures.
+ * Key design principles:
+ * - Uses invoice's billingPeriodStart/billingPeriodEnd as the authoritative window
+ * - Idempotent: deletes existing usage line items before inserting new ones
+ * - Precise: only counts requests with timestamps >= start AND < end
+ * - Tolerant: works when called on the 1st of the next month (DRAFT → PENDING)
+ *
+ * The DRAFT invoice is the single source of truth - it accumulates charges
+ * throughout the month and then transitions to PENDING for payment.
+ *
+ * IMPORTANT: This function performs multiple writes that must be atomic.
+ * The caller MUST wrap this in a transaction.
  *
  * @param tx Database or transaction instance (caller should provide transaction context)
  * @param customerId Customer ID
- * @param invoiceId DRAFT invoice ID to add charges to
- * @param clock DBClock for time reference
- * @returns Result with total charges and line items added
+ * @param invoiceId DRAFT invoice ID to update charges on
+ * @returns Result with total usage charges and line items count
  */
-export async function addUsageChargesToDraft(
-  tx: DatabaseOrTransaction,
+export async function updateUsageChargesToDraft(
+  tx: LockedTransaction,
   customerId: number,
-  invoiceId: string,
-  clock: DBClock
+  invoiceId: string
 ): Promise<UsageChargeResult> {
   // 1. Verify invoice exists and is in DRAFT status
   const [invoice] = await tx
@@ -90,13 +104,37 @@ export async function addUsageChargesToDraft(
     };
   }
 
-  // 2. Get all service instances for this customer
+  // 2. Get the current usage total (to calculate delta)
+  const existingUsageResult = await tx.execute(sql`
+    SELECT COALESCE(SUM(amount_usd_cents), 0) as total
+    FROM invoice_line_items
+    WHERE billing_record_id = ${invoiceId}
+      AND service_type IS NOT NULL
+      AND description LIKE 'Usage:%'
+  `);
+  const existingUsageTotal = Number(existingUsageResult.rows[0]?.total ?? 0);
+
+  // 3. Delete existing usage line items for idempotency
+  // This allows the function to be called multiple times safely
+  // Usage line items have a serviceType set and description starts with "Usage:"
+  await tx.execute(sql`
+    DELETE FROM invoice_line_items
+    WHERE billing_record_id = ${invoiceId}
+      AND service_type IS NOT NULL
+      AND description LIKE 'Usage:%'
+  `);
+
+  // 4. Get all service instances for this customer
   const services = await tx
     .select()
     .from(serviceInstances)
     .where(eq(serviceInstances.customerId, customerId));
 
   if (services.length === 0) {
+    // Update invoice total (subtract old usage, no new usage)
+    if (existingUsageTotal > 0) {
+      await updateInvoiceTotal(tx, invoiceId, -existingUsageTotal);
+    }
     return {
       success: true,
       totalUsageChargesCents: 0,
@@ -104,31 +142,23 @@ export async function addUsageChargesToDraft(
     };
   }
 
-  // 3. Calculate billing period
-  const billingPeriodEnd = clock.now();
+  // 5. Use invoice's billing period as the authoritative time window
+  const billingPeriodStart = new Date(invoice.billingPeriodStart);
+  const billingPeriodEnd = new Date(invoice.billingPeriodEnd);
+
   const requestCounts: Record<string, number> = {};
   let totalUsageChargesCents = 0;
   let lineItemsAdded = 0;
 
-  // 4. Process each service
+  // 6. Process each service
   for (const service of services) {
     const serviceTypeName = service.serviceType as ServiceType;
     const serviceTypeNum = SERVICE_TYPE_NUMBER[serviceTypeName];
 
     if (!serviceTypeNum) continue;
 
-    // Determine billing start time
-    // Use last_billed_timestamp if set, otherwise use billing_period_start
-    const billingPeriodStart = service.lastBilledTimestamp
-      ? new Date(service.lastBilledTimestamp)
-      : new Date(invoice.billingPeriodStart);
-
-    // Skip if no time range to bill
-    if (billingPeriodStart >= billingPeriodEnd) {
-      continue;
-    }
-
-    // 5. Query stats for billable requests
+    // 7. Query stats for billable requests within the billing period
+    // WHERE bucket >= billingPeriodStart AND bucket < billingPeriodEnd
     const requestCount = await getBillableRequestCount(
       tx,
       customerId,
@@ -143,7 +173,7 @@ export async function addUsageChargesToDraft(
 
     requestCounts[serviceTypeName] = requestCount;
 
-    // 6. Calculate charge
+    // 8. Calculate charge
     const pricePer1000 = USAGE_PRICING_CENTS_PER_1000[serviceTypeName];
     const chargeCents = Math.ceil((requestCount * pricePer1000) / 1000);
 
@@ -151,7 +181,7 @@ export async function addUsageChargesToDraft(
       continue;
     }
 
-    // 7. Add line item
+    // 9. Add line item
     await tx.insert(invoiceLineItems).values({
       billingRecordId: invoiceId,
       description: `Usage: ${serviceTypeName.charAt(0).toUpperCase() + serviceTypeName.slice(1)} - ${requestCount.toLocaleString()} requests`,
@@ -162,19 +192,12 @@ export async function addUsageChargesToDraft(
 
     totalUsageChargesCents += chargeCents;
     lineItemsAdded++;
-
-    // 8. Update last_billed_timestamp
-    await tx.update(serviceInstances)
-      .set({ lastBilledTimestamp: billingPeriodEnd })
-      .where(eq(serviceInstances.instanceId, service.instanceId));
   }
 
-  // 9. Update invoice total
-  if (totalUsageChargesCents > 0) {
-    const currentAmount = Number(invoice.amountUsdCents ?? 0);
-    await tx.update(billingRecords)
-      .set({ amountUsdCents: currentAmount + totalUsageChargesCents })
-      .where(eq(billingRecords.id, invoiceId));
+  // 10. Update invoice total with usage delta (new usage - old usage)
+  const usageDelta = totalUsageChargesCents - existingUsageTotal;
+  if (usageDelta !== 0) {
+    await updateInvoiceTotal(tx, invoiceId, usageDelta);
   }
 
   return {
@@ -184,6 +207,24 @@ export async function addUsageChargesToDraft(
     requestCounts: Object.keys(requestCounts).length > 0 ? requestCounts : undefined,
   };
 }
+
+/**
+ * Update invoice total by a delta amount
+ *
+ * This preserves any existing charges (subscription, etc.) while adjusting for usage changes.
+ */
+async function updateInvoiceTotal(
+  tx: LockedTransaction,
+  invoiceId: string,
+  deltaCents: number
+): Promise<void> {
+  await tx.execute(sql`
+    UPDATE billing_records
+    SET amount_usd_cents = amount_usd_cents + ${deltaCents}
+    WHERE id = ${invoiceId}
+  `);
+}
+
 
 /**
  * Get usage charge summary for a customer (preview without creating line items)

@@ -6,7 +6,7 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import { router, protectedProcedure } from '../lib/trpc';
-import { db } from '@suiftly/database';
+import { db, withCustomerLockForAPI } from '@suiftly/database';
 import { customers, serviceInstances, ledgerEntries } from '@suiftly/database/schema';
 import { eq, and, sql } from 'drizzle-orm';
 import { SERVICE_TYPE, SERVICE_TIER, SERVICE_STATE, BALANCE_LIMITS } from '@suiftly/shared/constants';
@@ -17,11 +17,12 @@ import { getSuiService } from '../services/sui/index.js';
 import { storeApiKey } from '../lib/api-keys';
 import {
   handleSubscriptionBilling,
-  handleTierUpgrade,
-  scheduleTierDowngrade,
-  cancelScheduledTierChange,
-  scheduleCancellation,
-  undoCancellation,
+  handleSubscriptionBillingLocked,
+  handleTierUpgradeLocked,
+  scheduleTierDowngradeLocked,
+  cancelScheduledTierChangeLocked,
+  scheduleCancellationLocked,
+  undoCancellationLocked,
   canProvisionService,
   getTierChangeOptions,
 } from '@suiftly/database/billing';
@@ -152,8 +153,12 @@ async function validateSubscription(
 export const servicesRouter = router({
   /**
    * Subscribe to a service
+   *
+   * Uses customer-level advisory lock for the entire operation to prevent
+   * race conditions between API and Global Manager.
+   *
    * Service-First pattern: Create service → Charge → Update pending flag
-   * This ensures audit trail exists before any payment attempt
+   * This ensures audit trail exists before any payment attempt.
    */
   subscribe: protectedProcedure
     .input(subscribeInputSchema)
@@ -168,32 +173,22 @@ export const servicesRouter = router({
       // Apply test delay if configured
       await testDelayManager.applyDelay('subscribe');
 
-      // 1. Validate subscription
-      const validation = await validateSubscription(
-        ctx.user!.customerId,
-        input.serviceType,
-        input.tier
-      );
-
-      if (!validation.valid) {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: validation.errors![0].message,
-          cause: validation.errors,
-        });
-      }
-
-      // 2. Get tier price (from in-memory cache - O(1) lookup, no database query)
+      // Get tier price upfront (from in-memory cache - O(1) lookup, no database query)
       const priceUsdCents = getTierPriceUsdCents(input.tier);
+      const suiService = getSuiService();
 
-      // 3. Create service FIRST in transaction (with subscription_charge_pending=true)
-      const { service, apiKey } = await db.transaction(async (tx) => {
-        // Lock customer row and get data
-        const [customer] = await tx
+      // Wrap entire operation in customer advisory lock
+      // This prevents race conditions between concurrent API requests
+      // and the Global Manager billing processor
+      return await withCustomerLockForAPI(
+        ctx.user.customerId,
+        'subscribe',
+        async (tx) => {
+          // 1. Get customer (inside lock)
+          const [customer] = await tx
           .select()
           .from(customers)
           .where(eq(customers.customerId, ctx.user!.customerId))
-          .for('update')
           .limit(1);
 
         if (!customer) {
@@ -203,7 +198,7 @@ export const servicesRouter = router({
           });
         }
 
-        // Check if service already exists (idempotency check)
+        // 2. Check if service already exists (idempotency check)
         const existing = await tx.query.serviceInstances.findFirst({
           where: and(
             eq(serviceInstances.customerId, ctx.user!.customerId),
@@ -214,10 +209,15 @@ export const servicesRouter = router({
         if (existing) {
           // Already subscribed - return existing instance (idempotent)
           // Note: API key was already created, won't be returned again
-          return { service: existing, apiKey: null };
+          return {
+            ...existing,
+            subscriptionChargePending: existing.subscriptionChargePending,
+            apiKey: null as string | null,
+            paymentPending: existing.subscriptionChargePending,
+          };
         }
 
-        // Initialize config with defaults based on tier
+        // 3. Initialize config with defaults based on tier
         const defaultConfig = {
           tier: input.tier,
           burstEnabled: input.tier !== SERVICE_TIER.STARTER, // Enabled by default for Pro/Enterprise
@@ -230,7 +230,7 @@ export const servicesRouter = router({
           ipAllowlist: [],
         };
 
-        // Create service in DISABLED state with subscription_charge_pending=true
+        // 4. Create service in DISABLED state with subscription_charge_pending=true
         // This creates an audit trail BEFORE attempting any payment
         const [newService] = await tx
           .insert(serviceInstances)
@@ -245,52 +245,41 @@ export const servicesRouter = router({
           })
           .returning();
 
-        // Generate initial API key immediately (part of service creation)
-        const { plainKey, record: apiKeyRecord } = await storeApiKey({
+        // 5. Generate initial API key immediately (part of service creation)
+        const { plainKey } = await storeApiKey({
           customerId: ctx.user!.customerId,
           serviceType: input.serviceType,
           metadata: {
             generatedAt: 'subscription',
             instanceId: newService.instanceId,
           },
-          tx, // Pass transaction object to avoid deadlock
+          tx, // Pass locked transaction
         });
 
-        return { service: newService, apiKey: plainKey };
-      });
-
-      // 4. Transaction committed - service exists in database now
-      // This ensures we always have an audit trail before charging
-
-      // 5. Get customer for charge (non-transaction read)
-      const customer = await db.query.customers.findFirst({
-        where: eq(customers.customerId, ctx.user!.customerId),
-      });
-
-      if (!customer) {
-        throw new TRPCError({
-          code: 'NOT_FOUND',
-          message: 'Customer not found',
-        });
-      }
-
-      // 6. Use billing engine to handle subscription payment
-      //    This creates:
-      //    - Immediate invoice for first month (full charge)
-      //    - DRAFT invoice for next billing cycle
-      //    - Reconciliation credit for partial month
-      const suiService = getSuiService();
-
-      try {
-        const billingResult = await handleSubscriptionBilling(
-          db,
-          ctx.user!.customerId,
-          input.serviceType,
-          input.tier,
-          priceUsdCents,
-          suiService,
-          dbClock
-        );
+        // 6. Process billing (using locked version - we already hold the lock)
+        let billingResult;
+        try {
+          billingResult = await handleSubscriptionBillingLocked(
+            tx,
+            ctx.user!.customerId,
+            input.serviceType,
+            input.tier,
+            priceUsdCents,
+            suiService,
+            dbClock
+          );
+        } catch (billingError) {
+          // Unexpected error during billing - service created but payment failed
+          console.error('[SUBSCRIBE] Unexpected billing error:', billingError);
+          return {
+            ...newService,
+            subscriptionChargePending: true,
+            apiKey: plainKey,
+            paymentPending: true,
+            paymentError: 'UNEXPECTED_ERROR',
+            paymentErrorMessage: billingError instanceof Error ? billingError.message : 'Unexpected error',
+          };
+        }
 
         if (!billingResult.paymentSuccessful) {
           // Payment failed - service exists but can't be enabled
@@ -307,9 +296,9 @@ export const servicesRouter = router({
           }
 
           return {
-            ...service,
+            ...newService,
             subscriptionChargePending: true,
-            apiKey: apiKey,
+            apiKey: plainKey,
             paymentPending: true,
             paymentError: billingResult.error?.includes('No escrow account')
               ? 'NO_ESCROW_ACCOUNT'
@@ -318,55 +307,36 @@ export const servicesRouter = router({
           };
         }
 
-        // 7. Payment succeeded - clear pending flag and record ledger entry atomically
-        //    IMPORTANT: These must be in a transaction to prevent double-billing
-        //    if server crashes after billing succeeds but before clearing the pending flag
-        await db.transaction(async (tx) => {
-          // Clear pending flag, keep service OFF for user to configure before enabling
-          await tx
-            .update(serviceInstances)
-            .set({
-              state: SERVICE_STATE.DISABLED, // Keep disabled - user must manually enable after config
-              subscriptionChargePending: false,
-              isUserEnabled: false, // Service stays OFF - user enables when ready
-            })
-            .where(eq(serviceInstances.instanceId, service.instanceId));
+        // 7. Payment succeeded - clear pending flag (same transaction)
+        await tx
+          .update(serviceInstances)
+          .set({
+            state: SERVICE_STATE.DISABLED, // Keep disabled - user must manually enable after config
+            subscriptionChargePending: false,
+            isUserEnabled: false, // Service stays OFF - user enables when ready
+          })
+          .where(eq(serviceInstances.instanceId, newService.instanceId));
 
-          // Note: DRAFT invoice already calculated correctly by handleSubscriptionBilling()
-          // It includes all subscribed services regardless of enable/disable toggle state
-
-          // Record charge in ledger
-          await tx.insert(ledgerEntries).values({
-            customerId: ctx.user!.customerId,
-            type: 'charge',
-            amountUsdCents: priceUsdCents,
-            description: `${input.serviceType} ${input.tier} tier subscription`,
-            createdAt: new Date(),
-          });
+        // 8. Record charge in ledger
+        await tx.insert(ledgerEntries).values({
+          customerId: ctx.user!.customerId,
+          type: 'charge',
+          amountUsdCents: priceUsdCents,
+          description: `${input.serviceType} ${input.tier} tier subscription`,
+          createdAt: new Date(),
         });
 
-        // 9. Return service with API key
-        return {
-          ...service,
-          subscriptionChargePending: false,
-          isUserEnabled: false, // Service OFF - user must manually enable
-          apiKey: apiKey,
-          paymentPending: false,
-        };
-
-      } catch (billingError) {
-        // Unexpected error during billing
-        console.error('[SUBSCRIBE] Unexpected billing error:', billingError);
-
-        return {
-          ...service,
-          subscriptionChargePending: true,
-          apiKey: apiKey,
-          paymentPending: true,
-          paymentError: 'UNEXPECTED_ERROR',
-          paymentErrorMessage: billingError instanceof Error ? billingError.message : 'Unexpected error',
-        };
-      }
+          // 9. Return service with API key
+          return {
+            ...newService,
+            subscriptionChargePending: false,
+            isUserEnabled: false, // Service OFF - user must manually enable
+            apiKey: plainKey,
+            paymentPending: false,
+          };
+        },
+        { serviceType: input.serviceType, tier: input.tier }
+      );
     }),
 
   /**
@@ -415,6 +385,8 @@ export const servicesRouter = router({
   /**
    * Toggle service enabled/disabled state
    * Transitions between State 3 (Disabled) ↔ State 4 (Enabled)
+   *
+   * Uses customer-level advisory lock to prevent race conditions.
    */
   toggleService: protectedProcedure
     .input(z.object({
@@ -433,85 +405,95 @@ export const servicesRouter = router({
         });
       }
 
-      const service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, ctx.user.customerId),
-          eq(serviceInstances.serviceType, input.serviceType)
-        ),
-      });
-
-      if (!service) {
-        throw new TRPCError({
-          code: 'NOT_FOUND',
-          message: 'Service not found',
-        });
-      }
-
-      // Check if subscription charge is pending when trying to enable
-      // Only validate funds when payment is still pending (not yet paid)
-      if (service.subscriptionChargePending && input.enabled) {
-        // Get customer to check account status
-        const customer = await db.query.customers.findFirst({
-          where: eq(customers.customerId, ctx.user.customerId),
-        });
-
-        if (!customer) {
-          throw new TRPCError({
-            code: 'NOT_FOUND',
-            message: 'Customer not found',
+      // Wrap entire operation in customer advisory lock
+      return await withCustomerLockForAPI(
+        ctx.user.customerId,
+        'toggleService',
+        async (tx) => {
+          const service = await tx.query.serviceInstances.findFirst({
+            where: and(
+              eq(serviceInstances.customerId, ctx.user!.customerId),
+              eq(serviceInstances.serviceType, input.serviceType)
+            ),
           });
-        }
 
-        // Check escrow account balance
-        const suiService = getSuiService();
-        const account = await suiService.getAccount(customer.walletAddress);
-        const tierPrice = getTierPriceUsdCents(service.tier);
+          if (!service) {
+            throw new TRPCError({
+              code: 'NOT_FOUND',
+              message: 'Service not found',
+            });
+          }
 
-        console.log('[TOGGLE] Validating funds for pending charge - Account:', account ? {
-          balance: account.balanceUsdCents,
-          tierPrice,
-          hasAccount: !!account
-        } : 'null');
+          // Check if subscription charge is pending when trying to enable
+          // Only validate funds when payment is still pending (not yet paid)
+          if (service.subscriptionChargePending && input.enabled) {
+            // Get customer to check account status
+            const customer = await tx.query.customers.findFirst({
+              where: eq(customers.customerId, ctx.user!.customerId),
+            });
 
-        // If no account exists or insufficient balance, guide to deposit
-        if (!account || account.balanceUsdCents < tierPrice) {
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: 'Insufficient funds. Deposit to proceed via Billing page.',
-          });
-        }
+            if (!customer) {
+              throw new TRPCError({
+                code: 'NOT_FOUND',
+                message: 'Customer not found',
+              });
+            }
 
-        // Account exists with funds but charge still pending - something else went wrong
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: 'Cannot enable service: subscription payment pending. Please contact support if this persists.',
-        });
-      }
+            // Check escrow account balance
+            const suiService = getSuiService();
+            const account = await suiService.getAccount(customer.walletAddress);
+            const tierPrice = getTierPriceUsdCents(service.tier);
 
-      // Only allow toggling if service is in disabled or enabled state
-      if (service.state !== SERVICE_STATE.DISABLED && service.state !== SERVICE_STATE.ENABLED) {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: `Cannot toggle service in state: ${service.state}`,
-        });
-      }
+            console.log('[TOGGLE] Validating funds for pending charge - Account:', account ? {
+              balance: account.balanceUsdCents,
+              tierPrice,
+              hasAccount: !!account
+            } : 'null');
 
-      const [updatedService] = await db
-        .update(serviceInstances)
-        .set({
-          isUserEnabled: input.enabled,
-          state: input.enabled ? SERVICE_STATE.ENABLED : SERVICE_STATE.DISABLED,
-          enabledAt: input.enabled ? new Date() : service.enabledAt,
-          disabledAt: !input.enabled ? new Date() : service.disabledAt,
-        })
-        .where(eq(serviceInstances.instanceId, service.instanceId))
-        .returning();
+            // If no account exists or insufficient balance, guide to deposit
+            if (!account || account.balanceUsdCents < tierPrice) {
+              throw new TRPCError({
+                code: 'BAD_REQUEST',
+                message: 'Insufficient funds. Deposit to proceed via Billing page.',
+              });
+            }
 
-      return updatedService;
+            // Account exists with funds but charge still pending - something else went wrong
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'Cannot enable service: subscription payment pending. Please contact support if this persists.',
+            });
+          }
+
+          // Only allow toggling if service is in disabled or enabled state
+          if (service.state !== SERVICE_STATE.DISABLED && service.state !== SERVICE_STATE.ENABLED) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: `Cannot toggle service in state: ${service.state}`,
+            });
+          }
+
+          const [updatedService] = await tx
+            .update(serviceInstances)
+            .set({
+              isUserEnabled: input.enabled,
+              state: input.enabled ? SERVICE_STATE.ENABLED : SERVICE_STATE.DISABLED,
+              enabledAt: input.enabled ? new Date() : service.enabledAt,
+              disabledAt: !input.enabled ? new Date() : service.disabledAt,
+            })
+            .where(eq(serviceInstances.instanceId, service.instanceId))
+            .returning();
+
+          return updatedService;
+        },
+        { serviceType: input.serviceType, enabled: input.enabled }
+      );
     }),
 
   /**
    * Update service configuration (burst, IP allowlist)
+   *
+   * Uses customer-level advisory lock to prevent race conditions.
    */
   updateConfig: protectedProcedure
     .input(z.object({
@@ -527,64 +509,72 @@ export const servicesRouter = router({
         });
       }
 
-      const service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, ctx.user.customerId),
-          eq(serviceInstances.serviceType, input.serviceType)
-        ),
-      });
+      // Wrap entire operation in customer advisory lock
+      return await withCustomerLockForAPI(
+        ctx.user.customerId,
+        'updateConfig',
+        async (tx) => {
+          const service = await tx.query.serviceInstances.findFirst({
+            where: and(
+              eq(serviceInstances.customerId, ctx.user!.customerId),
+              eq(serviceInstances.serviceType, input.serviceType)
+            ),
+          });
 
-      if (!service) {
-        throw new TRPCError({
-          code: 'NOT_FOUND',
-          message: 'Service not found',
-        });
-      }
+          if (!service) {
+            throw new TRPCError({
+              code: 'NOT_FOUND',
+              message: 'Service not found',
+            });
+          }
 
-      // Get current config or create new one
-      const currentConfig = service.config as any || {
-        tier: service.tier,
-        burstEnabled: false,
-        totalSealKeys: 1,
-        packagesPerSealKey: 3,
-        totalApiKeys: 2,
-        purchasedSealKeys: 0,
-        purchasedPackages: 0,
-        purchasedApiKeys: 0,
-      };
+          // Get current config or create new one
+          const currentConfig = service.config as any || {
+            tier: service.tier,
+            burstEnabled: false,
+            totalSealKeys: 1,
+            packagesPerSealKey: 3,
+            totalApiKeys: 2,
+            purchasedSealKeys: 0,
+            purchasedPackages: 0,
+            purchasedApiKeys: 0,
+          };
 
-      // Update only the fields that were provided
-      const updatedConfig = {
-        ...currentConfig,
-        ...(input.burstEnabled !== undefined && { burstEnabled: input.burstEnabled }),
-        ...(input.ipAllowlist !== undefined && { ipAllowlist: input.ipAllowlist }),
-      };
+          // Update only the fields that were provided
+          const updatedConfig = {
+            ...currentConfig,
+            ...(input.burstEnabled !== undefined && { burstEnabled: input.burstEnabled }),
+            ...(input.ipAllowlist !== undefined && { ipAllowlist: input.ipAllowlist }),
+          };
 
-      // Validate burst is only for Pro/Enterprise
-      if (updatedConfig.burstEnabled && service.tier === SERVICE_TIER.STARTER) {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: 'Burst is only available for Pro and Enterprise tiers',
-        });
-      }
+          // Validate burst is only for Pro/Enterprise
+          if (updatedConfig.burstEnabled && service.tier === SERVICE_TIER.STARTER) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'Burst is only available for Pro and Enterprise tiers',
+            });
+          }
 
-      // Validate IP allowlist is only for Pro/Enterprise
-      if (updatedConfig.ipAllowlist?.length > 0 && service.tier === SERVICE_TIER.STARTER) {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: 'IP allowlist is only available for Pro and Enterprise tiers',
-        });
-      }
+          // Validate IP allowlist is only for Pro/Enterprise
+          if (updatedConfig.ipAllowlist?.length > 0 && service.tier === SERVICE_TIER.STARTER) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'IP allowlist is only available for Pro and Enterprise tiers',
+            });
+          }
 
-      const [updated] = await db
-        .update(serviceInstances)
-        .set({
-          config: updatedConfig,
-        })
-        .where(eq(serviceInstances.instanceId, service.instanceId))
-        .returning();
+          const [updated] = await tx
+            .update(serviceInstances)
+            .set({
+              config: updatedConfig,
+            })
+            .where(eq(serviceInstances.instanceId, service.instanceId))
+            .returning();
 
-      return updated;
+          return updated;
+        },
+        { serviceType: input.serviceType }
+      );
     }),
 
   // ==========================================================================
@@ -646,13 +636,21 @@ export const servicesRouter = router({
 
       const suiService = getSuiService();
 
-      const result = await handleTierUpgrade(
-        db,
+      // Acquire customer lock at route level for consistency
+      const result = await withCustomerLockForAPI(
         ctx.user.customerId,
-        input.serviceType as 'seal' | 'grpc' | 'graphql',
-        input.newTier as 'starter' | 'pro' | 'enterprise',
-        suiService,
-        dbClock
+        'upgradeTier',
+        async (tx) => {
+          return await handleTierUpgradeLocked(
+            tx,
+            ctx.user!.customerId,
+            input.serviceType as 'seal' | 'grpc' | 'graphql',
+            input.newTier as 'starter' | 'pro' | 'enterprise',
+            suiService,
+            dbClock
+          );
+        },
+        { serviceType: input.serviceType, newTier: input.newTier }
       );
 
       if (!result.success) {
@@ -690,12 +688,19 @@ export const servicesRouter = router({
       // Apply test delay if configured
       await testDelayManager.applyDelay('tierChange');
 
-      const result = await scheduleTierDowngrade(
-        db,
+      const result = await withCustomerLockForAPI(
         ctx.user.customerId,
-        input.serviceType as 'seal' | 'grpc' | 'graphql',
-        input.newTier as 'starter' | 'pro' | 'enterprise',
-        dbClock
+        'scheduleTierDowngrade',
+        async (tx) => {
+          return await scheduleTierDowngradeLocked(
+            tx,
+            ctx.user!.customerId,
+            input.serviceType as 'seal' | 'grpc' | 'graphql',
+            input.newTier as 'starter' | 'pro' | 'enterprise',
+            dbClock
+          );
+        },
+        { serviceType: input.serviceType, newTier: input.newTier }
       );
 
       if (!result.success) {
@@ -727,11 +732,18 @@ export const servicesRouter = router({
         });
       }
 
-      const result = await cancelScheduledTierChange(
-        db,
+      const result = await withCustomerLockForAPI(
         ctx.user.customerId,
-        input.serviceType as 'seal' | 'grpc' | 'graphql',
-        dbClock
+        'cancelScheduledTierChange',
+        async (tx) => {
+          return await cancelScheduledTierChangeLocked(
+            tx,
+            ctx.user!.customerId,
+            input.serviceType as 'seal' | 'grpc' | 'graphql',
+            dbClock
+          );
+        },
+        { serviceType: input.serviceType }
       );
 
       if (!result.success) {
@@ -763,11 +775,18 @@ export const servicesRouter = router({
       // Apply test delay if configured
       await testDelayManager.applyDelay('cancellation');
 
-      const result = await scheduleCancellation(
-        db,
+      const result = await withCustomerLockForAPI(
         ctx.user.customerId,
-        input.serviceType as 'seal' | 'grpc' | 'graphql',
-        dbClock
+        'scheduleCancellation',
+        async (tx) => {
+          return await scheduleCancellationLocked(
+            tx,
+            ctx.user!.customerId,
+            input.serviceType as 'seal' | 'grpc' | 'graphql',
+            dbClock
+          );
+        },
+        { serviceType: input.serviceType }
       );
 
       if (!result.success) {
@@ -799,11 +818,18 @@ export const servicesRouter = router({
         });
       }
 
-      const result = await undoCancellation(
-        db,
+      const result = await withCustomerLockForAPI(
         ctx.user.customerId,
-        input.serviceType as 'seal' | 'grpc' | 'graphql',
-        dbClock
+        'undoCancellation',
+        async (tx) => {
+          return await undoCancellationLocked(
+            tx,
+            ctx.user!.customerId,
+            input.serviceType as 'seal' | 'grpc' | 'graphql',
+            dbClock
+          );
+        },
+        { serviceType: input.serviceType }
       );
 
       if (!result.success) {

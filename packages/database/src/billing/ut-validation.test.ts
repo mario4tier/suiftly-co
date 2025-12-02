@@ -14,12 +14,14 @@ import {
   billingIdempotency,
   invoicePayments,
   escrowTransactions,
+  mockSuiTransactions,
 } from '../schema';
 import { MockDBClock } from '@suiftly/shared/db-clock';
 import { validateInvoiceBeforeCharging, ensureInvoiceValid } from './validation';
 import { handleSubscriptionBilling, recalculateDraftInvoice } from './service-billing';
 import { issueCredit } from './credits';
 import { logInternalError } from './admin-notifications';
+import { unsafeAsLockedTransaction } from './test-helpers';
 import { eq, and, sql } from 'drizzle-orm';
 import type { ISuiService, TransactionResult, ChargeParams } from '@suiftly/shared/sui-service';
 import { adminNotifications } from '../schema/admin';
@@ -73,6 +75,7 @@ describe('Invoice Validation', () => {
     await db.execute(sql`TRUNCATE TABLE customer_credits CASCADE`);
     await db.execute(sql`TRUNCATE TABLE service_instances CASCADE`);
     await db.execute(sql`TRUNCATE TABLE escrow_transactions CASCADE`);
+    await db.execute(sql`TRUNCATE TABLE mock_sui_transactions CASCADE`);
     await db.execute(sql`TRUNCATE TABLE customers CASCADE`);
   });
 
@@ -104,6 +107,7 @@ describe('Invoice Validation', () => {
     await db.delete(customerCredits);
     await db.delete(serviceInstances);
     await db.delete(escrowTransactions);
+    await db.delete(mockSuiTransactions);
     await db.delete(customers);
   });
 
@@ -139,7 +143,6 @@ describe('Invoice Validation', () => {
         tier: 'pro',
         isUserEnabled: true,
         config: { tier: 'pro' },
-        createdAt: clock.now(),
       });
 
       // Create DRAFT with WRONG amount (bug scenario - stale DRAFT)
@@ -173,7 +176,6 @@ describe('Invoice Validation', () => {
         tier: 'pro',
         isUserEnabled: true,
         config: { tier: 'pro' },
-        createdAt: clock.now(),
       });
 
       // Create DRAFT with CORRECT amount
@@ -322,7 +324,6 @@ describe('Invoice Validation', () => {
         tier: 'pro',
         isUserEnabled: true,
         config: { tier: 'pro' },
-        createdAt: clock.now(),
       });
 
       // Create DRAFT with wrong amount
@@ -376,7 +377,7 @@ describe('Invoice Validation', () => {
 
       // Recalculate DRAFT (no subscribed services, so amount = $0)
       await db.transaction(async (tx) => {
-        await recalculateDraftInvoice(tx, testCustomerId, clock);
+        await recalculateDraftInvoice(unsafeAsLockedTransaction(tx), testCustomerId, clock);
       });
 
       // Verify warning was logged to admin_notifications
