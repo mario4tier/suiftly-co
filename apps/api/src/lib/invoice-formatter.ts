@@ -14,7 +14,7 @@
 
 import { db } from '@suiftly/database';
 import { getTierPriceUsdCents } from '@suiftly/shared/pricing';
-import { customerCredits, serviceInstances } from '@suiftly/database/schema';
+import { customerCredits, serviceInstances, invoiceLineItems } from '@suiftly/database/schema';
 import { eq, and, sql, gt, isNull } from 'drizzle-orm';
 import { dbClock } from '@suiftly/shared/db-clock';
 
@@ -32,6 +32,7 @@ export interface InvoiceLineItem {
  *
  * Calculates what will be charged on the 1st of next month, including:
  * - Service subscriptions (by name: "Seal Pro tier")
+ * - Usage charges (from invoice_line_items table, synced periodically)
  * - Add-ons (future: "Seal - 2 extra keys")
  * - Available credits (will be applied when DRAFT → PENDING)
  *
@@ -44,12 +45,14 @@ export interface InvoiceLineItem {
  * @param customerId Customer ID
  * @param draftAmountCents DRAFT invoice gross amount
  * @param billingPeriodStart Invoice due date (1st of next month) - used to calculate credit month
+ * @param draftInvoiceId Optional DRAFT invoice ID to query usage line items from
  * @returns Array of line items
  */
 export async function buildDraftLineItems(
   customerId: number,
   draftAmountCents: number,
-  billingPeriodStart?: Date
+  billingPeriodStart?: Date,
+  draftInvoiceId?: string
 ): Promise<InvoiceLineItem[]> {
   const lineItems: InvoiceLineItem[] = [];
 
@@ -79,6 +82,28 @@ export async function buildDraftLineItems(
 
     // Future: Add-ons would be additional line items here
     // e.g., "Seal - 2 extra keys @ $5/mo"
+  }
+
+  // Get usage line items from invoice_line_items table (synced periodically)
+  // Usage line items have service_type set; subscription/credit line items don't
+  if (draftInvoiceId) {
+    const usageItems = await db
+      .select()
+      .from(invoiceLineItems)
+      .where(
+        and(
+          eq(invoiceLineItems.billingRecordId, draftInvoiceId),
+          sql`${invoiceLineItems.serviceType} IS NOT NULL`
+        )
+      );
+
+    for (const item of usageItems) {
+      lineItems.push({
+        description: item.description,
+        amountUsd: Number(item.amountUsdCents) / 100,
+        type: 'usage',
+      });
+    }
   }
 
   // Get available credits

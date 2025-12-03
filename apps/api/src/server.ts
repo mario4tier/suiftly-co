@@ -439,10 +439,10 @@ if (config.NODE_ENV !== 'production') {
       escrowAddress: account.accountAddress,
     });
 
-    // If successful, create ledger entry
+    // If successful, create invoice (billing record) and ledger entry
     if (result.success) {
       const { db } = await import('@suiftly/database');
-      const { ledgerEntries, customers } = await import('@suiftly/database/schema');
+      const { ledgerEntries, customers, billingRecords, invoiceLineItems } = await import('@suiftly/database/schema');
       const { eq } = await import('drizzle-orm');
 
       const customer = await db.query.customers.findFirst({
@@ -450,10 +450,37 @@ if (config.NODE_ENV !== 'production') {
       });
 
       if (customer) {
+        const amountCents = Math.round(amountUsd * 100);
+        const now = new Date();
+
+        // Create invoice (billing record) with status 'paid'
+        const [invoice] = await db.insert(billingRecords).values({
+          customerId: customer.customerId,
+          billingPeriodStart: now,
+          billingPeriodEnd: now,
+          amountUsdCents: amountCents,
+          amountPaidUsdCents: amountCents,
+          type: 'charge',
+          status: 'paid',
+          billingType: 'immediate',
+          txDigest: hexToBuffer(result.digest),
+          createdAt: now,
+        }).returning({ id: billingRecords.id });
+
+        // Create line item for display
+        await db.insert(invoiceLineItems).values({
+          billingRecordId: invoice.id,
+          description,
+          amountUsdCents: amountCents,
+          quantity: 1,
+        });
+
+        // Also create ledger entry for audit trail
         await db.insert(ledgerEntries).values({
           customerId: customer.customerId,
+          invoiceId: invoice.id,
           type: 'charge',
-          amountUsdCents: Math.round(amountUsd * 100),
+          amountUsdCents: amountCents,
           txDigest: hexToBuffer(result.digest),
           description,
         });
@@ -504,10 +531,10 @@ if (config.NODE_ENV !== 'production') {
       escrowAddress: account.accountAddress,
     });
 
-    // If successful, create ledger entry
+    // If successful, create invoice (billing record) and ledger entry
     if (result.success) {
       const { db } = await import('@suiftly/database');
-      const { ledgerEntries, customers } = await import('@suiftly/database/schema');
+      const { ledgerEntries, customers, billingRecords, invoiceLineItems } = await import('@suiftly/database/schema');
       const { eq } = await import('drizzle-orm');
 
       const customer = await db.query.customers.findFirst({
@@ -515,10 +542,37 @@ if (config.NODE_ENV !== 'production') {
       });
 
       if (customer) {
+        const amountCents = Math.round(amountUsd * 100);
+        const now = new Date();
+
+        // Create invoice (billing record) with status 'paid' and type 'credit'
+        const [invoice] = await db.insert(billingRecords).values({
+          customerId: customer.customerId,
+          billingPeriodStart: now,
+          billingPeriodEnd: now,
+          amountUsdCents: amountCents,
+          amountPaidUsdCents: amountCents,
+          type: 'credit',
+          status: 'paid',
+          billingType: 'immediate',
+          txDigest: hexToBuffer(result.digest),
+          createdAt: now,
+        }).returning({ id: billingRecords.id });
+
+        // Create line item for display
+        await db.insert(invoiceLineItems).values({
+          billingRecordId: invoice.id,
+          description,
+          amountUsdCents: amountCents,
+          quantity: 1,
+        });
+
+        // Also create ledger entry for audit trail
         await db.insert(ledgerEntries).values({
           customerId: customer.customerId,
+          invoiceId: invoice.id,
           type: 'credit',
-          amountUsdCents: Math.round(amountUsd * 100),
+          amountUsdCents: amountCents,
           txDigest: hexToBuffer(result.digest),
           description,
         });

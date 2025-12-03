@@ -12,9 +12,15 @@
 
 import { eq, and, lte, gt, isNotNull, sql } from 'drizzle-orm';
 import type { Database } from '../db';
-import { serviceInstances, serviceCancellationHistory, customers, billingRecords } from '../schema';
+import { serviceInstances, serviceCancellationHistory, billingRecords } from '../schema';
 import { withCustomerLock, type LockedTransaction } from './locking';
-import { createAndChargeImmediately, getOrCreateDraftInvoice, updateDraftInvoiceAmount } from './invoices';
+import {
+  createAndChargeImmediately,
+  getOrCreateDraftInvoice,
+  updateDraftInvoiceAmount,
+  createPendingInvoiceCommitted,
+  voidInvoice,
+} from './invoices';
 import { processInvoicePayment } from './payments';
 import { recalculateDraftInvoice, calculateProRatedUpgradeCharge } from './service-billing';
 import { getTierPriceUsdCents, TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
@@ -285,6 +291,270 @@ export async function handleTierUpgradeLocked(
     success: true,
     newTier,
     chargeAmountUsdCents: chargeAmountCents,
+    invoiceId,
+  };
+}
+
+// ============================================================================
+// Two-Phase Commit for Tier Upgrade (Crash-Safe)
+// ============================================================================
+//
+// Route code should call these functions with explicit locking:
+//
+// // Phase 1: Lock → validate → calculate
+// const phase1 = await withCustomerLockForAPI(customerId, 'upgradeTier:phase1', (tx) =>
+//   prepareTierUpgradePhase1Locked(tx, customerId, serviceType, newTier, clock)
+// );
+// if (!phase1.canProceed) return error;
+// if (phase1.useSimplePath) { /* use handleTierUpgradeLocked */ }
+//
+// // Create invoice (commits immediately, NO LOCK)
+// const invoiceId = await createUpgradeInvoiceCommitted(customerId, phase1, clock);
+//
+// // Phase 2: Lock → pay → update tier
+// const result = await withCustomerLockForAPI(customerId, 'upgradeTier:phase2', (tx) =>
+//   executeTierUpgradePhase2Locked(tx, customerId, serviceType, newTier, phase1.currentTier, invoiceId, suiService, clock)
+// );
+// ============================================================================
+
+/**
+ * Result from Phase 1 of tier upgrade
+ */
+export interface TierUpgradePhase1Result {
+  canProceed: boolean;
+  currentTier?: ServiceTier;
+  chargeAmountUsdCents: number;
+  description?: string;
+  error?: string;
+  // If true, use simple single-transaction path (no charge needed)
+  useSimplePath?: boolean;
+}
+
+/**
+ * Phase 1: Validate and calculate upgrade charge (REQUIRES LOCK)
+ *
+ * Call via withCustomerLockForAPI in route code.
+ * Returns information needed to create the invoice.
+ *
+ * @param tx Locked transaction from withCustomerLockForAPI
+ * @param customerId Customer ID
+ * @param serviceType Service type to upgrade
+ * @param newTier New tier (must be higher than current)
+ * @param clock DBClock for timestamps
+ * @returns Phase 1 result with charge info
+ */
+export async function prepareTierUpgradePhase1Locked(
+  tx: LockedTransaction,
+  customerId: number,
+  serviceType: ServiceType,
+  newTier: ServiceTier,
+  clock: DBClock
+): Promise<TierUpgradePhase1Result> {
+  // Get current service
+  const [service] = await tx
+    .select()
+    .from(serviceInstances)
+    .where(and(
+      eq(serviceInstances.customerId, customerId),
+      eq(serviceInstances.serviceType, serviceType)
+    ))
+    .limit(1);
+
+  if (!service) {
+    return {
+      canProceed: false,
+      chargeAmountUsdCents: 0,
+      error: 'Service not found',
+    };
+  }
+
+  // Block tier changes if cancellation is scheduled
+  if (service.cancellationScheduledFor) {
+    return {
+      canProceed: false,
+      chargeAmountUsdCents: 0,
+      error: 'Cannot change tier while cancellation is scheduled. Please undo the cancellation first.',
+    };
+  }
+
+  // Validate upgrade (new tier must be higher priced)
+  const currentTierPrice = getTierPriceUsdCents(service.tier);
+  const newTierPrice = getTierPriceUsdCents(newTier);
+
+  if (newTierPrice <= currentTierPrice) {
+    return {
+      canProceed: false,
+      chargeAmountUsdCents: 0,
+      error: 'New tier must have higher price than current tier. Use downgrade for lower tiers.',
+    };
+  }
+
+  // If user has never paid, use simple single-transaction path
+  if (!service.paidOnce) {
+    return {
+      canProceed: true,
+      currentTier: service.tier,
+      chargeAmountUsdCents: 0,
+      useSimplePath: true,
+    };
+  }
+
+  // Calculate pro-rated charge
+  const chargeAmountCents = calculateProRatedUpgradeCharge(
+    currentTierPrice,
+    newTierPrice,
+    clock
+  );
+
+  // If charge is $0 (grace period), use simple single-transaction path
+  if (chargeAmountCents === 0) {
+    return {
+      canProceed: true,
+      currentTier: service.tier,
+      chargeAmountUsdCents: 0,
+      useSimplePath: true,
+    };
+  }
+
+  return {
+    canProceed: true,
+    currentTier: service.tier,
+    chargeAmountUsdCents: chargeAmountCents,
+    description: `${serviceType} tier upgrade: ${service.tier} → ${newTier} (pro-rated)`,
+  };
+}
+
+/**
+ * Create upgrade invoice (COMMITS IMMEDIATELY, NO LOCK REQUIRED)
+ *
+ * Called between Phase 1 and Phase 2 locks. The invoice is committed
+ * immediately to ensure an audit trail exists before the on-chain charge.
+ *
+ * @param customerId Customer ID
+ * @param phase1Result Result from prepareTierUpgradePhase1Locked
+ * @param clock DBClock for timestamps
+ * @returns Invoice ID
+ */
+export async function createUpgradeInvoiceCommitted(
+  customerId: number,
+  phase1Result: TierUpgradePhase1Result,
+  clock: DBClock
+): Promise<string> {
+  if (!phase1Result.canProceed || !phase1Result.description) {
+    throw new Error('Cannot create invoice: Phase 1 did not succeed');
+  }
+
+  return await createPendingInvoiceCommitted(
+    {
+      customerId,
+      amountUsdCents: phase1Result.chargeAmountUsdCents,
+      type: 'charge',
+      description: phase1Result.description,
+      billingPeriodStart: clock.now(),
+      billingPeriodEnd: getEndOfMonth(clock),
+      dueDate: clock.now(),
+    },
+    clock
+  );
+}
+
+/**
+ * Phase 2: Execute payment and update tier (REQUIRES LOCK)
+ *
+ * Call via withCustomerLockForAPI in route code.
+ * Re-validates state, processes payment, and updates the tier if successful.
+ *
+ * @param tx Locked transaction from withCustomerLockForAPI
+ * @param customerId Customer ID
+ * @param serviceType Service type to upgrade
+ * @param newTier New tier
+ * @param expectedCurrentTier Expected current tier (from Phase 1)
+ * @param invoiceId Pre-created invoice ID
+ * @param suiService Sui service for payment
+ * @param clock DBClock for timestamps
+ * @returns Upgrade result
+ */
+export async function executeTierUpgradePhase2Locked(
+  tx: LockedTransaction,
+  customerId: number,
+  serviceType: ServiceType,
+  newTier: ServiceTier,
+  expectedCurrentTier: ServiceTier,
+  invoiceId: string,
+  suiService: ISuiService,
+  clock: DBClock
+): Promise<TierUpgradeResult> {
+  // Re-validate that tier hasn't changed since Phase 1
+  const [service] = await tx
+    .select()
+    .from(serviceInstances)
+    .where(and(
+      eq(serviceInstances.customerId, customerId),
+      eq(serviceInstances.serviceType, serviceType)
+    ))
+    .limit(1);
+
+  if (!service || service.tier !== expectedCurrentTier) {
+    // Tier changed between phases - void invoice
+    await voidInvoice(tx, invoiceId, 'Tier changed during upgrade - operation cancelled');
+    return {
+      success: false,
+      newTier,
+      chargeAmountUsdCents: 0,
+      invoiceId,
+      error: 'Service tier changed. Please retry the upgrade.',
+    };
+  }
+
+  if (service.cancellationScheduledFor) {
+    await voidInvoice(tx, invoiceId, 'Cancellation scheduled during upgrade - operation cancelled');
+    return {
+      success: false,
+      newTier,
+      chargeAmountUsdCents: 0,
+      invoiceId,
+      error: 'Cannot change tier while cancellation is scheduled.',
+    };
+  }
+
+  // Process payment on the pre-created invoice
+  const paymentResult = await processInvoicePayment(
+    tx,
+    invoiceId,
+    suiService,
+    clock
+  );
+
+  if (!paymentResult.fullyPaid) {
+    // Payment failed - void the invoice (immediate operations don't retry)
+    await voidInvoice(tx, invoiceId, paymentResult.error?.message || 'Payment failed');
+    return {
+      success: false,
+      newTier,
+      chargeAmountUsdCents: paymentResult.amountPaidCents,
+      invoiceId,
+      error: paymentResult.error?.message || 'Payment failed',
+    };
+  }
+
+  // Payment succeeded - update tier immediately
+  await tx
+    .update(serviceInstances)
+    .set({
+      tier: newTier,
+      scheduledTier: null,
+      scheduledTierEffectiveDate: null,
+      cancellationScheduledFor: null,
+    })
+    .where(eq(serviceInstances.instanceId, service.instanceId));
+
+  // Recalculate DRAFT invoice for next billing cycle
+  await recalculateDraftInvoice(tx, customerId, clock);
+
+  return {
+    success: true,
+    newTier,
+    chargeAmountUsdCents: paymentResult.amountPaidCents,
     invoiceId,
   };
 }

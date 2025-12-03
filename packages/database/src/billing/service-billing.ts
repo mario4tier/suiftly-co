@@ -10,9 +10,9 @@
  * See BILLING_DESIGN.md for detailed requirements.
  */
 
-import { eq, and } from 'drizzle-orm';
+import { eq, and, sql } from 'drizzle-orm';
 import type { Database, DatabaseOrTransaction } from '../db';
-import { serviceInstances, customers } from '../schema';
+import { serviceInstances, customers, billingRecords } from '../schema';
 import { withCustomerLock, type LockedTransaction } from './locking';
 import { getOrCreateDraftInvoice, createAndChargeImmediately, updateDraftInvoiceAmount } from './invoices';
 import { processInvoicePayment } from './payments';
@@ -224,6 +224,14 @@ export async function recalculateDraftInvoice(
   // Get DRAFT invoice (create if doesn't exist)
   const draftId = await getOrCreateDraftInvoice(tx, customerId, clock);
 
+  // Get current invoice amount to check if it changes
+  const [currentInvoice] = await tx
+    .select({ amountUsdCents: billingRecords.amountUsdCents })
+    .from(billingRecords)
+    .where(eq(billingRecords.id, draftId))
+    .limit(1);
+  const oldAmount = currentInvoice?.amountUsdCents ?? 0;
+
   // Get all subscribed services
   // NOTE: Service existence = subscription. is_user_enabled is just on/off toggle.
   // Customers are billed for subscribed services regardless of toggle state.
@@ -264,8 +272,18 @@ export async function recalculateDraftInvoice(
     }
   }
 
-  // Update DRAFT invoice amount
-  await updateDraftInvoiceAmount(tx, draftId, totalUsdCents);
+  // Only update amount if it changed
+  if (totalUsdCents !== oldAmount) {
+    await updateDraftInvoiceAmount(tx, draftId, totalUsdCents);
+  }
+
+  // Always update lastUpdatedAt to indicate we checked (even if no changes)
+  const now = clock.now();
+  await tx.execute(sql`
+    UPDATE billing_records
+    SET last_updated_at = ${now}
+    WHERE id = ${draftId}
+  `);
 
   // CRITICAL: Validate DRAFT after update to catch calculation bugs
   const validation = await validateInvoiceBeforeCharging(tx, draftId);

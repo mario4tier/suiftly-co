@@ -3,7 +3,7 @@ import { bytea } from '../types/bytea';
 import { sql } from 'drizzle-orm';
 import { customers } from './customers';
 import { FIELD_LIMITS } from '@suiftly/shared/constants';
-import { transactionTypeEnum, billingStatusEnum } from './enums';
+import { transactionTypeEnum, billingStatusEnum, billingTypeEnum } from './enums';
 
 export const escrowTransactions = pgTable('escrow_transactions', {
   txId: bigserial('tx_id', { mode: 'number' }).primaryKey(),
@@ -51,6 +51,12 @@ export const billingRecords = pgTable('billing_records', {
   invoiceNumber: varchar('invoice_number', { length: 50 }).notNull().default(sql`nextval('invoice_number_seq')::text`),
   dueDate: timestamp('due_date', { withTimezone: true }),
 
+  // Billing type: immediate (upgrades, first sub) vs scheduled (monthly billing)
+  // - immediate: Created BEFORE on-chain charge, voided on failure, needs reconciliation if stuck pending
+  // - scheduled: From DRAFT, retry until paid
+  // Default 'scheduled' for backward compatibility with existing records
+  billingType: billingTypeEnum('billing_type').notNull().default('scheduled'),
+
   // Multi-source payment tracking (credits + escrow)
   amountPaidUsdCents: bigint('amount_paid_usd_cents', { mode: 'number' }).notNull().default(0), // Running total of payments received
 
@@ -60,8 +66,14 @@ export const billingRecords = pgTable('billing_records', {
   failureReason: text('failure_reason'),
 
   createdAt: timestamp('created_at').notNull().defaultNow(),
+
+  // Tracks when DRAFT invoice was last checked/synced (usage sync, config changes)
+  // Used to display "Updated X ago" in UI
+  // Updated even if no changes were found (confirms data is fresh)
+  lastUpdatedAt: timestamp('last_updated_at'),
 }, (table) => ({
   idxCustomerPeriod: index('idx_customer_period').on(table.customerId, table.billingPeriodStart),
   idxBillingStatus: index('idx_billing_status').on(table.status).where(sql`${table.status} != 'paid'`),
+  idxBillingTypeStatus: index('idx_billing_type_status').on(table.billingType, table.status).where(sql`${table.status} = 'pending'`),
   checkTxDigestLength: check('check_tx_digest_length', sql`${table.txDigest} IS NULL OR LENGTH(${table.txDigest}) = 32`),
 }));

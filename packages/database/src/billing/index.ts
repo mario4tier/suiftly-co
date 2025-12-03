@@ -74,6 +74,10 @@ export {
   transitionDraftToPending,
   createAndChargeImmediately,
   voidInvoice,
+  // Two-phase commit support
+  createPendingInvoiceCommitted,
+  markInvoicePaid,
+  getInvoiceById,
 } from './invoices';
 
 export type {
@@ -94,9 +98,18 @@ export type {
 } from './service-billing';
 
 // Tier change and cancellation (Phase 1C)
-// Note: All functions accept LockedTransaction - call via withCustomerLockForAPI
+// Note: Locked functions require LockedTransaction - call via withCustomerLockForAPI
+// Two-Phase Commit for Upgrades (crash-safe):
+//   Phase 1: withCustomerLockForAPI → prepareTierUpgradePhase1Locked
+//   Between: createUpgradeInvoiceCommitted (commits immediately, no lock)
+//   Phase 2: withCustomerLockForAPI → executeTierUpgradePhase2Locked
 export {
-  handleTierUpgradeLocked,
+  handleTierUpgradeLocked, // Single-phase (simpler but less crash-safe)
+  // Two-phase commit for tier upgrades (crash-safe)
+  prepareTierUpgradePhase1Locked,
+  createUpgradeInvoiceCommitted,
+  executeTierUpgradePhase2Locked,
+  // Other tier operations
   scheduleTierDowngradeLocked,
   cancelScheduledTierChangeLocked,
   scheduleCancellationLocked,
@@ -108,8 +121,18 @@ export {
   processScheduledCancellations,
 } from './tier-changes';
 
+// Invoice reconciliation (two-phase commit crash recovery)
+export {
+  reconcileStuckInvoices,
+} from './reconciliation';
+
+export type {
+  ReconciliationResult,
+} from './reconciliation';
+
 export type {
   TierUpgradeResult,
+  TierUpgradePhase1Result, // Two-phase commit Phase 1 result
   TierDowngradeResult,
   CancellationResult,
   UndoCancellationResult,
@@ -133,10 +156,12 @@ export type {
 export {
   updateUsageChargesToDraft,
   getUsageChargePreview,
+  syncUsageToDraft,
 } from './usage-charges';
 
 export type {
   UsageChargeResult,
+  UsageSyncResult,
 } from './usage-charges';
 
 // Invoice validation (defensive checks)

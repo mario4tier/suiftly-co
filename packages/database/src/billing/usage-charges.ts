@@ -110,18 +110,14 @@ export async function updateUsageChargesToDraft(
     FROM invoice_line_items
     WHERE billing_record_id = ${invoiceId}
       AND service_type IS NOT NULL
-      AND description LIKE 'Usage:%'
   `);
   const existingUsageTotal = Number(existingUsageResult.rows[0]?.total ?? 0);
 
   // 3. Delete existing usage line items for idempotency
-  // This allows the function to be called multiple times safely
-  // Usage line items have a serviceType set and description starts with "Usage:"
   await tx.execute(sql`
     DELETE FROM invoice_line_items
     WHERE billing_record_id = ${invoiceId}
       AND service_type IS NOT NULL
-      AND description LIKE 'Usage:%'
   `);
 
   // 4. Get all service instances for this customer
@@ -173,9 +169,9 @@ export async function updateUsageChargesToDraft(
 
     requestCounts[serviceTypeName] = requestCount;
 
-    // 8. Calculate charge
+    // 8. Calculate charge (conservative: round down to avoid overcharging)
     const pricePer1000 = USAGE_PRICING_CENTS_PER_1000[serviceTypeName];
-    const chargeCents = Math.ceil((requestCount * pricePer1000) / 1000);
+    const chargeCents = Math.floor((requestCount * pricePer1000) / 1000);
 
     if (chargeCents === 0) {
       continue;
@@ -184,7 +180,7 @@ export async function updateUsageChargesToDraft(
     // 9. Add line item
     await tx.insert(invoiceLineItems).values({
       billingRecordId: invoiceId,
-      description: `Usage: ${serviceTypeName.charAt(0).toUpperCase() + serviceTypeName.slice(1)} - ${requestCount.toLocaleString()} requests`,
+      description: `${serviceTypeName.charAt(0).toUpperCase() + serviceTypeName.slice(1)} usage: ${requestCount.toLocaleString()} requests`,
       amountUsdCents: chargeCents,
       serviceType: serviceTypeName,
       quantity: requestCount,
@@ -286,8 +282,9 @@ export async function getUsageChargePreview(
 
     if (requestCount === 0) continue;
 
+    // Conservative: round down to avoid overcharging
     const pricePer1000 = USAGE_PRICING_CENTS_PER_1000[serviceTypeName];
-    const chargeCents = Math.ceil((requestCount * pricePer1000) / 1000);
+    const chargeCents = Math.floor((requestCount * pricePer1000) / 1000);
 
     result.services.push({
       serviceType: service.serviceType,
@@ -299,4 +296,174 @@ export async function getUsageChargePreview(
   }
 
   return result;
+}
+
+// ============================================================================
+// Periodic Usage Sync
+// ============================================================================
+
+/**
+ * Result of syncing usage to DRAFT invoice
+ */
+export interface UsageSyncResult {
+  success: boolean;
+  /** Total usage charges on the invoice in USD cents */
+  totalUsageChargesCents: number;
+  /** Number of usage line items on the invoice */
+  lineItemsCount: number;
+  /** Error message if failed */
+  error?: string;
+}
+
+/**
+ * Sync usage charges to DRAFT invoice (for display purposes)
+ *
+ * This function is called periodically (hourly) to keep the DRAFT invoice
+ * updated with current usage. Unlike updateUsageChargesToDraft() which is
+ * for final billing, this function:
+ * - Always creates line items even for 0 requests (for pricing transparency)
+ * - Updates lastUpdatedAt timestamp
+ * - Uses the invoice's billing period for consistency
+ *
+ * IMPORTANT: This function performs multiple writes that must be atomic.
+ * The caller MUST wrap this in a transaction.
+ *
+ * @param tx Database or locked transaction instance
+ * @param customerId Customer ID
+ * @param invoiceId DRAFT invoice ID to sync usage to
+ * @param clock DBClock for current time
+ * @returns Result with total usage charges
+ */
+export async function syncUsageToDraft(
+  tx: LockedTransaction,
+  customerId: number,
+  invoiceId: string,
+  clock: DBClock
+): Promise<UsageSyncResult> {
+  // 1. Verify invoice exists and is in DRAFT status
+  const [invoice] = await tx
+    .select()
+    .from(billingRecords)
+    .where(eq(billingRecords.id, invoiceId))
+    .limit(1);
+
+  if (!invoice) {
+    return {
+      success: false,
+      totalUsageChargesCents: 0,
+      lineItemsCount: 0,
+      error: 'Invoice not found',
+    };
+  }
+
+  if (invoice.status !== 'draft') {
+    return {
+      success: false,
+      totalUsageChargesCents: 0,
+      lineItemsCount: 0,
+      error: `Invoice is not in draft status (current: ${invoice.status})`,
+    };
+  }
+
+  // 2. Get the current usage total (to calculate delta)
+  // Usage line items have service_type set; subscription/credit line items don't
+  const existingUsageResult = await tx.execute(sql`
+    SELECT COALESCE(SUM(amount_usd_cents), 0) as total
+    FROM invoice_line_items
+    WHERE billing_record_id = ${invoiceId}
+      AND service_type IS NOT NULL
+  `);
+  const existingUsageTotal = Number(existingUsageResult.rows[0]?.total ?? 0);
+
+  // 3. Delete existing usage line items for idempotency
+  await tx.execute(sql`
+    DELETE FROM invoice_line_items
+    WHERE billing_record_id = ${invoiceId}
+      AND service_type IS NOT NULL
+  `);
+
+  // 4. Get all subscribed services for this customer
+  // Skip services with pending subscription charge (not yet paid initial charge)
+  const services = await tx
+    .select()
+    .from(serviceInstances)
+    .where(eq(serviceInstances.customerId, customerId));
+
+  const activeServices = services.filter(s => !s.subscriptionChargePending);
+
+  // 5. For DRAFT invoices, show CURRENT month's usage (not next month's billing period)
+  // The DRAFT billing period is for next month's subscription charges,
+  // but usage charges reflect what the customer accrued THIS month
+  const today = clock.today();
+  const currentMonthStart = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
+  const now = clock.now();
+
+  let totalUsageChargesCents = 0;
+  let lineItemsCount = 0;
+
+  // 6. Process each active service - always create line item for transparency
+  for (const service of activeServices) {
+    const serviceTypeName = service.serviceType as ServiceType;
+    const serviceTypeNum = SERVICE_TYPE_NUMBER[serviceTypeName];
+
+    if (!serviceTypeNum) continue;
+
+    // Determine start time: use enabledAt if service was enabled mid-month
+    const serviceStart = service.enabledAt
+      ? new Date(Math.max(currentMonthStart.getTime(), new Date(service.enabledAt).getTime()))
+      : currentMonthStart;
+
+    // 7. Query stats for billable requests
+    const requestCount = await getBillableRequestCount(
+      tx,
+      customerId,
+      serviceTypeNum,
+      serviceStart,
+      now
+    );
+
+    // 8. Calculate charge (conservative: round down)
+    const pricePer1000 = USAGE_PRICING_CENTS_PER_1000[serviceTypeName];
+    const chargeCents = Math.floor((requestCount * pricePer1000) / 1000);
+
+    // 9. Always add line item for transparency (even if 0 requests)
+    // Format: "Seal usage: 1,234 requests @ $0.0001/req"
+    const serviceName = serviceTypeName.charAt(0).toUpperCase() + serviceTypeName.slice(1);
+    const pricePerRequest = pricePer1000 / 1000 / 100; // Convert to dollars per request
+    const description = `${serviceName} usage: ${requestCount.toLocaleString()} requests @ $${pricePerRequest.toFixed(4)}/req`;
+
+    await tx.insert(invoiceLineItems).values({
+      billingRecordId: invoiceId,
+      description,
+      amountUsdCents: chargeCents,
+      serviceType: serviceTypeName,
+      quantity: requestCount,
+    });
+
+    totalUsageChargesCents += chargeCents;
+    lineItemsCount++;
+  }
+
+  // 10. Update invoice total if there was a change
+  const usageDelta = totalUsageChargesCents - existingUsageTotal;
+  if (usageDelta !== 0) {
+    await tx.execute(sql`
+      UPDATE billing_records
+      SET amount_usd_cents = amount_usd_cents + ${usageDelta}
+      WHERE id = ${invoiceId}
+    `);
+  }
+
+  // 11. Always update lastUpdatedAt to indicate we checked (even if no changes)
+  await tx.execute(sql`
+    UPDATE billing_records
+    SET last_updated_at = ${now}
+    WHERE id = ${invoiceId}
+  `);
+
+  return {
+    success: true,
+    totalUsageChargesCents,
+    lineItemsCount,
+  };
 }

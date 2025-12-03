@@ -61,6 +61,13 @@ export const billingStatusEnum = pgEnum('billing_status', [
   'voided'    // Cancelled (billing error, etc.)
 ]);
 
+// Billing type (distinguishes invoice creation context)
+// Used for reconciliation: immediate invoices need on-chain verification if stuck pending
+export const billingTypeEnum = pgEnum('billing_type', [
+  'immediate', // Mid-cycle charges (upgrades, first subscription) - void on failure
+  'scheduled'  // Monthly billing (from DRAFT) - retry until paid
+]);
+
 /**
  * Export TypeScript types derived from enums
  *
@@ -77,3 +84,4 @@ export type ServiceState = typeof serviceStateEnum.enumValues[number];
 export type ServiceTier = typeof serviceTierEnum.enumValues[number];
 export type TransactionType = typeof transactionTypeEnum.enumValues[number];
 export type BillingStatus = typeof billingStatusEnum.enumValues[number];
+export type BillingType = typeof billingTypeEnum.enumValues[number];

@@ -133,7 +133,14 @@ export const billingRouter = router({
         orderBy: [desc(ledgerEntries.createdAt)],
       });
 
-      // Get billing records with their line items (invoices - charges/refunds, exclude drafts)
+      // Get billing records with their line items (invoices - charges/refunds)
+      // Exclude from history:
+      // - draft: Not yet charged (next month's projection)
+      // - failed: Payment attempts that didn't succeed (will be retried or voided)
+      // - voided: Cancelled operations (e.g., failed immediate charges like upgrades)
+      //
+      // Only show: 'pending' (awaiting payment) and 'paid' (completed)
+      // Users only care about what they owe and what they've paid.
       const invoiceResults = await db
         .select({
           id: billingRecords.id,
@@ -150,7 +157,7 @@ export const billingRouter = router({
         .leftJoin(invoiceLineItems, eq(billingRecords.id, invoiceLineItems.billingRecordId))
         .where(and(
           eq(billingRecords.customerId, customer.customerId),
-          sql`${billingRecords.status} != 'draft'`
+          sql`${billingRecords.status} IN ('pending', 'paid')`
         ))
         .orderBy(desc(billingRecords.createdAt));
 
@@ -754,7 +761,8 @@ export const billingRouter = router({
     const lineItems = await buildDraftLineItems(
       customer.customerId,
       Number(draft.amountUsdCents),
-      draft.billingPeriodStart || undefined
+      draft.billingPeriodStart || undefined,
+      draft.id
     );
 
     // Calculate total (sum of all line items)
@@ -772,12 +780,25 @@ export const billingRouter = router({
         )).toISOString()
       : null;
 
+    // Convert lastUpdatedAt to ISO string if present
+    const lastUpdatedAt = draft.lastUpdatedAt
+      ? new Date(Date.UTC(
+          draft.lastUpdatedAt.getUTCFullYear(),
+          draft.lastUpdatedAt.getUTCMonth(),
+          draft.lastUpdatedAt.getUTCDate(),
+          draft.lastUpdatedAt.getUTCHours(),
+          draft.lastUpdatedAt.getUTCMinutes(),
+          draft.lastUpdatedAt.getUTCSeconds()
+        )).toISOString()
+      : null;
+
     return {
       found: true,
       lineItems,
       totalUsd,
       dueDate,
       invoiceNumber: draft.invoiceNumber,
+      lastUpdatedAt,
     };
   }),
 });

@@ -214,7 +214,8 @@ test.describe('Seal Service Onboarding Form', () => {
   test('per-request pricing section is displayed', async ({ page }) => {
     // Should see Per-Request Pricing section
     await expect(page.locator('text=Per-Request Pricing')).toBeVisible();
-    await expect(page.locator('text=/\\$1 charged per 10,000 successful requests/i')).toBeVisible();
+    // UI shows: "$0.0001/req ($1 per 10,000 successful requests)"
+    await expect(page.locator('text=/\\$1 per 10,000 successful requests/i')).toBeVisible();
 
     console.log('✅ Per-Request Pricing section is displayed correctly');
   });

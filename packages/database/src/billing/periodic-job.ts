@@ -24,6 +24,7 @@ import type { Database, DatabaseOrTransaction } from '../db';
 import { processBilling } from './processor';
 import { processCancellationCleanup, cleanupOldCancellationHistory, type CancellationCleanupResult } from './cancellation-cleanup';
 import { cleanupIdempotencyRecords } from './idempotency';
+import { reconcileStuckInvoices, type ReconciliationResult } from './reconciliation';
 import type { BillingProcessorConfig, CustomerBillingResult } from './types';
 import type { DBClock } from '@suiftly/shared/db-clock';
 import type { ISuiService } from '@suiftly/shared/sui-service';
@@ -39,6 +40,10 @@ export interface PeriodicJobResult {
       executed: boolean;
       customersProcessed: number;
       results: CustomerBillingResult[];
+    };
+    reconciliation: {
+      executed: boolean;
+      result: ReconciliationResult | null;
     };
     cancellationCleanup: {
       executed: boolean;
@@ -85,6 +90,10 @@ export async function runPeriodicBillingJob(
         customersProcessed: 0,
         results: [],
       },
+      reconciliation: {
+        executed: false,
+        result: null,
+      },
       cancellationCleanup: {
         executed: false,
         result: null,
@@ -122,7 +131,23 @@ export async function runPeriodicBillingJob(
     }
 
     // =========================================================================
-    // PHASE 2: Cancellation Cleanup
+    // PHASE 2: Invoice Reconciliation (Two-Phase Commit Recovery)
+    // =========================================================================
+    // Handles:
+    // - 'immediate' invoices stuck in 'pending' for > 10 minutes (crash recovery)
+    // - Checks if payment was processed (ledger entry exists)
+    // - Marks invoice as 'paid' or 'voided' based on on-chain state
+
+    const reconciliationResult = await reconcileStuckInvoices(db, config.clock);
+    result.phases.reconciliation.executed = true;
+    result.phases.reconciliation.result = reconciliationResult;
+
+    for (const error of reconciliationResult.errors) {
+      result.errors.push(`Reconciliation: ${error}`);
+    }
+
+    // =========================================================================
+    // PHASE 3: Cancellation Cleanup
     // =========================================================================
     // Handles:
     // - Services in cancellation_pending state for 7+ days
@@ -140,7 +165,7 @@ export async function runPeriodicBillingJob(
     }
 
     // =========================================================================
-    // PHASE 3: Housekeeping
+    // PHASE 4: Housekeeping
     // =========================================================================
     // Handles:
     // - Clean up old idempotency records (> 90 days)
@@ -196,6 +221,10 @@ export async function runPeriodicJobForCustomer(
         customersProcessed: 0,
         results: [],
       },
+      reconciliation: {
+        executed: false,
+        result: null,
+      },
       cancellationCleanup: {
         executed: false,
         result: null,
@@ -221,6 +250,15 @@ export async function runPeriodicJobForCustomer(
 
     for (const error of customerResult.errors) {
       result.errors.push(`Customer ${customerId}: ${error.message}`);
+    }
+
+    // Run reconciliation for stuck invoices
+    const reconciliationResult = await reconcileStuckInvoices(db, config.clock);
+    result.phases.reconciliation.executed = true;
+    result.phases.reconciliation.result = reconciliationResult;
+
+    for (const error of reconciliationResult.errors) {
+      result.errors.push(`Reconciliation: ${error}`);
     }
 
     // Still run cleanup (it's global, but safe to run)

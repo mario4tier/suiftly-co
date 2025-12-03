@@ -32,10 +32,13 @@ import { ensureInvoiceValid } from './validation';
 import { ValidationError } from './errors';
 import { applyScheduledTierChanges, processScheduledCancellations } from './tier-changes';
 import { recalculateDraftInvoice } from './service-billing';
-import { updateUsageChargesToDraft } from './usage-charges';
+import { updateUsageChargesToDraft, syncUsageToDraft } from './usage-charges';
 import type { BillingProcessorConfig, CustomerBillingResult, BillingOperation } from './types';
 import type { DBClock } from '@suiftly/shared/db-clock';
 import type { ISuiService } from '@suiftly/shared/sui-service';
+
+// How often to sync usage to DRAFT invoices (in milliseconds)
+const USAGE_SYNC_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 
 /**
  * Process billing for a single customer
@@ -99,6 +102,18 @@ export async function processCustomerBilling(
     );
     result.operations.push(...gracePeriodResult.operations);
     result.errors.push(...gracePeriodResult.errors);
+
+    // Sync usage to DRAFT invoices hourly (for display)
+    // Skip on 1st of month since updateUsageChargesToDraft already runs there
+    if (!isFirstOfMonth) {
+      const usageSyncResult = await syncUsageToCustomerDraft(
+        tx,
+        customerId,
+        config.clock
+      );
+      result.operations.push(...usageSyncResult.operations);
+      result.errors.push(...usageSyncResult.errors);
+    }
 
     result.success = result.errors.length === 0;
 
@@ -440,6 +455,80 @@ async function checkGracePeriodExpiration(
       timestamp: config.clock.now(),
       description: `Grace period expired - account suspended (${serviceCount} services disabled)`,
       success: true,
+    });
+  }
+
+  return result;
+}
+
+/**
+ * Sync usage to customer's DRAFT invoice (for display)
+ *
+ * Called hourly to keep DRAFT invoices updated with current usage.
+ * Skips if less than an hour has passed since last update.
+ *
+ * @param tx Transaction handle (must have customer lock)
+ * @param customerId Customer ID
+ * @param clock DBClock for time reference
+ * @returns Billing result
+ */
+async function syncUsageToCustomerDraft(
+  tx: LockedTransaction,
+  customerId: number,
+  clock: DBClock
+): Promise<CustomerBillingResult> {
+  const result: CustomerBillingResult = {
+    customerId,
+    success: true,
+    operations: [],
+    errors: [],
+  };
+
+  const now = clock.now();
+
+  // Find DRAFT invoice for this customer
+  const draftInvoice = await tx.query.billingRecords.findFirst({
+    where: and(
+      eq(billingRecords.customerId, customerId),
+      eq(billingRecords.status, 'draft')
+    ),
+  });
+
+  if (!draftInvoice) {
+    return result; // No draft invoice, nothing to sync
+  }
+
+  // Check if enough time has passed since last update
+  const lastUpdated = draftInvoice.lastUpdatedAt;
+  if (lastUpdated) {
+    const timeSinceUpdate = now.getTime() - new Date(lastUpdated).getTime();
+    if (timeSinceUpdate < USAGE_SYNC_INTERVAL_MS) {
+      return result; // Updated recently, skip
+    }
+  }
+
+  // Sync usage
+  const syncResult = await syncUsageToDraft(tx, customerId, draftInvoice.id, clock);
+
+  if (syncResult.success) {
+    result.operations.push({
+      type: 'reconciliation',
+      timestamp: now,
+      description: `Usage sync: ${syncResult.lineItemsCount} service(s), $${(syncResult.totalUsageChargesCents / 100).toFixed(2)}`,
+      success: true,
+    });
+  } else {
+    result.operations.push({
+      type: 'reconciliation',
+      timestamp: now,
+      description: `Usage sync failed: ${syncResult.error}`,
+      success: false,
+    });
+    result.errors.push({
+      type: 'database_error',
+      message: syncResult.error || 'Unknown error',
+      customerId,
+      retryable: true,
     });
   }
 
