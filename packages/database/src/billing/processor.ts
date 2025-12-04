@@ -465,17 +465,19 @@ async function checkGracePeriodExpiration(
  * Sync usage to customer's DRAFT invoice (for display)
  *
  * Called hourly to keep DRAFT invoices updated with current usage.
- * Skips if less than an hour has passed since last update.
+ * Skips if less than an hour has passed since last update (unless force=true).
  *
  * @param tx Transaction handle (must have customer lock)
  * @param customerId Customer ID
  * @param clock DBClock for time reference
+ * @param force If true, bypasses debouncing and always syncs
  * @returns Billing result
  */
 async function syncUsageToCustomerDraft(
   tx: LockedTransaction,
   customerId: number,
-  clock: DBClock
+  clock: DBClock,
+  force: boolean = false
 ): Promise<CustomerBillingResult> {
   const result: CustomerBillingResult = {
     customerId,
@@ -498,12 +500,14 @@ async function syncUsageToCustomerDraft(
     return result; // No draft invoice, nothing to sync
   }
 
-  // Check if enough time has passed since last update
-  const lastUpdated = draftInvoice.lastUpdatedAt;
-  if (lastUpdated) {
-    const timeSinceUpdate = now.getTime() - new Date(lastUpdated).getTime();
-    if (timeSinceUpdate < USAGE_SYNC_INTERVAL_MS) {
-      return result; // Updated recently, skip
+  // Check if enough time has passed since last update (unless force=true)
+  if (!force) {
+    const lastUpdated = draftInvoice.lastUpdatedAt;
+    if (lastUpdated) {
+      const timeSinceUpdate = now.getTime() - new Date(lastUpdated).getTime();
+      if (timeSinceUpdate < USAGE_SYNC_INTERVAL_MS) {
+        return result; // Updated recently, skip
+      }
     }
   }
 
@@ -587,4 +591,27 @@ export async function processBilling(
   }
 
   return results;
+}
+
+/**
+ * Force sync usage to customer's DRAFT invoice (on-demand)
+ *
+ * This is the exported wrapper for syncUsageToCustomerDraft with force=true.
+ * Used by test/dev endpoints to immediately sync usage after injecting data.
+ *
+ * Follows the same production code path but bypasses the hourly debounce.
+ *
+ * @param db Database instance
+ * @param customerId Customer ID
+ * @param clock DBClock for time reference
+ * @returns Billing result
+ */
+export async function forceSyncUsageToDraft(
+  db: Database,
+  customerId: number,
+  clock: DBClock
+): Promise<CustomerBillingResult> {
+  return await withCustomerLock(db, customerId, async (tx) => {
+    return await syncUsageToCustomerDraft(tx, customerId, clock, true);
+  });
 }

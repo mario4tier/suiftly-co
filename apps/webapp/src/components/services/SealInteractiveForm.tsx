@@ -31,7 +31,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { type ServiceState, type ServiceTier } from "@suiftly/shared/constants";
+import { type ServiceState, type ServiceTier, SERVICE_TYPE, SERVICE_STATE, SERVICE_TIER, INVOICE_LINE_ITEM_TYPE, USAGE_PRICING_CENTS_PER_1000 } from "@suiftly/shared/constants";
+import type { InvoiceLineItem } from "@suiftly/shared/types";
 import {
   freg_count,
   fbw_sta,
@@ -49,6 +50,7 @@ import { AddPackageModal } from "./AddPackageModal";
 import { trpc } from "@/lib/trpc";
 import { useSearch, useNavigate } from "@tanstack/react-router";
 import { LinkButton } from "@/components/ui/link-button";
+import { TextRoute } from "@/components/ui/text-route";
 import { toast } from "sonner";
 import {
   parseIpAddressList,
@@ -144,6 +146,9 @@ export function SealInteractiveForm({
 
   // Fetch usage statistics from database
   const { data: usageStats } = trpc.seal.getUsageStats.useQuery();
+
+  // Fetch DRAFT invoice to show pending usage charges
+  const { data: draftInvoice } = trpc.billing.getNextScheduledPayment.useQuery();
 
   // Fetch API keys
   const { data: apiKeys, isLoading: apiKeysLoading } = trpc.seal.listApiKeys.useQuery();
@@ -375,22 +380,22 @@ export function SealInteractiveForm({
   }, [moreSettings]);
 
   // Determine if service is cancelled or suspended
-  const isCancelled = serviceState === "suspended_maintenance" || serviceState === "suspended_no_payment";
+  const isCancelled = serviceState === SERVICE_STATE.SUSPENDED_MAINTENANCE || serviceState === SERVICE_STATE.SUSPENDED_NO_PAYMENT;
   const isReadOnly = isCancelled;
 
   // Tier info
   const tierInfo = {
-    starter: {
+    [SERVICE_TIER.STARTER]: {
       name: "STARTER",
       reqPerRegion: fbw_sta,
       price: fsubs_usd_sta,
     },
-    pro: {
+    [SERVICE_TIER.PRO]: {
       name: "PRO",
       reqPerRegion: fbw_pro,
       price: fsubs_usd_pro,
     },
-    enterprise: {
+    [SERVICE_TIER.ENTERPRISE]: {
       name: "ENTERPRISE",
       reqPerRegion: fbw_ent,
       price: fsubs_usd_ent,
@@ -414,6 +419,21 @@ export function SealInteractiveForm({
     monthlyCharges.ipv4Allowlist +
     monthlyCharges.packagesPerKey +
     monthlyCharges.apiKeys;
+
+  // Extract Seal usage charge from DRAFT invoice (if any)
+  // Filter line items by service === 'seal' and itemType === 'requests'
+  const pendingSealUsage = useMemo(() => {
+    if (!draftInvoice?.found || !('lineItems' in draftInvoice)) {
+      return { quantity: 0, unitPriceUsd: 0, amountUsd: 0 };
+    }
+    const sealUsageItem = draftInvoice.lineItems.find(
+      (item: InvoiceLineItem) =>
+        item.service === SERVICE_TYPE.SEAL && item.itemType === INVOICE_LINE_ITEM_TYPE.REQUESTS
+    );
+    return sealUsageItem
+      ? { quantity: sealUsageItem.quantity, unitPriceUsd: sealUsageItem.unitPriceUsd, amountUsd: sealUsageItem.amountUsd }
+      : { quantity: 0, unitPriceUsd: 0, amountUsd: 0 };
+  }, [draftInvoice]);
 
   const handleToggleService = (checked: boolean) => {
     onToggleService?.(checked);
@@ -703,17 +723,16 @@ export function SealInteractiveForm({
         <TabsContent value="overview" className="space-y-6">
           {/* Monthly Charges Section */}
           <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-                Monthly Charges - {currentTier.name}
-              </h3>
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+              {currentTier.name} Tier{' '}
               <ActionButton
                 onClick={onChangePlan}
                 disabled={isReadOnly}
+                className="ml-2"
               >
                 Change Plan
               </ActionButton>
-            </div>
+            </h3>
 
             {/* Monthly Charges Table */}
             <div className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
@@ -847,18 +866,54 @@ export function SealInteractiveForm({
                     </tr>
                   )}
 
-                  {/* Total Row */}
-                  <tr className="bg-gray-50 dark:bg-gray-800/50">
-                    <td colSpan={3} className="px-4 py-1.5 text-right text-sm font-semibold text-gray-900 dark:text-gray-100">
-                      Total Monthly Fee
-                    </td>
-                    <td className="px-4 py-1.5 text-right text-lg font-bold text-gray-900 dark:text-gray-100">
-                      ${totalMonthlyFee.toFixed(2)}
-                    </td>
-                  </tr>
                 </tbody>
               </table>
             </div>
+
+          </div>
+
+          {/* Summary Section - Subscription, Usage, Grand Total */}
+          <div className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
+            <table className="w-full">
+              <tbody>
+                {/* Subscription Row */}
+                <tr className="bg-gray-50 dark:bg-gray-800/50">
+                  <td className="px-4 py-1.5">
+                    {/* Empty first column */}
+                  </td>
+                  <td colSpan={2} className="px-4 py-1.5 text-right text-sm font-semibold text-gray-900 dark:text-gray-100">
+                    Subscription
+                  </td>
+                  <td className="px-4 py-1.5 text-right text-lg font-bold text-gray-900 dark:text-gray-100">
+                    ${totalMonthlyFee.toFixed(2)}
+                  </td>
+                </tr>
+                {/* Usage This Month Row */}
+                <tr>
+                  <td className="px-4 py-1.5 text-sm text-gray-600 dark:text-gray-400">
+                    {pendingSealUsage.quantity.toLocaleString()} req @ ${(pendingSealUsage.unitPriceUsd || USAGE_PRICING_CENTS_PER_1000[SERVICE_TYPE.SEAL] / 100 / 1000).toFixed(4)}/req
+                  </td>
+                  <td colSpan={2} className="px-4 py-1.5 text-right text-sm font-semibold text-gray-900 dark:text-gray-100">
+                    Usage This Month
+                  </td>
+                  <td className="px-4 py-1.5 text-right text-lg font-bold text-gray-900 dark:text-gray-100">
+                    +${pendingSealUsage.amountUsd.toFixed(2)}
+                  </td>
+                </tr>
+                {/* Grand Total Row */}
+                <tr className="border-t border-gray-200 dark:border-gray-700">
+                  <td className="px-4 py-1.5">
+                    {/* Empty to align with Usage This Month row */}
+                  </td>
+                  <td colSpan={2} className="px-4 py-1.5 text-right text-sm font-semibold text-gray-900 dark:text-gray-100">
+                    Total
+                  </td>
+                  <td className="px-4 py-1.5 text-right text-lg font-bold text-gray-900 dark:text-gray-100">
+                    ${(totalMonthlyFee + pendingSealUsage.amountUsd).toFixed(2)}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         </TabsContent>
 

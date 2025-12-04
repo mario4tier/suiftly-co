@@ -18,6 +18,9 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { ChevronRight, ChevronDown, User, ArrowUpDown, ArrowDownUp, Shield, Building2, AlertCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import { getTierPriceUsdCents } from '@suiftly/shared/pricing';
+import { SERVICE_TYPE, SPENDING_LIMIT } from '@suiftly/shared/constants';
+import type { InvoiceLineItem } from '@suiftly/shared/types';
+import { formatLineItemDescription } from '@/lib/billing-utils';
 
 export const Route = createLazyFileRoute('/billing')({
   component: BillingPage,
@@ -140,8 +143,8 @@ function BillingPage() {
       return;
     }
 
-    if (limit > 0 && limit < 10) {
-      setError('Spending limit must be at least $10');
+    if (limit > 0 && limit < SPENDING_LIMIT.MINIMUM_USD) {
+      setError(`Spending limit must be at least $${SPENDING_LIMIT.MINIMUM_USD}`);
       return;
     }
 
@@ -391,12 +394,12 @@ function BillingPage() {
                 <div className="text-sm">
                   {nextPaymentData && 'lineItems' in nextPaymentData && nextPaymentData.lineItems.length > 0 ? (
                     <>
-                      {nextPaymentData.lineItems.map((item: { description: string; amountUsd: number }, index: number) => (
+                      {nextPaymentData.lineItems.map((item: InvoiceLineItem, index: number) => (
                         <div
                           key={index}
                           className={`flex justify-between mb-1 ${item.amountUsd < 0 ? 'text-green-600' : 'text-gray-600'}`}
                         >
-                          <span>{item.description}</span>
+                          <span>{formatLineItemDescription(item)}</span>
                           <span className="font-medium">
                             {item.amountUsd < 0 ? '-' : ''}${Math.abs(item.amountUsd).toFixed(2)}
                           </span>

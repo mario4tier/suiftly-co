@@ -38,15 +38,14 @@ import {
   freqs_count,
 } from "@/lib/config";
 import { TermsOfServiceContent } from "@/components/content/TermsOfServiceContent";
+import { SERVICE_TIER, type ServiceTier } from "@suiftly/shared/constants";
 
 interface SealConfigFormProps {
   onTierChange?: (tierSelected: boolean) => void;
 }
 
-type Tier = "starter" | "pro" | "enterprise";
-
 export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
-  const [selectedTier, setSelectedTier] = useState<Tier>("pro");
+  const [selectedTier, setSelectedTier] = useState<ServiceTier>(SERVICE_TIER.PRO);
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [tosModalOpen, setTosModalOpen] = useState(false);
   const utils = trpc.useUtils();
@@ -73,7 +72,7 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
     },
   });
 
-  const handleTierSelect = (tier: Tier) => {
+  const handleTierSelect = (tier: ServiceTier) => {
     setSelectedTier(tier);
     if (onTierChange) {
       onTierChange(true);
@@ -82,19 +81,19 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
 
   // Tier info using global config variables (zero-cost access)
   const tierInfo = {
-    starter: {
+    [SERVICE_TIER.STARTER]: {
       name: "STARTER",
       reqPerRegion: fbw_sta,
       reqGlobal: fbw_sta * freg_count,
       price: fsubs_usd_sta,
     },
-    pro: {
+    [SERVICE_TIER.PRO]: {
       name: "PRO",
       reqPerRegion: fbw_pro,
       reqGlobal: fbw_pro * freg_count,
       price: fsubs_usd_pro,
     },
-    enterprise: {
+    [SERVICE_TIER.ENTERPRISE]: {
       name: "ENTERPRISE",
       reqPerRegion: fbw_ent,
       reqGlobal: fbw_ent * freg_count,
@@ -183,7 +182,7 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
 
         {/* Tier Cards */}
         <div className="space-y-3">
-          {(["starter", "pro", "enterprise"] as Tier[]).map((tier) => {
+          {(Object.values(SERVICE_TIER) as ServiceTier[]).map((tier) => {
             const info = tierInfo[tier];
             const isSelected = selectedTier === tier;
 

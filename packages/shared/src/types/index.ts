@@ -46,3 +46,35 @@ export type BillingStatus = z.infer<typeof schemas.billingRecordSchema.shape.sta
 
 // Validation types
 export * from './validation';
+
+// Invoice types
+import type { ServiceType, InvoiceLineItemType } from '../constants';
+
+/**
+ * Structured invoice line item
+ *
+ * Backend provides structured data; frontend formats display strings.
+ * This eliminates brittle description string parsing.
+ *
+ * The itemType encodes both the charge category AND tier where applicable
+ * (e.g., 'subscription_pro' instead of 'tier_subscription' + tier: 'pro')
+ */
+export interface InvoiceLineItem {
+  /** Service this line item belongs to (null for credits, taxes) */
+  service: ServiceType | null;
+
+  /** Type of charge (encodes tier for subscriptions, e.g., 'subscription_pro') */
+  itemType: InvoiceLineItemType;
+
+  /** Quantity (e.g., number of requests, extra keys, 1 for subscriptions) */
+  quantity: number;
+
+  /** Unit price in USD (e.g., $0.0001 per request, $5 per extra key, tier price for subs) */
+  unitPriceUsd: number;
+
+  /** Total amount in USD (quantity * unitPriceUsd, negative for credits) */
+  amountUsd: number;
+
+  /** Optional: credit month name for credit line items */
+  creditMonth?: string;
+}

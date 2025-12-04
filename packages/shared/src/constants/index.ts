@@ -15,7 +15,8 @@ export type {
   ServiceState,
   ServiceTier,
   TransactionType,
-  BillingStatus
+  BillingStatus,
+  InvoiceLineItemType
 } from '@suiftly/database/schema';
 
 // Import types for creating constants objects with type checking
@@ -25,7 +26,8 @@ import type {
   ServiceState,
   ServiceTier,
   TransactionType,
-  BillingStatus
+  BillingStatus,
+  InvoiceLineItemType
 } from '@suiftly/database/schema';
 
 // 28-Day Spending Limits (Rolling period from account creation)
@@ -102,12 +104,48 @@ export const TRANSACTION_TYPE = {
   CREDIT: 'credit',
 } as const satisfies Record<string, TransactionType>;
 
-// Billing Status
+// Billing Status (matches billingStatusEnum in schema/enums.ts)
 export const BILLING_STATUS = {
-  PENDING: 'pending',
-  PAID: 'paid',
-  FAILED: 'failed',
+  DRAFT: 'draft',       // Pre-computed projection for next billing cycle
+  PENDING: 'pending',   // Ready for payment processing
+  PAID: 'paid',         // Fully paid
+  FAILED: 'failed',     // Charge attempt failed
+  VOIDED: 'voided',     // Cancelled (billing error, etc.)
 } as const satisfies Record<string, BillingStatus>;
+
+// Invoice Line Item Types
+// Used for structured invoice line items instead of parsing description strings
+// Item type encodes both the charge category AND tier where applicable
+// NOTE: Type is derived from database ENUM (see invoiceLineItemTypeEnum in schema/enums.ts)
+export const INVOICE_LINE_ITEM_TYPE = {
+  // Tier subscriptions (per service, per tier)
+  SUBSCRIPTION_STARTER: 'subscription_starter',
+  SUBSCRIPTION_PRO: 'subscription_pro',
+  SUBSCRIPTION_ENTERPRISE: 'subscription_enterprise',
+
+  // Tier upgrade (pro-rated charge for remaining days in month)
+  TIER_UPGRADE: 'tier_upgrade',
+
+  // Usage-based charges
+  REQUESTS: 'requests',                     // Burst traffic charges (quantity = request count)
+
+  // Add-ons (quantity = extra count beyond included)
+  EXTRA_API_KEYS: 'extra_api_keys',
+  EXTRA_SEAL_KEYS: 'extra_seal_keys',
+  EXTRA_ALLOWLIST_IPS: 'extra_allowlist_ips',
+  EXTRA_PACKAGES: 'extra_packages',
+
+  // Credits and taxes
+  CREDIT: 'credit',                         // Credits/discounts (quantity = 1, negative amount)
+  TAX: 'tax',                               // Tax charges (future)
+} as const satisfies Record<string, InvoiceLineItemType>;
+
+// Mapping from ServiceTier to subscription line item type
+export const TIER_TO_SUBSCRIPTION_ITEM = {
+  [SERVICE_TIER.STARTER]: INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_STARTER,
+  [SERVICE_TIER.PRO]: INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_PRO,
+  [SERVICE_TIER.ENTERPRISE]: INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_ENTERPRISE,
+} as const satisfies Record<ServiceTier, InvoiceLineItemType>;
 
 // Field Length Limits (matches database VARCHAR constraints)
 // Keep in sync: database schema, validation schemas, tests

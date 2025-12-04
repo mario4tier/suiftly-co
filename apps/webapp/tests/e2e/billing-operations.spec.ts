@@ -216,7 +216,7 @@ test.describe('Billing Operations', () => {
     // Should see deposit and charge in history (Playwright auto-retries)
     await expect(page.locator('text=deposit').first()).toBeVisible();
     await expect(page.locator('text=charge').first()).toBeVisible();
-    await expect(page.locator('text=Seal Service - Starter Plan')).toBeVisible();
+    await expect(page.locator('text=Seal Pro tier')).toBeVisible();
 
     // Simulate a refund
     const refundResponse = await page.request.post(`${API_BASE}/test/wallet/refund`, {
@@ -237,8 +237,9 @@ test.describe('Billing Operations', () => {
     await page.getByRole('button', { name: 'Billing History' }).click();
 
     // Should see credit (refund) in history (Playwright auto-retries)
-    await expect(page.locator('text=credit')).toBeVisible();
-    await expect(page.locator('text=Partial refund')).toBeVisible();
+    // Note: With semantic itemType schema, refund displays as "credit" (the formatted description)
+    // The raw description is stored in ledger_entries but UI displays formatted itemType
+    await expect(page.locator('text=credit').first()).toBeVisible();
 
     console.log('✅ Charge and refund flow works correctly with billing history');
   });

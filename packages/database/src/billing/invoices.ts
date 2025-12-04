@@ -11,15 +11,21 @@ import type { Database, DatabaseOrTransaction } from '../db';
 import type { LockedTransaction } from './locking';
 import { billingRecords, customers, invoiceLineItems } from '../schema';
 import type { DBClock } from '@suiftly/shared/db-clock';
+import type { InvoiceLineItemType, ServiceType } from '../schema/enums';
 
 /**
  * Line item for an invoice
+ *
+ * Now uses semantic item types instead of description strings.
+ * Types match PostgreSQL ENUMs defined in schema/enums.ts.
  */
 export interface InvoiceLineItem {
-  description: string;
+  itemType: InvoiceLineItemType;
   amountUsdCents: number;
-  serviceType?: string;
+  serviceType?: ServiceType | null;
   quantity?: number;
+  unitPriceUsdCents?: number;
+  creditMonth?: string;
 }
 
 /**
@@ -30,12 +36,14 @@ export interface CreateInvoiceParams {
   amountUsdCents: number;
   type: 'charge' | 'credit' | 'deposit' | 'withdraw';
   status: 'draft' | 'pending';
-  description: string;
+  description: string; // Kept for logging/debugging
   invoiceNumber?: string;
   billingPeriodStart?: Date;
   billingPeriodEnd?: Date;
   dueDate?: Date;
   billingType?: 'immediate' | 'scheduled'; // Default: 'scheduled'
+  // Semantic line item info for immediate charges
+  lineItem?: InvoiceLineItem;
 }
 
 /**
@@ -197,13 +205,18 @@ export async function createAndChargeImmediately(
   const invoiceId = await createInvoice(tx, invoiceParams, clock);
 
   // Create line item for this immediate charge
-  // This ensures billing history can display the description
-  await tx.insert(invoiceLineItems).values({
-    billingRecordId: invoiceId,
-    description: params.description,
-    amountUsdCents: params.amountUsdCents,
-    quantity: 1,
-  });
+  // This ensures billing history can display the line item
+  if (params.lineItem) {
+    await tx.insert(invoiceLineItems).values({
+      billingRecordId: invoiceId,
+      itemType: params.lineItem.itemType,
+      serviceType: params.lineItem.serviceType || null,
+      quantity: params.lineItem.quantity || 1,
+      unitPriceUsdCents: params.lineItem.unitPriceUsdCents || params.amountUsdCents,
+      amountUsdCents: params.lineItem.amountUsdCents,
+      creditMonth: params.lineItem.creditMonth || null,
+    });
+  }
 
   return invoiceId;
 }
@@ -275,7 +288,7 @@ import { db } from '../db';
  * @returns Created invoice ID (committed to database)
  */
 export async function createPendingInvoiceCommitted(
-  params: Omit<CreateInvoiceParams, 'status' | 'billingType'> & { lineItemDescription?: string },
+  params: Omit<CreateInvoiceParams, 'status' | 'billingType'>,
   clock: DBClock
 ): Promise<string> {
   // Use a separate transaction that commits immediately
@@ -301,13 +314,16 @@ export async function createPendingInvoiceCommitted(
       .returning({ id: billingRecords.id });
 
     // Create line item for this immediate charge
-    // This ensures billing history can display the description
-    if (params.lineItemDescription || params.description) {
+    // This ensures billing history can display the line item
+    if (params.lineItem) {
       await tx.insert(invoiceLineItems).values({
         billingRecordId: invoice.id,
-        description: params.lineItemDescription || params.description,
-        amountUsdCents: params.amountUsdCents,
-        quantity: 1,
+        itemType: params.lineItem.itemType,
+        serviceType: params.lineItem.serviceType || null,
+        quantity: params.lineItem.quantity || 1,
+        unitPriceUsdCents: params.lineItem.unitPriceUsdCents || params.amountUsdCents,
+        amountUsdCents: params.lineItem.amountUsdCents,
+        creditMonth: params.lineItem.creditMonth || null,
       });
     }
 

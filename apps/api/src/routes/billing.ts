@@ -10,10 +10,57 @@ import { getSuiService } from '../services/sui';
 import { db, logActivity } from '@suiftly/database';
 import { ledgerEntries, customers, billingRecords, customerCredits, invoiceLineItems } from '@suiftly/database/schema';
 import { eq, and, desc, sql, gt } from 'drizzle-orm';
-import { SPENDING_LIMIT } from '@suiftly/shared/constants';
+import { SPENDING_LIMIT, INVOICE_LINE_ITEM_TYPE } from '@suiftly/shared/constants';
 import { reconcilePayments } from '../lib/reconcile-payments';
 import { dbClock } from '@suiftly/shared/db-clock';
 import { buildDraftLineItems } from '../lib/invoice-formatter';
+
+/**
+ * Format a semantic line item into a human-readable description
+ * Used for billing history display
+ */
+function formatLineItemDescription(
+  itemType: string,
+  serviceType: string | null,
+  quantity: number,
+  unitPriceUsdCents: number,
+  creditMonth: string | null
+): string {
+  const serviceName = serviceType
+    ? serviceType.charAt(0).toUpperCase() + serviceType.slice(1)
+    : '';
+
+  const unitPriceUsd = unitPriceUsdCents / 100;
+
+  switch (itemType) {
+    case INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_STARTER:
+      return `${serviceName} Starter tier`;
+    case INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_PRO:
+      return `${serviceName} Pro tier`;
+    case INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_ENTERPRISE:
+      return `${serviceName} Enterprise tier`;
+    case INVOICE_LINE_ITEM_TYPE.TIER_UPGRADE:
+      return `${serviceName} tier upgrade (pro-rated)`;
+    case INVOICE_LINE_ITEM_TYPE.REQUESTS:
+      return `${serviceName} usage: ${quantity.toLocaleString()} requests`;
+    case INVOICE_LINE_ITEM_TYPE.EXTRA_API_KEYS:
+      return `${serviceName} extra API keys: ${quantity}`;
+    case INVOICE_LINE_ITEM_TYPE.EXTRA_SEAL_KEYS:
+      return `${serviceName} extra seal keys: ${quantity}`;
+    case INVOICE_LINE_ITEM_TYPE.EXTRA_ALLOWLIST_IPS:
+      return `${serviceName} extra allowlist IPs: ${quantity}`;
+    case INVOICE_LINE_ITEM_TYPE.EXTRA_PACKAGES:
+      return `${serviceName} extra packages: ${quantity}`;
+    case INVOICE_LINE_ITEM_TYPE.CREDIT:
+      return creditMonth
+        ? `${serviceName ? serviceName + ' ' : ''}partial month credit (${creditMonth})`
+        : `${serviceName ? serviceName + ' ' : ''}credit`;
+    case INVOICE_LINE_ITEM_TYPE.TAX:
+      return 'Tax';
+    default:
+      return 'Charge';
+  }
+}
 
 /**
  * Convert hex string to Buffer for BYTEA fields
@@ -150,8 +197,12 @@ export const billingRouter = router({
           txDigest: billingRecords.txDigest,
           createdAt: billingRecords.createdAt,
           invoiceNumber: billingRecords.invoiceNumber,
-          // Get first line item description (for single-item invoices)
-          lineItemDescription: invoiceLineItems.description,
+          // Get semantic line item fields
+          itemType: invoiceLineItems.itemType,
+          serviceType: invoiceLineItems.serviceType,
+          quantity: invoiceLineItems.quantity,
+          unitPriceUsdCents: invoiceLineItems.unitPriceUsdCents,
+          creditMonth: invoiceLineItems.creditMonth,
         })
         .from(billingRecords)
         .leftJoin(invoiceLineItems, eq(billingRecords.id, invoiceLineItems.billingRecordId))
@@ -174,10 +225,21 @@ export const billingRouter = router({
       }>();
 
       for (const row of invoiceResults) {
+        // Format line item into description if present
+        const lineItemDescription = row.itemType
+          ? formatLineItemDescription(
+              row.itemType,
+              row.serviceType,
+              Number(row.quantity ?? 1),
+              Number(row.unitPriceUsdCents ?? 0),
+              row.creditMonth
+            )
+          : null;
+
         const existing = invoiceMap.get(row.id);
         if (existing) {
-          if (row.lineItemDescription) {
-            existing.lineItemDescriptions.push(row.lineItemDescription);
+          if (lineItemDescription) {
+            existing.lineItemDescriptions.push(lineItemDescription);
           }
         } else {
           invoiceMap.set(row.id, {
@@ -188,7 +250,7 @@ export const billingRouter = router({
             txDigest: row.txDigest,
             createdAt: row.createdAt,
             invoiceNumber: row.invoiceNumber,
-            lineItemDescriptions: row.lineItemDescription ? [row.lineItemDescription] : [],
+            lineItemDescriptions: lineItemDescription ? [lineItemDescription] : [],
           });
         }
       }
@@ -357,7 +419,7 @@ export const billingRouter = router({
             .update(customers)
             .set({
               escrowContractId: result.createdObjects.escrowAddress,
-              updatedAt: new Date(),
+              updatedAt: dbClock.now(),
             })
             .where(eq(customers.customerId, customer.customerId));
         }
@@ -471,7 +533,7 @@ export const billingRouter = router({
             .update(customers)
             .set({
               escrowContractId: result.createdObjects.escrowAddress,
-              updatedAt: new Date(),
+              updatedAt: dbClock.now(),
             })
             .where(eq(customers.customerId, customer.customerId));
         }
@@ -573,7 +635,7 @@ export const billingRouter = router({
           .update(customers)
           .set({
             escrowContractId: input.escrowAddress,
-            updatedAt: new Date(),
+            updatedAt: dbClock.now(),
           })
           .where(eq(customers.customerId, customer.customerId));
       } else if (customer.escrowContractId !== input.escrowAddress) {
@@ -676,7 +738,7 @@ export const billingRouter = router({
             .update(customers)
             .set({
               escrowContractId: result.createdObjects.escrowAddress,
-              updatedAt: new Date(),
+              updatedAt: dbClock.now(),
             })
             .where(eq(customers.customerId, customer.customerId));
         }

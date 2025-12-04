@@ -24,6 +24,7 @@ import {
 import { processInvoicePayment } from './payments';
 import { recalculateDraftInvoice, calculateProRatedUpgradeCharge } from './service-billing';
 import { getTierPriceUsdCents, TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
+import { INVOICE_LINE_ITEM_TYPE } from '@suiftly/shared/constants';
 import type { DBClock } from '@suiftly/shared/db-clock';
 import type { ISuiService } from '@suiftly/shared/sui-service';
 import type { ServiceType, ServiceTier, ServiceState } from '../schema/enums';
@@ -248,6 +249,13 @@ export async function handleTierUpgradeLocked(
       billingPeriodStart: clock.now(),
       billingPeriodEnd: getEndOfMonth(clock),
       dueDate: clock.now(),
+      lineItem: {
+        itemType: INVOICE_LINE_ITEM_TYPE.TIER_UPGRADE,
+        serviceType,
+        quantity: 1,
+        unitPriceUsdCents: chargeAmountCents,
+        amountUsdCents: chargeAmountCents,
+      },
     },
     clock
   );
@@ -325,6 +333,7 @@ export interface TierUpgradePhase1Result {
   currentTier?: ServiceTier;
   chargeAmountUsdCents: number;
   description?: string;
+  serviceType?: ServiceType; // For creating semantic line item
   error?: string;
   // If true, use simple single-transaction path (no charge needed)
   useSimplePath?: boolean;
@@ -395,6 +404,7 @@ export async function prepareTierUpgradePhase1Locked(
       canProceed: true,
       currentTier: service.tier,
       chargeAmountUsdCents: 0,
+      serviceType,
       useSimplePath: true,
     };
   }
@@ -412,6 +422,7 @@ export async function prepareTierUpgradePhase1Locked(
       canProceed: true,
       currentTier: service.tier,
       chargeAmountUsdCents: 0,
+      serviceType,
       useSimplePath: true,
     };
   }
@@ -420,6 +431,7 @@ export async function prepareTierUpgradePhase1Locked(
     canProceed: true,
     currentTier: service.tier,
     chargeAmountUsdCents: chargeAmountCents,
+    serviceType,
     description: `${serviceType} tier upgrade: ${service.tier} → ${newTier} (pro-rated)`,
   };
 }
@@ -453,6 +465,13 @@ export async function createUpgradeInvoiceCommitted(
       billingPeriodStart: clock.now(),
       billingPeriodEnd: getEndOfMonth(clock),
       dueDate: clock.now(),
+      lineItem: {
+        itemType: INVOICE_LINE_ITEM_TYPE.TIER_UPGRADE,
+        serviceType: phase1Result.serviceType,
+        quantity: 1,
+        unitPriceUsdCents: phase1Result.chargeAmountUsdCents,
+        amountUsdCents: phase1Result.chargeAmountUsdCents,
+      },
     },
     clock
   );

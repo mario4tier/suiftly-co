@@ -125,7 +125,7 @@ describe('Usage Charges', () => {
         where: eq(invoiceLineItems.billingRecordId, testInvoiceId),
       });
       expect(lineItems.length).toBe(1);
-      expect(lineItems[0].description).toContain('Usage');
+      expect(lineItems[0].itemType).toBe('requests');
       expect(lineItems[0].serviceType).toBe('seal');
     });
 

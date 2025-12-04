@@ -20,6 +20,7 @@ import type { DBClock } from '@suiftly/shared/db-clock';
 import {
   SERVICE_TYPE_NUMBER,
   USAGE_PRICING_CENTS_PER_1000,
+  INVOICE_LINE_ITEM_TYPE,
   type ServiceType,
 } from '@suiftly/shared';
 
@@ -177,13 +178,17 @@ export async function updateUsageChargesToDraft(
       continue;
     }
 
-    // 9. Add line item
+    // 9. Add line item with semantic data
+    // Unit price: cents per 1000 requests (e.g., 10 = $0.10 per 1000 = $0.0001 per request)
+    const unitPriceCents = pricePer1000; // Store as cents per 1000 for precision
+
     await tx.insert(invoiceLineItems).values({
       billingRecordId: invoiceId,
-      description: `${serviceTypeName.charAt(0).toUpperCase() + serviceTypeName.slice(1)} usage: ${requestCount.toLocaleString()} requests`,
-      amountUsdCents: chargeCents,
+      itemType: INVOICE_LINE_ITEM_TYPE.REQUESTS,
       serviceType: serviceTypeName,
       quantity: requestCount,
+      unitPriceUsdCents: unitPriceCents,
+      amountUsdCents: chargeCents,
     });
 
     totalUsageChargesCents += chargeCents;
@@ -427,17 +432,16 @@ export async function syncUsageToDraft(
     const chargeCents = Math.floor((requestCount * pricePer1000) / 1000);
 
     // 9. Always add line item for transparency (even if 0 requests)
-    // Format: "Seal usage: 1,234 requests @ $0.0001/req"
-    const serviceName = serviceTypeName.charAt(0).toUpperCase() + serviceTypeName.slice(1);
-    const pricePerRequest = pricePer1000 / 1000 / 100; // Convert to dollars per request
-    const description = `${serviceName} usage: ${requestCount.toLocaleString()} requests @ $${pricePerRequest.toFixed(4)}/req`;
+    // Unit price: cents per 1000 requests (stored for precision)
+    const unitPriceCents = pricePer1000;
 
     await tx.insert(invoiceLineItems).values({
       billingRecordId: invoiceId,
-      description,
-      amountUsdCents: chargeCents,
+      itemType: INVOICE_LINE_ITEM_TYPE.REQUESTS,
       serviceType: serviceTypeName,
       quantity: requestCount,
+      unitPriceUsdCents: unitPriceCents,
+      amountUsdCents: chargeCents,
     });
 
     totalUsageChargesCents += chargeCents;

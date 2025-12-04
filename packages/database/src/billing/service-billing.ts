@@ -22,6 +22,7 @@ import { logValidationIssues } from './admin-notifications';
 import type { DBClock } from '@suiftly/shared/db-clock';
 import type { ISuiService } from '@suiftly/shared/sui-service';
 import { getTierPriceUsdCents, ADDON_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
+import { TIER_TO_SUBSCRIPTION_ITEM, type ServiceTier, type ServiceType } from '@suiftly/shared/constants';
 
 /**
  * Result of service subscription billing
@@ -56,7 +57,7 @@ export interface SubscriptionBillingResult {
 export async function handleSubscriptionBilling(
   db: Database,
   customerId: number,
-  serviceType: string,
+  serviceType: ServiceType,
   tier: string,
   monthlyPriceUsdCents: number,
   suiService: ISuiService,
@@ -93,7 +94,7 @@ export async function handleSubscriptionBilling(
 export async function handleSubscriptionBillingLocked(
   tx: LockedTransaction,
   customerId: number,
-  serviceType: string,
+  serviceType: ServiceType,
   tier: string,
   monthlyPriceUsdCents: number,
   suiService: ISuiService,
@@ -111,6 +112,13 @@ export async function handleSubscriptionBillingLocked(
         billingPeriodStart: clock.now(),
         billingPeriodEnd: clock.addDays(30),
         dueDate: clock.now(),
+        lineItem: {
+          itemType: TIER_TO_SUBSCRIPTION_ITEM[tier as ServiceTier],
+          serviceType,
+          quantity: 1,
+          unitPriceUsdCents: monthlyPriceUsdCents,
+          amountUsdCents: monthlyPriceUsdCents,
+        },
       },
       clock
     );
@@ -272,9 +280,22 @@ export async function recalculateDraftInvoice(
     }
   }
 
+  // Query existing usage charges (usage line items have service_type set)
+  // This preserves usage charges when recalculating subscription totals
+  const usageResult = await tx.execute(sql`
+    SELECT COALESCE(SUM(amount_usd_cents), 0) as total
+    FROM invoice_line_items
+    WHERE billing_record_id = ${draftId}
+      AND service_type IS NOT NULL
+  `);
+  const usageChargesCents = Number(usageResult.rows[0]?.total ?? 0);
+
+  // Total = subscription/add-ons + usage charges
+  const finalTotalCents = totalUsdCents + usageChargesCents;
+
   // Only update amount if it changed
-  if (totalUsdCents !== oldAmount) {
-    await updateDraftInvoiceAmount(tx, draftId, totalUsdCents);
+  if (finalTotalCents !== oldAmount) {
+    await updateDraftInvoiceAmount(tx, draftId, finalTotalCents);
   }
 
   // Always update lastUpdatedAt to indicate we checked (even if no changes)

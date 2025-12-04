@@ -109,14 +109,15 @@ export const serviceTypeEnum = pgEnum('service_type', [
   'graphql'
 ]);
 
-// Service states
+// Service states (7 distinct states)
 export const serviceStateEnum = pgEnum('service_state', [
   'not_provisioned',
   'provisioning',
   'disabled',
   'enabled',
   'suspended_maintenance',
-  'suspended_no_payment'
+  'suspended_no_payment',
+  'cancellation_pending'  // 7-day grace period after billing period ends
 ]);
 
 // Service tiers
@@ -134,11 +135,34 @@ export const transactionTypeEnum = pgEnum('transaction_type', [
   'credit'
 ]);
 
-// Billing status
+// Billing status (invoice lifecycle states)
 export const billingStatusEnum = pgEnum('billing_status', [
-  'pending',
-  'paid',
-  'failed'
+  'draft',    // Pre-computed projection for next billing cycle
+  'pending',  // Ready for payment processing
+  'paid',     // Fully paid
+  'failed',   // Charge attempt failed
+  'voided'    // Cancelled (billing error, etc.)
+]);
+
+// Billing type (distinguishes invoice creation context)
+export const billingTypeEnum = pgEnum('billing_type', [
+  'immediate', // Mid-cycle charges (upgrades, first subscription) - void on failure
+  'scheduled'  // Monthly billing (from DRAFT) - retry until paid
+]);
+
+// Invoice line item types (semantic categorization of invoice charges)
+export const invoiceLineItemTypeEnum = pgEnum('invoice_line_item_type', [
+  'subscription_starter',
+  'subscription_pro',
+  'subscription_enterprise',
+  'tier_upgrade',
+  'requests',
+  'extra_api_keys',
+  'extra_seal_keys',
+  'extra_allowlist_ips',
+  'extra_packages',
+  'credit',
+  'tax'
 ]);
 
 // Export TypeScript types derived from enums
@@ -148,6 +172,8 @@ export type ServiceState = typeof serviceStateEnum.enumValues[number];
 export type ServiceTier = typeof serviceTierEnum.enumValues[number];
 export type TransactionType = typeof transactionTypeEnum.enumValues[number];
 export type BillingStatus = typeof billingStatusEnum.enumValues[number];
+export type BillingType = typeof billingTypeEnum.enumValues[number];
+export type InvoiceLineItemType = typeof invoiceLineItemTypeEnum.enumValues[number];
 ```
 
 ### Step 2: Update Schema Files to Use ENUMs
@@ -268,10 +294,26 @@ export const TRANSACTION_TYPE = {
 } as const satisfies Record<string, TransactionType>;
 
 export const BILLING_STATUS = {
+  DRAFT: 'draft',
   PENDING: 'pending',
   PAID: 'paid',
   FAILED: 'failed',
+  VOIDED: 'voided',
 } as const satisfies Record<string, BillingStatus>;
+
+export const INVOICE_LINE_ITEM_TYPE = {
+  SUBSCRIPTION_STARTER: 'subscription_starter',
+  SUBSCRIPTION_PRO: 'subscription_pro',
+  SUBSCRIPTION_ENTERPRISE: 'subscription_enterprise',
+  TIER_UPGRADE: 'tier_upgrade',
+  REQUESTS: 'requests',
+  EXTRA_API_KEYS: 'extra_api_keys',
+  EXTRA_SEAL_KEYS: 'extra_seal_keys',
+  EXTRA_ALLOWLIST_IPS: 'extra_allowlist_ips',
+  EXTRA_PACKAGES: 'extra_packages',
+  CREDIT: 'credit',
+  TAX: 'tax',
+} as const satisfies Record<string, InvoiceLineItemType>;
 
 // Other constants remain unchanged
 export const SPENDING_LIMIT = {
@@ -703,6 +745,7 @@ npm run build
 
 ---
 
-**Document Version**: 1.0
-**Last Updated**: 2025-01-14
+**Document Version**: 1.1
+**Last Updated**: 2025-12-04
 **Status**: Implementation guide
+**Changes**: Added billingTypeEnum, invoiceLineItemTypeEnum; updated billingStatusEnum and serviceStateEnum

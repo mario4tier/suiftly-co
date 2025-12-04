@@ -467,12 +467,14 @@ if (config.NODE_ENV !== 'production') {
           createdAt: now,
         }).returning({ id: billingRecords.id });
 
-        // Create line item for display
+        // Create line item for display (test charge uses subscription_pro as default)
         await db.insert(invoiceLineItems).values({
           billingRecordId: invoice.id,
-          description,
-          amountUsdCents: amountCents,
+          itemType: 'subscription_pro', // Test endpoint default
+          serviceType: 'seal',
           quantity: 1,
+          unitPriceUsdCents: amountCents,
+          amountUsdCents: amountCents,
         });
 
         // Also create ledger entry for audit trail
@@ -559,12 +561,13 @@ if (config.NODE_ENV !== 'production') {
           createdAt: now,
         }).returning({ id: billingRecords.id });
 
-        // Create line item for display
+        // Create line item for display (refund/credit)
         await db.insert(invoiceLineItems).values({
           billingRecordId: invoice.id,
-          description,
-          amountUsdCents: amountCents,
+          itemType: 'credit', // Refund is a credit line item
           quantity: 1,
+          unitPriceUsdCents: amountCents,
+          amountUsdCents: amountCents,
         });
 
         // Also create ledger entry for audit trail
@@ -1099,6 +1102,40 @@ if (config.NODE_ENV !== 'production') {
       });
     } catch (error: any) {
       console.error('[CLEAR LOGS ERROR]', error);
+      reply.code(500).send({
+        success: false,
+        error: error.message || String(error),
+      });
+    }
+  });
+
+  // Sync usage to DRAFT invoice for a customer (uses production code path)
+  server.post('/test/stats/sync-draft', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    try {
+      const { db } = await import('@suiftly/database');
+      const { forceSyncUsageToDraft } = await import('@suiftly/database/billing');
+      const { dbClockProvider } = await import('@suiftly/shared/db-clock');
+
+      const body = request.body as any;
+
+      if (!body.customerId) {
+        return reply.code(400).send({
+          success: false,
+          error: 'customerId is required',
+        });
+      }
+
+      const clock = dbClockProvider.getClock();
+      const result = await forceSyncUsageToDraft(db, body.customerId, clock);
+      reply.send({
+        success: result.success,
+        operations: result.operations,
+        errors: result.errors,
+      });
+    } catch (error: any) {
+      console.error('[SYNC DRAFT ERROR]', error);
       reply.code(500).send({
         success: false,
         error: error.message || String(error),

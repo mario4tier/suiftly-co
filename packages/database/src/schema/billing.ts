@@ -2,6 +2,7 @@ import { pgTable, serial, integer, uuid, bigint, varchar, text, timestamp, index
 import { sql } from 'drizzle-orm';
 import { customers } from './customers';
 import { billingRecords, escrowTransactions } from './escrow';
+import { serviceTypeEnum, invoiceLineItemTypeEnum } from './enums';
 import { FIELD_LIMITS } from '@suiftly/shared/constants';
 
 /**
@@ -98,21 +99,42 @@ export const billingIdempotency = pgTable('billing_idempotency', {
 }));
 
 /**
- * Invoice Line Items Table (Optional)
+ * Invoice Line Items Table
  *
- * Stores itemized invoice details as separate rows instead of JSONB.
- * Provides better queryability and type safety.
+ * Stores structured invoice line items with semantic types.
+ * Uses PostgreSQL ENUMs for type safety at database level.
  *
- * Note: billing_records currently uses JSONB for line_items.
- * This table is for future migration to relational model.
+ * itemType uses invoiceLineItemTypeEnum (invoice_line_item_type):
+ * - subscription_starter, subscription_pro, subscription_enterprise
+ * - tier_upgrade (pro-rated upgrade charges)
+ * - requests (usage-based charges)
+ * - extra_api_keys, extra_seal_keys, extra_allowlist_ips, extra_packages
+ * - credit, tax
+ *
+ * serviceType uses serviceTypeEnum (service_type):
+ * - seal, grpc, graphql
+ *
+ * Frontend formats display strings from this structured data.
  */
 export const invoiceLineItems = pgTable('invoice_line_items', {
   lineItemId: serial('line_item_id').primaryKey(),
   billingRecordId: uuid('billing_record_id').notNull().references(() => billingRecords.id, { onDelete: 'cascade' }),
-  description: text('description').notNull(),
+
+  // Semantic type - uses PostgreSQL ENUM for database-level validation
+  itemType: invoiceLineItemTypeEnum('item_type').notNull(),
+
+  // Service this line item belongs to (null for credits, taxes)
+  // Uses existing service_type ENUM for consistency
+  serviceType: serviceTypeEnum('service_type'),
+
+  // Quantity and pricing
+  quantity: bigint('quantity', { mode: 'number' }).notNull().default(1),
+  unitPriceUsdCents: bigint('unit_price_usd_cents', { mode: 'number' }).notNull(),
   amountUsdCents: bigint('amount_usd_cents', { mode: 'number' }).notNull(),
-  serviceType: varchar('service_type', { length: 20 }), // Optional: link to service_type enum
-  quantity: integer('quantity').default(1),
+
+  // Optional: credit month name for credit line items
+  creditMonth: varchar('credit_month', { length: 20 }),
+
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
   idxLineItemsBilling: index('idx_line_items_billing').on(table.billingRecordId),

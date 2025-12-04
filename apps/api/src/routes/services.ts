@@ -467,13 +467,14 @@ export const servicesRouter = router({
             });
           }
 
+          const now = dbClock.now();
           const [updatedService] = await tx
             .update(serviceInstances)
             .set({
               isUserEnabled: input.enabled,
               state: input.enabled ? SERVICE_STATE.ENABLED : SERVICE_STATE.DISABLED,
-              enabledAt: input.enabled ? new Date() : service.enabledAt,
-              disabledAt: !input.enabled ? new Date() : service.disabledAt,
+              enabledAt: input.enabled ? now : service.enabledAt,
+              disabledAt: !input.enabled ? now : service.disabledAt,
             })
             .where(eq(serviceInstances.instanceId, service.instanceId))
             .returning();

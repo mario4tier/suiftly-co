@@ -14,25 +14,25 @@
 
 import { db } from '@suiftly/database';
 import { getTierPriceUsdCents } from '@suiftly/shared/pricing';
+import { INVOICE_LINE_ITEM_TYPE, TIER_TO_SUBSCRIPTION_ITEM } from '@suiftly/shared/constants';
+import type { ServiceType, ServiceTier, InvoiceLineItemType } from '@suiftly/shared/constants';
+import type { InvoiceLineItem } from '@suiftly/shared/types';
 import { customerCredits, serviceInstances, invoiceLineItems } from '@suiftly/database/schema';
 import { eq, and, sql, gt, isNull } from 'drizzle-orm';
 import { dbClock } from '@suiftly/shared/db-clock';
 
-/**
- * Line item for invoice display
- */
-export interface InvoiceLineItem {
-  description: string;
-  amountUsd: number;
-  type: 'subscription' | 'addon' | 'usage' | 'credit' | 'tax';
-}
+// Re-export the type for convenience
+export type { InvoiceLineItem } from '@suiftly/shared/types';
 
 /**
  * Build line items for a DRAFT invoice
  *
- * Calculates what will be charged on the 1st of next month, including:
- * - Service subscriptions (by name: "Seal Pro tier")
- * - Usage charges (from invoice_line_items table, synced periodically)
+ * Reads cached line items from invoice_line_items table (synced periodically)
+ * and adds subscription charges based on current service configuration.
+ *
+ * Line items include:
+ * - Service subscriptions (computed from service tier)
+ * - Usage charges (read from cached invoice_line_items)
  * - Add-ons (future: "Seal - 2 extra keys")
  * - Available credits (will be applied when DRAFT → PENDING)
  *
@@ -45,7 +45,7 @@ export interface InvoiceLineItem {
  * @param customerId Customer ID
  * @param draftAmountCents DRAFT invoice gross amount
  * @param billingPeriodStart Invoice due date (1st of next month) - used to calculate credit month
- * @param draftInvoiceId Optional DRAFT invoice ID to query usage line items from
+ * @param draftInvoiceId DRAFT invoice ID to read cached line items from
  * @returns Array of line items
  */
 export async function buildDraftLineItems(
@@ -55,6 +55,7 @@ export async function buildDraftLineItems(
   draftInvoiceId?: string
 ): Promise<InvoiceLineItem[]> {
   const lineItems: InvoiceLineItem[] = [];
+  const now = dbClock.now();
 
   // Get subscribed services (exclude services with pending initial charge or scheduled cancellation)
   const services = await db.query.serviceInstances.findMany({
@@ -65,43 +66,46 @@ export async function buildDraftLineItems(
     ),
   });
 
-  // Add line item for each service
+  // Add subscription line item for each service
   for (const service of services) {
     // Use scheduled tier if present (for scheduled downgrades), otherwise current tier
     // This ensures DRAFT invoice line items reflect what will ACTUALLY be charged
-    const effectiveTier = service.scheduledTier || service.tier;
-    const tierPrice = getTierPriceUsdCents(effectiveTier);
-    const serviceName = service.serviceType.charAt(0).toUpperCase() + service.serviceType.slice(1);
-    const tierName = effectiveTier.charAt(0).toUpperCase() + effectiveTier.slice(1);
+    const effectiveTier = (service.scheduledTier || service.tier) as ServiceTier;
+    const tierPriceCents = getTierPriceUsdCents(effectiveTier);
+    const tierPriceUsd = tierPriceCents / 100;
 
     lineItems.push({
-      description: `${serviceName} ${tierName} tier`,
-      amountUsd: tierPrice / 100,
-      type: 'subscription',
+      service: service.serviceType as ServiceType,
+      itemType: TIER_TO_SUBSCRIPTION_ITEM[effectiveTier],
+      quantity: 1,
+      unitPriceUsd: tierPriceUsd,
+      amountUsd: tierPriceUsd,
     });
 
     // Future: Add-ons would be additional line items here
-    // e.g., "Seal - 2 extra keys @ $5/mo"
+    // e.g., extra_api_keys, extra_seal_keys, etc.
   }
 
-  // Get usage line items from invoice_line_items table (synced periodically)
-  // Usage line items have service_type set; subscription/credit line items don't
+  // Read usage charges from cached invoice_line_items table
+  // These are synced periodically by syncUsageToDraft()
   if (draftInvoiceId) {
-    const usageItems = await db
-      .select()
-      .from(invoiceLineItems)
-      .where(
-        and(
-          eq(invoiceLineItems.billingRecordId, draftInvoiceId),
-          sql`${invoiceLineItems.serviceType} IS NOT NULL`
-        )
-      );
+    const cachedLineItems = await db.query.invoiceLineItems.findMany({
+      where: eq(invoiceLineItems.billingRecordId, draftInvoiceId),
+    });
 
-    for (const item of usageItems) {
+    for (const item of cachedLineItems) {
+      // Convert stored cents to USD for frontend
+      // unitPriceUsdCents is stored as cents per 1000 requests
+      const unitPriceUsd = Number(item.unitPriceUsdCents) / 100 / 1000;
+      const amountUsd = Number(item.amountUsdCents) / 100;
+
       lineItems.push({
-        description: item.description,
-        amountUsd: Number(item.amountUsdCents) / 100,
-        type: 'usage',
+        service: item.serviceType as ServiceType | null,
+        itemType: item.itemType as InvoiceLineItemType,
+        quantity: Number(item.quantity),
+        unitPriceUsd,
+        amountUsd,
+        creditMonth: item.creditMonth || undefined,
       });
     }
   }
@@ -110,7 +114,6 @@ export async function buildDraftLineItems(
   // Only show credits if there are active services in the DRAFT
   // (If all services have pending subscription charges, don't show credits)
   if (services.length > 0) {
-    const now = dbClock.now();
     const credits = await db
       .select({ total: sql<number>`COALESCE(SUM(${customerCredits.remainingAmountUsdCents}), 0)` })
       .from(customerCredits)
@@ -125,38 +128,37 @@ export async function buildDraftLineItems(
     const creditsCents = Number(credits[0]?.total ?? 0);
 
     if (creditsCents > 0) {
-      // Credit description includes service name, tier, and month for clarity
-      // Use CURRENT tier (not scheduled), since credit was generated from what user paid for
-      const serviceName = services.length === 1
-        ? services[0].serviceType.charAt(0).toUpperCase() + services[0].serviceType.slice(1)
-        : 'Service'; // Fallback if multiple services (rare for partial month credit)
-      const tierName = services.length === 1
-        ? services[0].tier.charAt(0).toUpperCase() + services[0].tier.slice(1)
-        : ''; // Omit tier if multiple services
+      // For multiple services, use null for service (rare case)
+      const creditService = services.length === 1
+        ? services[0].serviceType as ServiceType
+        : null;
 
       // Credit is for the month BEFORE the DRAFT invoice due date
       // Example: December 1st DRAFT invoice → credit is for November partial month
-      let creditMonth: Date;
+      let creditMonthDate: Date;
       if (billingPeriodStart) {
         // Use invoice due date minus 1 month
-        creditMonth = new Date(billingPeriodStart);
-        creditMonth.setUTCMonth(creditMonth.getUTCMonth() - 1);
+        creditMonthDate = new Date(billingPeriodStart);
+        creditMonthDate.setUTCMonth(creditMonthDate.getUTCMonth() - 1);
       } else {
         // Fallback to current month if billing period not provided
-        creditMonth = now;
+        creditMonthDate = now;
       }
 
-      const monthName = creditMonth.toLocaleDateString('en-US', {
+      const creditMonthName = creditMonthDate.toLocaleDateString('en-US', {
         month: 'long',
         timeZone: 'UTC'
       });
 
-      // Format: "Seal Starter partial month credit (November)"
-      const tierPart = tierName ? ` ${tierName}` : '';
+      const creditAmountUsd = creditsCents / 100;
+
       lineItems.push({
-        description: `${serviceName}${tierPart} partial month credit (${monthName})`,
-        amountUsd: -(creditsCents / 100),
-        type: 'credit',
+        service: creditService,
+        itemType: INVOICE_LINE_ITEM_TYPE.CREDIT,
+        quantity: 1,
+        unitPriceUsd: creditAmountUsd,
+        amountUsd: -creditAmountUsd, // Negative for credits
+        creditMonth: creditMonthName,
       });
     }
   }

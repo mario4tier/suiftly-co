@@ -5,22 +5,8 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1764545100430,
+      "when": 1764814226640,
       "tag": "0000_initial_schema",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1764714268406,
-      "tag": "0001_dizzy_captain_midlands",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1764730078471,
-      "tag": "0002_curly_whistler",
       "breakpoints": true
     }
   ]

@@ -1,5 +1,7 @@
 CREATE TYPE "public"."billing_status" AS ENUM('draft', 'pending', 'paid', 'failed', 'voided');--> statement-breakpoint
+CREATE TYPE "public"."billing_type" AS ENUM('immediate', 'scheduled');--> statement-breakpoint
 CREATE TYPE "public"."customer_status" AS ENUM('active', 'suspended', 'closed');--> statement-breakpoint
+CREATE TYPE "public"."invoice_line_item_type" AS ENUM('subscription_starter', 'subscription_pro', 'subscription_enterprise', 'tier_upgrade', 'requests', 'extra_api_keys', 'extra_seal_keys', 'extra_allowlist_ips', 'extra_packages', 'credit', 'tax');--> statement-breakpoint
 CREATE TYPE "public"."service_state" AS ENUM('not_provisioned', 'provisioning', 'disabled', 'enabled', 'suspended_maintenance', 'suspended_no_payment', 'cancellation_pending');--> statement-breakpoint
 CREATE TYPE "public"."service_tier" AS ENUM('starter', 'pro', 'enterprise');--> statement-breakpoint
 CREATE TYPE "public"."service_type" AS ENUM('seal', 'grpc', 'graphql');--> statement-breakpoint
@@ -72,10 +74,12 @@ CREATE TABLE "customer_credits" (
 CREATE TABLE "invoice_line_items" (
 	"line_item_id" serial PRIMARY KEY NOT NULL,
 	"billing_record_id" uuid NOT NULL,
-	"description" text NOT NULL,
+	"item_type" "invoice_line_item_type" NOT NULL,
+	"service_type" "service_type",
+	"quantity" bigint DEFAULT 1 NOT NULL,
+	"unit_price_usd_cents" bigint NOT NULL,
 	"amount_usd_cents" bigint NOT NULL,
-	"service_type" varchar(20),
-	"quantity" integer DEFAULT 1,
+	"credit_month" varchar(20),
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
@@ -131,13 +135,15 @@ CREATE TABLE "billing_records" (
 	"type" "transaction_type" NOT NULL,
 	"status" "billing_status" NOT NULL,
 	"tx_digest" "bytea",
-	"invoice_number" varchar(50) NOT NULL DEFAULT nextval('invoice_number_seq')::text,
+	"invoice_number" varchar(50) DEFAULT nextval('invoice_number_seq')::text NOT NULL,
 	"due_date" timestamp with time zone,
+	"billing_type" "billing_type" DEFAULT 'scheduled' NOT NULL,
 	"amount_paid_usd_cents" bigint DEFAULT 0 NOT NULL,
 	"retry_count" integer DEFAULT 0,
 	"last_retry_at" timestamp with time zone,
 	"failure_reason" text,
 	"created_at" timestamp DEFAULT now() NOT NULL,
+	"last_updated_at" timestamp,
 	CONSTRAINT "check_tx_digest_length" CHECK ("billing_records"."tx_digest" IS NULL OR LENGTH("billing_records"."tx_digest") = 32)
 );
 --> statement-breakpoint
@@ -356,6 +362,7 @@ CREATE INDEX "idx_wallet" ON "customers" USING btree ("wallet_address");--> stat
 CREATE INDEX "idx_customer_status" ON "customers" USING btree ("status") WHERE "customers"."status" != 'active';--> statement-breakpoint
 CREATE INDEX "idx_customer_period" ON "billing_records" USING btree ("customer_id","billing_period_start");--> statement-breakpoint
 CREATE INDEX "idx_billing_status" ON "billing_records" USING btree ("status") WHERE "billing_records"."status" != 'paid';--> statement-breakpoint
+CREATE INDEX "idx_billing_type_status" ON "billing_records" USING btree ("billing_type","status") WHERE "billing_records"."status" = 'pending';--> statement-breakpoint
 CREATE INDEX "idx_escrow_customer" ON "escrow_transactions" USING btree ("customer_id");--> statement-breakpoint
 CREATE INDEX "idx_escrow_tx_digest" ON "escrow_transactions" USING btree ("tx_digest");--> statement-breakpoint
 CREATE INDEX "idx_customer_created" ON "ledger_entries" USING btree ("customer_id","created_at");--> statement-breakpoint

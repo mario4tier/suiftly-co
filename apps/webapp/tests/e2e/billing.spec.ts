@@ -269,8 +269,8 @@ test.describe('Billing Page', () => {
     await expect(page.locator('text=Seal Pro tier')).toBeVisible();
     // Partial month credit may or may not appear depending on subscription date
     // If subscribed near end of month, credit may be $0 and not displayed
-    // Credit format when present: "Seal Pro partial month credit (Month)"
-    const creditLocator = page.locator('text=/Seal Pro partial month credit/i');
+    // Credit format when present: "Seal partial month credit (Month)"
+    const creditLocator = page.locator('text=/Seal partial month credit/i');
     const creditVisible = await creditLocator.isVisible().catch(() => false);
     if (creditVisible) {
       console.log('  → Partial month credit is visible');

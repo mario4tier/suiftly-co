@@ -15,6 +15,7 @@ import { parseIpAddressList, ipAllowlistUpdateSchema } from '@suiftly/shared/sch
 import { decryptSecret } from '../lib/encryption';
 import { generateSealKey } from '../lib/seal-key-generation';
 import { getTierPriceUsdCents } from '../lib/config-cache';
+import { dbClock } from '@suiftly/shared/db-clock';
 
 export const sealRouter = router({
   /**
@@ -881,7 +882,7 @@ export const sealRouter = router({
         .update(apiKeys)
         .set({
           isUserEnabled: false,
-          revokedAt: new Date(),
+          revokedAt: dbClock.now(),
         })
         .where(
           and(
@@ -961,7 +962,7 @@ export const sealRouter = router({
       const result = await db
         .update(apiKeys)
         .set({
-          deletedAt: new Date(),
+          deletedAt: dbClock.now(),
         })
         .where(
           and(

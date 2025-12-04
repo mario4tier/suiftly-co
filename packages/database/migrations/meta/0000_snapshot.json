@@ -1,5 +1,5 @@
 {
-  "id": "e0563820-b028-40c5-9afa-8f83d2396556",
+  "id": "eed357ce-66ad-427d-867e-64089505b234",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -642,9 +642,30 @@
           "primaryKey": false,
           "notNull": true
         },
-        "description": {
-          "name": "description",
-          "type": "text",
+        "item_type": {
+          "name": "item_type",
+          "type": "invoice_line_item_type",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "service_type": {
+          "name": "service_type",
+          "type": "service_type",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "quantity": {
+          "name": "quantity",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "unit_price_usd_cents": {
+          "name": "unit_price_usd_cents",
+          "type": "bigint",
           "primaryKey": false,
           "notNull": true
         },
@@ -654,18 +675,11 @@
           "primaryKey": false,
           "notNull": true
         },
-        "service_type": {
-          "name": "service_type",
+        "credit_month": {
+          "name": "credit_month",
           "type": "varchar(20)",
           "primaryKey": false,
           "notNull": false
-        },
-        "quantity": {
-          "name": "quantity",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "default": 1
         },
         "created_at": {
           "name": "created_at",
@@ -1177,13 +1191,22 @@
           "name": "invoice_number",
           "type": "varchar(50)",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true,
+          "default": "nextval('invoice_number_seq')::text"
         },
         "due_date": {
           "name": "due_date",
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
+        },
+        "billing_type": {
+          "name": "billing_type",
+          "type": "billing_type",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'scheduled'"
         },
         "amount_paid_usd_cents": {
           "name": "amount_paid_usd_cents",
@@ -1217,6 +1240,12 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
+        },
+        "last_updated_at": {
+          "name": "last_updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -1253,6 +1282,28 @@
           ],
           "isUnique": false,
           "where": "\"billing_records\".\"status\" != 'paid'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_billing_type_status": {
+          "name": "idx_billing_type_status",
+          "columns": [
+            {
+              "expression": "billing_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"billing_records\".\"status\" = 'pending'",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -2889,6 +2940,14 @@
         "voided"
       ]
     },
+    "public.billing_type": {
+      "name": "billing_type",
+      "schema": "public",
+      "values": [
+        "immediate",
+        "scheduled"
+      ]
+    },
     "public.customer_status": {
       "name": "customer_status",
       "schema": "public",
@@ -2896,6 +2955,23 @@
         "active",
         "suspended",
         "closed"
+      ]
+    },
+    "public.invoice_line_item_type": {
+      "name": "invoice_line_item_type",
+      "schema": "public",
+      "values": [
+        "subscription_starter",
+        "subscription_pro",
+        "subscription_enterprise",
+        "tier_upgrade",
+        "requests",
+        "extra_api_keys",
+        "extra_seal_keys",
+        "extra_allowlist_ips",
+        "extra_packages",
+        "credit",
+        "tax"
       ]
     },
     "public.service_state": {

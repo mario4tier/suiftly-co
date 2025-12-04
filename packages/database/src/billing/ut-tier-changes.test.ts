@@ -1215,8 +1215,10 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         // Create line item for the pending invoice
         await db.insert(invoiceLineItems).values({
           billingRecordId: pendingInvoice.id,
-          description: 'seal pro tier - first month',
+          itemType: 'subscription_pro',
+          serviceType: 'seal',
           amountUsdCents: PRO_PRICE_CENTS,
+          unitPriceUsdCents: PRO_PRICE_CENTS,
           quantity: 1,
         });
 

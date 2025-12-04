@@ -14,6 +14,7 @@ import { eq, and, gt } from 'drizzle-orm';
 import { randomBytes, randomInt, createHash } from 'crypto';
 import { TRPCError } from '@trpc/server';
 import { config } from '../lib/config.js';
+import { dbClock } from '@suiftly/shared/db-clock';
 
 const MOCK_AUTH = config.MOCK_AUTH;
 const NONCE_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes (user-friendly, still secure)
@@ -66,7 +67,7 @@ export const authRouter = router({
       await db.insert(authNonces).values({
         address: walletAddress,
         nonce,
-        createdAt: new Date(),
+        createdAt: dbClock.now(),
       });
 
       console.log(`[AUTH] New nonce generated for ${walletAddress.slice(0, 10)}...`);
@@ -85,7 +86,7 @@ export const authRouter = router({
       return {
         nonce,
         message,
-        expiresAt: new Date(Date.now() + NONCE_EXPIRY_MS).toISOString(),
+        expiresAt: new Date(dbClock.now().getTime() + NONCE_EXPIRY_MS).toISOString(),
       };
     }),
 
@@ -105,7 +106,7 @@ export const authRouter = router({
           and(
             eq(authNonces.address, walletAddress),
             eq(authNonces.nonce, nonce),
-            gt(authNonces.createdAt, new Date(Date.now() - NONCE_EXPIRY_MS))
+            gt(authNonces.createdAt, new Date(dbClock.now().getTime() - NONCE_EXPIRY_MS))
           )
         )
         .limit(1);
@@ -171,7 +172,10 @@ export const authRouter = router({
               spendingLimitUsdCents: 25000, // $250 default from CONSTANTS.md
               currentBalanceUsdCents: 0,
               currentPeriodChargedUsdCents: 0,
-              currentPeriodStart: new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1)).toISOString().split('T')[0],
+              currentPeriodStart: (() => {
+                const now = dbClock.now();
+                return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString().split('T')[0];
+              })(),
             });
             inserted = true;
           } catch (error: any) {
@@ -212,7 +216,7 @@ export const authRouter = router({
       await db.insert(refreshTokens).values({
         customerId,
         tokenHash,
-        expiresAt: new Date(Date.now() + refreshExpiryMs),
+        expiresAt: new Date(dbClock.now().getTime() + refreshExpiryMs),
       });
 
       // Set httpOnly cookie for refresh token
@@ -259,7 +263,7 @@ export const authRouter = router({
           and(
             eq(refreshTokens.customerId, payload.customerId),
             eq(refreshTokens.tokenHash, tokenHash),
-            gt(refreshTokens.expiresAt, new Date())
+            gt(refreshTokens.expiresAt, dbClock.now())
           )
         )
         .limit(1);

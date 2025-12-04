@@ -25,6 +25,13 @@ import {
   resetTestData,
 } from './helpers/http.js';
 import { login, TEST_WALLET } from './helpers/auth.js';
+import { INVOICE_LINE_ITEM_TYPE } from '@suiftly/shared/constants';
+
+const SUBSCRIPTION_ITEM_TYPES = [
+  INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_STARTER,
+  INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_PRO,
+  INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_ENTERPRISE,
+] as const;
 
 describe('API: Tier Changes Flow', () => {
   let accessToken: string;
@@ -267,8 +274,8 @@ describe('API: Tier Changes Flow', () => {
 
       // Initially should show Enterprise tier
       let lineItems = paymentResult.result?.data?.lineItems;
-      let subscriptionItem = lineItems.find((item: any) => item.type === 'subscription');
-      expect(subscriptionItem?.description).toContain('Enterprise');
+      let subscriptionItem = lineItems.find((item: any) => SUBSCRIPTION_ITEM_TYPES.includes(item.itemType));
+      expect(subscriptionItem?.itemType).toBe(INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_ENTERPRISE);
       expect(subscriptionItem?.amountUsd).toBe(185); // Enterprise = $185
 
       // ---- Schedule downgrade to starter ----
@@ -292,10 +299,10 @@ describe('API: Tier Changes Flow', () => {
 
       expect(paymentResult.result?.data?.found).toBe(true);
       lineItems = paymentResult.result?.data?.lineItems;
-      subscriptionItem = lineItems.find((item: any) => item.type === 'subscription');
+      subscriptionItem = lineItems.find((item: any) => SUBSCRIPTION_ITEM_TYPES.includes(item.itemType));
 
       // Line items should show the SCHEDULED tier (starter = $9), not current tier (enterprise = $185)
-      expect(subscriptionItem?.description).toContain('Starter');
+      expect(subscriptionItem?.itemType).toBe(INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_STARTER);
       expect(subscriptionItem?.amountUsd).toBe(9); // Starter = $9, NOT Enterprise = $185
     });
 

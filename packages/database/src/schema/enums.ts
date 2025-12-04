@@ -68,6 +68,27 @@ export const billingTypeEnum = pgEnum('billing_type', [
   'scheduled'  // Monthly billing (from DRAFT) - retry until paid
 ]);
 
+// Invoice line item types (semantic categorization of invoice charges)
+// Used for structured billing display instead of string descriptions
+export const invoiceLineItemTypeEnum = pgEnum('invoice_line_item_type', [
+  // Tier subscriptions (per service, per tier)
+  'subscription_starter',
+  'subscription_pro',
+  'subscription_enterprise',
+  // Tier upgrade (pro-rated charge for remaining days in month)
+  'tier_upgrade',
+  // Usage-based charges
+  'requests',
+  // Add-ons (quantity = extra count beyond included)
+  'extra_api_keys',
+  'extra_seal_keys',
+  'extra_allowlist_ips',
+  'extra_packages',
+  // Credits and taxes
+  'credit',
+  'tax'
+]);
+
 /**
  * Export TypeScript types derived from enums
  *
@@ -85,3 +106,4 @@ export type ServiceTier = typeof serviceTierEnum.enumValues[number];
 export type TransactionType = typeof transactionTypeEnum.enumValues[number];
 export type BillingStatus = typeof billingStatusEnum.enumValues[number];
 export type BillingType = typeof billingTypeEnum.enumValues[number];
+export type InvoiceLineItemType = typeof invoiceLineItemTypeEnum.enumValues[number];

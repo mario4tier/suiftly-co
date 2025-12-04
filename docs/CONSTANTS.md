@@ -196,7 +196,7 @@ export const FIELD_LIMITS = {
   // Status fields
   CUSTOMER_STATUS: 20,      // 'active', 'suspended', 'closed'
   TRANSACTION_TYPE: 20,     // 'deposit', 'withdraw', 'charge', 'credit'
-  BILLING_STATUS: 20,       // 'pending', 'paid', 'failed'
+  BILLING_STATUS: 20,       // 'draft', 'pending', 'paid', 'failed', 'voided'
 
   // User-provided names
   PACKAGE_NAME: 100,        // Seal package names

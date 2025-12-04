@@ -16,6 +16,7 @@ import { db } from '@suiftly/database';
 import { apiKeys } from '@suiftly/database/schema';
 import { eq, and, isNull } from 'drizzle-orm';
 import { encryptSecret, decryptSecret } from './encryption';
+import { dbClock } from '@suiftly/shared/db-clock';
 
 /**
  * API_SECRET_KEY - 32-byte key for AES-128-CTR encryption and HMAC-SHA256
@@ -493,7 +494,7 @@ export async function storeApiKey(options: {
             procGroup: decoded.metadata.procGroup,
           },
           isUserEnabled: true,
-          createdAt: new Date(),
+          createdAt: dbClock.now(),
         })
         .returning();
 
@@ -550,7 +551,7 @@ export async function revokeApiKey(apiKey: string, customerId: number): Promise<
     .update(apiKeys)
     .set({
       isUserEnabled: false,
-      revokedAt: new Date(),
+      revokedAt: dbClock.now(),
     })
     .where(
       and(
@@ -576,7 +577,7 @@ export async function deleteApiKey(apiKey: string, customerId: number): Promise<
   const result = await db
     .update(apiKeys)
     .set({
-      deletedAt: new Date(),
+      deletedAt: dbClock.now(),
     })
     .where(
       and(

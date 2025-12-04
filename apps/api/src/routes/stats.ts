@@ -21,7 +21,7 @@ import {
   clearCustomerLogs,
   type TimeRange,
 } from '@suiftly/database/stats';
-import { getUsageChargePreview } from '@suiftly/database/billing';
+import { getUsageChargePreview, forceSyncUsageToDraft } from '@suiftly/database/billing';
 import { config } from '../lib/config';
 
 // Validation schemas
@@ -214,6 +214,9 @@ export const statsRouter = router({
       // Refresh the aggregate to make data immediately visible
       await refreshStatsAggregate(db);
 
+      // Sync usage to DRAFT invoice using production code path (force=true bypasses debouncing)
+      await forceSyncUsageToDraft(db, ctx.user.customerId, clock);
+
       return {
         success: true,
         inserted: {
@@ -398,6 +401,9 @@ export const statsRouter = router({
 
       // Refresh the aggregate to make data immediately visible
       await refreshStatsAggregate(db);
+
+      // Sync usage to DRAFT invoice using production code path (force=true bypasses debouncing)
+      await forceSyncUsageToDraft(db, ctx.user.customerId, clock);
 
       return {
         success: true,
