@@ -11,15 +11,15 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { db } from '@suiftly/database';
-import { serviceInstances, customers, billingRecords } from '@suiftly/database/schema';
-import { eq, and } from 'drizzle-orm';
+import { customers } from '@suiftly/database/schema';
+import { eq } from 'drizzle-orm';
 import {
   setClockTime,
   resetClock,
   ensureTestBalance,
   trpcQuery,
-  trpcMutation,
   resetTestData,
+  subscribeAndEnable,
 } from './helpers/http.js';
 import { login, TEST_WALLET } from './helpers/auth.js';
 import { INVOICE_LINE_ITEM_TYPE, SERVICE_TYPE } from '@suiftly/shared/constants';
@@ -109,24 +109,7 @@ describe('API: Invoice Line Items', () => {
   describe('Usage Line Items in DRAFT Invoice', () => {
     it('should include usage charges in getNextScheduledPayment after syncing logs', async () => {
       // ---- Setup: Subscribe to Seal Starter ----
-      await trpcMutation<any>(
-        'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
-        accessToken
-      );
-
-      // Mark service as paid (so it's included in DRAFT)
-      const service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal')
-        ),
-      });
-      if (service) {
-        await db.update(serviceInstances)
-          .set({ paidOnce: true, subPendingInvoiceId: null })
-          .where(eq(serviceInstances.instanceId, service.instanceId));
-      }
+      await subscribeAndEnable('seal', 'starter', accessToken);
 
       // ---- Insert mock usage logs: 15,500 billable requests ----
       // Note: Insert at 11:00 and clock is at 12:00, so bucket (11:00) < now (12:00)
@@ -173,24 +156,7 @@ describe('API: Invoice Line Items', () => {
 
     it('should show zero usage when no logs exist', async () => {
       // ---- Setup: Subscribe to Seal Starter ----
-      await trpcMutation<any>(
-        'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
-        accessToken
-      );
-
-      // Mark service as paid
-      const service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal')
-        ),
-      });
-      if (service) {
-        await db.update(serviceInstances)
-          .set({ paidOnce: true, subPendingInvoiceId: null })
-          .where(eq(serviceInstances.instanceId, service.instanceId));
-      }
+      await subscribeAndEnable('seal', 'starter', accessToken);
 
       // ---- Sync empty usage to DRAFT invoice ----
       const syncResult = await syncUsageToDraft(customerId);
@@ -227,24 +193,8 @@ describe('API: Invoice Line Items', () => {
     }, 15000);
 
     it('should calculate usage correctly for high volume (50,000 requests = $5.00)', async () => {
-      // ---- Setup: Subscribe and mark as paid ----
-      await trpcMutation<any>(
-        'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
-        accessToken
-      );
-
-      const service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal')
-        ),
-      });
-      if (service) {
-        await db.update(serviceInstances)
-          .set({ paidOnce: true, subPendingInvoiceId: null })
-          .where(eq(serviceInstances.instanceId, service.instanceId));
-      }
+      // ---- Setup: Subscribe and enable ----
+      await subscribeAndEnable('seal', 'starter', accessToken);
 
       // ---- Insert 50,000 billable requests ----
       // Note: Insert at 11:00 and clock is at 12:00, so bucket (11:00) < now (12:00)
@@ -282,24 +232,7 @@ describe('API: Invoice Line Items', () => {
   describe('Subscription Line Items', () => {
     it('should include correct tier subscription in DRAFT line items', async () => {
       // ---- Subscribe to Pro tier ----
-      await trpcMutation<any>(
-        'services.subscribe',
-        { serviceType: 'seal', tier: 'pro' },
-        accessToken
-      );
-
-      // Mark as paid
-      const service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal')
-        ),
-      });
-      if (service) {
-        await db.update(serviceInstances)
-          .set({ paidOnce: true, subPendingInvoiceId: null })
-          .where(eq(serviceInstances.instanceId, service.instanceId));
-      }
+      await subscribeAndEnable('seal', 'pro', accessToken);
 
       // ---- Get next scheduled payment ----
       const paymentResult = await trpcQuery<any>(

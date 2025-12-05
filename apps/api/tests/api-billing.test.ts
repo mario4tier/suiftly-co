@@ -9,14 +9,12 @@
  * 2. Controlling time via /test/clock/* endpoints
  * 3. Triggering billing job via /test/billing/run-periodic-job
  * 4. Reading DB directly for assertions (read-only)
- *
- * See docs/TEST_REFACTORING_PLAN.md for test layer design.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { db } from '@suiftly/database';
 import { serviceInstances, customers, billingRecords, customerCredits } from '@suiftly/database/schema';
-import { eq, and, gt, sql } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import {
   setClockTime,
   resetClock,
@@ -24,6 +22,7 @@ import {
   trpcMutation,
   resetTestData,
   runPeriodicBillingJob,
+  subscribeAndEnable,
 } from './helpers/http.js';
 import { login, TEST_WALLET } from './helpers/auth.js';
 
@@ -66,22 +65,7 @@ describe('API: Billing Flow', () => {
       // ---- Setup: Subscribe to a service ----
       await setClockTime('2025-01-05T00:00:00Z');
 
-      await trpcMutation<any>(
-        'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
-        accessToken
-      );
-
-      // Mark as paid
-      let service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal')
-        ),
-      });
-      await db.update(serviceInstances)
-        .set({ paidOnce: true, subPendingInvoiceId: null, state: 'enabled', isUserEnabled: true })
-        .where(eq(serviceInstances.instanceId, service!.instanceId));
+      await subscribeAndEnable('seal', 'starter', accessToken);
 
       // ---- Run periodic billing job ----
       await setClockTime('2025-02-01T00:00:00Z');
@@ -97,21 +81,15 @@ describe('API: Billing Flow', () => {
       // ---- Setup: Subscribe and schedule downgrade ----
       await setClockTime('2025-01-05T00:00:00Z');
 
-      await trpcMutation<any>(
-        'services.subscribe',
-        { serviceType: 'seal', tier: 'pro' },
-        accessToken
-      );
+      await subscribeAndEnable('seal', 'pro', accessToken);
 
+      // Get service for assertions
       let service = await db.query.serviceInstances.findFirst({
         where: and(
           eq(serviceInstances.customerId, customerId),
           eq(serviceInstances.serviceType, 'seal')
         ),
       });
-      await db.update(serviceInstances)
-        .set({ paidOnce: true, subPendingInvoiceId: null, state: 'enabled', isUserEnabled: true })
-        .where(eq(serviceInstances.instanceId, service!.instanceId));
 
       // Schedule downgrade
       await trpcMutation<any>(
@@ -145,21 +123,15 @@ describe('API: Billing Flow', () => {
       // ---- Setup: Subscribe and schedule cancellation ----
       await setClockTime('2025-01-05T00:00:00Z');
 
-      await trpcMutation<any>(
-        'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
-        accessToken
-      );
+      await subscribeAndEnable('seal', 'starter', accessToken);
 
+      // Get service for assertions
       let service = await db.query.serviceInstances.findFirst({
         where: and(
           eq(serviceInstances.customerId, customerId),
           eq(serviceInstances.serviceType, 'seal')
         ),
       });
-      await db.update(serviceInstances)
-        .set({ paidOnce: true, subPendingInvoiceId: null, state: 'enabled', isUserEnabled: true })
-        .where(eq(serviceInstances.instanceId, service!.instanceId));
 
       // Schedule cancellation
       const cancelResult = await trpcMutation<any>(
@@ -220,21 +192,7 @@ describe('API: Billing Flow', () => {
       // ---- Setup ----
       await setClockTime('2025-01-05T00:00:00Z');
 
-      await trpcMutation<any>(
-        'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
-        accessToken
-      );
-
-      let service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal')
-        ),
-      });
-      await db.update(serviceInstances)
-        .set({ paidOnce: true, subPendingInvoiceId: null, state: 'enabled', isUserEnabled: true })
-        .where(eq(serviceInstances.instanceId, service!.instanceId));
+      await subscribeAndEnable('seal', 'starter', accessToken);
 
       // Check for DRAFT invoice before month end
       const draftsBefore = await db.query.billingRecords.findMany({

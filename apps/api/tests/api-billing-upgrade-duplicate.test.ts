@@ -14,7 +14,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { db } from '@suiftly/database';
-import { serviceInstances, customers, billingRecords, invoiceLineItems } from '@suiftly/database/schema';
+import { customers, billingRecords, invoiceLineItems } from '@suiftly/database/schema';
 import { eq, and, sql } from 'drizzle-orm';
 import {
   setClockTime,
@@ -23,6 +23,7 @@ import {
   trpcMutation,
   trpcQuery,
   resetTestData,
+  subscribeAndEnable,
 } from './helpers/http.js';
 import { login, TEST_WALLET } from './helpers/auth.js';
 
@@ -62,23 +63,7 @@ describe('API: Billing Upgrade Duplicate Bug', () => {
     // ---- Setup: Subscribe to Pro tier ----
     await setClockTime('2025-01-15T12:00:00Z');
 
-    const subscribeResult = await trpcMutation<any>(
-      'services.subscribe',
-      { serviceType: 'seal', tier: 'pro' },
-      accessToken
-    );
-    expect(subscribeResult.result?.data?.tier).toBe('pro');
-
-    // Mark as paid so upgrade charges correctly
-    const service = await db.query.serviceInstances.findFirst({
-      where: and(
-        eq(serviceInstances.customerId, customerId),
-        eq(serviceInstances.serviceType, 'seal')
-      ),
-    });
-    await db.update(serviceInstances)
-      .set({ paidOnce: true, subPendingInvoiceId: null, state: 'enabled', isUserEnabled: true })
-      .where(eq(serviceInstances.instanceId, service!.instanceId));
+    await subscribeAndEnable('seal', 'pro', accessToken);
 
     // Count billing records before upgrade
     const recordsBefore = await db.query.billingRecords.findMany({
@@ -137,22 +122,7 @@ describe('API: Billing Upgrade Duplicate Bug', () => {
     // ---- Setup: Subscribe to Pro tier ----
     await setClockTime('2025-01-15T12:00:00Z');
 
-    await trpcMutation<any>(
-      'services.subscribe',
-      { serviceType: 'seal', tier: 'pro' },
-      accessToken
-    );
-
-    // Mark as paid
-    const service = await db.query.serviceInstances.findFirst({
-      where: and(
-        eq(serviceInstances.customerId, customerId),
-        eq(serviceInstances.serviceType, 'seal')
-      ),
-    });
-    await db.update(serviceInstances)
-      .set({ paidOnce: true, subPendingInvoiceId: null, state: 'enabled', isUserEnabled: true })
-      .where(eq(serviceInstances.instanceId, service!.instanceId));
+    await subscribeAndEnable('seal', 'pro', accessToken);
 
     // Get billing history before upgrade
     const historyBefore = await trpcQuery<any>(
@@ -206,22 +176,8 @@ describe('API: Billing Upgrade Duplicate Bug', () => {
     // ---- Setup ----
     await setClockTime('2025-01-15T12:00:00Z');
 
-    // Subscribe directly and mark as paid
-    await trpcMutation<any>(
-      'services.subscribe',
-      { serviceType: 'seal', tier: 'pro' },
-      accessToken
-    );
-
-    const service = await db.query.serviceInstances.findFirst({
-      where: and(
-        eq(serviceInstances.customerId, customerId),
-        eq(serviceInstances.serviceType, 'seal')
-      ),
-    });
-    await db.update(serviceInstances)
-      .set({ paidOnce: true, subPendingInvoiceId: null, state: 'enabled', isUserEnabled: true })
-      .where(eq(serviceInstances.instanceId, service!.instanceId));
+    // Subscribe and enable via API (validates payment succeeded and service enabled)
+    await subscribeAndEnable('seal', 'pro', accessToken);
 
     // Directly query the database to count records with upgrade description
     const getUpgradeRecords = async () => {

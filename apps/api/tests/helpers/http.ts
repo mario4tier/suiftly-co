@@ -195,6 +195,81 @@ export async function truncateAllTables(): Promise<void> {
 }
 
 /**
+ * Subscribe to a service and enable it via API
+ * This is the proper API-based flow for setting up a paid, enabled service.
+ *
+ * This helper validates its own actions:
+ * - Verifies payment succeeded (paymentPending: false)
+ * - Verifies service starts in DISABLED state (business rule: disabled by default)
+ * - Verifies service was enabled after toggle (isUserEnabled: true)
+ *
+ * @param serviceType - The service type (e.g., 'seal')
+ * @param tier - The tier (e.g., 'starter', 'pro', 'enterprise')
+ * @param accessToken - JWT access token from login()
+ * @returns The subscribe result data
+ * @throws Error if subscribe fails, payment is pending, service doesn't start disabled, or enable fails
+ */
+export async function subscribeAndEnable(
+  serviceType: string,
+  tier: string,
+  accessToken: string
+): Promise<{ paymentPending: boolean; tier: string; [key: string]: any }> {
+  // Subscribe to service
+  const subscribeResult = await trpcMutation<any>(
+    'services.subscribe',
+    { serviceType, tier },
+    accessToken
+  );
+
+  if (subscribeResult.error) {
+    throw new Error(`Subscribe failed: ${JSON.stringify(subscribeResult.error)}`);
+  }
+
+  const data = subscribeResult.result?.data;
+  if (!data) {
+    throw new Error('Subscribe returned no data');
+  }
+
+  // Validate: Subscription should be for the requested tier
+  if (data.tier !== tier) {
+    throw new Error(`Subscribe returned wrong tier: expected ${tier}, got ${data.tier}`);
+  }
+
+  // Validate: Payment should have succeeded (sufficient balance expected)
+  if (data.paymentPending) {
+    throw new Error(`Subscribe payment pending - ensure sufficient balance before calling subscribeAndEnable`);
+  }
+
+  // Validate: Service should start in DISABLED state (business rule)
+  // New subscriptions must be manually enabled by the user
+  if (data.state !== 'disabled') {
+    throw new Error(`Subscribe should return service in disabled state, got: ${data.state}`);
+  }
+  if (data.isUserEnabled !== false) {
+    throw new Error(`Subscribe should return isUserEnabled=false, got: ${data.isUserEnabled}`);
+  }
+
+  // Enable the service
+  const toggleResult = await trpcMutation<any>(
+    'services.toggleService',
+    { serviceType, enabled: true },
+    accessToken
+  );
+
+  if (toggleResult.error) {
+    throw new Error(`Toggle service failed: ${JSON.stringify(toggleResult.error)}`);
+  }
+
+  // Validate: Service should now be enabled
+  const toggleData = toggleResult.result?.data;
+  if (!toggleData?.isUserEnabled) {
+    throw new Error(`Toggle service did not enable: isUserEnabled=${toggleData?.isUserEnabled}`);
+  }
+
+  return data;
+}
+
+/**
  * Ensure test wallet has specific balance
  */
 export async function ensureTestBalance(

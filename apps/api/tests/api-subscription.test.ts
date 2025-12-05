@@ -8,8 +8,6 @@
  * 1. Making HTTP calls to tRPC endpoints (services.subscribe, services.list, etc.)
  * 2. Controlling time via /test/clock/* endpoints
  * 3. Reading DB directly for assertions (read-only)
- *
- * See docs/TEST_REFACTORING_PLAN.md for test layer design.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -23,6 +21,7 @@ import {
   trpcMutation,
   trpcQuery,
   resetTestData,
+  subscribeAndEnable,
 } from './helpers/http.js';
 import { login, TEST_WALLET } from './helpers/auth.js';
 
@@ -87,6 +86,58 @@ describe('API: Subscription Flow', () => {
       });
       expect(service).toBeDefined();
       expect(service?.tier).toBe('starter');
+    });
+
+    it('should start in disabled state by default (requires manual enable)', async () => {
+      /**
+       * Business rule: New subscriptions start DISABLED.
+       * User must explicitly enable the service via toggleService.
+       *
+       * This ensures:
+       * - User confirms they want to start using (and being billed for) the service
+       * - Prevents accidental traffic through a service they just subscribed to
+       * - Gives user time to configure API keys, IP allowlists, etc. before enabling
+       */
+      await setClockTime('2025-01-05T00:00:00Z');
+
+      // Subscribe to service (payment succeeds)
+      const result = await trpcMutation<any>(
+        'services.subscribe',
+        { serviceType: 'seal', tier: 'starter' },
+        accessToken
+      );
+      expect(result.result?.data).toBeDefined();
+      expect(result.result?.data.paymentPending).toBe(false); // Payment succeeded
+
+      // Verify service starts in DISABLED state (not auto-enabled)
+      const service = await db.query.serviceInstances.findFirst({
+        where: and(
+          eq(serviceInstances.customerId, customerId),
+          eq(serviceInstances.serviceType, 'seal')
+        ),
+      });
+      expect(service).toBeDefined();
+      expect(service?.state).toBe('disabled'); // NOT 'enabled'
+      expect(service?.isUserEnabled).toBe(false); // User has not enabled yet
+
+      // Now manually enable the service
+      const enableResult = await trpcMutation<any>(
+        'services.toggleService',
+        { serviceType: 'seal', enabled: true },
+        accessToken
+      );
+      expect(enableResult.result?.data?.isUserEnabled).toBe(true);
+      expect(enableResult.result?.data?.state).toBe('enabled');
+
+      // Verify state changed in database
+      const enabledService = await db.query.serviceInstances.findFirst({
+        where: and(
+          eq(serviceInstances.customerId, customerId),
+          eq(serviceInstances.serviceType, 'seal')
+        ),
+      });
+      expect(enabledService?.state).toBe('enabled');
+      expect(enabledService?.isUserEnabled).toBe(true);
     });
 
     it('should return existing instance on duplicate subscription (idempotent)', async () => {
@@ -220,34 +271,18 @@ describe('API: Subscription Flow', () => {
     it('should enable and disable service', async () => {
       await setClockTime('2025-01-05T00:00:00Z');
 
-      // Subscribe and mark as paid
-      const subscribeResult = await trpcMutation<any>(
-        'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
-        accessToken
-      );
+      // Subscribe and enable (this handles payment and toggle to enabled)
+      await subscribeAndEnable('seal', 'starter', accessToken);
 
+      // Verify enabled state
       let service = await db.query.serviceInstances.findFirst({
         where: and(
           eq(serviceInstances.customerId, customerId),
           eq(serviceInstances.serviceType, 'seal')
         ),
       });
-
-      // Mark as paid so we can enable
-      await db.update(serviceInstances)
-        .set({ paidOnce: true, subPendingInvoiceId: null })
-        .where(eq(serviceInstances.instanceId, service!.instanceId));
-
-      // Enable service
-      const enableResult = await trpcMutation<any>(
-        'services.toggleService',
-        { serviceType: 'seal', enabled: true },
-        accessToken
-      );
-      expect(enableResult.result?.data).toBeDefined();
-      expect(enableResult.result?.data.isUserEnabled).toBe(true);
-      expect(enableResult.result?.data.state).toBe('enabled');
+      expect(service?.isUserEnabled).toBe(true);
+      expect(service?.state).toBe('enabled');
 
       // Disable service
       const disableResult = await trpcMutation<any>(
@@ -258,6 +293,16 @@ describe('API: Subscription Flow', () => {
       expect(disableResult.result?.data).toBeDefined();
       expect(disableResult.result?.data.isUserEnabled).toBe(false);
       expect(disableResult.result?.data.state).toBe('disabled');
+
+      // Re-enable service
+      const enableResult = await trpcMutation<any>(
+        'services.toggleService',
+        { serviceType: 'seal', enabled: true },
+        accessToken
+      );
+      expect(enableResult.result?.data).toBeDefined();
+      expect(enableResult.result?.data.isUserEnabled).toBe(true);
+      expect(enableResult.result?.data.state).toBe('enabled');
     });
   });
 
@@ -320,23 +365,8 @@ describe('API: Subscription Flow', () => {
     it('should reject provisioning when already subscribed', async () => {
       await setClockTime('2025-01-05T00:00:00Z');
 
-      // Subscribe first
-      await trpcMutation<any>(
-        'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
-        accessToken
-      );
-
-      // Mark as paid and enabled
-      let service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal')
-        ),
-      });
-      await db.update(serviceInstances)
-        .set({ paidOnce: true, subPendingInvoiceId: null, state: 'enabled' })
-        .where(eq(serviceInstances.instanceId, service!.instanceId));
+      // Subscribe and enable
+      await subscribeAndEnable('seal', 'starter', accessToken);
 
       // Check canProvision
       const result = await trpcQuery<any>(

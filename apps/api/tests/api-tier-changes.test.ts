@@ -8,8 +8,6 @@
  * 1. Making HTTP calls to tRPC endpoints (services.upgradeTier, services.scheduleTierDowngrade, etc.)
  * 2. Controlling time via /test/clock/* endpoints
  * 3. Reading DB directly for assertions (read-only)
- *
- * See docs/TEST_REFACTORING_PLAN.md for test layer design.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -23,6 +21,7 @@ import {
   trpcMutation,
   trpcQuery,
   resetTestData,
+  subscribeAndEnable,
 } from './helpers/http.js';
 import { login, TEST_WALLET } from './helpers/auth.js';
 import { INVOICE_LINE_ITEM_TYPE } from '@suiftly/shared/constants';
@@ -73,14 +72,9 @@ describe('API: Tier Changes Flow', () => {
       // ---- Setup: Subscribe to a starter service first ----
       await setClockTime('2025-01-05T00:00:00Z');
 
-      const subscribeResult = await trpcMutation<any>(
-        'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
-        accessToken
-      );
-      expect(subscribeResult.result?.data).toBeDefined();
+      await subscribeAndEnable('seal', 'starter', accessToken);
 
-      // Mark as paid and enable the service
+      // Verify service state via DB read
       let service = await db.query.serviceInstances.findFirst({
         where: and(
           eq(serviceInstances.customerId, customerId),
@@ -89,10 +83,8 @@ describe('API: Tier Changes Flow', () => {
       });
       expect(service).toBeDefined();
       expect(service?.tier).toBe('starter');
-
-      await db.update(serviceInstances)
-        .set({ paidOnce: true, subPendingInvoiceId: null, state: 'enabled', isUserEnabled: true })
-        .where(eq(serviceInstances.instanceId, service!.instanceId));
+      expect(service?.paidOnce).toBe(true);
+      expect(service?.isUserEnabled).toBe(true);
 
       // ---- Upgrade to pro tier mid-month ----
       await setClockTime('2025-01-15T00:00:00Z');
@@ -119,22 +111,7 @@ describe('API: Tier Changes Flow', () => {
       // ---- Setup: Subscribe to pro tier ----
       await setClockTime('2025-01-05T00:00:00Z');
 
-      await trpcMutation<any>(
-        'services.subscribe',
-        { serviceType: 'seal', tier: 'pro' },
-        accessToken
-      );
-
-      let service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal')
-        ),
-      });
-
-      await db.update(serviceInstances)
-        .set({ paidOnce: true, subPendingInvoiceId: null, state: 'enabled', isUserEnabled: true })
-        .where(eq(serviceInstances.instanceId, service!.instanceId));
+      await subscribeAndEnable('seal', 'pro', accessToken);
 
       // ---- Try to upgrade to same tier ----
       const upgradeResult = await trpcMutation<any>(
@@ -148,25 +125,11 @@ describe('API: Tier Changes Flow', () => {
     });
 
     it('should reject upgrade to lower tier (use downgrade instead)', async () => {
-      // ---- Setup: Subscribe to enterprise tier ----
+      // ---- Setup: Subscribe to enterprise tier (need $200+ balance) ----
       await setClockTime('2025-01-05T00:00:00Z');
+      await ensureTestBalance(200, { walletAddress: TEST_WALLET });
 
-      await trpcMutation<any>(
-        'services.subscribe',
-        { serviceType: 'seal', tier: 'enterprise' },
-        accessToken
-      );
-
-      let service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal')
-        ),
-      });
-
-      await db.update(serviceInstances)
-        .set({ paidOnce: true, subPendingInvoiceId: null, state: 'enabled', isUserEnabled: true })
-        .where(eq(serviceInstances.instanceId, service!.instanceId));
+      await subscribeAndEnable('seal', 'enterprise', accessToken);
 
       // ---- Try to upgrade to lower tier ----
       const upgradeResult = await trpcMutation<any>(
@@ -185,22 +148,7 @@ describe('API: Tier Changes Flow', () => {
       // ---- Setup: Subscribe to pro tier ----
       await setClockTime('2025-01-05T00:00:00Z');
 
-      await trpcMutation<any>(
-        'services.subscribe',
-        { serviceType: 'seal', tier: 'pro' },
-        accessToken
-      );
-
-      let service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal')
-        ),
-      });
-
-      await db.update(serviceInstances)
-        .set({ paidOnce: true, subPendingInvoiceId: null, state: 'enabled', isUserEnabled: true })
-        .where(eq(serviceInstances.instanceId, service!.instanceId));
+      await subscribeAndEnable('seal', 'pro', accessToken);
 
       // ---- Schedule downgrade to starter ----
       await setClockTime('2025-01-15T00:00:00Z');
@@ -216,8 +164,11 @@ describe('API: Tier Changes Flow', () => {
       expect(downgradeResult.result?.data?.effectiveDate).toBeDefined();
 
       // Verify service still at pro tier (downgrade is scheduled, not immediate)
-      service = await db.query.serviceInstances.findFirst({
-        where: eq(serviceInstances.instanceId, service!.instanceId),
+      const service = await db.query.serviceInstances.findFirst({
+        where: and(
+          eq(serviceInstances.customerId, customerId),
+          eq(serviceInstances.serviceType, 'seal')
+        ),
       });
       expect(service?.tier).toBe('pro');
       expect(service?.scheduledTier).toBe('starter');
@@ -242,25 +193,11 @@ describe('API: Tier Changes Flow', () => {
        * Actual: Line items show "Seal Enterprise tier - $185.00"
        */
 
-      // ---- Setup: Subscribe to enterprise tier ----
+      // ---- Setup: Subscribe to enterprise tier (need $200+ balance) ----
       await setClockTime('2025-01-05T00:00:00Z');
+      await ensureTestBalance(200, { walletAddress: TEST_WALLET });
 
-      await trpcMutation<any>(
-        'services.subscribe',
-        { serviceType: 'seal', tier: 'enterprise' },
-        accessToken
-      );
-
-      let service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal')
-        ),
-      });
-
-      await db.update(serviceInstances)
-        .set({ paidOnce: true, subPendingInvoiceId: null, state: 'enabled', isUserEnabled: true })
-        .where(eq(serviceInstances.instanceId, service!.instanceId));
+      await subscribeAndEnable('seal', 'enterprise', accessToken);
 
       // ---- Verify initial state: DRAFT shows enterprise price ----
       let paymentResult = await trpcQuery<any>(
@@ -310,22 +247,7 @@ describe('API: Tier Changes Flow', () => {
       // ---- Setup: Subscribe and schedule downgrade ----
       await setClockTime('2025-01-05T00:00:00Z');
 
-      await trpcMutation<any>(
-        'services.subscribe',
-        { serviceType: 'seal', tier: 'pro' },
-        accessToken
-      );
-
-      let service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal')
-        ),
-      });
-
-      await db.update(serviceInstances)
-        .set({ paidOnce: true, subPendingInvoiceId: null, state: 'enabled', isUserEnabled: true })
-        .where(eq(serviceInstances.instanceId, service!.instanceId));
+      await subscribeAndEnable('seal', 'pro', accessToken);
 
       // Schedule downgrade
       await trpcMutation<any>(
@@ -335,8 +257,11 @@ describe('API: Tier Changes Flow', () => {
       );
 
       // Verify downgrade is scheduled
-      service = await db.query.serviceInstances.findFirst({
-        where: eq(serviceInstances.instanceId, service!.instanceId),
+      let service = await db.query.serviceInstances.findFirst({
+        where: and(
+          eq(serviceInstances.customerId, customerId),
+          eq(serviceInstances.serviceType, 'seal')
+        ),
       });
       expect(service?.scheduledTier).toBe('starter');
 
@@ -351,7 +276,10 @@ describe('API: Tier Changes Flow', () => {
 
       // Verify scheduled downgrade is cleared
       service = await db.query.serviceInstances.findFirst({
-        where: eq(serviceInstances.instanceId, service!.instanceId),
+        where: and(
+          eq(serviceInstances.customerId, customerId),
+          eq(serviceInstances.serviceType, 'seal')
+        ),
       });
       expect(service?.scheduledTier).toBeNull();
       expect(service?.tier).toBe('pro'); // Still at pro
@@ -363,22 +291,7 @@ describe('API: Tier Changes Flow', () => {
       // ---- Setup: Subscribe to starter tier ----
       await setClockTime('2025-01-05T00:00:00Z');
 
-      await trpcMutation<any>(
-        'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
-        accessToken
-      );
-
-      let service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal')
-        ),
-      });
-
-      await db.update(serviceInstances)
-        .set({ paidOnce: true, subPendingInvoiceId: null, state: 'enabled', isUserEnabled: true })
-        .where(eq(serviceInstances.instanceId, service!.instanceId));
+      await subscribeAndEnable('seal', 'starter', accessToken);
 
       // ---- Get tier options ----
       const optionsResult = await trpcQuery<any>(
@@ -427,25 +340,11 @@ describe('API: Tier Changes Flow', () => {
        * 2. User changes mind, schedules downgrade to Starter -> scheduledTier should now be 'starter'
        * 3. UI should show "Scheduled" only on the currently scheduled tier
        */
-      // ---- Setup: Subscribe to enterprise tier ----
+      // ---- Setup: Subscribe to enterprise tier (need $200+ balance) ----
       await setClockTime('2025-01-05T00:00:00Z');
+      await ensureTestBalance(200, { walletAddress: TEST_WALLET });
 
-      await trpcMutation<any>(
-        'services.subscribe',
-        { serviceType: 'seal', tier: 'enterprise' },
-        accessToken
-      );
-
-      let service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal')
-        ),
-      });
-
-      await db.update(serviceInstances)
-        .set({ paidOnce: true, subPendingInvoiceId: null, state: 'enabled', isUserEnabled: true })
-        .where(eq(serviceInstances.instanceId, service!.instanceId));
+      await subscribeAndEnable('seal', 'enterprise', accessToken);
 
       // ---- Step 1: Schedule downgrade to Pro ----
       await setClockTime('2025-01-15T00:00:00Z');
