@@ -355,33 +355,62 @@ await request.post('/test/billing/run-periodic-job');
 
 ### D7: Implementation Order
 
-1. **Schema:** Add continuous aggregate + `last_billed_timestamp` column
-2. **Test helpers:** `insertMockHAProxyLogs()`, `refreshStatsAggregate()`
-3. **Unit tests:** Write tests for query functions (TDD)
-4. **Query functions:** `packages/database/src/stats/queries.ts`
-5. **Billing integration:** Add `processUsageCharges()` to periodic job
-6. **API tests:** Write tests for stats endpoints
-7. **Stats API:** tRPC routes in `apps/api/src/routes/stats.ts`
-8. **E2E tests:** Dashboard summary, stats page
-9. **UI components:** Dashboard stats, stats page graphs
+1. ✅ **Schema:** Add continuous aggregate + `last_billed_timestamp` column
+2. ✅ **Test helpers:** `insertMockHAProxyLogs()`, `refreshStatsAggregate()`
+3. ✅ **Unit tests:** Write tests for query functions (TDD)
+4. ✅ **Query functions:** `packages/database/src/stats/queries.ts`
+5. ✅ **Billing integration:** Add `processUsageCharges()` to periodic job
+6. ✅ **API tests:** Write tests for stats endpoints
+7. ✅ **Stats API:** tRPC routes in `apps/api/src/routes/stats.ts`
+8. ⏳ **E2E tests:** Dashboard summary, stats page (deferred)
+9. ✅ **UI components:** Dashboard stats, stats page graphs
 
-### D8: Files to Create/Modify
+### D8: Implementation Status
 
-| File | Action |
-|------|--------|
-| `packages/database/src/stats/queries.ts` | Create - stats query functions |
-| `packages/database/src/stats/test-helpers.ts` | Create - mock data insertion |
-| `packages/database/src/stats/ut-stats.test.ts` | Create - unit tests |
-| `packages/database/src/billing/usage-charges.ts` | Create - `addUsageChargesToDraft()` |
-| `packages/database/src/billing/processor.ts` | Modify - call usage charges |
-| `apps/api/src/routes/stats.ts` | Create - tRPC routes |
-| `apps/api/src/server.ts` | Modify - add `/test/stats/*` endpoints |
-| `apps/api/tests/api-stats.test.ts` | Create - API tests |
-| `apps/webapp/tests/e2e/stats-dashboard.spec.ts` | Create - E2E tests |
-| `packages/database/migrations/` | New migration - continuous aggregate + column |
+| File | Status | Notes |
+|------|--------|-------|
+| `packages/database/src/stats/queries.ts` | ✅ Done | 5 query functions |
+| `packages/database/src/stats/test-helpers.ts` | ✅ Done | 6 helper functions incl. demo data |
+| `packages/database/src/stats/ut-stats-queries.test.ts` | ✅ Done | Comprehensive unit tests |
+| `packages/database/src/billing/usage-charges.ts` | ✅ Done | `updateUsageChargesToDraft()`, `syncUsageToDraft()`, `getUsageChargePreview()` |
+| `packages/database/src/billing/processor.ts` | ✅ Done | Hourly sync + monthly billing integration |
+| `apps/api/src/routes/stats.ts` | ✅ Done | 8 tRPC endpoints |
+| `apps/api/src/server.ts` | ✅ Done | 5 REST test endpoints |
+| `apps/api/tests/api-stats.test.ts` | ✅ Done | 350+ lines of tests |
+| `apps/webapp/src/routes/services/seal.stats.lazy.tsx` | ✅ Done | ~1010 lines, full stats page |
+| `apps/webapp/src/routes/dashboard.tsx` | ✅ Done | 24h summary integration |
+| `packages/database/src/timescale-setup.ts` | ✅ Done | Continuous aggregate setup |
+| `packages/database/migrations/0000_initial_schema.sql` | ✅ Done | `haproxy_raw_logs` hypertable |
+| `apps/webapp/tests/e2e/stats-*.spec.ts` | ⏳ Deferred | E2E tests not yet created |
+
+### D9: Additional Implementation Details
+
+**Test helpers provide:**
+- `insertMockHAProxyLogs()` - Insert individual/batched logs with spread-across-hours support
+- `insertMockMixedLogs()` - Realistic traffic mix with hourly variation (±30%)
+- `refreshStatsAggregate()` - Force immediate refresh
+- `clearCustomerLogs()` / `clearAllLogs()` - Cleanup helpers
+
+**API endpoints implemented:**
+- `stats.getSummary` - 24h dashboard summary
+- `stats.getUsage` - Time-series billable requests (24h/7d/30d)
+- `stats.getResponseTime` - Avg response time over time
+- `stats.getTraffic` - Stacked traffic breakdown
+- `stats.getUsagePreview` - Preview pending charges
+- `stats.injectTestData` - Inject random traffic (dev/test)
+- `stats.injectDemoData` - Inject realistic 24h pattern (dev/test)
+- `stats.clearStats` - Clear customer stats (dev/test)
+
+**Stats page UI features:**
+- Time range selector (24h, 7d, 30d)
+- Summary cards (total, success, rate limited, client errors, server errors)
+- Stacked area chart for traffic breakdown
+- Response time chart with 1-second threshold indicator
+- Interactive tooltips and legends
+- Dev-only test menu for data injection
 
 ---
 
-**Version:** 1.5
-**Last Updated:** 2025-01-29
-**Status:** Design Draft
+**Version:** 2.0
+**Last Updated:** 2025-12-05
+**Status:** MVP Implemented
