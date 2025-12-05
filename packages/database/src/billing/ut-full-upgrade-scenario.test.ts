@@ -161,7 +161,7 @@ describe('Full Upgrade Scenario: Deposit → Pro → Schedule Downgrade → Ente
       tier: 'starter', // Initial tier before subscribing
       state: 'disabled',
       isUserEnabled: false,
-      subscriptionChargePending: false,
+      subPendingInvoiceId: null,
       paidOnce: false,
       config: {},
     });

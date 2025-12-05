@@ -80,7 +80,7 @@ describe('API: Billing Flow', () => {
         ),
       });
       await db.update(serviceInstances)
-        .set({ paidOnce: true, subscriptionChargePending: false, state: 'enabled', isUserEnabled: true })
+        .set({ paidOnce: true, subPendingInvoiceId: null, state: 'enabled', isUserEnabled: true })
         .where(eq(serviceInstances.instanceId, service!.instanceId));
 
       // ---- Run periodic billing job ----
@@ -88,6 +88,7 @@ describe('API: Billing Flow', () => {
 
       const result = await runPeriodicBillingJob(customerId);
 
+      console.log('[DEBUG] Billing job result:', JSON.stringify(result, null, 2));
       expect(result.success).toBe(true);
       expect(result.result).toBeDefined();
     });
@@ -109,7 +110,7 @@ describe('API: Billing Flow', () => {
         ),
       });
       await db.update(serviceInstances)
-        .set({ paidOnce: true, subscriptionChargePending: false, state: 'enabled', isUserEnabled: true })
+        .set({ paidOnce: true, subPendingInvoiceId: null, state: 'enabled', isUserEnabled: true })
         .where(eq(serviceInstances.instanceId, service!.instanceId));
 
       // Schedule downgrade
@@ -157,7 +158,7 @@ describe('API: Billing Flow', () => {
         ),
       });
       await db.update(serviceInstances)
-        .set({ paidOnce: true, subscriptionChargePending: false, state: 'enabled', isUserEnabled: true })
+        .set({ paidOnce: true, subPendingInvoiceId: null, state: 'enabled', isUserEnabled: true })
         .where(eq(serviceInstances.instanceId, service!.instanceId));
 
       // Schedule cancellation
@@ -232,7 +233,7 @@ describe('API: Billing Flow', () => {
         ),
       });
       await db.update(serviceInstances)
-        .set({ paidOnce: true, subscriptionChargePending: false, state: 'enabled', isUserEnabled: true })
+        .set({ paidOnce: true, subPendingInvoiceId: null, state: 'enabled', isUserEnabled: true })
         .where(eq(serviceInstances.instanceId, service!.instanceId));
 
       // Check for DRAFT invoice before month end

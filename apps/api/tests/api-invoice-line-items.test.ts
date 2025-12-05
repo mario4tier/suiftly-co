@@ -124,7 +124,7 @@ describe('API: Invoice Line Items', () => {
       });
       if (service) {
         await db.update(serviceInstances)
-          .set({ paidOnce: true, subscriptionChargePending: false })
+          .set({ paidOnce: true, subPendingInvoiceId: null })
           .where(eq(serviceInstances.instanceId, service.instanceId));
       }
 
@@ -188,7 +188,7 @@ describe('API: Invoice Line Items', () => {
       });
       if (service) {
         await db.update(serviceInstances)
-          .set({ paidOnce: true, subscriptionChargePending: false })
+          .set({ paidOnce: true, subPendingInvoiceId: null })
           .where(eq(serviceInstances.instanceId, service.instanceId));
       }
 
@@ -242,7 +242,7 @@ describe('API: Invoice Line Items', () => {
       });
       if (service) {
         await db.update(serviceInstances)
-          .set({ paidOnce: true, subscriptionChargePending: false })
+          .set({ paidOnce: true, subPendingInvoiceId: null })
           .where(eq(serviceInstances.instanceId, service.instanceId));
       }
 
@@ -297,7 +297,7 @@ describe('API: Invoice Line Items', () => {
       });
       if (service) {
         await db.update(serviceInstances)
-          .set({ paidOnce: true, subscriptionChargePending: false })
+          .set({ paidOnce: true, subPendingInvoiceId: null })
           .where(eq(serviceInstances.instanceId, service.instanceId));
       }
 

@@ -70,7 +70,7 @@ function SealOverviewPage() {
 
   const serviceState: ServiceState = (sealService?.state as ServiceState) ?? 'not_provisioned';
   const tier: ServiceTier = (sealService?.tier as ServiceTier) ?? 'pro';
-  const subscriptionChargePending = sealService?.subscriptionChargePending ?? false;
+  const subscriptionChargePending = sealService != null && sealService.subPendingInvoiceId != null; // Derive boolean from invoice reference
   const scheduledTier = sealService?.scheduledTier as ServiceTier | null;
   const scheduledTierEffectiveDate = sealService?.scheduledTierEffectiveDate;
   const cancellationScheduledFor = sealService?.cancellationScheduledFor;

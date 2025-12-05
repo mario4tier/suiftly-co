@@ -178,7 +178,8 @@ export async function getCustomerTestData(walletAddress: string = MOCK_WALLET_AD
       tier: s.tier,
       state: s.state,
       isUserEnabled: s.isUserEnabled,
-      subscriptionChargePending: s.subscriptionChargePending,
+      subPendingInvoiceId: s.subPendingInvoiceId,
+      subscriptionChargePending: s.subPendingInvoiceId !== null, // Convenience boolean for tests
     })),
     apiKeysCount: keys.length,
     sealKeysCount: sealKeysData.length,
@@ -296,5 +297,6 @@ export async function getServiceInstanceTestData(
   return {
     found: true,
     ...service,
+    subscriptionChargePending: service.subPendingInvoiceId !== null, // Convenience boolean for tests
   };
 }

@@ -32,7 +32,7 @@ import type { ISuiService } from '@suiftly/shared/sui-service';
  */
 export async function processInvoicePayment(
   tx: LockedTransaction,
-  billingRecordId: string,
+  billingRecordId: number,
   suiService: ISuiService,
   clock: DBClock
 ): Promise<InvoicePaymentResult> {
@@ -231,7 +231,7 @@ export async function processInvoicePayment(
  */
 export async function getInvoicePaidAmount(
   tx: DatabaseOrTransaction,
-  billingRecordId: string
+  billingRecordId: number
 ): Promise<number> {
   const payments = await tx
     .select({ total: sql<number>`COALESCE(SUM(${invoicePayments.amountUsdCents}), 0)` })

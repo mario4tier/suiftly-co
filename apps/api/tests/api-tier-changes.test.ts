@@ -91,7 +91,7 @@ describe('API: Tier Changes Flow', () => {
       expect(service?.tier).toBe('starter');
 
       await db.update(serviceInstances)
-        .set({ paidOnce: true, subscriptionChargePending: false, state: 'enabled', isUserEnabled: true })
+        .set({ paidOnce: true, subPendingInvoiceId: null, state: 'enabled', isUserEnabled: true })
         .where(eq(serviceInstances.instanceId, service!.instanceId));
 
       // ---- Upgrade to pro tier mid-month ----
@@ -133,7 +133,7 @@ describe('API: Tier Changes Flow', () => {
       });
 
       await db.update(serviceInstances)
-        .set({ paidOnce: true, subscriptionChargePending: false, state: 'enabled', isUserEnabled: true })
+        .set({ paidOnce: true, subPendingInvoiceId: null, state: 'enabled', isUserEnabled: true })
         .where(eq(serviceInstances.instanceId, service!.instanceId));
 
       // ---- Try to upgrade to same tier ----
@@ -165,7 +165,7 @@ describe('API: Tier Changes Flow', () => {
       });
 
       await db.update(serviceInstances)
-        .set({ paidOnce: true, subscriptionChargePending: false, state: 'enabled', isUserEnabled: true })
+        .set({ paidOnce: true, subPendingInvoiceId: null, state: 'enabled', isUserEnabled: true })
         .where(eq(serviceInstances.instanceId, service!.instanceId));
 
       // ---- Try to upgrade to lower tier ----
@@ -199,7 +199,7 @@ describe('API: Tier Changes Flow', () => {
       });
 
       await db.update(serviceInstances)
-        .set({ paidOnce: true, subscriptionChargePending: false, state: 'enabled', isUserEnabled: true })
+        .set({ paidOnce: true, subPendingInvoiceId: null, state: 'enabled', isUserEnabled: true })
         .where(eq(serviceInstances.instanceId, service!.instanceId));
 
       // ---- Schedule downgrade to starter ----
@@ -259,7 +259,7 @@ describe('API: Tier Changes Flow', () => {
       });
 
       await db.update(serviceInstances)
-        .set({ paidOnce: true, subscriptionChargePending: false, state: 'enabled', isUserEnabled: true })
+        .set({ paidOnce: true, subPendingInvoiceId: null, state: 'enabled', isUserEnabled: true })
         .where(eq(serviceInstances.instanceId, service!.instanceId));
 
       // ---- Verify initial state: DRAFT shows enterprise price ----
@@ -324,7 +324,7 @@ describe('API: Tier Changes Flow', () => {
       });
 
       await db.update(serviceInstances)
-        .set({ paidOnce: true, subscriptionChargePending: false, state: 'enabled', isUserEnabled: true })
+        .set({ paidOnce: true, subPendingInvoiceId: null, state: 'enabled', isUserEnabled: true })
         .where(eq(serviceInstances.instanceId, service!.instanceId));
 
       // Schedule downgrade
@@ -377,7 +377,7 @@ describe('API: Tier Changes Flow', () => {
       });
 
       await db.update(serviceInstances)
-        .set({ paidOnce: true, subscriptionChargePending: false, state: 'enabled', isUserEnabled: true })
+        .set({ paidOnce: true, subPendingInvoiceId: null, state: 'enabled', isUserEnabled: true })
         .where(eq(serviceInstances.instanceId, service!.instanceId));
 
       // ---- Get tier options ----
@@ -444,7 +444,7 @@ describe('API: Tier Changes Flow', () => {
       });
 
       await db.update(serviceInstances)
-        .set({ paidOnce: true, subscriptionChargePending: false, state: 'enabled', isUserEnabled: true })
+        .set({ paidOnce: true, subPendingInvoiceId: null, state: 'enabled', isUserEnabled: true })
         .where(eq(serviceInstances.instanceId, service!.instanceId));
 
       // ---- Step 1: Schedule downgrade to Pro ----

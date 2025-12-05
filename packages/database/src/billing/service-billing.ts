@@ -10,9 +10,9 @@
  * See BILLING_DESIGN.md for detailed requirements.
  */
 
-import { eq, and, sql } from 'drizzle-orm';
+import { eq, and, sql, inArray } from 'drizzle-orm';
 import type { Database, DatabaseOrTransaction } from '../db';
-import { serviceInstances, customers, billingRecords } from '../schema';
+import { serviceInstances, customers, billingRecords, invoiceLineItems } from '../schema';
 import { withCustomerLock, type LockedTransaction } from './locking';
 import { getOrCreateDraftInvoice, createAndChargeImmediately, updateDraftInvoiceAmount } from './invoices';
 import { processInvoicePayment } from './payments';
@@ -22,16 +22,23 @@ import { logValidationIssues } from './admin-notifications';
 import type { DBClock } from '@suiftly/shared/db-clock';
 import type { ISuiService } from '@suiftly/shared/sui-service';
 import { getTierPriceUsdCents, ADDON_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
-import { TIER_TO_SUBSCRIPTION_ITEM, type ServiceTier, type ServiceType } from '@suiftly/shared/constants';
+import {
+  TIER_TO_SUBSCRIPTION_ITEM,
+  INVOICE_LINE_ITEM_TYPE,
+  type ServiceTier,
+  type ServiceType,
+  type InvoiceLineItemType,
+} from '@suiftly/shared/constants';
 
 /**
  * Result of service subscription billing
  */
 export interface SubscriptionBillingResult {
-  invoiceId: string;
+  invoiceId: number;
   amountUsdCents: number;
   paymentSuccessful: boolean;
-  subscriptionChargePending: boolean;
+  /** Invoice ID if payment is still pending, null if paid */
+  subPendingInvoiceId: number | null;
   error?: string;
 }
 
@@ -192,7 +199,7 @@ export async function handleSubscriptionBillingLocked(
     invoiceId,
     amountUsdCents: monthlyPriceUsdCents,
     paymentSuccessful: paymentResult.fullyPaid,
-    subscriptionChargePending: !paymentResult.fullyPaid,
+    subPendingInvoiceId: paymentResult.fullyPaid ? null : invoiceId,
     error: paymentResult.error?.message,
   };
 }
@@ -240,6 +247,26 @@ export async function recalculateDraftInvoice(
     .limit(1);
   const oldAmount = currentInvoice?.amountUsdCents ?? 0;
 
+  // Subscription line item types to manage (not usage, not credits)
+  const subscriptionTypes: InvoiceLineItemType[] = [
+    INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_STARTER,
+    INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_PRO,
+    INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_ENTERPRISE,
+    INVOICE_LINE_ITEM_TYPE.EXTRA_API_KEYS,
+    INVOICE_LINE_ITEM_TYPE.EXTRA_SEAL_KEYS,
+    INVOICE_LINE_ITEM_TYPE.EXTRA_PACKAGES,
+  ];
+
+  // Delete existing subscription/add-on line items (idempotent update)
+  // Usage line items (itemType='requests') are managed by syncUsageToDraft
+  await tx.delete(invoiceLineItems)
+    .where(
+      and(
+        eq(invoiceLineItems.billingRecordId, draftId),
+        inArray(invoiceLineItems.itemType, subscriptionTypes)
+      )
+    );
+
   // Get all subscribed services
   // NOTE: Service existence = subscription. is_user_enabled is just on/off toggle.
   // Customers are billed for subscribed services regardless of toggle state.
@@ -248,13 +275,28 @@ export async function recalculateDraftInvoice(
     .from(serviceInstances)
     .where(eq(serviceInstances.customerId, customerId));
 
-  // Calculate total from tier prices + add-ons
-  let totalUsdCents = 0;
-
+  // Insert subscription line items for each service
   for (const service of services) {
-    // Get tier price from centralized config
-    const tierPriceCents = getTierPriceUsdCents(service.tier);
-    totalUsdCents += tierPriceCents;
+    // Skip services with scheduled cancellation - they won't be billed next month
+    if (service.cancellationScheduledFor) {
+      continue;
+    }
+
+    const serviceType = service.serviceType as ServiceType;
+    // Use scheduled tier if present (for scheduled downgrades), otherwise current tier
+    const effectiveTier = (service.scheduledTier || service.tier) as ServiceTier;
+    const tierPriceCents = getTierPriceUsdCents(effectiveTier);
+    const subscriptionItemType = TIER_TO_SUBSCRIPTION_ITEM[effectiveTier];
+
+    // Insert subscription line item
+    await tx.insert(invoiceLineItems).values({
+      billingRecordId: draftId,
+      itemType: subscriptionItemType,
+      serviceType: serviceType,
+      quantity: 1,
+      unitPriceUsdCents: tierPriceCents,
+      amountUsdCents: tierPriceCents,
+    });
 
     // Add-on charges (Seal keys, packages, API keys)
     if (service.serviceType === 'seal' && service.config) {
@@ -263,35 +305,52 @@ export async function recalculateDraftInvoice(
       // Extra Seal keys
       const purchasedKeys = config.purchasedSealKeys || 0;
       if (purchasedKeys > 0) {
-        totalUsdCents += purchasedKeys * ADDON_PRICES_USD_CENTS.sealKey;
+        await tx.insert(invoiceLineItems).values({
+          billingRecordId: draftId,
+          itemType: INVOICE_LINE_ITEM_TYPE.EXTRA_SEAL_KEYS,
+          serviceType: serviceType,
+          quantity: purchasedKeys,
+          unitPriceUsdCents: ADDON_PRICES_USD_CENTS.sealKey,
+          amountUsdCents: purchasedKeys * ADDON_PRICES_USD_CENTS.sealKey,
+        });
       }
 
       // Extra packages
       const purchasedPackages = config.purchasedPackages || 0;
       if (purchasedPackages > 0) {
-        totalUsdCents += purchasedPackages * ADDON_PRICES_USD_CENTS.package;
+        await tx.insert(invoiceLineItems).values({
+          billingRecordId: draftId,
+          itemType: INVOICE_LINE_ITEM_TYPE.EXTRA_PACKAGES,
+          serviceType: serviceType,
+          quantity: purchasedPackages,
+          unitPriceUsdCents: ADDON_PRICES_USD_CENTS.package,
+          amountUsdCents: purchasedPackages * ADDON_PRICES_USD_CENTS.package,
+        });
       }
 
       // Extra API keys
       const purchasedApiKeys = config.purchasedApiKeys || 0;
       if (purchasedApiKeys > 0) {
-        totalUsdCents += purchasedApiKeys * ADDON_PRICES_USD_CENTS.apiKey;
+        await tx.insert(invoiceLineItems).values({
+          billingRecordId: draftId,
+          itemType: INVOICE_LINE_ITEM_TYPE.EXTRA_API_KEYS,
+          serviceType: serviceType,
+          quantity: purchasedApiKeys,
+          unitPriceUsdCents: ADDON_PRICES_USD_CENTS.apiKey,
+          amountUsdCents: purchasedApiKeys * ADDON_PRICES_USD_CENTS.apiKey,
+        });
       }
     }
   }
 
-  // Query existing usage charges (usage line items have service_type set)
-  // This preserves usage charges when recalculating subscription totals
-  const usageResult = await tx.execute(sql`
+  // Calculate total from ALL line items in the database
+  // This is the source of truth: Total == Sum(Line Items)
+  const totalResult = await tx.execute(sql`
     SELECT COALESCE(SUM(amount_usd_cents), 0) as total
     FROM invoice_line_items
     WHERE billing_record_id = ${draftId}
-      AND service_type IS NOT NULL
   `);
-  const usageChargesCents = Number(usageResult.rows[0]?.total ?? 0);
-
-  // Total = subscription/add-ons + usage charges
-  const finalTotalCents = totalUsdCents + usageChargesCents;
+  const finalTotalCents = Number(totalResult.rows[0]?.total ?? 0);
 
   // Only update amount if it changed
   if (finalTotalCents !== oldAmount) {

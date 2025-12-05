@@ -162,7 +162,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       tier: 'pro',
       state: 'enabled',
       isUserEnabled: true,
-      subscriptionChargePending: false,
+      subPendingInvoiceId: null,
       paidOnce: true, // Service has been paid for (normal paid subscription)
       config: { tier: 'pro' },
     }).returning();
@@ -175,12 +175,13 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
     await db.execute(sql`TRUNCATE TABLE service_cancellation_history CASCADE`);
     await db.delete(billingIdempotency);
     await db.delete(invoicePayments);
-    await db.delete(billingRecords);
-    await db.delete(customerCredits);
     await db.delete(sealPackages);
     await db.delete(sealKeys);
     await db.delete(apiKeys);
+    // serviceInstances must be deleted before billingRecords due to FK on subPendingInvoiceId
     await db.delete(serviceInstances);
+    await db.delete(billingRecords);
+    await db.delete(customerCredits);
     await db.delete(escrowTransactions);
     await db.delete(mockSuiTransactions);
     await db.delete(customers);
@@ -1226,7 +1227,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         await db.update(serviceInstances)
           .set({
             paidOnce: false,
-            subscriptionChargePending: true,
+            subPendingInvoiceId: pendingInvoice.id, // Reference to the pending invoice
           })
           .where(eq(serviceInstances.instanceId, testInstanceId));
 

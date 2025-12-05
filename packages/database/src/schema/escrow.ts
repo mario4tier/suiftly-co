@@ -5,6 +5,12 @@ import { customers } from './customers';
 import { FIELD_LIMITS } from '@suiftly/shared/constants';
 import { transactionTypeEnum, billingStatusEnum, billingTypeEnum } from './enums';
 
+/**
+ * First invoice ID - billing_records sequence starts at this value.
+ * Makes invoice numbers look professional from day one.
+ */
+export const FIRST_INVOICE_ID = 103405;
+
 export const escrowTransactions = pgTable('escrow_transactions', {
   txId: bigserial('tx_id', { mode: 'number' }).primaryKey(),
   customerId: integer('customer_id').notNull().references(() => customers.customerId),
@@ -28,7 +34,7 @@ export const ledgerEntries = pgTable('ledger_entries', {
   suiUsdRateCents: bigint('sui_usd_rate_cents', { mode: 'number' }),
   txDigest: bytea('tx_digest'),
   description: text('description'),
-  invoiceId: varchar('invoice_id', { length: FIELD_LIMITS.INVOICE_ID }),
+  invoiceId: bigint('invoice_id', { mode: 'number' }), // References billing_records.id (forward reference not supported)
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
   idxCustomerCreated: index('idx_customer_created').on(table.customerId, table.createdAt),
@@ -37,7 +43,7 @@ export const ledgerEntries = pgTable('ledger_entries', {
 }));
 
 export const billingRecords = pgTable('billing_records', {
-  id: uuid('id').primaryKey().defaultRandom(),
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
   customerId: integer('customer_id').notNull().references(() => customers.customerId),
   billingPeriodStart: timestamp('billing_period_start').notNull(),
   billingPeriodEnd: timestamp('billing_period_end').notNull(),

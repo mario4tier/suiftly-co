@@ -1,5 +1,5 @@
 {
-  "id": "eed357ce-66ad-427d-867e-64089505b234",
+  "id": "892b01cf-90ee-4c27-89db-c684004e1b82",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -447,7 +447,7 @@
         },
         "billing_record_id": {
           "name": "billing_record_id",
-          "type": "uuid",
+          "type": "bigint",
           "primaryKey": false,
           "notNull": false
         },
@@ -638,7 +638,7 @@
         },
         "billing_record_id": {
           "name": "billing_record_id",
-          "type": "uuid",
+          "type": "bigint",
           "primaryKey": false,
           "notNull": true
         },
@@ -739,7 +739,7 @@
         },
         "billing_record_id": {
           "name": "billing_record_id",
-          "type": "uuid",
+          "type": "bigint",
           "primaryKey": false,
           "notNull": true
         },
@@ -1138,10 +1138,9 @@
       "columns": {
         "id": {
           "name": "id",
-          "type": "uuid",
+          "type": "bigserial",
           "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
+          "notNull": true
         },
         "customer_id": {
           "name": "customer_id",
@@ -1627,12 +1626,11 @@
           "notNull": true,
           "default": true
         },
-        "subscription_charge_pending": {
-          "name": "subscription_charge_pending",
-          "type": "boolean",
+        "sub_pending_invoice_id": {
+          "name": "sub_pending_invoice_id",
+          "type": "bigint",
           "primaryKey": false,
-          "notNull": true,
-          "default": true
+          "notNull": false
         },
         "paid_once": {
           "name": "paid_once",
@@ -1778,6 +1776,19 @@
           ],
           "columnsTo": [
             "customer_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "service_instances_sub_pending_invoice_id_billing_records_id_fk": {
+          "name": "service_instances_sub_pending_invoice_id_billing_records_id_fk",
+          "tableFrom": "service_instances",
+          "tableTo": "billing_records",
+          "columnsFrom": [
+            "sub_pending_invoice_id"
+          ],
+          "columnsTo": [
+            "id"
           ],
           "onDelete": "no action",
           "onUpdate": "no action"

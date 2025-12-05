@@ -23,7 +23,7 @@ export interface LogInternalErrorParams {
   message: string; // Human-readable message
   details?: any; // Additional context (will be JSON-stringified)
   customerId?: number | string;
-  invoiceId?: string;
+  invoiceId?: number;
 }
 
 /**
@@ -72,7 +72,7 @@ export async function logInternalError(
       message: params.message,
       details: params.details ? JSON.stringify(params.details, null, 2) : null,
       customerId: params.customerId ? String(params.customerId) : null,
-      invoiceId: params.invoiceId || null,
+      invoiceId: params.invoiceId != null ? String(params.invoiceId) : null,
     })
     .returning({ notificationId: adminNotifications.notificationId });
 
@@ -91,7 +91,7 @@ export async function logInternalError(
  */
 export async function logValidationIssues(
   tx: DatabaseOrTransaction,
-  invoiceId: string,
+  invoiceId: number,
   issues: Array<{ severity: string; code: string; message: string; details?: any }>,
   customerId?: number
 ): Promise<void> {

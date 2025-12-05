@@ -476,7 +476,7 @@ export async function syncCustomerDraftInvoice(
   customerId: number
 ): Promise<{
   success: boolean;
-  invoiceId?: string;
+  invoiceId?: number;
   totalUsageChargesCents?: number;
   lineItemsCount?: number;
   error?: string;

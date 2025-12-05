@@ -135,7 +135,7 @@ describe('Service Billing Integration (Phase 2)', () => {
       );
 
       expect(result.paymentSuccessful).toBe(true);
-      expect(result.subscriptionChargePending).toBe(false);
+      expect(result.subPendingInvoiceId).toBeNull();
       expect(result.amountUsdCents).toBe(2900);
 
       // Verify invoice created and paid
@@ -180,7 +180,7 @@ describe('Service Billing Integration (Phase 2)', () => {
         serviceType: 'seal',
         tier: 'pro',
         isUserEnabled: true, // Service is enabled
-        subscriptionChargePending: false,
+        subPendingInvoiceId: null,
         config: { tier: 'pro' },
       });
 

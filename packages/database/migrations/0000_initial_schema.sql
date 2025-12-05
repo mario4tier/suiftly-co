@@ -6,7 +6,7 @@ CREATE TYPE "public"."service_state" AS ENUM('not_provisioned', 'provisioning', 
 CREATE TYPE "public"."service_tier" AS ENUM('starter', 'pro', 'enterprise');--> statement-breakpoint
 CREATE TYPE "public"."service_type" AS ENUM('seal', 'grpc', 'graphql');--> statement-breakpoint
 CREATE TYPE "public"."transaction_type" AS ENUM('deposit', 'withdraw', 'charge', 'credit');--> statement-breakpoint
-CREATE SEQUENCE IF NOT EXISTS invoice_number_seq START WITH 148372;--> statement-breakpoint
+CREATE SEQUENCE "invoice_number_seq" START WITH 1000;--> statement-breakpoint
 CREATE TABLE "admin_notifications" (
 	"notification_id" serial PRIMARY KEY NOT NULL,
 	"severity" varchar(20) NOT NULL,
@@ -52,7 +52,7 @@ CREATE TABLE "refresh_tokens" (
 --> statement-breakpoint
 CREATE TABLE "billing_idempotency" (
 	"idempotency_key" varchar(100) PRIMARY KEY NOT NULL,
-	"billing_record_id" uuid,
+	"billing_record_id" bigint,
 	"response" text NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
@@ -73,19 +73,20 @@ CREATE TABLE "customer_credits" (
 --> statement-breakpoint
 CREATE TABLE "invoice_line_items" (
 	"line_item_id" serial PRIMARY KEY NOT NULL,
-	"billing_record_id" uuid NOT NULL,
+	"billing_record_id" bigint NOT NULL,
 	"item_type" "invoice_line_item_type" NOT NULL,
 	"service_type" "service_type",
 	"quantity" bigint DEFAULT 1 NOT NULL,
 	"unit_price_usd_cents" bigint NOT NULL,
 	"amount_usd_cents" bigint NOT NULL,
 	"credit_month" varchar(20),
+	"description" varchar(100),
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE "invoice_payments" (
 	"payment_id" serial PRIMARY KEY NOT NULL,
-	"billing_record_id" uuid NOT NULL,
+	"billing_record_id" bigint NOT NULL,
 	"source_type" varchar(20) NOT NULL,
 	"credit_id" integer,
 	"escrow_transaction_id" bigint,
@@ -127,7 +128,7 @@ CREATE TABLE "customers" (
 );
 --> statement-breakpoint
 CREATE TABLE "billing_records" (
-	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"id" bigserial PRIMARY KEY NOT NULL,
 	"customer_id" integer NOT NULL,
 	"billing_period_start" timestamp NOT NULL,
 	"billing_period_end" timestamp NOT NULL,
@@ -147,6 +148,7 @@ CREATE TABLE "billing_records" (
 	CONSTRAINT "check_tx_digest_length" CHECK ("billing_records"."tx_digest" IS NULL OR LENGTH("billing_records"."tx_digest") = 32)
 );
 --> statement-breakpoint
+ALTER SEQUENCE "billing_records_id_seq" RESTART WITH 103405;--> statement-breakpoint
 CREATE TABLE "escrow_transactions" (
 	"tx_id" bigserial PRIMARY KEY NOT NULL,
 	"customer_id" integer NOT NULL,
@@ -168,7 +170,7 @@ CREATE TABLE "ledger_entries" (
 	"sui_usd_rate_cents" bigint,
 	"tx_digest" "bytea",
 	"description" text,
-	"invoice_id" varchar(50),
+	"invoice_id" bigint,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "check_tx_digest_length" CHECK ("ledger_entries"."tx_digest" IS NULL OR LENGTH("ledger_entries"."tx_digest") = 32)
 );
@@ -180,7 +182,7 @@ CREATE TABLE "service_instances" (
 	"state" "service_state" DEFAULT 'not_provisioned' NOT NULL,
 	"tier" "service_tier" NOT NULL,
 	"is_user_enabled" boolean DEFAULT true NOT NULL,
-	"subscription_charge_pending" boolean DEFAULT true NOT NULL,
+	"sub_pending_invoice_id" bigint,
 	"paid_once" boolean DEFAULT false NOT NULL,
 	"config" jsonb,
 	"enabled_at" timestamp,
@@ -333,6 +335,7 @@ ALTER TABLE "billing_records" ADD CONSTRAINT "billing_records_customer_id_custom
 ALTER TABLE "escrow_transactions" ADD CONSTRAINT "escrow_transactions_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "ledger_entries" ADD CONSTRAINT "ledger_entries_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "service_instances" ADD CONSTRAINT "service_instances_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "service_instances" ADD CONSTRAINT "service_instances_sub_pending_invoice_id_billing_records_id_fk" FOREIGN KEY ("sub_pending_invoice_id") REFERENCES "public"."billing_records"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "seal_keys" ADD CONSTRAINT "seal_keys_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "seal_keys" ADD CONSTRAINT "seal_keys_instance_id_service_instances_instance_id_fk" FOREIGN KEY ("instance_id") REFERENCES "public"."service_instances"("instance_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "seal_packages" ADD CONSTRAINT "seal_packages_seal_key_id_seal_keys_seal_key_id_fk" FOREIGN KEY ("seal_key_id") REFERENCES "public"."seal_keys"("seal_key_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint

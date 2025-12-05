@@ -17,9 +17,8 @@
 
 import { db } from '@suiftly/database';
 import { serviceInstances, customers, billingRecords, invoicePayments, escrowTransactions } from '@suiftly/database/schema';
-import { eq, and, desc } from 'drizzle-orm';
+import { eq, and, isNotNull } from 'drizzle-orm';
 import { getSuiService } from '../services/sui/index.js';
-import { getTierPriceUsdCents } from './config-cache';
 import { issueCredit } from '@suiftly/database/billing';
 import { dbClock } from '@suiftly/shared/db-clock';
 
@@ -50,11 +49,11 @@ export async function reconcilePayments(customerId: number): Promise<ReconcileRe
     details: [],
   };
 
-  // Find all services with pending subscription charges
+  // Find all services with pending subscription charges (subPendingInvoiceId IS NOT NULL)
   const pendingServices = await db.query.serviceInstances.findMany({
     where: and(
       eq(serviceInstances.customerId, customerId),
-      eq(serviceInstances.subscriptionChargePending, true)
+      isNotNull(serviceInstances.subPendingInvoiceId)
     ),
   });
 
@@ -82,8 +81,28 @@ export async function reconcilePayments(customerId: number): Promise<ReconcileRe
     result.servicesProcessed++;
 
     try {
-      // Get tier price
-      const priceUsdCents = getTierPriceUsdCents(service.tier);
+      // Get the actual invoice amount from the billing record
+      // This is more accurate than recalculating from tier, as the invoice may have been
+      // updated during upgrades/downgrades, or adjusted for prorations/credits
+      const subPendingInvoiceId = service.subPendingInvoiceId!; // Safe: we filtered for NOT NULL above
+
+      const pendingInvoice = await db.query.billingRecords.findFirst({
+        where: eq(billingRecords.id, subPendingInvoiceId),
+      });
+
+      if (!pendingInvoice) {
+        console.error(`[RECONCILE] Pending invoice ${subPendingInvoiceId} not found for service ${service.instanceId}`);
+        result.chargesFailed++;
+        result.details.push({
+          instanceId: service.instanceId,
+          success: false,
+          error: `Pending invoice ${subPendingInvoiceId} not found`,
+        });
+        continue;
+      }
+
+      // Use the actual invoice amount, not recalculated tier price
+      const priceUsdCents = pendingInvoice.amountUsdCents;
 
       // Attempt to charge subscription fee
       const chargeResult = await suiService.charge({
@@ -98,10 +117,10 @@ export async function reconcilePayments(customerId: number): Promise<ReconcileRe
         const txDigest = Buffer.from(chargeResult.digest.replace(/^0x/, ''), 'hex');
 
         await db.transaction(async (tx) => {
-          // Clear pending flag and set paidOnce
+          // Clear pending invoice reference and set paidOnce
           await tx.update(serviceInstances)
             .set({
-              subscriptionChargePending: false,
+              subPendingInvoiceId: null, // Clear the reference
               paidOnce: true,
             })
             .where(eq(serviceInstances.instanceId, service.instanceId));
@@ -111,53 +130,39 @@ export async function reconcilePayments(customerId: number): Promise<ReconcileRe
             .set({ paidOnce: true })
             .where(eq(customers.customerId, customerId));
 
-          // Find the pending billing record for this subscription
-          const [pendingBillingRecord] = await tx
-            .select()
-            .from(billingRecords)
-            .where(and(
-              eq(billingRecords.customerId, customerId),
-              eq(billingRecords.status, 'pending'),
-              eq(billingRecords.amountUsdCents, priceUsdCents)
-            ))
-            .orderBy(desc(billingRecords.createdAt))
-            .limit(1);
+          // Record escrow transaction
+          const [escrowTx] = await tx
+            .insert(escrowTransactions)
+            .values({
+              customerId,
+              txDigest: txDigest,
+              txType: 'charge',
+              amount: String(priceUsdCents / 100),
+              assetType: 'USDC',
+              timestamp: dbClock.now(),
+            })
+            .returning({ id: escrowTransactions.txId });
 
-          if (pendingBillingRecord) {
-            // Record escrow transaction
-            const [escrowTx] = await tx
-              .insert(escrowTransactions)
-              .values({
-                customerId,
-                txDigest: txDigest,
-                txType: 'charge',
-                amount: String(priceUsdCents / 100),
-                assetType: 'USDC',
-                timestamp: dbClock.now(),
-              })
-              .returning({ id: escrowTransactions.txId });
+          // Record invoice payment
+          await tx.insert(invoicePayments).values({
+            billingRecordId: subPendingInvoiceId,
+            sourceType: 'escrow',
+            creditId: null,
+            escrowTransactionId: escrowTx.id,
+            amountUsdCents: priceUsdCents,
+          });
 
-            // Record invoice payment
-            await tx.insert(invoicePayments).values({
-              billingRecordId: pendingBillingRecord.id,
-              sourceType: 'escrow',
-              creditId: null,
-              escrowTransactionId: escrowTx.id,
-              amountUsdCents: priceUsdCents,
-            });
+          // Update billing record to paid (works for both 'pending' and 'failed' status)
+          await tx
+            .update(billingRecords)
+            .set({
+              status: 'paid',
+              amountPaidUsdCents: priceUsdCents,
+              txDigest: txDigest,
+            })
+            .where(eq(billingRecords.id, subPendingInvoiceId));
 
-            // Update billing record to paid
-            await tx
-              .update(billingRecords)
-              .set({
-                status: 'paid',
-                amountPaidUsdCents: priceUsdCents,
-                txDigest: txDigest,
-              })
-              .where(eq(billingRecords.id, pendingBillingRecord.id));
-
-            console.log(`[RECONCILE] Updated billing record ${pendingBillingRecord.id} to paid`);
-          }
+          console.log(`[RECONCILE] Updated billing record ${subPendingInvoiceId} to paid`);
 
           // Issue reconciliation credit for partial month
           // Calculate based on current tier price (not original subscription tier)

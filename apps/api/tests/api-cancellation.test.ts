@@ -93,7 +93,7 @@ describe('API: Cancellation Flow', () => {
 
       // Mark as paid and enable the service
       await db.update(serviceInstances)
-        .set({ paidOnce: true, subscriptionChargePending: false, state: 'enabled', isUserEnabled: true })
+        .set({ paidOnce: true, subPendingInvoiceId: null, state: 'enabled', isUserEnabled: true })
         .where(eq(serviceInstances.instanceId, service!.instanceId));
 
       // ---- Schedule cancellation via HTTP ----
@@ -206,7 +206,7 @@ describe('API: Cancellation Flow', () => {
 
       // Mark as paid and enable the service
       await db.update(serviceInstances)
-        .set({ paidOnce: true, subscriptionChargePending: false, state: 'enabled', isUserEnabled: true })
+        .set({ paidOnce: true, subPendingInvoiceId: null, state: 'enabled', isUserEnabled: true })
         .where(eq(serviceInstances.instanceId, service!.instanceId));
 
       // ---- Verify initial state: DRAFT shows enterprise price ----

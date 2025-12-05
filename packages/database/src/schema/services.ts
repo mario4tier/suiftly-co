@@ -1,6 +1,7 @@
-import { pgTable, serial, integer, boolean, jsonb, timestamp, date, unique, index } from 'drizzle-orm/pg-core';
+import { pgTable, serial, integer, boolean, jsonb, timestamp, date, unique, index, bigint } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { customers } from './customers';
+import { billingRecords } from './escrow';
 import { serviceTypeEnum, serviceStateEnum, serviceTierEnum } from './enums';
 
 /**
@@ -16,7 +17,10 @@ export const serviceInstances = pgTable('service_instances', {
   state: serviceStateEnum('state').notNull().default('not_provisioned'),
   tier: serviceTierEnum('tier').notNull(),
   isUserEnabled: boolean('is_user_enabled').notNull().default(true),
-  subscriptionChargePending: boolean('subscription_charge_pending').notNull().default(true),
+  // Subscription pending invoice reference: NULL = no pending subscription charge, ID = immediate invoice awaiting payment
+  // Used exclusively during initial subscription flow - stores reference to the invoice created at subscribe time
+  // This replaces the old boolean subscriptionChargePending field for better atomicity and direct lookup
+  subPendingInvoiceId: bigint('sub_pending_invoice_id', { mode: 'number' }).references(() => billingRecords.id),
   paidOnce: boolean('paid_once').notNull().default(false), // Has this service ever had a successful payment?
   config: jsonb('config'),
   enabledAt: timestamp('enabled_at'),

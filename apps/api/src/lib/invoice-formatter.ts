@@ -13,9 +13,8 @@
  */
 
 import { db } from '@suiftly/database';
-import { getTierPriceUsdCents } from '@suiftly/shared/pricing';
-import { INVOICE_LINE_ITEM_TYPE, TIER_TO_SUBSCRIPTION_ITEM } from '@suiftly/shared/constants';
-import type { ServiceType, ServiceTier, InvoiceLineItemType } from '@suiftly/shared/constants';
+import { INVOICE_LINE_ITEM_TYPE } from '@suiftly/shared/constants';
+import type { ServiceType, InvoiceLineItemType } from '@suiftly/shared/constants';
 import type { InvoiceLineItem } from '@suiftly/shared/types';
 import { customerCredits, serviceInstances, invoiceLineItems } from '@suiftly/database/schema';
 import { eq, and, sql, gt, isNull } from 'drizzle-orm';
@@ -24,80 +23,57 @@ import { dbClock } from '@suiftly/shared/db-clock';
 // Re-export the type for convenience
 export type { InvoiceLineItem } from '@suiftly/shared/types';
 
+// Item types that store unitPriceUsdCents as "cents per 1000 requests"
+const USAGE_BASED_ITEM_TYPES = new Set([
+  INVOICE_LINE_ITEM_TYPE.REQUESTS,
+]);
+
 /**
  * Build line items for a DRAFT invoice
  *
- * Reads cached line items from invoice_line_items table (synced periodically)
- * and adds subscription charges based on current service configuration.
+ * Reads all line items from invoice_line_items table (subscriptions, usage, add-ons)
+ * and adds available credits.
  *
  * Line items include:
- * - Service subscriptions (computed from service tier)
- * - Usage charges (read from cached invoice_line_items)
- * - Add-ons (future: "Seal - 2 extra keys")
- * - Available credits (will be applied when DRAFT → PENDING)
- *
- * IMPORTANT: Excludes services with subscriptionChargePending=true because:
- * - Initial charge hasn't been paid yet
- * - Service hasn't been activated/provisioned
- * - Proration credit calculation would be unclear
- * - It's confusing to show next month's charges when current month isn't settled
+ * - Service subscriptions (from invoice_line_items, synced by recalculateDraftInvoice)
+ * - Usage charges (from invoice_line_items, synced by syncUsageToDraft)
+ * - Add-ons (from invoice_line_items, synced by recalculateDraftInvoice)
+ * - Available credits (computed from customer_credits table)
  *
  * @param customerId Customer ID
- * @param draftAmountCents DRAFT invoice gross amount
+ * @param draftAmountCents DRAFT invoice gross amount (unused, kept for backward compatibility)
  * @param billingPeriodStart Invoice due date (1st of next month) - used to calculate credit month
- * @param draftInvoiceId DRAFT invoice ID to read cached line items from
+ * @param draftInvoiceId DRAFT invoice ID to read line items from
  * @returns Array of line items
  */
 export async function buildDraftLineItems(
   customerId: number,
   draftAmountCents: number,
   billingPeriodStart?: Date,
-  draftInvoiceId?: string
+  draftInvoiceId?: number
 ): Promise<InvoiceLineItem[]> {
   const lineItems: InvoiceLineItem[] = [];
   const now = dbClock.now();
 
-  // Get subscribed services (exclude services with pending initial charge or scheduled cancellation)
-  const services = await db.query.serviceInstances.findMany({
-    where: and(
-      eq(serviceInstances.customerId, customerId),
-      eq(serviceInstances.subscriptionChargePending, false),
-      isNull(serviceInstances.cancellationScheduledFor)
-    ),
-  });
-
-  // Add subscription line item for each service
-  for (const service of services) {
-    // Use scheduled tier if present (for scheduled downgrades), otherwise current tier
-    // This ensures DRAFT invoice line items reflect what will ACTUALLY be charged
-    const effectiveTier = (service.scheduledTier || service.tier) as ServiceTier;
-    const tierPriceCents = getTierPriceUsdCents(effectiveTier);
-    const tierPriceUsd = tierPriceCents / 100;
-
-    lineItems.push({
-      service: service.serviceType as ServiceType,
-      itemType: TIER_TO_SUBSCRIPTION_ITEM[effectiveTier],
-      quantity: 1,
-      unitPriceUsd: tierPriceUsd,
-      amountUsd: tierPriceUsd,
-    });
-
-    // Future: Add-ons would be additional line items here
-    // e.g., extra_api_keys, extra_seal_keys, etc.
-  }
-
-  // Read usage charges from cached invoice_line_items table
-  // These are synced periodically by syncUsageToDraft()
+  // Read ALL line items from database (subscriptions, usage, add-ons)
+  // These are synced by recalculateDraftInvoice (subscriptions/add-ons) and syncUsageToDraft (usage)
   if (draftInvoiceId) {
     const cachedLineItems = await db.query.invoiceLineItems.findMany({
       where: eq(invoiceLineItems.billingRecordId, draftInvoiceId),
     });
 
     for (const item of cachedLineItems) {
-      // Convert stored cents to USD for frontend
-      // unitPriceUsdCents is stored as cents per 1000 requests
-      const unitPriceUsd = Number(item.unitPriceUsdCents) / 100 / 1000;
       const amountUsd = Number(item.amountUsdCents) / 100;
+
+      // Unit price conversion depends on item type:
+      // - Usage (requests): unitPriceUsdCents is "cents per 1000 requests" → divide by 100 and 1000
+      // - Everything else: unitPriceUsdCents is actual price in cents → divide by 100
+      let unitPriceUsd: number;
+      if (USAGE_BASED_ITEM_TYPES.has(item.itemType as any)) {
+        unitPriceUsd = Number(item.unitPriceUsdCents) / 100 / 1000;
+      } else {
+        unitPriceUsd = Number(item.unitPriceUsdCents) / 100;
+      }
 
       lineItems.push({
         service: item.serviceType as ServiceType | null,
@@ -110,8 +86,18 @@ export async function buildDraftLineItems(
     }
   }
 
+  // Get subscribed services (exclude services with pending initial charge or scheduled cancellation)
+  // Used only to determine if we should show credits
+  const services = await db.query.serviceInstances.findMany({
+    where: and(
+      eq(serviceInstances.customerId, customerId),
+      isNull(serviceInstances.subPendingInvoiceId), // Only include paid services
+      isNull(serviceInstances.cancellationScheduledFor)
+    ),
+  });
+
   // Get available credits
-  // Only show credits if there are active services in the DRAFT
+  // Only show credits if there are active services
   // (If all services have pending subscription charges, don't show credits)
   if (services.length > 0) {
     const credits = await db

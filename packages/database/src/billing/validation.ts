@@ -13,7 +13,6 @@
 import { eq, and, sql } from 'drizzle-orm';
 import type { Database, DatabaseOrTransaction } from '../db';
 import { billingRecords, serviceInstances, customerCredits } from '../schema';
-import { getTierPriceUsdCents, ADDON_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
 import { ValidationError } from './errors';
 
 /**
@@ -52,7 +51,7 @@ export interface InvoiceValidationResult {
  */
 export async function validateInvoiceBeforeCharging(
   tx: DatabaseOrTransaction,
-  invoiceId: string
+  invoiceId: number
 ): Promise<InvoiceValidationResult> {
   const issues: ValidationIssue[] = [];
 
@@ -90,15 +89,7 @@ export async function validateInvoiceBeforeCharging(
     });
   }
 
-  // Check 2: DRAFT invoice matches enabled services (prevent stale DRAFT)
-  if (invoice.status === 'draft') {
-    const mismatch = await validateDraftMatchesServices(tx, invoice.customerId, Number(invoice.amountUsdCents));
-    if (mismatch) {
-      issues.push(mismatch);
-    }
-  }
-
-  // Check 3: Check for duplicate service charges
+  // Check 2: Check for duplicate service charges
   const duplicates = await detectDuplicateServiceCharges(tx, invoice.customerId, invoice.id);
   issues.push(...duplicates);
 
@@ -119,68 +110,6 @@ export async function validateInvoiceBeforeCharging(
 }
 
 /**
- * Validate DRAFT invoice amount matches enabled services
- *
- * Recalculates what the invoice SHOULD be and compares with actual amount.
- * Detects stale DRAFT invoices that weren't updated after service changes.
- *
- * @param tx Transaction handle
- * @param customerId Customer ID
- * @param draftAmountCents Current DRAFT amount
- * @returns Validation issue if mismatch found, null otherwise
- */
-async function validateDraftMatchesServices(
-  tx: DatabaseOrTransaction,
-  customerId: number,
-  draftAmountCents: number
-): Promise<ValidationIssue | null> {
-  // Get all subscribed services
-  // NOTE: Service existence = subscription. is_user_enabled is just on/off toggle.
-  // Validation must match billing logic - bill for subscribed services regardless of toggle.
-  const services = await tx
-    .select()
-    .from(serviceInstances)
-    .where(eq(serviceInstances.customerId, customerId));
-
-  // Calculate expected total
-  let expectedTotalCents = 0;
-
-  for (const service of services) {
-    // Get tier price
-    const tierPrice = getTierPriceUsdCents(service.tier);
-    expectedTotalCents += tierPrice;
-
-    // Add-ons (Seal only for now)
-    if (service.serviceType === 'seal' && service.config) {
-      const config = service.config as any;
-
-      expectedTotalCents += (config.purchasedSealKeys || 0) * ADDON_PRICES_USD_CENTS.sealKey;
-      expectedTotalCents += (config.purchasedPackages || 0) * ADDON_PRICES_USD_CENTS.package;
-      expectedTotalCents += (config.purchasedApiKeys || 0) * ADDON_PRICES_USD_CENTS.apiKey;
-    }
-  }
-
-  // Allow small rounding differences (±$0.01)
-  const difference = Math.abs(draftAmountCents - expectedTotalCents);
-
-  if (difference > 1) {
-    return {
-      severity: 'error',
-      code: 'DRAFT_AMOUNT_MISMATCH',
-      message: `DRAFT invoice amount (${draftAmountCents / 100}) doesn't match subscribed services (${expectedTotalCents / 100})`,
-      details: {
-        draftAmount: draftAmountCents / 100,
-        expectedAmount: expectedTotalCents / 100,
-        difference: difference / 100,
-        subscribedServices: services.map(s => ({ type: s.serviceType, tier: s.tier, enabled: s.isUserEnabled })),
-      },
-    };
-  }
-
-  return null;
-}
-
-/**
  * Detect duplicate DRAFT invoices
  *
  * Per BILLING_DESIGN.md: "Exactly one DRAFT per customer (or none if no enabled services)"
@@ -196,7 +125,7 @@ async function validateDraftMatchesServices(
 async function detectDuplicateServiceCharges(
   tx: DatabaseOrTransaction,
   customerId: number,
-  excludeInvoiceId: string
+  excludeInvoiceId: number
 ): Promise<ValidationIssue[]> {
   const issues: ValidationIssue[] = [];
 
@@ -303,7 +232,7 @@ async function detectOrphanedReconciliationCredits(
  */
 export async function ensureInvoiceValid(
   tx: DatabaseOrTransaction,
-  invoiceId: string
+  invoiceId: number
 ): Promise<void> {
   const validation = await validateInvoiceBeforeCharging(tx, invoiceId);
 

@@ -509,7 +509,7 @@ export const sealRouter = router({
 
           // Check if subscription charge is pending (payment gate logic)
           // This is the same validation used when trying to enable the service
-          if (service.subscriptionChargePending) {
+          if (service.subPendingInvoiceId !== null) {
             // Get customer to check account status
             const customer = await tx.query.customers.findFirst({
               where: eq(customers.customerId, ctx.user!.customerId),

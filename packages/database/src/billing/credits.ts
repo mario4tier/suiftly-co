@@ -33,7 +33,7 @@ import type { DBClock } from '@suiftly/shared/db-clock';
 export async function applyCreditsToInvoice(
   tx: LockedTransaction,
   customerId: number,
-  billingRecordId: string,
+  billingRecordId: number,
   invoiceAmountCents: number,
   clock: DBClock
 ): Promise<CreditApplicationResult> {

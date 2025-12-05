@@ -23,7 +23,7 @@ export interface BillingOperation {
   type: 'monthly_billing' | 'credit_application' | 'escrow_charge' | 'grace_period_start' | 'grace_period_end' | 'payment_retry' | 'reconciliation';
   timestamp: Date;
   amountUsdCents?: number;
-  invoiceId?: string;
+  invoiceId?: number;
   description: string;
   success: boolean;
 }
@@ -35,7 +35,7 @@ export interface BillingError {
   type: 'insufficient_balance' | 'spending_limit_exceeded' | 'payment_failed' | 'database_error' | 'validation_error';
   message: string;
   customerId: number;
-  invoiceId?: string;
+  invoiceId?: number;
   retryable: boolean;
 }
 
@@ -73,7 +73,7 @@ export interface CreditApplicationResult {
  * Result of processing a single invoice payment
  */
 export interface InvoicePaymentResult {
-  invoiceId: string;
+  invoiceId: number;
   initialAmountCents: number;
   amountPaidCents: number;
   fullyPaid: boolean;

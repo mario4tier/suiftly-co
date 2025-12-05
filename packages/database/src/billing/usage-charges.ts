@@ -78,7 +78,7 @@ export interface UsageChargeResult {
 export async function updateUsageChargesToDraft(
   tx: LockedTransaction,
   customerId: number,
-  invoiceId: string
+  invoiceId: number
 ): Promise<UsageChargeResult> {
   // 1. Verify invoice exists and is in DRAFT status
   const [invoice] = await tx
@@ -106,19 +106,21 @@ export async function updateUsageChargesToDraft(
   }
 
   // 2. Get the current usage total (to calculate delta)
+  // Usage line items have item_type = 'requests'
   const existingUsageResult = await tx.execute(sql`
     SELECT COALESCE(SUM(amount_usd_cents), 0) as total
     FROM invoice_line_items
     WHERE billing_record_id = ${invoiceId}
-      AND service_type IS NOT NULL
+      AND item_type = 'requests'
   `);
   const existingUsageTotal = Number(existingUsageResult.rows[0]?.total ?? 0);
 
   // 3. Delete existing usage line items for idempotency
+  // Only delete 'requests' type items, not subscription line items
   await tx.execute(sql`
     DELETE FROM invoice_line_items
     WHERE billing_record_id = ${invoiceId}
-      AND service_type IS NOT NULL
+      AND item_type = 'requests'
   `);
 
   // 4. Get all service instances for this customer
@@ -216,7 +218,7 @@ export async function updateUsageChargesToDraft(
  */
 async function updateInvoiceTotal(
   tx: LockedTransaction,
-  invoiceId: string,
+  invoiceId: number,
   deltaCents: number
 ): Promise<void> {
   await tx.execute(sql`
@@ -342,7 +344,7 @@ export interface UsageSyncResult {
 export async function syncUsageToDraft(
   tx: LockedTransaction,
   customerId: number,
-  invoiceId: string,
+  invoiceId: number,
   clock: DBClock
 ): Promise<UsageSyncResult> {
   // 1. Verify invoice exists and is in DRAFT status
@@ -371,20 +373,21 @@ export async function syncUsageToDraft(
   }
 
   // 2. Get the current usage total (to calculate delta)
-  // Usage line items have service_type set; subscription/credit line items don't
+  // Usage line items have item_type = 'requests'
   const existingUsageResult = await tx.execute(sql`
     SELECT COALESCE(SUM(amount_usd_cents), 0) as total
     FROM invoice_line_items
     WHERE billing_record_id = ${invoiceId}
-      AND service_type IS NOT NULL
+      AND item_type = 'requests'
   `);
   const existingUsageTotal = Number(existingUsageResult.rows[0]?.total ?? 0);
 
   // 3. Delete existing usage line items for idempotency
+  // Only delete 'requests' type items, not subscription line items
   await tx.execute(sql`
     DELETE FROM invoice_line_items
     WHERE billing_record_id = ${invoiceId}
-      AND service_type IS NOT NULL
+      AND item_type = 'requests'
   `);
 
   // 4. Get all subscribed services for this customer
@@ -394,7 +397,7 @@ export async function syncUsageToDraft(
     .from(serviceInstances)
     .where(eq(serviceInstances.customerId, customerId));
 
-  const activeServices = services.filter(s => !s.subscriptionChargePending);
+  const activeServices = services.filter(s => s.subPendingInvoiceId === null);
 
   // 5. For DRAFT invoices, show CURRENT month's usage (not next month's billing period)
   // The DRAFT billing period is for next month's subscription charges,
@@ -413,17 +416,14 @@ export async function syncUsageToDraft(
 
     if (!serviceTypeNum) continue;
 
-    // Determine start time: use enabledAt if service was enabled mid-month
-    const serviceStart = service.enabledAt
-      ? new Date(Math.max(currentMonthStart.getTime(), new Date(service.enabledAt).getTime()))
-      : currentMonthStart;
-
-    // 7. Query stats for billable requests
+    // Query stats for billable requests from start of month to now
+    // Note: We count ALL logs in the billing period, regardless of enabledAt.
+    // If HAProxy logged requests, they were served and should be billed.
     const requestCount = await getBillableRequestCount(
       tx,
       customerId,
       serviceTypeNum,
-      serviceStart,
+      currentMonthStart,
       now
     );
 

@@ -236,7 +236,7 @@ describe('API: Subscription Flow', () => {
 
       // Mark as paid so we can enable
       await db.update(serviceInstances)
-        .set({ paidOnce: true, subscriptionChargePending: false })
+        .set({ paidOnce: true, subPendingInvoiceId: null })
         .where(eq(serviceInstances.instanceId, service!.instanceId));
 
       // Enable service
@@ -335,7 +335,7 @@ describe('API: Subscription Flow', () => {
         ),
       });
       await db.update(serviceInstances)
-        .set({ paidOnce: true, subscriptionChargePending: false, state: 'enabled' })
+        .set({ paidOnce: true, subPendingInvoiceId: null, state: 'enabled' })
         .where(eq(serviceInstances.instanceId, service!.instanceId));
 
       // Check canProvision

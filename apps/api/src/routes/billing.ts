@@ -18,13 +18,21 @@ import { buildDraftLineItems } from '../lib/invoice-formatter';
 /**
  * Format a semantic line item into a human-readable description
  * Used for billing history display
+ *
+ * @param itemType - The semantic item type (e.g., TIER_UPGRADE, SUBSCRIPTION_PRO)
+ * @param serviceType - The service type (e.g., 'seal')
+ * @param quantity - Item quantity
+ * @param unitPriceUsdCents - Unit price in cents
+ * @param creditMonth - Credit month for CREDIT items
+ * @param description - Optional description to append (e.g., "starter → pro" for tier upgrades)
  */
 function formatLineItemDescription(
   itemType: string,
   serviceType: string | null,
   quantity: number,
   unitPriceUsdCents: number,
-  creditMonth: string | null
+  creditMonth: string | null,
+  description: string | null
 ): string {
   const serviceName = serviceType
     ? serviceType.charAt(0).toUpperCase() + serviceType.slice(1)
@@ -34,13 +42,15 @@ function formatLineItemDescription(
 
   switch (itemType) {
     case INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_STARTER:
-      return `${serviceName} Starter tier`;
+      return `${serviceName} Starter tier subscription`;
     case INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_PRO:
-      return `${serviceName} Pro tier`;
+      return `${serviceName} Pro tier subscription`;
     case INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_ENTERPRISE:
-      return `${serviceName} Enterprise tier`;
-    case INVOICE_LINE_ITEM_TYPE.TIER_UPGRADE:
-      return `${serviceName} tier upgrade (pro-rated)`;
+      return `${serviceName} Enterprise tier subscription`;
+    case INVOICE_LINE_ITEM_TYPE.TIER_UPGRADE: {
+      const base = `${serviceName} tier upgrade (pro-rated)`;
+      return description ? `${base}: ${description}` : base;
+    }
     case INVOICE_LINE_ITEM_TYPE.REQUESTS:
       return `${serviceName} usage: ${quantity.toLocaleString()} requests`;
     case INVOICE_LINE_ITEM_TYPE.EXTRA_API_KEYS:
@@ -203,6 +213,7 @@ export const billingRouter = router({
           quantity: invoiceLineItems.quantity,
           unitPriceUsdCents: invoiceLineItems.unitPriceUsdCents,
           creditMonth: invoiceLineItems.creditMonth,
+          lineItemDescription: invoiceLineItems.description, // Optional description to append
         })
         .from(billingRecords)
         .leftJoin(invoiceLineItems, eq(billingRecords.id, invoiceLineItems.billingRecordId))
@@ -213,8 +224,8 @@ export const billingRouter = router({
         .orderBy(desc(billingRecords.createdAt));
 
       // Group line items by invoice (in case of multiple line items)
-      const invoiceMap = new Map<string, {
-        id: string;
+      const invoiceMap = new Map<number, {
+        id: number;
         type: string;
         status: string;
         amountUsdCents: number;
@@ -232,7 +243,8 @@ export const billingRouter = router({
               row.serviceType,
               Number(row.quantity ?? 1),
               Number(row.unitPriceUsdCents ?? 0),
-              row.creditMonth
+              row.creditMonth,
+              row.lineItemDescription ?? null
             )
           : null;
 
@@ -295,7 +307,7 @@ export const billingRouter = router({
         }
 
         allTransactions.push({
-          id: invoice.id,
+          id: String(invoice.id), // Convert number ID to string for API response
           type: invoice.type, // 'charge' or 'credit'
           amountUsd: invoice.amountUsdCents / 100,
           description: invoiceDescription,

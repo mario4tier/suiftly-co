@@ -184,7 +184,7 @@ function BillingPage() {
   const found = balanceData?.found ?? false;
 
   // Calculate pending subscription charges
-  const pendingServices = services?.filter(s => s.subscriptionChargePending) ?? [];
+  const pendingServices = services?.filter(s => s.subPendingInvoiceId != null) ?? [];
   const totalPendingUsd = pendingServices.reduce((sum, service) => {
     const priceUsdCents = getTierPriceUsdCents(service.tier);
     return sum + (priceUsdCents / 100);

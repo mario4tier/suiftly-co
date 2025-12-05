@@ -211,9 +211,9 @@ export const servicesRouter = router({
           // Note: API key was already created, won't be returned again
           return {
             ...existing,
-            subscriptionChargePending: existing.subscriptionChargePending,
+            subPendingInvoiceId: existing.subPendingInvoiceId,
             apiKey: null as string | null,
-            paymentPending: existing.subscriptionChargePending,
+            paymentPending: existing.subPendingInvoiceId !== null,
           };
         }
 
@@ -230,7 +230,7 @@ export const servicesRouter = router({
           ipAllowlist: [],
         };
 
-        // 4. Create service in DISABLED state with subscription_charge_pending=true
+        // 4. Create service in DISABLED state (subPendingInvoiceId will be set after billing)
         // This creates an audit trail BEFORE attempting any payment
         const [newService] = await tx
           .insert(serviceInstances)
@@ -241,7 +241,7 @@ export const servicesRouter = router({
             state: SERVICE_STATE.DISABLED,
             config: input.config || defaultConfig,
             isUserEnabled: false,
-            subscriptionChargePending: true, // Payment not confirmed yet
+            // subPendingInvoiceId will be set if payment fails
           })
           .returning();
 
@@ -271,9 +271,10 @@ export const servicesRouter = router({
         } catch (billingError) {
           // Unexpected error during billing - service created but payment failed
           console.error('[SUBSCRIBE] Unexpected billing error:', billingError);
+          // Note: Invoice may not exist if billing failed early, so subPendingInvoiceId is null
           return {
             ...newService,
-            subscriptionChargePending: true,
+            subPendingInvoiceId: null,
             apiKey: plainKey,
             paymentPending: true,
             paymentError: 'UNEXPECTED_ERROR',
@@ -295,9 +296,15 @@ export const servicesRouter = router({
             paymentErrorMessage = billingResult.error || 'Payment failed';
           }
 
+          // Store subPendingInvoiceId on the service for later reconciliation
+          await tx
+            .update(serviceInstances)
+            .set({ subPendingInvoiceId: billingResult.subPendingInvoiceId })
+            .where(eq(serviceInstances.instanceId, newService.instanceId));
+
           return {
             ...newService,
-            subscriptionChargePending: true,
+            subPendingInvoiceId: billingResult.subPendingInvoiceId,
             apiKey: plainKey,
             paymentPending: true,
             paymentError: billingResult.error?.includes('No escrow account')
@@ -307,12 +314,12 @@ export const servicesRouter = router({
           };
         }
 
-        // 7. Payment succeeded - clear pending flag (same transaction)
+        // 7. Payment succeeded - keep subPendingInvoiceId as NULL (same transaction)
         await tx
           .update(serviceInstances)
           .set({
             state: SERVICE_STATE.DISABLED, // Keep disabled - user must manually enable after config
-            subscriptionChargePending: false,
+            subPendingInvoiceId: null, // Explicitly clear (should already be NULL)
             isUserEnabled: false, // Service stays OFF - user enables when ready
           })
           .where(eq(serviceInstances.instanceId, newService.instanceId));
@@ -323,7 +330,7 @@ export const servicesRouter = router({
         // 8. Return service with API key
         return {
           ...newService,
-          subscriptionChargePending: false,
+          subPendingInvoiceId: null,
           isUserEnabled: false, // Service OFF - user must manually enable
           apiKey: plainKey,
           paymentPending: false,
@@ -420,7 +427,7 @@ export const servicesRouter = router({
 
           // Check if subscription charge is pending when trying to enable
           // Only validate funds when payment is still pending (not yet paid)
-          if (service.subscriptionChargePending && input.enabled) {
+          if (service.subPendingInvoiceId !== null && input.enabled) {
             // Get customer to check account status
             const customer = await tx.query.customers.findFirst({
               where: eq(customers.customerId, ctx.user!.customerId),

@@ -12,19 +12,17 @@
 
 import { eq, and, lte, gt, isNotNull, sql } from 'drizzle-orm';
 import type { Database } from '../db';
-import { serviceInstances, serviceCancellationHistory, billingRecords } from '../schema';
+import { serviceInstances, serviceCancellationHistory, billingRecords, invoiceLineItems } from '../schema';
 import { withCustomerLock, type LockedTransaction } from './locking';
 import {
   createAndChargeImmediately,
-  getOrCreateDraftInvoice,
-  updateDraftInvoiceAmount,
   createPendingInvoiceCommitted,
-  voidInvoice,
+  deleteUnpaidInvoice,
 } from './invoices';
 import { processInvoicePayment } from './payments';
 import { recalculateDraftInvoice, calculateProRatedUpgradeCharge } from './service-billing';
 import { getTierPriceUsdCents, TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
-import { INVOICE_LINE_ITEM_TYPE } from '@suiftly/shared/constants';
+import { INVOICE_LINE_ITEM_TYPE, TIER_TO_SUBSCRIPTION_ITEM } from '@suiftly/shared/constants';
 import type { DBClock } from '@suiftly/shared/db-clock';
 import type { ISuiService } from '@suiftly/shared/sui-service';
 import type { ServiceType, ServiceTier, ServiceState } from '../schema/enums';
@@ -37,7 +35,7 @@ export interface TierUpgradeResult {
   success: boolean;
   newTier: ServiceTier;
   chargeAmountUsdCents: number;
-  invoiceId?: string;
+  invoiceId?: number;
   error?: string;
 }
 
@@ -182,19 +180,27 @@ export async function handleTierUpgradeLocked(
       .where(eq(serviceInstances.instanceId, service.instanceId));
 
     // Update pending billing record to reflect the new tier price
-    // This ensures reconcilePayments charges the correct amount
-    await tx
-      .update(billingRecords)
-      .set({
-        amountUsdCents: newTierPrice,
-      })
-      .where(
-        and(
-          eq(billingRecords.customerId, customerId),
-          // Only update non-paid, non-draft records (pending or failed)
-          sql`${billingRecords.status} NOT IN ('paid', 'draft')`
-        )
-      );
+    // Use subPendingInvoiceId to target the exact invoice for this service
+    if (service.subPendingInvoiceId) {
+      await tx
+        .update(billingRecords)
+        .set({
+          amountUsdCents: newTierPrice,
+        })
+        .where(eq(billingRecords.id, service.subPendingInvoiceId));
+
+      // Update line items to reflect the new tier
+      // This ensures billing history shows correct tier name (e.g., "Seal Enterprise tier" not "Seal Starter tier")
+      const newSubscriptionItemType = TIER_TO_SUBSCRIPTION_ITEM[newTier];
+      await tx
+        .update(invoiceLineItems)
+        .set({
+          itemType: newSubscriptionItemType,
+          unitPriceUsdCents: newTierPrice,
+          amountUsdCents: newTierPrice,
+        })
+        .where(eq(invoiceLineItems.billingRecordId, service.subPendingInvoiceId));
+    }
 
     // Recalculate DRAFT invoice to reflect the new tier
     await recalculateDraftInvoice(tx, customerId, clock);
@@ -255,6 +261,7 @@ export async function handleTierUpgradeLocked(
         quantity: 1,
         unitPriceUsdCents: chargeAmountCents,
         amountUsdCents: chargeAmountCents,
+        description: `${service.tier} → ${newTier}`,
       },
     },
     clock
@@ -331,6 +338,7 @@ export async function handleTierUpgradeLocked(
 export interface TierUpgradePhase1Result {
   canProceed: boolean;
   currentTier?: ServiceTier;
+  newTier?: ServiceTier; // For line item description (e.g., "Pro → Enterprise")
   chargeAmountUsdCents: number;
   description?: string;
   serviceType?: ServiceType; // For creating semantic line item
@@ -421,6 +429,7 @@ export async function prepareTierUpgradePhase1Locked(
     return {
       canProceed: true,
       currentTier: service.tier,
+      newTier,
       chargeAmountUsdCents: 0,
       serviceType,
       useSimplePath: true,
@@ -430,6 +439,7 @@ export async function prepareTierUpgradePhase1Locked(
   return {
     canProceed: true,
     currentTier: service.tier,
+    newTier,
     chargeAmountUsdCents: chargeAmountCents,
     serviceType,
     description: `${serviceType} tier upgrade: ${service.tier} → ${newTier} (pro-rated)`,
@@ -451,7 +461,7 @@ export async function createUpgradeInvoiceCommitted(
   customerId: number,
   phase1Result: TierUpgradePhase1Result,
   clock: DBClock
-): Promise<string> {
+): Promise<number> {
   if (!phase1Result.canProceed || !phase1Result.description) {
     throw new Error('Cannot create invoice: Phase 1 did not succeed');
   }
@@ -471,6 +481,9 @@ export async function createUpgradeInvoiceCommitted(
         quantity: 1,
         unitPriceUsdCents: phase1Result.chargeAmountUsdCents,
         amountUsdCents: phase1Result.chargeAmountUsdCents,
+        description: phase1Result.currentTier && phase1Result.newTier
+          ? `${phase1Result.currentTier} → ${phase1Result.newTier}`
+          : undefined,
       },
     },
     clock
@@ -499,7 +512,7 @@ export async function executeTierUpgradePhase2Locked(
   serviceType: ServiceType,
   newTier: ServiceTier,
   expectedCurrentTier: ServiceTier,
-  invoiceId: string,
+  invoiceId: number,
   suiService: ISuiService,
   clock: DBClock
 ): Promise<TierUpgradeResult> {
@@ -514,8 +527,8 @@ export async function executeTierUpgradePhase2Locked(
     .limit(1);
 
   if (!service || service.tier !== expectedCurrentTier) {
-    // Tier changed between phases - void invoice
-    await voidInvoice(tx, invoiceId, 'Tier changed during upgrade - operation cancelled');
+    // Tier changed between phases - delete unpaid invoice
+    await deleteUnpaidInvoice(tx, invoiceId);
     return {
       success: false,
       newTier,
@@ -526,7 +539,7 @@ export async function executeTierUpgradePhase2Locked(
   }
 
   if (service.cancellationScheduledFor) {
-    await voidInvoice(tx, invoiceId, 'Cancellation scheduled during upgrade - operation cancelled');
+    await deleteUnpaidInvoice(tx, invoiceId);
     return {
       success: false,
       newTier,
@@ -545,8 +558,8 @@ export async function executeTierUpgradePhase2Locked(
   );
 
   if (!paymentResult.fullyPaid) {
-    // Payment failed - void the invoice (immediate operations don't retry)
-    await voidInvoice(tx, invoiceId, paymentResult.error?.message || 'Payment failed');
+    // Payment failed - delete unpaid invoice (immediate operations don't retry)
+    await deleteUnpaidInvoice(tx, invoiceId);
     return {
       success: false,
       newTier,
@@ -665,20 +678,26 @@ export async function scheduleTierDowngradeLocked(
       })
       .where(eq(serviceInstances.instanceId, service.instanceId));
 
-    // Update pending billing record to reflect the new tier price
-    // This ensures reconcilePayments charges the correct amount
-    await tx
-      .update(billingRecords)
-      .set({
-        amountUsdCents: newTierPrice,
-      })
-      .where(
-        and(
-          eq(billingRecords.customerId, customerId),
-          // Only update non-paid, non-draft records (pending or failed)
-          sql`${billingRecords.status} NOT IN ('paid', 'draft')`
-        )
-      );
+    // Update the specific pending invoice using subPendingInvoiceId
+    // This ensures reconcilePayments charges the correct amount for the new tier
+    if (service.subPendingInvoiceId) {
+      await tx
+        .update(billingRecords)
+        .set({ amountUsdCents: newTierPrice })
+        .where(eq(billingRecords.id, service.subPendingInvoiceId));
+
+      // Update line items to reflect the new tier
+      // This ensures billing history shows correct tier name (e.g., "Seal Starter tier" not "Seal Enterprise tier")
+      const newSubscriptionItemType = TIER_TO_SUBSCRIPTION_ITEM[newTier];
+      await tx
+        .update(invoiceLineItems)
+        .set({
+          itemType: newSubscriptionItemType,
+          unitPriceUsdCents: newTierPrice,
+          amountUsdCents: newTierPrice,
+        })
+        .where(eq(invoiceLineItems.billingRecordId, service.subPendingInvoiceId));
+    }
 
     // Recalculate DRAFT invoice to reflect the new tier
     await recalculateDraftInvoice(tx, customerId, clock);
@@ -815,9 +834,19 @@ export async function scheduleCancellationLocked(
   // This handles "change of mind" before first payment - no cost to us
   // No cooldown period needed since they never actually used the service
   if (!service.paidOnce) {
+    // Save invoice ID before deleting service (service has FK to invoice)
+    const pendingInvoiceId = service.subPendingInvoiceId;
+
+    // Delete service FIRST (removes FK reference to billing_records)
     await tx
       .delete(serviceInstances)
       .where(eq(serviceInstances.instanceId, service.instanceId));
+
+    // THEN delete the pending invoice (prevents database bloat from abuse)
+    // We use delete instead of void because the customer never paid
+    if (pendingInvoiceId) {
+      await deleteUnpaidInvoice(tx, pendingInvoiceId);
+    }
 
     return {
       success: true,
@@ -1283,72 +1312,32 @@ function getFirstOfNextMonth(clock: DBClock): Date {
  * Recalculate DRAFT invoice accounting for scheduled tier change
  *
  * Uses scheduled_tier for billing amount if present.
+ * Now delegates to main recalculateDraftInvoice which handles line items properly.
  */
 async function recalculateDraftInvoiceWithScheduledTier(
   tx: LockedTransaction,
   customerId: number,
   clock: DBClock
 ): Promise<void> {
-  // Get DRAFT invoice
-  const draftId = await getOrCreateDraftInvoice(tx, customerId, clock);
-
-  // Get all services, using scheduled_tier where applicable
-  const services = await tx
-    .select()
-    .from(serviceInstances)
-    .where(eq(serviceInstances.customerId, customerId));
-
-  let totalUsdCents = 0;
-
-  for (const service of services) {
-    // Skip cancelled services
-    if (service.cancellationScheduledFor) {
-      continue;
-    }
-
-    // Use scheduled tier if present, otherwise current tier
-    const effectiveTier = service.scheduledTier || service.tier;
-    const tierPriceCents = getTierPriceUsdCents(effectiveTier);
-    totalUsdCents += tierPriceCents;
-  }
-
-  await updateDraftInvoiceAmount(tx, draftId, totalUsdCents);
+  // Delegate to main function which properly updates line items
+  // The main function already uses scheduledTier when present
+  await recalculateDraftInvoice(tx, customerId, clock);
 }
 
 /**
  * Recalculate DRAFT invoice accounting for scheduled cancellation
  *
  * Excludes services with cancellation_scheduled_for set.
+ * Now delegates to main recalculateDraftInvoice which handles line items properly.
  */
 async function recalculateDraftInvoiceWithCancellation(
   tx: LockedTransaction,
   customerId: number,
   clock: DBClock
 ): Promise<void> {
-  // Get DRAFT invoice
-  const draftId = await getOrCreateDraftInvoice(tx, customerId, clock);
-
-  // Get all services, excluding cancelled ones
-  const services = await tx
-    .select()
-    .from(serviceInstances)
-    .where(eq(serviceInstances.customerId, customerId));
-
-  let totalUsdCents = 0;
-
-  for (const service of services) {
-    // Skip cancelled services
-    if (service.cancellationScheduledFor) {
-      continue;
-    }
-
-    // Use scheduled tier if present, otherwise current tier
-    const effectiveTier = service.scheduledTier || service.tier;
-    const tierPriceCents = getTierPriceUsdCents(effectiveTier);
-    totalUsdCents += tierPriceCents;
-  }
-
-  await updateDraftInvoiceAmount(tx, draftId, totalUsdCents);
+  // Delegate to main function which properly updates line items
+  // The main function already skips services with cancellationScheduledFor
+  await recalculateDraftInvoice(tx, customerId, clock);
 }
 
 // ============================================================================

@@ -77,7 +77,7 @@ describe('API: Billing Upgrade Duplicate Bug', () => {
       ),
     });
     await db.update(serviceInstances)
-      .set({ paidOnce: true, subscriptionChargePending: false, state: 'enabled', isUserEnabled: true })
+      .set({ paidOnce: true, subPendingInvoiceId: null, state: 'enabled', isUserEnabled: true })
       .where(eq(serviceInstances.instanceId, service!.instanceId));
 
     // Count billing records before upgrade
@@ -151,7 +151,7 @@ describe('API: Billing Upgrade Duplicate Bug', () => {
       ),
     });
     await db.update(serviceInstances)
-      .set({ paidOnce: true, subscriptionChargePending: false, state: 'enabled', isUserEnabled: true })
+      .set({ paidOnce: true, subPendingInvoiceId: null, state: 'enabled', isUserEnabled: true })
       .where(eq(serviceInstances.instanceId, service!.instanceId));
 
     // Get billing history before upgrade
@@ -220,7 +220,7 @@ describe('API: Billing Upgrade Duplicate Bug', () => {
       ),
     });
     await db.update(serviceInstances)
-      .set({ paidOnce: true, subscriptionChargePending: false, state: 'enabled', isUserEnabled: true })
+      .set({ paidOnce: true, subPendingInvoiceId: null, state: 'enabled', isUserEnabled: true })
       .where(eq(serviceInstances.instanceId, service!.instanceId));
 
     // Directly query the database to count records with upgrade description

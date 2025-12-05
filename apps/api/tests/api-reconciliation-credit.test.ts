@@ -89,7 +89,7 @@ describe('API: Reconciliation Credit Calculation', () => {
 
       // Subscription created but payment pending (due to insufficient funds)
       expect(subscribeResult.result?.data).toBeDefined();
-      expect(subscribeResult.result?.data?.subscriptionChargePending).toBe(true);
+      expect(subscribeResult.result?.data?.paymentPending).toBe(true);
 
       // Verify service state
       let service = await db.query.serviceInstances.findFirst({
@@ -100,7 +100,7 @@ describe('API: Reconciliation Credit Calculation', () => {
       });
       expect(service?.tier).toBe('starter');
       expect(service?.paidOnce).toBe(false);
-      expect(service?.subscriptionChargePending).toBe(true);
+      expect(service?.subPendingInvoiceId).not.toBeNull();
 
       // No credits should exist yet (payment failed)
       let credits = await db.query.customerCredits.findMany({
@@ -129,8 +129,8 @@ describe('API: Reconciliation Credit Calculation', () => {
       });
       expect(service?.tier).toBe('enterprise');
       expect(service?.paidOnce).toBe(false);
-      // subscriptionChargePending should still be true
-      expect(service?.subscriptionChargePending).toBe(true);
+      // subPendingInvoiceId should still be set (not yet paid)
+      expect(service?.subPendingInvoiceId).not.toBeNull();
 
       // Still no credits
       credits = await db.query.customerCredits.findMany({
@@ -187,7 +187,7 @@ describe('API: Reconciliation Credit Calculation', () => {
         ),
       });
       expect(service?.paidOnce).toBe(true);
-      expect(service?.subscriptionChargePending).toBe(false);
+      expect(service?.subPendingInvoiceId).toBeNull();
     });
 
     it('should update pending billing record when tier changes while unpaid', async () => {
@@ -260,7 +260,7 @@ describe('API: Reconciliation Credit Calculation', () => {
         ),
       });
       expect(service?.tier).toBe('enterprise');
-      expect(service?.subscriptionChargePending).toBe(true);
+      expect(service?.subPendingInvoiceId).not.toBeNull();
 
       // ---- Downgrade to starter (immediate since unpaid) ----
       const downgradeResult = await trpcMutation<any>(

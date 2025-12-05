@@ -157,7 +157,7 @@ describe('Bug: Upgrade while downgrade is scheduled', () => {
       tier: 'pro',
       state: 'enabled',
       isUserEnabled: true,
-      subscriptionChargePending: false,
+      subPendingInvoiceId: null,
       paidOnce: true,
       config: {},
     });

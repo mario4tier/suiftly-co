@@ -188,13 +188,14 @@ async function processServiceDeletion(
     }
 
     // 3. Reset service instance to not_provisioned state
+    // Note: subPendingInvoiceId is NULL - re-subscribing will create new invoice
     await tx
       .update(serviceInstances)
       .set({
         state: 'not_provisioned',
         tier: 'starter', // Reset to default tier
         isUserEnabled: true, // Reset to default
-        subscriptionChargePending: true, // Will need to pay on re-subscribe
+        subPendingInvoiceId: null, // Reset - new invoice will be created on re-subscribe
         config: null,
         enabledAt: null,
         disabledAt: null,

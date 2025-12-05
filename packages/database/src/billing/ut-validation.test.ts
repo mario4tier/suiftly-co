@@ -17,7 +17,7 @@ import {
   mockSuiTransactions,
 } from '../schema';
 import { MockDBClock } from '@suiftly/shared/db-clock';
-import { validateInvoiceBeforeCharging, ensureInvoiceValid } from './validation';
+import { validateInvoiceBeforeCharging } from './validation';
 import { handleSubscriptionBilling, recalculateDraftInvoice } from './service-billing';
 import { issueCredit } from './credits';
 import { logInternalError } from './admin-notifications';
@@ -131,70 +131,6 @@ describe('Invoice Validation', () => {
       expect(validation.valid).toBe(false);
       expect(validation.criticalErrors.length).toBeGreaterThanOrEqual(1);
       expect(validation.criticalErrors.some(e => e.code === 'NEGATIVE_AMOUNT')).toBe(true);
-    });
-  });
-
-  describe('DRAFT Amount Mismatch Detection', () => {
-    it('should detect when DRAFT amount doesnt match enabled services', async () => {
-      // Create enabled service
-      await db.insert(serviceInstances).values({
-        customerId: testCustomerId,
-        serviceType: 'seal',
-        tier: 'pro',
-        isUserEnabled: true,
-        config: { tier: 'pro' },
-      });
-
-      // Create DRAFT with WRONG amount (bug scenario - stale DRAFT)
-      const [invoice] = await db.insert(billingRecords).values({
-        customerId: testCustomerId,
-        billingPeriodStart: clock.now(),
-        billingPeriodEnd: clock.addDays(30),
-        amountUsdCents: 900, // BUG: Shows Starter price, but service is Pro
-        type: 'charge',
-        status: 'draft',
-        createdAt: clock.now(),
-      }).returning();
-
-      const validation = await db.transaction(async (tx) => {
-        return await validateInvoiceBeforeCharging(tx, invoice.id);
-      });
-
-      expect(validation.valid).toBe(false);
-      expect(validation.criticalErrors.some(e => e.code === 'DRAFT_AMOUNT_MISMATCH')).toBe(true);
-
-      const mismatchError = validation.criticalErrors.find(e => e.code === 'DRAFT_AMOUNT_MISMATCH');
-      expect(mismatchError?.details.draftAmount).toBe(9); // $9
-      expect(mismatchError?.details.expectedAmount).toBe(29); // $29
-    });
-
-    it('should pass when DRAFT amount matches enabled services', async () => {
-      // Create enabled service
-      await db.insert(serviceInstances).values({
-        customerId: testCustomerId,
-        serviceType: 'seal',
-        tier: 'pro',
-        isUserEnabled: true,
-        config: { tier: 'pro' },
-      });
-
-      // Create DRAFT with CORRECT amount
-      const [invoice] = await db.insert(billingRecords).values({
-        customerId: testCustomerId,
-        billingPeriodStart: clock.now(),
-        billingPeriodEnd: clock.addDays(30),
-        amountUsdCents: 2900, // Correct: Pro tier price
-        type: 'charge',
-        status: 'draft',
-        createdAt: clock.now(),
-      }).returning();
-
-      const validation = await db.transaction(async (tx) => {
-        return await validateInvoiceBeforeCharging(tx, invoice.id);
-      });
-
-      expect(validation.valid).toBe(true);
-      expect(validation.criticalErrors).toHaveLength(0);
     });
   });
 

@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, uuid, bigint, varchar, text, timestamp, index, check } from 'drizzle-orm/pg-core';
+import { pgTable, serial, integer, bigint, varchar, text, timestamp, index, check } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { customers } from './customers';
 import { billingRecords, escrowTransactions } from './escrow';
@@ -55,7 +55,7 @@ export const customerCredits = pgTable('customer_credits', {
  */
 export const invoicePayments = pgTable('invoice_payments', {
   paymentId: serial('payment_id').primaryKey(),
-  billingRecordId: uuid('billing_record_id').notNull().references(() => billingRecords.id),
+  billingRecordId: bigint('billing_record_id', { mode: 'number' }).notNull().references(() => billingRecords.id),
 
   // Payment source (MVP: credit or escrow only)
   sourceType: varchar('source_type', { length: 20 }).notNull(), // 'credit' | 'escrow' | 'stripe' (Phase 3)
@@ -91,7 +91,7 @@ export const invoicePayments = pgTable('invoice_payments', {
  */
 export const billingIdempotency = pgTable('billing_idempotency', {
   idempotencyKey: varchar('idempotency_key', { length: 100 }).primaryKey(),
-  billingRecordId: uuid('billing_record_id').references(() => billingRecords.id),
+  billingRecordId: bigint('billing_record_id', { mode: 'number' }).references(() => billingRecords.id),
   response: text('response').notNull(), // JSON-encoded response
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
@@ -118,7 +118,7 @@ export const billingIdempotency = pgTable('billing_idempotency', {
  */
 export const invoiceLineItems = pgTable('invoice_line_items', {
   lineItemId: serial('line_item_id').primaryKey(),
-  billingRecordId: uuid('billing_record_id').notNull().references(() => billingRecords.id, { onDelete: 'cascade' }),
+  billingRecordId: bigint('billing_record_id', { mode: 'number' }).notNull().references(() => billingRecords.id, { onDelete: 'cascade' }),
 
   // Semantic type - uses PostgreSQL ENUM for database-level validation
   itemType: invoiceLineItemTypeEnum('item_type').notNull(),
@@ -134,6 +134,9 @@ export const invoiceLineItems = pgTable('invoice_line_items', {
 
   // Optional: credit month name for credit line items
   creditMonth: varchar('credit_month', { length: 20 }),
+
+  // Optional: extra context appended to semantic description (e.g., "Pro → Enterprise" for tier upgrades)
+  description: varchar('description', { length: 100 }),
 
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
