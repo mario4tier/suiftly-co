@@ -7,7 +7,7 @@
 
 import { restCall } from './http.js';
 
-const API_BASE = 'http://localhost:3000';
+const API_BASE = 'http://localhost:22700'; // See ~/walrus/PORT_MAP.md
 
 // Default test wallet address (same as E2E tests)
 export const TEST_WALLET = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';

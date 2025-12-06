@@ -8,7 +8,7 @@ import { resetCustomer, ensureTestBalance } from '../helpers/db';
 import { waitAfterMutation } from '../helpers/wait-utils';
 
 const MOCK_WALLET_ADDRESS = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
-const API_BASE = 'http://localhost:3000';
+const API_BASE = 'http://localhost:22700';
 
 test.describe('Billing Operations', () => {
   test.beforeEach(async ({ page }) => {

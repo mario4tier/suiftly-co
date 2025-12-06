@@ -9,7 +9,7 @@ import { waitAfterMutation } from '../helpers/wait-utils';
 test.describe('Seal Service Onboarding Form', () => {
   test.beforeEach(async ({ page }) => {
     // Reset customer test data (delete all services, reset balance)
-    await page.request.post('http://localhost:3000/test/data/reset', {
+    await page.request.post('http://localhost:22700/test/data/reset', {
       data: {
         balanceUsdCents: 100000, // $1000
         spendingLimitUsdCents: 25000, // $250

@@ -29,7 +29,7 @@ async function globalSetup(config: FullConfig) {
 
     // Just check if servers are running (no config validation needed)
     try {
-      const apiCheck = await fetch('http://localhost:3000/health', { signal: AbortSignal.timeout(2000) });
+      const apiCheck = await fetch('http://localhost:22700/health', { signal: AbortSignal.timeout(2000) });
       if (!apiCheck.ok) throw new Error('API not responding');
       console.log('✅ API server already running');
     } catch {
@@ -38,7 +38,7 @@ async function globalSetup(config: FullConfig) {
     }
 
     try {
-      const webappCheck = await fetch('http://localhost:5173', { signal: AbortSignal.timeout(2000) });
+      const webappCheck = await fetch('http://localhost:22710', { signal: AbortSignal.timeout(2000) });
       if (!webappCheck.ok) throw new Error('Webapp not responding');
       console.log('✅ Webapp already running');
     } catch {
@@ -53,7 +53,7 @@ async function globalSetup(config: FullConfig) {
 
     // Just check if servers are running
     try {
-      const apiCheck = await fetch('http://localhost:3000/health', { signal: AbortSignal.timeout(2000) });
+      const apiCheck = await fetch('http://localhost:22700/health', { signal: AbortSignal.timeout(2000) });
       if (!apiCheck.ok) throw new Error('API not responding');
       console.log('✅ API server already running');
     } catch {
@@ -62,7 +62,7 @@ async function globalSetup(config: FullConfig) {
     }
 
     try {
-      const webappCheck = await fetch('http://localhost:5173', { signal: AbortSignal.timeout(2000) });
+      const webappCheck = await fetch('http://localhost:22710', { signal: AbortSignal.timeout(2000) });
       if (!webappCheck.ok) throw new Error('Webapp not responding');
       console.log('✅ Webapp already running');
     } catch {
@@ -93,7 +93,7 @@ async function globalSetup(config: FullConfig) {
 async function globalTeardown() {
   // Clear any runtime JWT config overrides
   try {
-    await fetch('http://localhost:3000/test/jwt-config', {
+    await fetch('http://localhost:22700/test/jwt-config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ clear: true }),
@@ -105,7 +105,7 @@ async function globalTeardown() {
 
   // Reset to real database clock (important for cleanup)
   try {
-    await fetch('http://localhost:3000/test/clock/real', {
+    await fetch('http://localhost:22700/test/clock/real', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
     });

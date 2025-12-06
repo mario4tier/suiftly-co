@@ -19,7 +19,7 @@ API_PID=$!
 # Wait for API
 for i in {1..10}; do
   sleep 1
-  if curl -s http://localhost:3000/health >/dev/null 2>&1; then
+  if curl -s http://localhost:22700/health >/dev/null 2>&1; then
     echo "✅ API server ready (PID: $API_PID)"
     break
   fi
@@ -33,7 +33,7 @@ WEBAPP_PID=$!
 # Wait for webapp
 for i in {1..10}; do
   sleep 1
-  if curl -s http://localhost:5173 >/dev/null 2>&1; then
+  if curl -s http://localhost:22710 >/dev/null 2>&1; then
     echo "✅ Webapp ready (PID: $WEBAPP_PID)"
     break
   fi

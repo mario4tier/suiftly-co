@@ -51,7 +51,7 @@ async function addPackageViaUI(page: Page, address: string, name: string): Promi
 test.describe('Seal Keys & Packages Management', () => {
   test.beforeEach(async ({ page }) => {
     // Reset customer test data
-    const resetResponse = await page.request.post('http://localhost:3000/test/data/reset', {
+    const resetResponse = await page.request.post('http://localhost:22700/test/data/reset', {
       data: {
         balanceUsdCents: 100000, // $1000
         spendingLimitUsdCents: 25000, // $250
@@ -498,7 +498,7 @@ test.describe('Seal Keys & Packages Management', () => {
 
   test('copy object ID to clipboard', async ({ page }) => {
     // Setup: Create a seal key with object ID
-    const response = await page.request.get('http://localhost:3000/test/data/customer');
+    const response = await page.request.get('http://localhost:22700/test/data/customer');
     const userData = await response.json();
     const customerId = userData.customer.customerId;
 
@@ -593,7 +593,7 @@ test.describe('Seal Keys & Packages Management', () => {
 
   test.afterEach(async ({ page }) => {
     // Cleanup: Delete test seal keys and packages
-    const response = await page.request.get('http://localhost:3000/test/data/customer');
+    const response = await page.request.get('http://localhost:22700/test/data/customer');
     const userData = await response.json();
     const customerId = userData.customer.customerId;
 

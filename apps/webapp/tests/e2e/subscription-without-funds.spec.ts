@@ -13,7 +13,7 @@ import { getBanner } from '../helpers/locators';
 test.describe('Subscription Without Funds', () => {
   test.beforeEach(async ({ page, request }) => {
     // Reset customer test data (delete all services, zero balance, NO escrow account)
-    await request.post('http://localhost:3000/test/data/reset', {
+    await request.post('http://localhost:22700/test/data/reset', {
       data: {
         balanceUsdCents: 0, // $0 balance
         spendingLimitUsdCents: 25000, // $250

@@ -22,7 +22,7 @@ import {
 } from './helpers/http.js';
 import { login, TEST_WALLET } from './helpers/auth.js';
 
-const API_BASE = 'http://localhost:3000';
+const API_BASE = 'http://localhost:22700';
 
 /**
  * Insert mock HAProxy logs via test endpoint

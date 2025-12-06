@@ -83,7 +83,7 @@ if (existsSync(homeEnvPath)) {
 const envSchema = z.object({
   // Server
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
-  PORT: z.string().default('3000'),
+  PORT: z.string().default('22700'), // See ~/walrus/PORT_MAP.md for port allocation
   HOST: z.string().default('0.0.0.0'),
 
   // Database
@@ -110,7 +110,7 @@ const envSchema = z.object({
   ),
 
   // CORS
-  CORS_ORIGIN: z.string().default('http://localhost:5173'), // Vite default port
+  CORS_ORIGIN: z.string().default('http://localhost:22710'), // See ~/walrus/PORT_MAP.md
 
   // Rate limiting
   RATE_LIMIT_MAX: z.string().transform(Number).default('100'), // requests per minute

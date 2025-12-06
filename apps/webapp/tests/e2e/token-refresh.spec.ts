@@ -84,7 +84,7 @@ test.describe('Token Expiry - Normal Config (15m access, 30d refresh)', () => {
 test.describe('Token Refresh - Short Expiry Config (2s access, 10s refresh)', () => {
   test.beforeEach(async ({ request }) => {
     // Set short JWT expiry via API (no server restart needed!)
-    await request.post('http://localhost:3000/test/jwt-config', {
+    await request.post('http://localhost:22700/test/jwt-config', {
       data: {
         accessTokenExpiry: '2s',
         refreshTokenExpiry: '10s',
@@ -92,7 +92,7 @@ test.describe('Token Refresh - Short Expiry Config (2s access, 10s refresh)', ()
     });
 
     // Verify it was set correctly
-    const response = await request.get('http://localhost:3000/test/config');
+    const response = await request.get('http://localhost:22700/test/config');
     const config = await response.json();
     if (config.jwtConfig.accessTokenExpiry !== '2s' || config.jwtConfig.refreshTokenExpiry !== '10s') {
       throw new Error(`Failed to set short JWT expiry. Got: ${JSON.stringify(config.jwtConfig)}`);
@@ -101,7 +101,7 @@ test.describe('Token Refresh - Short Expiry Config (2s access, 10s refresh)', ()
 
   test.afterEach(async ({ request }) => {
     // Clear JWT config override (restore defaults)
-    await request.post('http://localhost:3000/test/jwt-config', {
+    await request.post('http://localhost:22700/test/jwt-config', {
       data: { clear: true },
     });
   });

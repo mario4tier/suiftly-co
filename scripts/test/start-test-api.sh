@@ -19,7 +19,7 @@ API_PID=$!
 # Wait for API to be ready
 for i in {1..10}; do
   sleep 1
-  if curl -s http://localhost:3000/health >/dev/null 2>&1; then
+  if curl -s http://localhost:22700/health >/dev/null 2>&1; then
     break
   fi
   echo "  Waiting for API... ($i/10)"
@@ -32,7 +32,7 @@ if ! kill -0 $API_PID 2>/dev/null; then
   exit 1
 fi
 
-if ! curl -s http://localhost:3000/health >/dev/null 2>&1; then
+if ! curl -s http://localhost:22700/health >/dev/null 2>&1; then
   echo "❌ ERROR: API server not responding"
   exit 1
 fi

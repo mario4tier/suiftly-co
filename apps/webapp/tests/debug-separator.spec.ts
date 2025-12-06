@@ -1,7 +1,7 @@
 import { test } from '@playwright/test';
 
 test('debug separator HTML', async ({ page }) => {
-  await page.goto('http://localhost:5173/dashboard');
+  await page.goto('http://localhost:22710/dashboard');
   await page.waitForSelector('aside');
 
   // Get the entire sidebar HTML

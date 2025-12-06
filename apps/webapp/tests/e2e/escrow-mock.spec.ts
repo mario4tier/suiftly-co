@@ -16,7 +16,7 @@ import { test, expect } from '@playwright/test';
 import { waitAfterMutation, waitForCondition } from '../helpers/wait-utils';
 
 const MOCK_WALLET_ADDRESS = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
-const API_BASE = 'http://localhost:3000';
+const API_BASE = 'http://localhost:22700';
 
 test.describe('Escrow Mock - Wallet Operations', () => {
   test.beforeEach(async ({ page }) => {

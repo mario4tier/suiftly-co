@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 test('debug item width with chevron', async ({ page }) => {
-  await page.goto('http://localhost:5173/login');
+  await page.goto('http://localhost:22710/login');
 
   // Mock wallet authentication
   await page.evaluate(() => {

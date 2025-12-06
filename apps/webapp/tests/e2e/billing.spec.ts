@@ -7,7 +7,7 @@ import { test, expect } from '@playwright/test';
 import { resetCustomer } from '../helpers/db';
 
 const MOCK_WALLET_ADDRESS = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
-const API_BASE = 'http://localhost:3000';
+const API_BASE = 'http://localhost:22700';
 
 // Test suite for "no escrow account" scenario (needs separate setup)
 test.describe('Billing Page - No Escrow Account', () => {

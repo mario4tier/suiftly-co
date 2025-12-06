@@ -192,3 +192,16 @@ export const USAGE_PRICING_CENTS_PER_1000 = {
   [SERVICE_TYPE.GRPC]: 10,      // Same pricing
   [SERVICE_TYPE.GRAPHQL]: 10,   // Same pricing
 } as const satisfies Record<ServiceType, number>;
+
+// Port Allocations - Single source of truth: ~/walrus/PORT_MAP.md
+// Short names for convenient use in tests and configs
+export const PORT = {
+  API: 22700,     // API Server (22700-22703 in production, load balanced)
+  WEB: 22710,     // Webapp dev server (Vite)
+  GM: 22600,      // Global Manager admin dashboard
+  LM: 22610,      // Local Manager (22610-22613 for multi-server dev simulation)
+} as const;
+
+// Convenience URLs for tests
+export const API_URL = `http://localhost:${PORT.API}`;
+export const WEB_URL = `http://localhost:${PORT.WEB}`;

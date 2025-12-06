@@ -22,7 +22,7 @@ test.describe('Subscription Pricing Validation', () => {
 
   test('all three tiers create service successfully even with insufficient balance', async ({ page }) => {
     // Reset with zero balance
-    await page.request.post('http://localhost:3000/test/data/reset', {
+    await page.request.post('http://localhost:22700/test/data/reset', {
       data: {
         balanceUsdCents: 0, // $0
         spendingLimitUsdCents: 25000, // $250
@@ -56,7 +56,7 @@ test.describe('Subscription Pricing Validation', () => {
 
   test('PRO tier subscription creates service when balance is short by $1', async ({ page }) => {
     // Reset with $28 balance (need $29 for PRO) - no escrow account
-    await page.request.post('http://localhost:3000/test/data/reset', {
+    await page.request.post('http://localhost:22700/test/data/reset', {
       data: {
         balanceUsdCents: 0,
         spendingLimitUsdCents: 25000, // $250
@@ -86,7 +86,7 @@ test.describe('Subscription Pricing Validation', () => {
 
   test('PRO tier subscription succeeds when balance is exactly $29', async ({ page }) => {
     // Reset and create escrow account with exactly $29 balance
-    await page.request.post('http://localhost:3000/test/data/reset', {
+    await page.request.post('http://localhost:22700/test/data/reset', {
       data: {
         balanceUsdCents: 0,
         spendingLimitUsdCents: 25000, // $250
@@ -95,7 +95,7 @@ test.describe('Subscription Pricing Validation', () => {
     });
 
     // Create escrow account with $29 balance
-    await page.request.post('http://localhost:3000/test/wallet/deposit', {
+    await page.request.post('http://localhost:22700/test/wallet/deposit', {
       data: {
         walletAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
         amountUsd: 29,
@@ -130,7 +130,7 @@ test.describe('Subscription Pricing Validation', () => {
 
   test('STARTER tier subscription creates service when balance is short by $1', async ({ page }) => {
     // Reset with $0 balance (need $9 for STARTER) - no escrow account
-    await page.request.post('http://localhost:3000/test/data/reset', {
+    await page.request.post('http://localhost:22700/test/data/reset', {
       data: {
         balanceUsdCents: 0,
         spendingLimitUsdCents: 25000, // $250
@@ -161,7 +161,7 @@ test.describe('Subscription Pricing Validation', () => {
 
   test('STARTER tier subscription succeeds when balance is exactly $9', async ({ page }) => {
     // Reset and create escrow account with exactly $9 balance
-    await page.request.post('http://localhost:3000/test/data/reset', {
+    await page.request.post('http://localhost:22700/test/data/reset', {
       data: {
         balanceUsdCents: 0,
         spendingLimitUsdCents: 25000, // $250
@@ -170,7 +170,7 @@ test.describe('Subscription Pricing Validation', () => {
     });
 
     // Create escrow account with $9 balance
-    await page.request.post('http://localhost:3000/test/wallet/deposit', {
+    await page.request.post('http://localhost:22700/test/wallet/deposit', {
       data: {
         walletAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
         amountUsd: 9,
@@ -206,7 +206,7 @@ test.describe('Subscription Pricing Validation', () => {
 
   test('ENTERPRISE tier subscription creates service when balance is short by $1', async ({ page }) => {
     // Reset with $0 balance (need $185 for ENTERPRISE) - no escrow account
-    await page.request.post('http://localhost:3000/test/data/reset', {
+    await page.request.post('http://localhost:22700/test/data/reset', {
       data: {
         balanceUsdCents: 0,
         spendingLimitUsdCents: 25000, // $250
@@ -237,7 +237,7 @@ test.describe('Subscription Pricing Validation', () => {
 
   test('ENTERPRISE tier subscription succeeds when balance is exactly $185', async ({ page }) => {
     // Reset and create escrow account with exactly $185 balance
-    await page.request.post('http://localhost:3000/test/data/reset', {
+    await page.request.post('http://localhost:22700/test/data/reset', {
       data: {
         balanceUsdCents: 0,
         spendingLimitUsdCents: 25000, // $250
@@ -246,7 +246,7 @@ test.describe('Subscription Pricing Validation', () => {
     });
 
     // Create escrow account with $185 balance
-    await page.request.post('http://localhost:3000/test/wallet/deposit', {
+    await page.request.post('http://localhost:22700/test/wallet/deposit', {
       data: {
         walletAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
         amountUsd: 185,
@@ -282,7 +282,7 @@ test.describe('Subscription Pricing Validation', () => {
 
   test('subscribe button shows correct prices for all tiers', async ({ page }) => {
     // Reset with sufficient balance
-    await page.request.post('http://localhost:3000/test/data/reset', {
+    await page.request.post('http://localhost:22700/test/data/reset', {
       data: {
         balanceUsdCents: 100000, // $1000
         spendingLimitUsdCents: 25000, // $250

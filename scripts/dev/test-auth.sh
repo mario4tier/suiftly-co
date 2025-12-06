@@ -4,7 +4,7 @@
 
 set -e
 
-API_URL="http://localhost:3000"
+API_URL="http://localhost:22700"
 
 echo "🧪 Testing Authentication Flow"
 echo "================================"

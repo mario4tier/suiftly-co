@@ -6,14 +6,14 @@
  * - sameSite: prevents CSRF attacks
  * - secure: HTTPS only in production
  *
- * Note: These tests require a running server at http://localhost:3000
+ * Note: These tests require a running server at http://localhost:22700
  * Run with: MOCK_AUTH=true npm run dev (in apps/api)
  */
 
 import { test, expect, describe, beforeAll } from 'vitest';
 import { spawn } from 'child_process';
 
-const API_URL = 'http://localhost:3000';
+const API_URL = 'http://localhost:22700';
 
 /**
  * Wait for server to be ready by polling health endpoint

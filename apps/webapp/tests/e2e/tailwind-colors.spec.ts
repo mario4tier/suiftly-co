@@ -28,7 +28,7 @@ function expectColorMatch(actual: string, expectedRgb: string, expectedOklch: st
 test.describe('Tailwind Color System', () => {
   test.beforeEach(async ({ page, request }) => {
     // Reset DB to ensure fresh state (no existing services)
-    await request.post('http://localhost:3000/test/data/reset', {
+    await request.post('http://localhost:22700/test/data/reset', {
       data: {
         balanceUsdCents: 0,
         spendingLimitUsdCents: 0,

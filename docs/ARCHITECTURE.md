@@ -9,7 +9,7 @@ Customer-facing platform for Suiftly services:
 - PostgreSQL database (customer data, configs, HAProxy logs)
 - Global Manager (centralized worker: billing, metering, vault generation)
 
-Infrastructure (HAProxy, Seal servers, control plane) handled by **walrus** project (local repos always at ~/walrus)
+Infrastructure (HAProxy, Seal servers, Local Manager) handled by **walrus** project (local repos always at ~/walrus). The control plane spans both repositories - see [CONTROL_PLANE_DESIGN.md](./CONTROL_PLANE_DESIGN.md) for the complete architecture.
 
 ## Principles
 
@@ -97,9 +97,9 @@ Infrastructure (HAProxy, Seal servers, control plane) handled by **walrus** proj
 - Resumable (picks up unbilled logs on next cycle)
 - Graceful shutdown (handles SIGTERM/SIGINT)
 - PostgreSQL is source of truth (no job queue needed)
-- Admin dashboard (port 3001) for debugging and monitoring
+- Admin dashboard (port 22600) for debugging and monitoring
 
-**For detailed design, see [GLOBAL_MANAGER_DESIGN.md](./GLOBAL_MANAGER_DESIGN.md)**
+**For detailed design, see [CONTROL_PLANE_DESIGN.md](./CONTROL_PLANE_DESIGN.md)**
 
 ---
 
@@ -436,14 +436,16 @@ npm install
 
 | Service | Port | Configuration File | Notes |
 |---------|------|-------------------|-------|
-| **API Server** | **3000** | `apps/api/.env` (PORT=3000) | tRPC + REST endpoints |
-| **Web App (Vite)** | **5173** | `apps/webapp/vite.config.ts` (default) | Frontend SPA |
-| **Global Manager** | **3001** | `services/global-manager/.env` | Optional in dev |
+| **API Server** | **22700** | `apps/api/.env` (PORT=22700) | tRPC + REST endpoints |
+| **Web App (Vite)** | **22710** | `apps/webapp/vite.config.ts` | Frontend SPA (dev only) |
+| **Global Manager** | **22600** | `services/global-manager/.env` | Admin dashboard (localhost only) |
+
+**Port Allocation:** See [~/walrus/PORT_MAP.md](~/walrus/PORT_MAP.md) for the single source of truth. In production, multiple API servers (22700-22703) run behind HAProxy.
 
 **Port Enforcement:**
-- Playwright config uses `baseURL: 'http://localhost:5173'` (see [playwright.config.ts](../playwright.config.ts))
-- Vite should NOT auto-increment ports - always use 5173
-- If port 5173 is occupied, kill the process: `lsof -ti:5173 | xargs kill`
+- Playwright config uses `baseURL: 'http://localhost:22710'` (see [playwright.config.ts](../playwright.config.ts))
+- Vite should NOT auto-increment ports - always use 22710
+- If port 22710 is occupied, kill the process: `lsof -ti:22710 | xargs kill`
 - Test files should use `page.goto(BASE_URL)` from playwright `baseURL`, NOT hardcoded ports
 
 **Daily Development Workflow:**
@@ -482,7 +484,7 @@ cd services/global-manager && npm run dev
 ./scripts/dev/reset-database.sh    # Full reset: drop, create, migrate, grant permissions
 
 # Test data reset (no sudo required - uses deploy user TRUNCATE permission)
-curl -X POST http://localhost:3000/test/data/truncate-all  # Quick reset: truncate all tables
+curl -X POST http://localhost:22700/test/data/truncate-all  # Quick reset: truncate all tables
 
 # Drizzle commands
 npm run db:studio        # Visual database browser (Drizzle Studio)

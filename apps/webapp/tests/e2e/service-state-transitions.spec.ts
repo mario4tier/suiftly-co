@@ -10,7 +10,7 @@ import { test, expect } from '@playwright/test';
 test.describe('Service State Transitions', () => {
   test.beforeEach(async ({ page, request }) => {
     // Reset customer test data (delete all services, reset balance)
-    await request.post('http://localhost:3000/test/data/reset', {
+    await request.post('http://localhost:22700/test/data/reset', {
       data: {
         balanceUsdCents: 0, // Will be set via deposit
         spendingLimitUsdCents: 25000, // $250
@@ -18,7 +18,7 @@ test.describe('Service State Transitions', () => {
     });
 
     // Create escrow account and deposit funds
-    const depositResponse = await request.post('http://localhost:3000/test/wallet/deposit', {
+    const depositResponse = await request.post('http://localhost:22700/test/wallet/deposit', {
       data: {
         walletAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
         amountUsd: 1000, // $1000
@@ -44,7 +44,7 @@ test.describe('Service State Transitions', () => {
 
   test.afterEach(async ({ page }) => {
     // Clear test delays after each test
-    await page.request.post('http://localhost:3000/test/delays/clear');
+    await page.request.post('http://localhost:22700/test/delays/clear');
   });
 
   test('State 1: Service starts in NotProvisioned state', async ({ page }) => {
@@ -173,7 +173,7 @@ test.describe('Service State Transitions', () => {
 test.describe('Service State - Edge Cases', () => {
   test.beforeEach(async ({ page, request }) => {
     // Reset customer test data (delete all services, reset balance, clear escrow)
-    await request.post('http://localhost:3000/test/data/reset', {
+    await request.post('http://localhost:22700/test/data/reset', {
       data: {
         balanceUsdCents: 0, // Will be set via deposit
         spendingLimitUsdCents: 25000, // $250
@@ -182,7 +182,7 @@ test.describe('Service State - Edge Cases', () => {
     });
 
     // Create escrow account and deposit funds
-    const depositResponse = await request.post('http://localhost:3000/test/wallet/deposit', {
+    const depositResponse = await request.post('http://localhost:22700/test/wallet/deposit', {
       data: {
         walletAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
         amountUsd: 1000, // $1000

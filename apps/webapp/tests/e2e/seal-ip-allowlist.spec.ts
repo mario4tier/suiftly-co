@@ -16,15 +16,15 @@ import { getToast, waitForToastsToDisappear } from '../helpers/locators';
 test.describe('Seal IP Allowlist - Validation & Save/Cancel', () => {
   test.beforeEach(async ({ page, request }) => {
     // Setup test environment
-    await request.post('http://localhost:3000/test/delays/clear');
-    await request.post('http://localhost:3000/test/data/reset', {
+    await request.post('http://localhost:22700/test/delays/clear');
+    await request.post('http://localhost:22700/test/data/reset', {
       data: {
         balanceUsdCents: 0,
         spendingLimitUsdCents: 50000,
       },
     });
 
-    await request.post('http://localhost:3000/test/wallet/deposit', {
+    await request.post('http://localhost:22700/test/wallet/deposit', {
       data: {
         walletAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
         amountUsd: 50,
@@ -128,7 +128,7 @@ test.describe('Seal IP Allowlist - Validation & Save/Cancel', () => {
     await page.waitForTimeout(1500);
 
     // Verify database has normalized IP (without /32)
-    const serviceData = await (await request.get('http://localhost:3000/test/data/service-instance?serviceType=seal')).json();
+    const serviceData = await (await request.get('http://localhost:22700/test/data/service-instance?serviceType=seal')).json();
     expect(serviceData.config.ipAllowlist).toEqual(['192.168.1.1']); // Normalized without /32
 
     console.log('✅ /32 accepted and normalized to plain IP');
@@ -201,7 +201,7 @@ test.describe('Seal IP Allowlist - Validation & Save/Cancel', () => {
     await expect(page.locator('text=/IP Allowlist saved successfully/i')).toBeVisible({ timeout: 2000 });
 
     // Verify database
-    const serviceData = await (await request.get('http://localhost:3000/test/data/service-instance?serviceType=seal')).json();
+    const serviceData = await (await request.get('http://localhost:22700/test/data/service-instance?serviceType=seal')).json();
     expect(serviceData.config.ipAllowlist).toHaveLength(2);
     expect(serviceData.config.ipAllowlist).toContain('192.168.1.1');
     expect(serviceData.config.ipAllowlist).toContain('10.0.0.1');
@@ -265,7 +265,7 @@ test.describe('Seal IP Allowlist - Validation & Save/Cancel', () => {
     await page.waitForTimeout(1500);
 
     // Verify both IPs saved
-    const serviceData = await (await request.get('http://localhost:3000/test/data/service-instance?serviceType=seal')).json();
+    const serviceData = await (await request.get('http://localhost:22700/test/data/service-instance?serviceType=seal')).json();
     expect(serviceData.config.ipAllowlist).toHaveLength(2);
 
     console.log('✅ Mixed separators handled correctly');
@@ -305,7 +305,7 @@ test.describe('Seal IP Allowlist - Validation & Save/Cancel', () => {
     await page.waitForTimeout(1500);
 
     // Verify database preserves IPs but feature is disabled
-    const serviceData = await (await request.get('http://localhost:3000/test/data/service-instance?serviceType=seal')).json();
+    const serviceData = await (await request.get('http://localhost:22700/test/data/service-instance?serviceType=seal')).json();
     expect(serviceData.config.ipAllowlistEnabled).toBe(false);
     expect(serviceData.config.ipAllowlist).toEqual(['192.168.1.1']); // IPs preserved
 
@@ -318,7 +318,7 @@ test.describe('Seal IP Allowlist - Validation & Save/Cancel', () => {
     expect(textareaValue).toBe('192.168.1.1');
 
     // Verify feature is enabled again in database
-    const reEnabledData = await (await request.get('http://localhost:3000/test/data/service-instance?serviceType=seal')).json();
+    const reEnabledData = await (await request.get('http://localhost:22700/test/data/service-instance?serviceType=seal')).json();
     expect(reEnabledData.config.ipAllowlistEnabled).toBe(true);
     expect(reEnabledData.config.ipAllowlist).toEqual(['192.168.1.1']);
 
@@ -412,15 +412,15 @@ test.describe('Seal IP Allowlist - Validation & Save/Cancel', () => {
 
 test.describe('Seal IP Allowlist - Persistence & Reload', () => {
   test.beforeEach(async ({ page, request }) => {
-    await request.post('http://localhost:3000/test/delays/clear');
-    await request.post('http://localhost:3000/test/data/reset', {
+    await request.post('http://localhost:22700/test/delays/clear');
+    await request.post('http://localhost:22700/test/data/reset', {
       data: {
         balanceUsdCents: 0,
         spendingLimitUsdCents: 50000,
       },
     });
 
-    await request.post('http://localhost:3000/test/wallet/deposit', {
+    await request.post('http://localhost:22700/test/wallet/deposit', {
       data: {
         walletAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
         amountUsd: 50,

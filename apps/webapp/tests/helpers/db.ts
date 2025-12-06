@@ -7,7 +7,7 @@
 
 import type { APIRequestContext } from '@playwright/test';
 
-const API_BASE = 'http://localhost:3000';
+const API_BASE = 'http://localhost:22700'; // See ~/walrus/PORT_MAP.md
 
 export interface ResetCustomerOptions {
   walletAddress?: string;

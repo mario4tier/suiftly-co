@@ -12,7 +12,7 @@ export default defineConfig({
   maxFailures: 1, // Stop on first test failure for fast feedback
 
   use: {
-    baseURL: 'http://localhost:5173',
+    baseURL: 'http://localhost:22710', // See ~/walrus/PORT_MAP.md for port allocation
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
   },

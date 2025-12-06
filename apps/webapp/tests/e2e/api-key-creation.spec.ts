@@ -22,7 +22,7 @@ test.describe('API Key Creation on Subscription', () => {
 
   test('creates exactly one API key when subscribing to Seal service', async ({ page, request }) => {
     // Reset database
-    const resetResponse = await request.post('http://localhost:3000/test/data/reset', {
+    const resetResponse = await request.post('http://localhost:22700/test/data/reset', {
       data: {
         balanceUsdCents: 0, // Will be set via deposit
         spendingLimitUsdCents: 25000, // $250
@@ -31,7 +31,7 @@ test.describe('API Key Creation on Subscription', () => {
     expect(resetResponse.ok()).toBe(true);
 
     // Create escrow account and deposit funds
-    const depositResponse = await request.post('http://localhost:3000/test/wallet/deposit', {
+    const depositResponse = await request.post('http://localhost:22700/test/wallet/deposit', {
       data: {
         walletAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
         amountUsd: 10, // $10 (enough for Starter tier $9)
@@ -69,7 +69,7 @@ test.describe('API Key Creation on Subscription', () => {
     await page.waitForTimeout(1000);
 
     // Query database to verify API key was created
-    const apiKeysResponse = await request.get('http://localhost:3000/test/data/api-keys');
+    const apiKeysResponse = await request.get('http://localhost:22700/test/data/api-keys');
     expect(apiKeysResponse.ok()).toBe(true);
 
     const apiKeysData = await apiKeysResponse.json();
@@ -117,7 +117,7 @@ test.describe('API Key Creation on Subscription', () => {
 
   test('API key count starts at 0 before subscription', async ({ page, request }) => {
     // Reset database
-    const resetResponse = await request.post('http://localhost:3000/test/data/reset', {
+    const resetResponse = await request.post('http://localhost:22700/test/data/reset', {
       data: {
         balanceUsdCents: 0,
         spendingLimitUsdCents: 25000, // $250
@@ -126,7 +126,7 @@ test.describe('API Key Creation on Subscription', () => {
     expect(resetResponse.ok()).toBe(true);
 
     // Create escrow account (needed for future tests, but not for this check)
-    const depositResponse = await request.post('http://localhost:3000/test/wallet/deposit', {
+    const depositResponse = await request.post('http://localhost:22700/test/wallet/deposit', {
       data: {
         walletAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
         amountUsd: 10,
@@ -138,7 +138,7 @@ test.describe('API Key Creation on Subscription', () => {
     console.log('✅ Database reset and escrow account created');
 
     // Query database before subscription
-    const apiKeysResponse = await request.get('http://localhost:3000/test/data/api-keys');
+    const apiKeysResponse = await request.get('http://localhost:22700/test/data/api-keys');
     expect(apiKeysResponse.ok()).toBe(true);
 
     const apiKeysData = await apiKeysResponse.json();
@@ -150,7 +150,7 @@ test.describe('API Key Creation on Subscription', () => {
 
   test('service starts in DISABLED state with subscription_charge_pending=false', async ({ page, request }) => {
     // Reset database
-    await request.post('http://localhost:3000/test/data/reset', {
+    await request.post('http://localhost:22700/test/data/reset', {
       data: {
         balanceUsdCents: 0,
         spendingLimitUsdCents: 25000, // $250
@@ -158,7 +158,7 @@ test.describe('API Key Creation on Subscription', () => {
     });
 
     // Create escrow account and deposit funds
-    const depositResponse = await request.post('http://localhost:3000/test/wallet/deposit', {
+    const depositResponse = await request.post('http://localhost:22700/test/wallet/deposit', {
       data: {
         walletAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
         amountUsd: 10,
@@ -186,7 +186,7 @@ test.describe('API Key Creation on Subscription', () => {
     console.log('✅ Service shows as disabled after subscription');
 
     // Query service state from API
-    const serviceResponse = await request.get('http://localhost:3000/test/data/service-instance?serviceType=seal');
+    const serviceResponse = await request.get('http://localhost:22700/test/data/service-instance?serviceType=seal');
     expect(serviceResponse.ok()).toBe(true);
 
     const serviceData = await serviceResponse.json();
@@ -203,7 +203,7 @@ test.describe('API Key Creation on Subscription', () => {
 
   test('seal keys and allowlist start at 0 count', async ({ page, request }) => {
     // Reset database
-    await request.post('http://localhost:3000/test/data/reset', {
+    await request.post('http://localhost:22700/test/data/reset', {
       data: {
         balanceUsdCents: 0,
         spendingLimitUsdCents: 25000, // $250
@@ -211,7 +211,7 @@ test.describe('API Key Creation on Subscription', () => {
     });
 
     // Create escrow account and deposit funds
-    const depositResponse = await request.post('http://localhost:3000/test/wallet/deposit', {
+    const depositResponse = await request.post('http://localhost:22700/test/wallet/deposit', {
       data: {
         walletAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
         amountUsd: 10,
@@ -235,7 +235,7 @@ test.describe('API Key Creation on Subscription', () => {
     await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
 
     // Query seal keys from database
-    const sealKeysResponse = await request.get('http://localhost:3000/test/data/seal-keys');
+    const sealKeysResponse = await request.get('http://localhost:22700/test/data/seal-keys');
     expect(sealKeysResponse.ok()).toBe(true);
 
     const sealKeysData = await sealKeysResponse.json();
@@ -245,7 +245,7 @@ test.describe('API Key Creation on Subscription', () => {
     console.log('✅ Zero seal keys after subscription (expected)');
 
     // Query service config to check allowlist
-    const serviceResponse = await request.get('http://localhost:3000/test/data/service-instance?serviceType=seal');
+    const serviceResponse = await request.get('http://localhost:22700/test/data/service-instance?serviceType=seal');
     expect(serviceResponse.ok()).toBe(true);
 
     const serviceData = await serviceResponse.json();

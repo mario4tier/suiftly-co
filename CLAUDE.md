@@ -169,7 +169,7 @@ See [docs/PRODUCTION_SAFETY.md](docs/PRODUCTION_SAFETY.md) for complete details.
 **Scripts use appropriate user automatically:**
 - `./scripts/dev/reset-database.sh` - Uses `postgres`, grants permissions to `deploy`
 - API runtime (apps/api) - Uses `deploy` from DATABASE_URL in .env
-- Test data reset - Use `curl -X POST http://localhost:3000/test/data/truncate-all` (no sudo)
+- Test data reset - Use `curl -X POST http://localhost:22700/test/data/truncate-all` (no sudo)
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#development) PostgreSQL Setup section for complete details.
 

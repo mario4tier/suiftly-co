@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 
 test('debug subitem padding', async ({ page }) => {
   // Navigate to dashboard (with mock auth)
-  await page.goto('http://localhost:5173/login');
+  await page.goto('http://localhost:22710/login');
 
   // Mock wallet authentication
   await page.evaluate(() => {

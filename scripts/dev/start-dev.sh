@@ -44,7 +44,7 @@ API_PID=$!
 # Wait for API to be ready (up to 10 seconds)
 for i in {1..10}; do
   sleep 1
-  if curl -s http://localhost:3000/health >/dev/null 2>&1; then
+  if curl -s http://localhost:22700/health >/dev/null 2>&1; then
     break
   fi
   echo "  Waiting for API... ($i/10)"
@@ -57,7 +57,7 @@ if ! kill -0 $API_PID 2>/dev/null; then
   exit 1
 fi
 
-if ! curl -s http://localhost:3000/health >/dev/null 2>&1; then
+if ! curl -s http://localhost:22700/health >/dev/null 2>&1; then
   echo "❌ ERROR: API server not responding on port 3000"
   exit 1
 fi
@@ -83,8 +83,8 @@ echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "✅ Dev servers running!"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "📡 API: http://localhost:3000 (MOCK_AUTH=true)"
-echo "🌐 Webapp: http://localhost:5173"
+echo "📡 API: http://localhost:22700 (MOCK_AUTH=true)"
+echo "🌐 Webapp: http://localhost:22710"
 echo ""
 echo "Logs:"
 echo "  API: /tmp/suiftly-api.log"

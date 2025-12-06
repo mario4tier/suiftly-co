@@ -13,7 +13,7 @@ import { resetCustomer } from '../helpers/db';
 import { setMockClock, resetClock } from '../helpers/clock';
 
 const MOCK_WALLET_ADDRESS = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
-const API_BASE = 'http://localhost:3000';
+const API_BASE = 'http://localhost:22700';
 
 test.describe('Subscription Billing - Bug Detection', () => {
   test('BUG 1: Next Scheduled Payment shows 1st of next month (not last day of current month)', async ({ page }) => {

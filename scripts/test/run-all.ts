@@ -252,8 +252,8 @@ async function main() {
 
   // Check if dev servers are running
   section('Checking servers...');
-  const apiRunning = await checkServerRunning('http://localhost:3000/health');
-  const webappRunning = await checkServerRunning('http://localhost:5173');
+  const apiRunning = await checkServerRunning('http://localhost:22700/health');
+  const webappRunning = await checkServerRunning('http://localhost:22710');
 
   if (apiRunning && webappRunning) {
     success('Dev servers already running');
@@ -312,7 +312,7 @@ async function main() {
   // Clear any JWT-related test data that might cause pollution (while server is still running)
   section('Cleaning database for short-expiry tests...');
   try {
-    const cleanupResponse = await fetch('http://localhost:3000/test/data/truncate-all', {
+    const cleanupResponse = await fetch('http://localhost:22700/test/data/truncate-all', {
       method: 'POST',
       signal: AbortSignal.timeout(5000)
     });

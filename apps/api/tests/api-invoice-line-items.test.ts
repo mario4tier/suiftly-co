@@ -24,7 +24,7 @@ import {
 import { login, TEST_WALLET } from './helpers/auth.js';
 import { INVOICE_LINE_ITEM_TYPE, SERVICE_TYPE } from '@suiftly/shared/constants';
 
-const API_BASE = 'http://localhost:3000';
+const API_BASE = 'http://localhost:22700';
 
 /**
  * Insert mock HAProxy logs via test endpoint
