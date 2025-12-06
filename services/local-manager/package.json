@@ -1,5 +1,5 @@
 {
-  "name": "@suiftly/global-manager",
+  "name": "@suiftly/local-manager",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -10,15 +10,11 @@
     "test": "vitest"
   },
   "dependencies": {
-    "@suiftly/database": "*",
     "@suiftly/shared": "*",
-    "drizzle-orm": "^0.44.7",
-    "fastify": "^5.1.0",
-    "pg": "^8.13.1"
+    "fastify": "^5.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
-    "@types/pg": "^8.11.10",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }

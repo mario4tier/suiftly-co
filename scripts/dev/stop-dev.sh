@@ -29,6 +29,27 @@ force_kill_port() {
 }
 
 # Kill by saved PIDs first (fastest)
+if [ -f /tmp/suiftly-gm.pid ]; then
+  GM_PID=$(cat /tmp/suiftly-gm.pid)
+  echo "  📍 Killing Global Manager (PID $GM_PID)..."
+  kill -9 $GM_PID 2>/dev/null || true
+  rm /tmp/suiftly-gm.pid
+fi
+
+if [ -f /tmp/suiftly-admin.pid ]; then
+  ADMIN_PID=$(cat /tmp/suiftly-admin.pid)
+  echo "  📍 Killing Admin webapp (PID $ADMIN_PID)..."
+  kill -9 $ADMIN_PID 2>/dev/null || true
+  rm /tmp/suiftly-admin.pid
+fi
+
+if [ -f /tmp/suiftly-lm.pid ]; then
+  LM_PID=$(cat /tmp/suiftly-lm.pid)
+  echo "  📍 Killing Local Manager (PID $LM_PID)..."
+  kill -9 $LM_PID 2>/dev/null || true
+  rm /tmp/suiftly-lm.pid
+fi
+
 if [ -f /tmp/suiftly-api.pid ]; then
   API_PID=$(cat /tmp/suiftly-api.pid)
   echo "  📍 Killing API server (PID $API_PID)..."
@@ -50,6 +71,11 @@ pkill -9 -f "vite" 2>/dev/null || true
 pkill -9 -f "node.*vite" 2>/dev/null || true
 
 # Final fallback: force kill by port (most robust)
+force_kill_port 22600
+force_kill_port 22601
+force_kill_port 22610
+force_kill_port 22700
+force_kill_port 22710
 force_kill_port 3000
 force_kill_port 5173
 force_kill_port 5174
@@ -57,7 +83,7 @@ force_kill_port 5175
 
 # Verify ports are free
 echo "  ✅ Verifying ports are free..."
-for port in 3000 5173; do
+for port in 22600 22601 22610 22700 22710; do
   if is_port_free $port; then
     echo "     Port $port is free"
   else
