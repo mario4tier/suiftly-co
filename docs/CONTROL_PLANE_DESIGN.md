@@ -12,7 +12,7 @@ The Suiftly control plane manages configuration distribution and status collecti
 
 **Port Allocation:** See [~/walrus/PORT_MAP.md](~/walrus/PORT_MAP.md) for the single source of truth on port assignments. Local Managers use ports 22610-22613 to support up to 4 instances in development for multi-server simulation.
 
-**Primary Server (US-East NetOps):**
+**Primary Server (EU-West NetOps):**
 ```
 ~/suiftly-co/  → Global Manager, API, Webapp, PostgreSQL
 ~/walrus/      → Local Manager, HAProxy, keyserver, VAULT simulation
@@ -29,17 +29,17 @@ The Suiftly control plane manages configuration distribution and status collecti
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                        Primary Server (US-East NetOps)                       │
+│                        Primary Server (EU-West NetOps)                      │
 │  ┌───────────────────────────────────────────────────────────────────────┐  │
-│  │                         ~/suiftly-co                                   │  │
+│  │                         ~/suiftly-co                                  │  │
 │  │  ┌─────────────────────────────────────────────────────────────────┐  │  │
 │  │  │              Global Manager (daemon, 5-min cycle)               │  │  │
 │  │  │                                                                 │  │  │
-│  │  │  1. Aggregate HAProxy logs → usage metrics                     │  │  │
-│  │  │  2. Calculate customer billing                                 │  │  │
-│  │  │  3. Generate MA_VAULT (API keys + rate limits)                 │  │  │
-│  │  │  4. Aggregate status from all Local Managers                   │  │  │
-│  │  │  5. Cleanup old data                                           │  │  │
+│  │  │  1. Aggregate HAProxy logs → usage metrics                      │  │  │
+│  │  │  2. Calculate customer billing                                  │  │  │
+│  │  │  3. Generate MA_VAULT (API keys + rate limits)                  │  │  │
+│  │  │  4. Aggregate status from all Local Managers                    │  │  │
+│  │  │  5. Cleanup old data                                            │  │  │
 │  │  └─────────────────────────────────────────────────────────────────┘  │  │
 │  │                              ↓                                        │  │
 │  │                    PostgreSQL (source of truth)                       │  │
@@ -50,7 +50,7 @@ The Suiftly control plane manages configuration distribution and status collecti
 │                    MA_VAULT files (to /opt/syncf/data_tx/ma/)               │
 │                                 ↓                                           │
 │  ┌───────────────────────────────────────────────────────────────────────┐  │
-│  │                           ~/walrus                                     │  │
+│  │                           ~/walrus                                    │  │
 │  │  sync-files.py → distributes VAULT to all servers                     │  │
 │  │  Local Manager → consumes VAULT, updates HAProxy                      │  │
 │  │  HAProxy → enforces rate limits, logs requests                        │  │
@@ -61,9 +61,9 @@ The Suiftly control plane manages configuration distribution and status collecti
                         (rsync via sync-files.py)
                                   ↓
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                      Other Gateway Servers (regions)                         │
+│                      Other Gateway Servers (regions)                        │
 │  ┌───────────────────────────────────────────────────────────────────────┐  │
-│  │                           ~/walrus                                     │  │
+│  │                           ~/walrus                                    │  │
 │  │  Local Manager → consumes VAULT, updates HAProxy                      │  │
 │  │  HAProxy → enforces rate limits, logs requests                        │  │
 │  │  Fluentd → ships logs back to PostgreSQL                              │  │

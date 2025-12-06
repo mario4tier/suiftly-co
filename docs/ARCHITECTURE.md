@@ -122,6 +122,120 @@ Origin Servers (Self-Hosted)
 
 ---
 
+## Cross-Repository Dependencies
+
+### Layered Architecture
+
+The Suiftly infrastructure uses a two-repository model with clear dependency direction:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  ~/walrus (Base Layer)                                          │
+│  Deployed: ALL servers (gateway + primary)                      │
+│                                                                 │
+│  Contains:                                                      │
+│  - Infrastructure scripts (Python)                              │
+│  - HAProxy configuration                                        │
+│  - SEAL key-server management                                   │
+│  - sync-files.py (VAULT distribution)                          │
+│  - Local Manager (TypeScript service)                          │
+│  - @walrus/shared (shared types package)                       │
+└─────────────────────────────────────────────────────────────────┘
+                              ↑
+                              │ suiftly-co imports from walrus
+                              │ (never the reverse)
+┌─────────────────────────────────────────────────────────────────┐
+│  ~/suiftly-co (NetOps Layer)                                    │
+│  Deployed: Primary server only (eu-w1-1)                        │
+│                                                                 │
+│  Contains:                                                      │
+│  - Global Manager (billing, metering, VAULT generation)        │
+│  - API Server (customer-facing)                                │
+│  - Webapp (dashboard SPA)                                      │
+│  - PostgreSQL schemas                                          │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Key principle**: Gateway servers only need `~/walrus` deployed. The `~/suiftly-co` repository is only deployed on the primary server (eu-w1-1) where PostgreSQL and the Global Manager run.
+
+### @walrus/shared Package
+
+Shared TypeScript types are defined in `~/walrus/services/shared/` and imported by both repositories:
+
+**Package location:** `~/walrus/services/shared/`
+
+**Importing in suiftly-co:**
+
+```json
+// package.json (root or services/global-manager)
+{
+  "dependencies": {
+    "@walrus/shared": "file:../walrus/services/shared"
+  }
+}
+```
+
+**Usage:**
+```typescript
+// services/global-manager/src/tasks/aggregate-status.ts
+import { ServerStatusReport, CustomerConfig } from '@walrus/shared'
+
+// Full type safety for:
+// - Status reports from Local Managers
+// - VAULT file format (customer configs)
+// - Health check interfaces
+```
+
+### Shared Types
+
+Types defined in `@walrus/shared`:
+
+| Type | Description | Used By |
+|------|-------------|---------|
+| `ServerStatusReport` | Health reports from Local Manager | Global Manager (receives), Local Manager (sends) |
+| `CustomerConfig` | Customer API keys, tier, limits | Global Manager (generates), Local Manager (consumes) |
+| `TierLimits` | Rate limit configuration | Both |
+| `HealthCheck` | Health check request/response | Both |
+
+### Development Workflow
+
+When working on features that span both repositories:
+
+1. **Update shared types first** (if needed):
+   ```bash
+   cd ~/walrus/services/shared
+   # Edit types
+   npm run build
+   ```
+
+2. **Update Local Manager** (walrus):
+   ```bash
+   cd ~/walrus/services/local-manager
+   npm run dev
+   ```
+
+3. **Update Global Manager** (suiftly-co):
+   ```bash
+   cd ~/suiftly-co/services/global-manager
+   npm install  # Picks up @walrus/shared changes
+   npm run dev
+   ```
+
+### Deployment Model
+
+| Server | Repositories | Services |
+|--------|--------------|----------|
+| **eu-w1-1** (Primary) | walrus + suiftly-co | Global Manager, API, Webapp, PostgreSQL, HAProxy, Local Manager |
+| **us-e1-1** (Gateway) | walrus only | HAProxy, Local Manager, SEAL key-server |
+| **us-w1-1** (Gateway) | walrus only | HAProxy, Local Manager, SEAL key-server |
+| **as-s1-1** (Gateway) | walrus only | HAProxy, Local Manager, SEAL key-server |
+
+**For detailed control plane design, see [CONTROL_PLANE_DESIGN.md](./CONTROL_PLANE_DESIGN.md)**
+
+**For Local Manager implementation, see [~/walrus/docs/LOCAL_MANAGER_FEATURE.md](~/walrus/docs/LOCAL_MANAGER_FEATURE.md)**
+
+---
+
 ## Caching Strategy
 
 **Application-Level Caching (No Redis)**
