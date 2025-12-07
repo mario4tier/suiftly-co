@@ -271,7 +271,7 @@ if (config.NODE_ENV !== 'production') {
   });
 
   // Mock wallet control endpoints
-  const { getSuiService } = await import('./services/sui/index.js');
+  const { getSuiService } = await import('@suiftly/database/sui-mock');
   const suiService = getSuiService();
 
   // Get mock wallet balance
@@ -451,7 +451,9 @@ if (config.NODE_ENV !== 'production') {
 
       if (customer) {
         const amountCents = Math.round(amountUsd * 100);
-        const now = new Date();
+        // Use dbClock for consistent timestamps in testing
+        const { dbClock } = await import('@suiftly/shared/db-clock');
+        const now = dbClock.now();
 
         // Create invoice (billing record) with status 'paid'
         const [invoice] = await db.insert(billingRecords).values({
@@ -545,7 +547,9 @@ if (config.NODE_ENV !== 'production') {
 
       if (customer) {
         const amountCents = Math.round(amountUsd * 100);
-        const now = new Date();
+        // Use dbClock for consistent timestamps in testing
+        const { dbClock } = await import('@suiftly/shared/db-clock');
+        const now = dbClock.now();
 
         // Create invoice (billing record) with status 'paid' and type 'credit'
         const [invoice] = await db.insert(billingRecords).values({
@@ -597,15 +601,18 @@ if (config.NODE_ENV !== 'production') {
   // ========================================
 
   // Import suiMockConfig for test endpoints
-  const { suiMockConfig } = await import('./services/sui/mock-config');
+  const { suiMockConfig } = await import('@suiftly/database/sui-mock');
 
-  // ========================================
-  // Database Clock Time Manipulation Endpoints
-  // ========================================
-
-  // Import database clock for test endpoints
+  // Import database clock and configure test_kv sync (read-only for API)
+  // GM is the source of truth for mock clock - API just reads from test_kv
   const { dbClockProvider } = await import('@suiftly/shared/db-clock');
-  const { MockDBClock } = await import('@suiftly/shared/db-clock');
+  const { getMockClockState, setMockClockState } = await import('@suiftly/database/test-kv');
+  dbClockProvider.configureTestKvSync(getMockClockState, setMockClockState);
+  dbClockProvider.enableTestKvSync();
+
+  // ========================================
+  // Sui Mock Configuration Endpoints
+  // ========================================
 
   // Get current Sui mock configuration
   server.get('/test/sui/config', {
@@ -679,159 +686,11 @@ if (config.NODE_ENV !== 'production') {
   });
 
   // ========================================
-  // Database Clock Test Endpoints
+  // Clock Test Endpoints - REMOVED
+  // Clock management moved to Global Manager (GM) only
+  // Tests should call GM's /api/test/clock/* endpoints
+  // GM writes mock time to test_kv, and syncs before billing operations
   // ========================================
-
-  // Get current database clock configuration
-  server.get('/test/clock', {
-    config: { rateLimit: false },
-  }, async (request, reply) => {
-    const mockClock = dbClockProvider.getMockClock();
-    if (!mockClock) {
-      reply.send({
-        type: 'real',
-        message: 'Using real system clock',
-        currentTime: new Date().toISOString(),
-      });
-    } else {
-      const config = mockClock.getConfig();
-      reply.send({
-        type: 'mock',
-        currentTime: mockClock.now().toISOString(),
-        config,
-      });
-    }
-  });
-
-  // Enable mock database clock with specific time
-  server.post('/test/clock/mock', {
-    config: { rateLimit: false },
-  }, async (request, reply) => {
-    const body = request.body as any;
-
-    // Parse time from body (can be ISO string or milliseconds)
-    let mockTime: Date | undefined;
-    if (body.time) {
-      if (typeof body.time === 'string') {
-        mockTime = new Date(body.time);
-      } else if (typeof body.time === 'number') {
-        mockTime = new Date(body.time);
-      } else {
-        reply.code(400).send({
-          error: 'Invalid time format. Use ISO string or milliseconds.',
-        });
-        return;
-      }
-
-      if (isNaN(mockTime.getTime())) {
-        reply.code(400).send({
-          error: 'Invalid date/time value',
-        });
-        return;
-      }
-    }
-
-    const mockClock = dbClockProvider.useMockClock({
-      currentTime: mockTime,
-      autoAdvance: body.autoAdvance || false,
-      timeScale: body.timeScale || 1.0,
-    });
-
-    reply.send({
-      success: true,
-      currentTime: mockClock.now().toISOString(),
-      config: mockClock.getConfig(),
-    });
-  });
-
-  // Reset to real database clock
-  server.post('/test/clock/real', {
-    config: { rateLimit: false },
-  }, async (request, reply) => {
-    dbClockProvider.useRealClock();
-    reply.send({
-      success: true,
-      type: 'real',
-      currentTime: new Date().toISOString(),
-    });
-  });
-
-  // Advance mock clock by specific duration
-  server.post('/test/clock/advance', {
-    config: { rateLimit: false },
-  }, async (request, reply) => {
-    const mockClock = dbClockProvider.getMockClock();
-    if (!mockClock) {
-      reply.code(400).send({
-        error: 'Mock clock not enabled. Use /test/clock/mock first.',
-      });
-      return;
-    }
-
-    const body = request.body as any;
-
-    // Support multiple time units
-    if (body.days) {
-      mockClock.advanceDays(body.days);
-    }
-    if (body.hours) {
-      mockClock.advanceHours(body.hours);
-    }
-    if (body.milliseconds) {
-      mockClock.advance(body.milliseconds);
-    }
-
-    reply.send({
-      success: true,
-      currentTime: mockClock.now().toISOString(),
-      advanced: {
-        days: body.days || 0,
-        hours: body.hours || 0,
-        milliseconds: body.milliseconds || 0,
-      },
-    });
-  });
-
-  // Set mock clock to specific time
-  server.post('/test/clock/set', {
-    config: { rateLimit: false },
-  }, async (request, reply) => {
-    const mockClock = dbClockProvider.getMockClock();
-    if (!mockClock) {
-      reply.code(400).send({
-        error: 'Mock clock not enabled. Use /test/clock/mock first.',
-      });
-      return;
-    }
-
-    const body = request.body as any;
-
-    // Parse time from body
-    let newTime: Date;
-    if (typeof body.time === 'string') {
-      newTime = new Date(body.time);
-    } else if (typeof body.time === 'number') {
-      newTime = new Date(body.time);
-    } else {
-      reply.code(400).send({
-        error: 'Invalid time format. Use ISO string or milliseconds.',
-      });
-      return;
-    }
-
-    if (isNaN(newTime.getTime())) {
-      reply.code(400).send({
-        error: 'Invalid date/time value',
-      });
-      return;
-    }
-
-    mockClock.setTime(newTime);
-    reply.send({
-      success: true,
-      currentTime: mockClock.now().toISOString(),
-    });
-  });
 
   // Get billing period info for testing
   server.get('/test/billing/period', {
@@ -847,6 +706,9 @@ if (config.NODE_ENV !== 'production') {
       return;
     }
 
+    // Sync clock from test_kv before use
+    await dbClockProvider.syncFromTestKv();
+
     const { getBillingPeriodInfo } = await import('@suiftly/shared/billing');
     const periodInfo = getBillingPeriodInfo(customerCreatedAt);
 
@@ -858,51 +720,38 @@ if (config.NODE_ENV !== 'production') {
     });
   });
 
-  // ========================================
-  // Unified Periodic Billing Job Endpoint
-  // ========================================
-  // Triggers THE SAME job that runs every 5 minutes in production.
-  // Single-threaded, deterministic order, handles ALL billing operations.
-  // See BILLING_DESIGN.md for detailed execution phases.
-
+  // Run periodic billing job (for testing)
+  // In production, this is called by Global Manager
   server.post('/test/billing/run-periodic-job', {
     config: { rateLimit: false },
   }, async (request, reply) => {
-    const body = request.body as any;
-    const customerId = body.customerId; // Optional: process single customer
+    const body = request.body as { customerId?: number } | undefined;
+    const customerId = body?.customerId;
 
     try {
       const { db } = await import('@suiftly/database');
       const { runPeriodicBillingJob, runPeriodicJobForCustomer } = await import('@suiftly/database/billing');
-      const { getSuiService } = await import('./services/sui/index.js');
+      const { getSuiService } = await import('@suiftly/database/sui-mock');
+
+      // Sync clock from test_kv before use
+      await dbClockProvider.syncFromTestKv();
 
       const clock = dbClockProvider.getClock();
-      const suiServiceForBilling = getSuiService();
+      const suiService = getSuiService();
 
       const billingConfig = {
         clock,
         gracePeriodDays: 14,
         maxRetryAttempts: 3,
         retryIntervalHours: 24,
-        usageChargeThresholdCents: 500, // $5 threshold
+        usageChargeThresholdCents: 500,
       };
 
       let result;
       if (customerId) {
-        // Process single customer (for targeted testing)
-        result = await runPeriodicJobForCustomer(
-          db,
-          customerId,
-          billingConfig,
-          suiServiceForBilling
-        );
+        result = await runPeriodicJobForCustomer(db, customerId, billingConfig, suiService);
       } else {
-        // Process all customers (full periodic job)
-        result = await runPeriodicBillingJob(
-          db,
-          billingConfig,
-          suiServiceForBilling
-        );
+        result = await runPeriodicBillingJob(db, billingConfig, suiService);
       }
 
       reply.send({
@@ -910,7 +759,42 @@ if (config.NODE_ENV !== 'production') {
         result,
       });
     } catch (error: any) {
-      console.error('[PERIODIC JOB ERROR]', error);
+      console.error('[TEST BILLING JOB ERROR]', error);
+      reply.code(500).send({
+        success: false,
+        error: error.message || String(error),
+      });
+    }
+  });
+
+  // Reconcile pending payments for a customer (for testing)
+  // Calls GM queue endpoint to ensure single-threaded execution
+  server.post('/test/billing/reconcile', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    const body = request.body as { customerId: number };
+    if (!body.customerId) {
+      reply.code(400).send({ success: false, error: 'customerId is required' });
+      return;
+    }
+
+    try {
+      // Call GM's sync-customer endpoint (synchronous by default)
+      // This ensures reconciliation runs in GM's single-threaded task queue
+      const gmResponse = await fetch(
+        `http://localhost:22600/api/queue/sync-customer/${body.customerId}?source=test`,
+        { method: 'POST' }
+      );
+
+      if (!gmResponse.ok) {
+        const errorText = await gmResponse.text();
+        throw new Error(`GM sync-customer failed: ${gmResponse.status} ${errorText}`);
+      }
+
+      const result = await gmResponse.json();
+      reply.send({ success: true, result });
+    } catch (error: any) {
+      console.error('[TEST RECONCILE ERROR]', error);
       reply.code(500).send({
         success: false,
         error: error.message || String(error),

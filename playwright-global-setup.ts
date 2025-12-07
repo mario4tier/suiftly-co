@@ -103,15 +103,16 @@ async function globalTeardown() {
     // Server might be down, that's ok
   }
 
-  // Reset to real database clock (important for cleanup)
+  // Reset to real database clock via GM (important for cleanup)
+  // GM is the single source of truth for mock clock time
   try {
-    await fetch('http://localhost:22700/test/clock/real', {
+    await fetch('http://localhost:22600/api/test/clock/real', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
     });
-    console.log('✅ Reset to real database clock');
+    console.log('✅ Reset to real database clock (via GM)');
   } catch {
-    // Server might be down, that's ok
+    // GM might be down, that's ok
   }
 }
 

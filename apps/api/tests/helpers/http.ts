@@ -111,53 +111,79 @@ export async function restCall<T>(
 // Test-Only Endpoints (for controlling test state)
 // ============================================================================
 
+const GM_BASE = 'http://localhost:22600'; // Global Manager
+
 /**
- * Set mock clock time
+ * Set mock clock time via Global Manager
+ *
+ * GM is the single source of truth for mock time:
+ * - GM writes mock time to test_kv table
+ * - All processes (API, GM) sync from test_kv before billing operations
  */
 export async function setClockTime(time: string | Date): Promise<void> {
   const timeStr = typeof time === 'string' ? time : time.toISOString();
-  const result = await restCall('POST', '/test/clock/mock', { time: timeStr });
-  if (!result.success) {
-    throw new Error(`Failed to set clock: ${result.error}`);
+
+  const response = await fetch(`${GM_BASE}/api/test/clock/mock`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ time: timeStr }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Failed to set clock time via GM: ${response.status} ${text}`);
   }
 }
 
 /**
- * Advance mock clock
+ * Advance mock clock via Global Manager
  */
 export async function advanceClock(duration: {
   days?: number;
   hours?: number;
   minutes?: number;
 }): Promise<void> {
-  const result = await restCall('POST', '/test/clock/advance', duration);
-  if (!result.success) {
-    throw new Error(`Failed to advance clock: ${result.error}`);
+  const response = await fetch(`${GM_BASE}/api/test/clock/advance`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(duration),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Failed to advance clock via GM: ${response.status} ${text}`);
   }
 }
 
 /**
- * Reset clock to real time
+ * Reset clock to real time via Global Manager
  */
 export async function resetClock(): Promise<void> {
-  const result = await restCall('POST', '/test/clock/real');
-  if (!result.success) {
-    throw new Error(`Failed to reset clock: ${result.error}`);
+  const response = await fetch(`${GM_BASE}/api/test/clock/real`, {
+    method: 'POST',
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Failed to reset clock via GM: ${response.status} ${text}`);
   }
 }
 
 /**
- * Get current clock status
+ * Get current clock status from Global Manager
  */
 export async function getClockStatus(): Promise<{
   type: 'real' | 'mock';
   currentTime: string;
 }> {
-  const result = await restCall<any>('GET', '/test/clock');
-  if (!result.success || !result.data) {
-    throw new Error(`Failed to get clock status: ${result.error}`);
+  const response = await fetch(`${GM_BASE}/api/test/clock`);
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Failed to get clock status from GM: ${response.status} ${text}`);
   }
-  return result.data;
+
+  return response.json();
 }
 
 /**
@@ -170,6 +196,21 @@ export async function runPeriodicBillingJob(customerId?: number): Promise<{
   const result = await restCall<any>('POST', '/test/billing/run-periodic-job', { customerId });
   if (!result.success || !result.data) {
     throw new Error(`Failed to run periodic billing job: ${result.error}`);
+  }
+  return result.data;
+}
+
+/**
+ * Reconcile pending payments for a customer
+ * This simulates what GM does after a deposit - processes any pending subscription charges
+ */
+export async function reconcilePendingPayments(customerId: number): Promise<{
+  success: boolean;
+  result: any;
+}> {
+  const result = await restCall<any>('POST', '/test/billing/reconcile', { customerId });
+  if (!result.success || !result.data) {
+    throw new Error(`Failed to reconcile payments: ${result.error}`);
   }
   return result.data;
 }

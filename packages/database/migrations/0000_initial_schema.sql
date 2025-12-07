@@ -148,7 +148,6 @@ CREATE TABLE "billing_records" (
 	CONSTRAINT "check_tx_digest_length" CHECK ("billing_records"."tx_digest" IS NULL OR LENGTH("billing_records"."tx_digest") = 32)
 );
 --> statement-breakpoint
-ALTER SEQUENCE "billing_records_id_seq" RESTART WITH 103405;--> statement-breakpoint
 CREATE TABLE "escrow_transactions" (
 	"tx_id" bigserial PRIMARY KEY NOT NULL,
 	"customer_id" integer NOT NULL,
@@ -320,6 +319,12 @@ CREATE TABLE "mock_tracking_objects" (
 	"reconciled" varchar(5) DEFAULT 'false' NOT NULL,
 	"reconciled_at" timestamp with time zone,
 	CONSTRAINT "mock_tracking_objects_tracking_address_unique" UNIQUE("tracking_address")
+);
+--> statement-breakpoint
+CREATE TABLE "test_kv" (
+	"key" text PRIMARY KEY NOT NULL,
+	"value" text NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
 ALTER TABLE "api_keys" ADD CONSTRAINT "api_keys_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint

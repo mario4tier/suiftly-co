@@ -6,12 +6,12 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import { router, protectedProcedure } from '../lib/trpc';
-import { getSuiService } from '../services/sui';
+import { getSuiService } from '@suiftly/database/sui-mock';
 import { db, logActivity } from '@suiftly/database';
 import { ledgerEntries, customers, billingRecords, customerCredits, invoiceLineItems } from '@suiftly/database/schema';
 import { eq, and, desc, sql, gt } from 'drizzle-orm';
 import { SPENDING_LIMIT, INVOICE_LINE_ITEM_TYPE } from '@suiftly/shared/constants';
-import { reconcilePayments } from '../lib/reconcile-payments';
+import { config } from '../lib/config';
 import { dbClock } from '@suiftly/shared/db-clock';
 import { buildDraftLineItems } from '../lib/invoice-formatter';
 
@@ -467,10 +467,15 @@ export const billingRouter = router({
         message: `Deposited $${input.amountUsd.toFixed(2)} to escrow account`,
       });
 
-      // Reconcile pending subscription charges
-      // This will retry any failed subscription charges now that funds are available
-      const reconcileResult = await reconcilePayments(customer.customerId);
-      console.log(`[DEPOSIT] Reconciled ${reconcileResult.chargesSucceeded} pending charges after deposit`);
+      // Queue sync with Global Manager to reconcile pending subscription charges
+      // This is fire-and-forget - the deposit has already succeeded
+      const gmUrl = config.GM_URL || 'http://localhost:22600';
+      fetch(`${gmUrl}/api/queue/sync-customer/${customer.customerId}?source=api`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      }).catch(err => {
+        console.error(`[DEPOSIT] Failed to queue sync with GM:`, err.message);
+      });
 
       // Get new balance
       const account = await suiService.getAccount(ctx.user.walletAddress);
@@ -480,7 +485,6 @@ export const billingRouter = router({
         newBalanceUsd: account ? account.balanceUsdCents / 100 : 0,
         accountCreated: result.accountCreated || false,
         txDigest: result.digest,
-        reconciledCharges: reconcileResult.chargesSucceeded, // Return how many pending charges were cleared
       };
     }),
 

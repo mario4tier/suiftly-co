@@ -41,6 +41,15 @@ export const protectedProcedure = t.procedure.use(async ({ ctx, next }) => {
   const { verifyAccessToken } = await import('./jwt');
   const { TRPCError } = await import('@trpc/server');
 
+  // Sync clock from test_kv in non-production (for testing)
+  // This ensures API sees mock time set by GM
+  if (process.env.NODE_ENV !== 'production') {
+    const { dbClockProvider } = await import('@suiftly/shared/db-clock');
+    if (dbClockProvider.isTestKvSyncEnabled()) {
+      await dbClockProvider.syncFromTestKv();
+    }
+  }
+
   // Get token from Authorization header
   const authHeader = ctx.req.headers.authorization;
   const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;

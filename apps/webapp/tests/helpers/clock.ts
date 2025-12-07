@@ -3,12 +3,17 @@
  * Helpers for controlling database timestamps in Playwright tests
  *
  * IMPORTANT: Tests should NOT import DBClock directly!
- * Instead, control time through these API endpoints.
+ * Instead, control time through Global Manager (GM) endpoints.
+ *
+ * GM is the single source of truth for mock clock time:
+ * - GM writes mock time to test_kv table
+ * - All processes (API, GM) sync from test_kv before billing operations
  */
 
 import type { APIRequestContext } from '@playwright/test';
 
-const API_BASE = 'http://localhost:22700'; // See ~/walrus/PORT_MAP.md
+const GM_BASE = 'http://localhost:22600'; // Global Manager - clock control
+const API_BASE = 'http://localhost:22700'; // API Server - billing info only
 
 /**
  * Reset clock to use real system time
@@ -17,7 +22,7 @@ const API_BASE = 'http://localhost:22700'; // See ~/walrus/PORT_MAP.md
  * starts with real time unless it specifically needs mock time.
  */
 export async function resetClock(request: APIRequestContext): Promise<void> {
-  const response = await request.post(`${API_BASE}/test/clock/real`);
+  const response = await request.post(`${GM_BASE}/api/test/clock/real`);
 
   if (!response.ok()) {
     throw new Error(`Failed to reset clock: ${await response.text()}`);
@@ -39,7 +44,7 @@ export async function setMockClock(
     timeScale?: number;
   }
 ): Promise<void> {
-  const response = await request.post(`${API_BASE}/test/clock/mock`, {
+  const response = await request.post(`${GM_BASE}/api/test/clock/mock`, {
     data: {
       time: typeof time === 'string' ? time : time.toISOString(),
       autoAdvance: options?.autoAdvance || false,
@@ -68,7 +73,7 @@ export async function advanceClock(
     milliseconds?: number;
   }
 ): Promise<void> {
-  const response = await request.post(`${API_BASE}/test/clock/advance`, {
+  const response = await request.post(`${GM_BASE}/api/test/clock/advance`, {
     data: duration,
   });
 
@@ -78,7 +83,7 @@ export async function advanceClock(
 }
 
 /**
- * Set mock clock to specific time
+ * Set mock clock to specific time (alias for setMockClock)
  *
  * @param request - Playwright request context
  * @param time - The time to set (Date or ISO string)
@@ -87,7 +92,8 @@ export async function setClockTime(
   request: APIRequestContext,
   time: Date | string
 ): Promise<void> {
-  const response = await request.post(`${API_BASE}/test/clock/set`, {
+  // Uses the same endpoint as setMockClock
+  const response = await request.post(`${GM_BASE}/api/test/clock/mock`, {
     data: {
       time: typeof time === 'string' ? time : time.toISOString(),
     },
@@ -111,7 +117,7 @@ export async function getClockStatus(
   currentTime: string;
   config?: any;
 }> {
-  const response = await request.get(`${API_BASE}/test/clock`);
+  const response = await request.get(`${GM_BASE}/api/test/clock`);
 
   if (!response.ok()) {
     throw new Error(`Failed to get clock status: ${await response.text()}`);

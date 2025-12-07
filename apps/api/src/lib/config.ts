@@ -114,6 +114,9 @@ const envSchema = z.object({
 
   // Rate limiting
   RATE_LIMIT_MAX: z.string().transform(Number).default('100'), // requests per minute
+
+  // Internal services
+  GM_URL: z.string().default('http://localhost:22600'), // Global Manager URL
 });
 
 export const config = envSchema.parse(process.env);

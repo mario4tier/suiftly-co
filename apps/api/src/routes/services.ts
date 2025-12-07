@@ -13,7 +13,7 @@ import { SERVICE_TYPE, SERVICE_TIER, SERVICE_STATE, BALANCE_LIMITS } from '@suif
 import type { ValidationResult, ValidationError, ValidationWarning } from '@suiftly/shared/types';
 import { testDelayManager } from '../lib/test-delays';
 import { getTierPriceUsdCents } from '../lib/config-cache';
-import { getSuiService } from '../services/sui/index.js';
+import { getSuiService } from '@suiftly/database/sui-mock';
 import { storeApiKey } from '../lib/api-keys';
 import {
   handleSubscriptionBilling,

@@ -28,20 +28,25 @@ This document covers the time abstraction layer, UTC conventions, and testing wi
 | Component | Location |
 |-----------|----------|
 | DBClock interface | `packages/shared/src/db-clock/index.ts` |
+| DBClockProvider (sync) | `packages/shared/src/db-clock/provider.ts` |
 | Billing period helpers | `packages/shared/src/billing/periods.ts` |
-| Test clock helpers | `apps/webapp/tests/helpers/clock.ts` |
-| Test API endpoints | `apps/api/src/routes/test/clock.ts` |
+| Test clock helpers (API tests) | `apps/api/tests/helpers/http.ts` |
+| Test clock helpers (E2E tests) | `apps/webapp/tests/helpers/clock.ts` |
+| Clock endpoints (GM only) | `services/global-manager/src/server.ts` |
+| test_kv functions | `packages/database/src/test-kv/index.ts` |
 
-### Test Clock API Endpoints
+### Test Clock API Endpoints (Global Manager)
+
+**All clock endpoints are on Global Manager (port 22600), NOT the API server.**
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/test/clock/real` | POST | Reset to real system time |
-| `/test/clock/mock` | POST | Enable mock time |
-| `/test/clock/advance` | POST | Advance mock time |
-| `/test/clock/set` | POST | Set specific time |
-| `/test/clock` | GET | Get current clock status |
-| `/test/billing/period` | GET | Get billing period info |
+| `/api/test/clock/real` | POST | Reset to real system time |
+| `/api/test/clock/mock` | POST | Enable mock time (writes to test_kv) |
+| `/api/test/clock/advance` | POST | Advance mock time (writes to test_kv) |
+| `/api/test/clock` | GET | Get current clock status |
+
+**Note:** The API server syncs from `test_kv` before each protected request, ensuring it sees mock time set by GM.
 
 ---
 
@@ -119,6 +124,42 @@ interface DBClock {
 - `setTime(date)` - Jump to specific time
 - `advance({ days, hours, minutes, seconds })` - Move forward
 - `timeScale` - Auto-advance at accelerated rate
+
+### Cross-Process Clock Sync (test_kv)
+
+In testing, multiple processes (API server, Global Manager) need the same mock time. This is achieved via the `test_kv` database table:
+
+**Architecture:**
+```
+┌─────────────────────┐     writes to      ┌──────────────┐
+│  Global Manager     │ ─────────────────► │   test_kv    │
+│  (source of truth)  │                    │   table      │
+└─────────────────────┘                    └──────────────┘
+                                                  │
+                                           reads from
+                                                  │
+                                                  ▼
+                                    ┌─────────────────────────┐
+                                    │      API Server         │
+                                    │  (syncs before request) │
+                                    └─────────────────────────┘
+```
+
+**How it works:**
+1. **GM sets mock time** → writes to `test_kv` table via `dbClockProvider.useMockClockAndSync()`
+2. **API syncs before each request** → reads from `test_kv` via middleware in `protectedProcedure`
+3. **GM syncs before billing tasks** → reads from `test_kv` before `executeSyncCustomer()` / `executeSyncAll()`
+
+**Key files:**
+- `packages/database/src/test-kv/index.ts` - `getMockClockState()`, `setMockClockState()`
+- `packages/shared/src/db-clock/provider.ts` - `syncFromTestKv()`, `useMockClockAndSync()`
+- `apps/api/src/lib/trpc.ts` - Middleware that syncs before protected procedures
+- `services/global-manager/src/task-queue.ts` - Syncs before billing operations
+
+**Production safety:**
+- All test_kv sync code is wrapped in `if (process.env.NODE_ENV !== 'production')`
+- Clock endpoints only exist in development mode
+- Zero overhead in production
 
 ### Billing Period Helpers
 
@@ -198,19 +239,26 @@ const isFirstOfMonth = today.getUTCDate() === 1; // ✅ UTC date
 
 ## 4. Testing Guide
 
-### Key Principle: Control Through API, Not Direct Import
+### Key Principle: Control Through GM, Not Direct Import
 
-**IMPORTANT**: Tests should NEVER directly import or create `DBClock` instances. All time control happens through test API endpoints.
+**IMPORTANT**: Tests should NEVER directly import or create `DBClock` instances. All time control happens through Global Manager's test endpoints.
 
 ```typescript
 // ❌ WRONG - Don't do this in tests
 import { dbClockProvider } from '@suiftly/shared/db-clock';
 dbClockProvider.useMockClock({ ... });
 
-// ✅ CORRECT - Use test helpers
+// ✅ CORRECT - Use test helpers that call GM
+// For API tests (apps/api/tests/)
+import { setClockTime, advanceClock, resetClock } from './helpers/http';
+await setClockTime('2024-01-01T00:00:00Z');
+
+// For E2E tests (apps/webapp/tests/)
 import { setMockClock } from '../helpers/clock';
 await setMockClock(request, '2024-01-01T00:00:00Z');
 ```
+
+**Why GM?** GM is the single source of truth for mock time. It writes to `test_kv`, which the API server reads before each request.
 
 ### Automatic Clock Reset
 
@@ -228,29 +276,41 @@ test('my test', async ({ page, request }) => {
 
 ### Clock Helper Functions
 
-Located in `apps/webapp/tests/helpers/clock.ts`:
+**For API tests** (`apps/api/tests/helpers/http.ts`):
 
 ```typescript
-// Reset to real time (done automatically, but can be called manually)
-await resetClock(request);
+import { setClockTime, advanceClock, resetClock, getClockStatus } from './helpers/http';
+
+// Set mock time (calls GM at http://localhost:22600/api/test/clock/mock)
+await setClockTime('2024-01-01T00:00:00Z');
+
+// Advance time (calls GM at http://localhost:22600/api/test/clock/advance)
+await advanceClock({ days: 14, hours: 2, minutes: 30 });
+
+// Reset to real time (calls GM at http://localhost:22600/api/test/clock/real)
+await resetClock();
+
+// Get current status (calls GM at http://localhost:22600/api/test/clock)
+const status = await getClockStatus();
+// Returns: { type: 'real' | 'mock', currentTime: string }
+```
+
+**For E2E tests** (`apps/webapp/tests/helpers/clock.ts`):
+
+```typescript
+import { setMockClock, advanceClock, resetClock, getClockStatus } from '../helpers/clock';
 
 // Set mock time
 await setMockClock(request, '2024-01-01T00:00:00Z');
 
 // Advance time
-await advanceClock(request, {
-  days: 14,
-  hours: 2,
-  minutes: 30,
-  seconds: 45
-});
+await advanceClock(request, { days: 14, hours: 2, minutes: 30 });
 
-// Jump to specific time
-await setClockTime(request, '2024-12-25T00:00:00Z');
+// Reset to real time
+await resetClock(request);
 
 // Get current status
 const status = await getClockStatus(request);
-// Returns: { type: 'real' | 'mock', currentTime: string, config?: {...} }
 
 // Get billing period information
 const period = await getBillingPeriodInfo(request, customerCreatedAt);
@@ -505,8 +565,12 @@ Session timeouts use system clock (not DBClock):
 
 ---
 
-**Document Version:** 1.0
-**Last Updated:** 2025-11-28
+**Document Version:** 1.1
+**Last Updated:** 2025-12-07
 **Status:** Architectural Standard
 
 **Merged from:** UTC_CONVENTION.md, TESTING_WITH_DB_CLOCK.md
+
+**Changelog:**
+- v1.1 (2025-12-07): Updated for GM-only clock control via test_kv cross-process sync
+- v1.0 (2025-11-28): Initial version

@@ -131,6 +131,9 @@ export type {
   ReconciliationResult,
 } from './reconciliation';
 
+// Payment reconciliation moved to Global Manager (services/global-manager/src/reconcile-payments.ts)
+// to ensure single-threaded execution via task queue
+
 export type {
   TierUpgradeResult,
   TierUpgradePhase1Result, // Two-phase commit Phase 1 result

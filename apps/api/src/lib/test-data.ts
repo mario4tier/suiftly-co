@@ -14,7 +14,8 @@ import {
 } from '@suiftly/database/schema';
 import { eq } from 'drizzle-orm';
 import { decryptSecret } from './encryption';
-import { suiMockConfig } from '../services/sui/mock-config';
+import { suiMockConfig } from '@suiftly/database/sui-mock';
+import { dbClock } from '@suiftly/shared/db-clock';
 
 const MOCK_WALLET_ADDRESS = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 
@@ -106,6 +107,7 @@ export async function resetCustomerTestData(options: TestDataResetOptions = {}) 
     suiMockConfig.clearConfig();
 
     // 7. Update customer with new balance/spending limit
+    // Use dbClock for consistent timestamps in testing
     await tx
       .update(customers)
       .set({
@@ -113,8 +115,8 @@ export async function resetCustomerTestData(options: TestDataResetOptions = {}) 
         spendingLimitUsdCents: spendingLimitUsdCents,
         currentPeriodChargedUsdCents: 0,
         escrowContractId: clearEscrowAccount ? null : customer.escrowContractId,
-        currentPeriodStart: new Date().toISOString().split('T')[0],
-        updatedAt: new Date(),
+        currentPeriodStart: dbClock.today().toISOString().split('T')[0],
+        updatedAt: dbClock.now(),
       })
       .where(eq(customers.customerId, customerId));
 

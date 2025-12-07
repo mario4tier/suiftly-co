@@ -12,8 +12,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { db } from '@suiftly/database';
 import { customers } from '@suiftly/database/schema';
 import { eq } from 'drizzle-orm';
-import { getSuiService } from '../src/services/sui';
-import { MockSuiService } from '../src/services/sui/mock';
+import { getSuiService, MockSuiService } from '@suiftly/database/sui-mock';
 import { cleanupCustomerByWallet } from './helpers/cleanup.js';
 
 describe('Escrow Account Flow', () => {

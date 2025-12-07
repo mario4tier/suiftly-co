@@ -23,6 +23,7 @@ import {
   trpcQuery,
   restCall,
   ensureTestBalance,
+  reconcilePendingPayments,
 } from './helpers/http.js';
 import { login, TEST_WALLET } from './helpers/auth.js';
 
@@ -128,6 +129,9 @@ describe('API: Subscription Without Funds', () => {
     expect(depositResult.result?.data.success).toBe(true);
 
     console.log('[TEST] Deposit successful');
+
+    // Trigger reconciliation (in production, this is done asynchronously by GM)
+    await reconcilePendingPayments(customerId);
 
     // ============================================================================
     // Step 3: Verify service is now paid
@@ -468,6 +472,9 @@ describe('API: Subscription Without Funds', () => {
     expect(depositResult.result?.data).toBeDefined();
     expect(depositResult.result?.data.success).toBe(true);
     console.log('[TEST] Deposit successful');
+
+    // Trigger reconciliation (in production, this is done asynchronously by GM)
+    await reconcilePendingPayments(customerId);
 
     // Verify service is now paid
     service = await db.query.serviceInstances.findFirst({

@@ -21,8 +21,8 @@
  * - Deterministic failure injection
  */
 
-import { db } from '@suiftly/database';
-import { customers, mockSuiTransactions, mockTrackingObjects } from '@suiftly/database/schema';
+import { db } from '../index.js';
+import { customers, mockSuiTransactions, mockTrackingObjects } from '../schema/index.js';
 import { eq, desc } from 'drizzle-orm';
 import { SPENDING_LIMIT } from '@suiftly/shared/constants';
 import { dbClock } from '@suiftly/shared/db-clock';
@@ -35,10 +35,10 @@ import type {
   ChargeParams,
   UpdateSpendingLimitParams,
   TransactionHistoryEntry,
-} from './interface';
+} from '@suiftly/shared/sui-service';
 import type { Transaction } from '@mysten/sui/transactions';
 import { randomBytes } from 'crypto';
-import { suiMockConfig } from './mock-config';
+import { suiMockConfig } from './mock-config.js';
 
 /**
  * Suiftly backend address (simulated)

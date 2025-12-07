@@ -6,8 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { MockSuiService } from '../src/services/sui/mock';
-import { suiMockConfig } from '../src/services/sui/mock-config';
+import { MockSuiService, suiMockConfig } from '@suiftly/database/sui-mock';
 import { dbClockProvider, type MockDBClock } from '@suiftly/shared/db-clock';
 import { db } from '@suiftly/database';
 import { customers, mockSuiTransactions, mockTrackingObjects } from '@suiftly/database/schema';

@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { MockSuiService } from '../src/services/sui/mock';
+import { MockSuiService } from '@suiftly/database/sui-mock';
 import { db } from '@suiftly/database';
 import { customers, mockTrackingObjects, mockSuiTransactions, refreshTokens, userActivityLogs } from '@suiftly/database/schema';
 import { eq } from 'drizzle-orm';

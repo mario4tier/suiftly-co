@@ -7,7 +7,9 @@
     ".": "./src/index.ts",
     "./schema": "./src/schema/index.ts",
     "./billing": "./src/billing/index.ts",
-    "./stats": "./src/stats/index.ts"
+    "./stats": "./src/stats/index.ts",
+    "./sui-mock": "./src/sui-mock/index.ts",
+    "./test-kv": "./src/test-kv/index.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json --noEmit",

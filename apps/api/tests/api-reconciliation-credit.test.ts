@@ -26,6 +26,7 @@ import {
   trpcMutation,
   resetTestData,
   restCall,
+  reconcilePendingPayments,
 } from './helpers/http.js';
 import { login, TEST_WALLET } from './helpers/auth.js';
 import { TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
@@ -146,8 +147,9 @@ describe('API: Reconciliation Credit Calculation', () => {
       );
 
       expect(depositResult.result?.data?.success).toBe(true);
-      // Should have reconciled 1 pending charge
-      expect(depositResult.result?.data?.reconciledCharges).toBe(1);
+
+      // Trigger reconciliation (now async via GM)
+      await reconcilePendingPayments(customerId);
 
       // ---- Step 4: Verify the reconciliation credit ----
       // Now check the credit that was created
@@ -290,6 +292,9 @@ describe('API: Reconciliation Credit Calculation', () => {
       );
 
       expect(depositResult.result?.data?.success).toBe(true);
+
+      // Trigger reconciliation (now async via GM)
+      await reconcilePendingPayments(customerId);
 
       // ---- Verify credit is based on starter (the tier that was charged) ----
       const credits = await db.query.customerCredits.findMany({

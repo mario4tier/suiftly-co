@@ -18,3 +18,4 @@ export * from './cancellation-history'; // Phase 1C cancellation tracking
 // Mock tables (test/development only - NOT for production use)
 export * from './mock';
 export * from './mock-tracking';
+export * from './test-kv';

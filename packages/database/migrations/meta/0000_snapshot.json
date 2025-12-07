@@ -1,5 +1,5 @@
 {
-  "id": "892b01cf-90ee-4c27-89db-c684004e1b82",
+  "id": "104a7881-c50d-4038-84ea-d0a520021808",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -678,6 +678,12 @@
         "credit_month": {
           "name": "credit_month",
           "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "description": {
+          "name": "description",
+          "type": "varchar(100)",
           "primaryKey": false,
           "notNull": false
         },
@@ -1504,7 +1510,7 @@
         },
         "invoice_id": {
           "name": "invoice_id",
-          "type": "varchar(50)",
+          "type": "bigint",
           "primaryKey": false,
           "notNull": false
         },
@@ -2934,6 +2940,38 @@
           ]
         }
       },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.test_kv": {
+      "name": "test_kv",
+      "schema": "",
+      "columns": {
+        "key": {
+          "name": "key",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "value": {
+          "name": "value",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
