@@ -235,23 +235,24 @@ export const statsRouter = router({
   /**
    * Clear stats data (development/test only)
    *
-   * Removes all HAProxy logs for the customer.
+   * Removes HAProxy logs for the customer for the specified service.
    * Only available when NODE_ENV !== 'production'
    */
   clearStats: protectedProcedure
     .input(z.object({
       serviceType: serviceTypeSchema,
     }))
-    .mutation(async ({ ctx }) => {
+    .mutation(async ({ ctx, input }) => {
       // Only allow in development/test
       if (config.NODE_ENV === 'production') {
         throw new Error('Clear stats not available in production');
       }
 
-      await clearCustomerLogs(db, ctx.user.customerId);
+      const serviceTypeNum = SERVICE_TYPE_NUMBER[input.serviceType as ServiceType];
+      await clearCustomerLogs(db, ctx.user.customerId, serviceTypeNum);
       await refreshStatsAggregate(db);
 
-      return { success: true };
+      return { success: true, serviceType: input.serviceType };
     }),
 
   /**

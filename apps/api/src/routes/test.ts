@@ -1,17 +1,23 @@
 /**
- * Test router for Phase 8
- * Protected endpoints for testing authentication
+ * Test router
+ * Development/test endpoints for verifying authentication
+ * All endpoints disabled in production (NODE_ENV === 'production')
  */
 
-import { z } from 'zod';
-import { router, protectedProcedure, publicProcedure } from '../lib/trpc';
-import { testDelayManager } from '../lib/test-delays';
+import { router, protectedProcedure } from '../lib/trpc';
+import { config } from '../lib/config';
 
 export const testRouter = router({
   /**
    * Protected endpoint - requires valid access token
+   * Used by tests to verify authentication is working
+   * Only available in development/test
    */
   getProfile: protectedProcedure.query(async ({ ctx }) => {
+    if (config.NODE_ENV === 'production') {
+      throw new Error('Test endpoint not available in production');
+    }
+
     return {
       message: 'Protected endpoint accessed successfully!',
       user: ctx.user,
@@ -19,32 +25,6 @@ export const testRouter = router({
     };
   }),
 
-  /**
-   * Set artificial delays for testing
-   * Allows Playwright tests to slow down API responses
-   */
-  setDelays: publicProcedure
-    .input(z.object({
-      validateSubscription: z.number().optional(),
-      subscribe: z.number().optional(),
-    }))
-    .mutation(({ input }) => {
-      testDelayManager.setDelays(input);
-      return {
-        success: true,
-        delays: input,
-        message: 'Test delays configured'
-      };
-    }),
-
-  /**
-   * Clear all test delays
-   */
-  clearDelays: publicProcedure.mutation(() => {
-    testDelayManager.clearDelays();
-    return {
-      success: true,
-      message: 'Test delays cleared'
-    };
-  }),
+  // Note: Test delays are managed via REST endpoints at /test/delays
+  // See server.ts for implementation (used by Playwright E2E tests)
 });

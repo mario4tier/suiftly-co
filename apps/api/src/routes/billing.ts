@@ -467,15 +467,18 @@ export const billingRouter = router({
         message: `Deposited $${input.amountUsd.toFixed(2)} to escrow account`,
       });
 
-      // Queue sync with Global Manager to reconcile pending subscription charges
-      // This is fire-and-forget - the deposit has already succeeded
+      // Sync with Global Manager to reconcile pending subscription charges
+      // This waits for completion so the response reflects the updated state
+      // (better UX - user sees subscription activated immediately after deposit)
       const gmUrl = config.GM_URL || 'http://localhost:22600';
-      fetch(`${gmUrl}/api/queue/sync-customer/${customer.customerId}?source=api`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      }).catch(err => {
-        console.error(`[DEPOSIT] Failed to queue sync with GM:`, err.message);
-      });
+      try {
+        await fetch(`${gmUrl}/api/queue/sync-customer/${customer.customerId}?source=api`, {
+          method: 'POST',
+        });
+      } catch (err: any) {
+        // Log but don't fail - the deposit itself succeeded
+        console.error(`[DEPOSIT] Failed to sync with GM:`, err.message);
+      }
 
       // Get new balance
       const account = await suiService.getAccount(ctx.user.walletAddress);

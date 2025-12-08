@@ -108,7 +108,6 @@ async function globalTeardown() {
   try {
     await fetch('http://localhost:22600/api/test/clock/real', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
     });
     console.log('✅ Reset to real database clock (via GM)');
   } catch {

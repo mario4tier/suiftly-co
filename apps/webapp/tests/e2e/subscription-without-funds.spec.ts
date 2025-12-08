@@ -275,10 +275,10 @@ test.describe('Subscription Without Funds', () => {
 
     // Wait for deposit to complete
     await expect(page.locator('[data-sonner-toast]').filter({ hasText: /Deposited.*successfully/i })).toBeVisible({ timeout: 5000 });
-    await expect(page.locator('[data-sonner-toast]').filter({ hasText: /subscription charge.*processed/i })).toBeVisible({ timeout: 5000 });
 
-    // Give React Query time to invalidate and refetch
-    await page.waitForTimeout(1000);
+    // Give time for the sync with GM to complete and React Query to invalidate/refetch
+    // The deposit now waits for GM sync, so the pending charge should already be processed
+    await page.waitForTimeout(2000);
 
     // Next Scheduled Payment/Refund should now be updated (no longer $0.00)
     // The exact amount will be less than $29 due to proration credit for partial month

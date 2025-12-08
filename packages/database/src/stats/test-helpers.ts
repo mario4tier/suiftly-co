@@ -437,18 +437,26 @@ export async function refreshStatsAggregate(
 }
 
 /**
- * Clear all HAProxy logs for a customer (test cleanup)
+ * Clear HAProxy logs for a customer (test cleanup)
  *
  * @param db Database instance
  * @param customerId Customer ID to clear logs for
+ * @param serviceType Optional service type to filter (1=seal, 2=grpc, 3=graphql). If omitted, clears all services.
  */
 export async function clearCustomerLogs(
   db: Database,
-  customerId: number
+  customerId: number,
+  serviceType?: number
 ): Promise<void> {
-  await db.execute(
-    sql`DELETE FROM haproxy_raw_logs WHERE customer_id = ${customerId}`
-  );
+  if (serviceType !== undefined) {
+    await db.execute(
+      sql`DELETE FROM haproxy_raw_logs WHERE customer_id = ${customerId} AND service_type = ${serviceType}`
+    );
+  } else {
+    await db.execute(
+      sql`DELETE FROM haproxy_raw_logs WHERE customer_id = ${customerId}`
+    );
+  }
 }
 
 /**

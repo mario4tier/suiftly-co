@@ -173,15 +173,14 @@ These are public values loaded by the frontend at startup.
 - `fmax_skey` - Maximum service keys allowed
 - `mockAuth` - Show mock wallet for development (backend-controlled)
 
-### Backend Configuration (b* keys)
+### Backend Configuration (b* keys) - NOT IMPLEMENTED
 
-These are private values used only by backend services.
+Reserved for future use. If needed, backend configuration would be:
+- Private values used only by backend services
+- API credentials, internal URLs, background job settings
+- Served via `config.getBackendConfig` (protectedProcedure)
 
-**Common use cases:**
-- API credentials
-- Internal service URLs
-- Background job settings
-- Admin thresholds
+Currently not implemented - no b* keys exist in the system.
 
 ## Modifying Configuration Values
 

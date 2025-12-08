@@ -1,7 +1,12 @@
 // Global Manager (gm) - Centralized control plane for Suiftly infrastructure
-// Port: 22600
+//
+// Environment variables:
+//   GM_PORT - Server port (default: 22600)
+//   GM_HOST - Server host (default: 0.0.0.0)
+//   NODE_ENV - Environment (production/development)
 
 import Fastify from 'fastify';
+import { z } from 'zod';
 import { db, adminNotifications } from '@suiftly/database';
 import { getMockClockState, setMockClockState } from '@suiftly/database/test-kv';
 import { desc, eq } from 'drizzle-orm';
@@ -16,8 +21,76 @@ import {
   stopPeriodicSync,
 } from './task-queue.js';
 
-const PORT = 22600;
-const HOST = '0.0.0.0';
+const PORT = parseInt(process.env.GM_PORT || '22600', 10);
+const HOST = process.env.GM_HOST || '0.0.0.0';
+
+// ============================================================================
+// Zod Schemas
+// ============================================================================
+
+// Common schemas
+const idParamSchema = z.object({
+  id: z.string().regex(/^\d+$/, 'ID must be a positive integer').transform(Number),
+});
+
+const customerIdParamSchema = z.object({
+  customerId: z.string().regex(/^\d+$/, 'Customer ID must be a positive integer').transform(Number),
+});
+
+// Notification schemas
+const notificationListQuerySchema = z.object({
+  acknowledged: z.enum(['true', 'false']).optional(),
+  limit: z.string().regex(/^\d+$/).transform(Number).pipe(z.number().min(1).max(500)).optional(),
+});
+
+// Queue schemas
+const queueQuerySchema = z.object({
+  source: z.enum(['api', 'test', 'manual']).optional().default('api'),
+  async: z.enum(['true', 'false']).optional(),
+});
+
+const syncAllQuerySchema = z.object({
+  source: z.enum(['api', 'test', 'manual']).optional().default('manual'),
+  async: z.enum(['true', 'false']).optional(),
+});
+
+// Test endpoint schemas
+const clockMockBodySchema = z.object({
+  time: z.union([z.string(), z.number()]).optional(),
+  autoAdvance: z.boolean().optional().default(false),
+  timeScale: z.number().positive().optional().default(1.0),
+});
+
+const clockAdvanceBodySchema = z.object({
+  days: z.number().int().optional(),
+  hours: z.number().int().optional(),
+  minutes: z.number().int().optional(),
+  milliseconds: z.number().int().optional(),
+});
+
+const testNotificationBodySchema = z.object({
+  severity: z.enum(['info', 'warning', 'error']).optional().default('info'),
+  category: z.string().min(1).max(100).optional().default('test'),
+  code: z.string().min(1).max(100).optional().default('TEST_NOTIFICATION'),
+  message: z.string().min(1).max(1000).optional().default('This is a test notification'),
+});
+
+// Helper to validate and return parsed result or send error
+function validate<T extends z.ZodTypeAny>(
+  schema: T,
+  data: unknown,
+  reply: any
+): z.output<T> | null {
+  const result = schema.safeParse(data);
+  if (!result.success) {
+    reply.status(400).send({
+      error: 'Validation failed',
+      details: result.error.issues.map(i => ({ path: i.path.join('.'), message: i.message })),
+    });
+    return null;
+  }
+  return result.data;
+}
 
 const server = Fastify({
   logger: {
@@ -40,9 +113,11 @@ server.get('/api/health', healthResponse);
 // ============================================================================
 
 // List all notifications (most recent first)
-server.get('/api/notifications', async (request) => {
-  const query = request.query as { acknowledged?: string; limit?: string };
-  const limit = Math.min(parseInt(query.limit || '100', 10), 500);
+server.get('/api/notifications', async (request, reply) => {
+  const query = validate(notificationListQuerySchema, request.query, reply);
+  if (!query) return;
+
+  const limit = query.limit ?? 100;
 
   let notifications;
   if (query.acknowledged === 'false') {
@@ -100,11 +175,9 @@ server.get('/api/notifications/counts', async () => {
 });
 
 // Acknowledge (dismiss) a notification
-server.post<{ Params: { id: string } }>('/api/notifications/:id/acknowledge', async (request, reply) => {
-  const id = parseInt(request.params.id, 10);
-  if (isNaN(id)) {
-    return reply.status(400).send({ error: 'Invalid notification ID' });
-  }
+server.post('/api/notifications/:id/acknowledge', async (request, reply) => {
+  const params = validate(idParamSchema, request.params, reply);
+  if (!params) return;
 
   const [updated] = await db
     .update(adminNotifications)
@@ -113,7 +186,7 @@ server.post<{ Params: { id: string } }>('/api/notifications/:id/acknowledge', as
       acknowledgedAt: new Date(),
       acknowledgedBy: 'admin', // Could be extended with actual user tracking
     })
-    .where(eq(adminNotifications.notificationId, id))
+    .where(eq(adminNotifications.notificationId, params.id))
     .returning();
 
   if (!updated) {
@@ -139,15 +212,13 @@ server.post('/api/notifications/acknowledge-all', async () => {
 });
 
 // Delete a notification permanently
-server.delete<{ Params: { id: string } }>('/api/notifications/:id', async (request, reply) => {
-  const id = parseInt(request.params.id, 10);
-  if (isNaN(id)) {
-    return reply.status(400).send({ error: 'Invalid notification ID' });
-  }
+server.delete('/api/notifications/:id', async (request, reply) => {
+  const params = validate(idParamSchema, request.params, reply);
+  if (!params) return;
 
   const [deleted] = await db
     .delete(adminNotifications)
-    .where(eq(adminNotifications.notificationId, id))
+    .where(eq(adminNotifications.notificationId, params.id))
     .returning();
 
   if (!deleted) {
@@ -174,47 +245,19 @@ server.delete('/api/notifications/acknowledged', async () => {
 // Queue a sync for a specific customer (called by API server after deposit, etc.)
 // Default: waits for completion (synchronous)
 // Use ?async=true to return immediately without waiting
-server.post<{ Params: { customerId: string } }>(
-  '/api/queue/sync-customer/:customerId',
-  async (request, reply) => {
-    const customerId = parseInt(request.params.customerId, 10);
-    if (isNaN(customerId)) {
-      return reply.status(400).send({ error: 'Invalid customer ID' });
-    }
+server.post('/api/queue/sync-customer/:customerId', async (request, reply) => {
+  const params = validate(customerIdParamSchema, request.params, reply);
+  if (!params) return;
 
-    const query = request.query as { source?: string; async?: string };
-    const source = (query.source as 'api' | 'test' | 'manual') || 'api';
-    const runAsync = query.async === 'true';
+  const query = validate(queueQuerySchema, request.query, reply);
+  if (!query) return;
 
-    let task;
-    if (runAsync) {
-      // Async mode - return immediately (for production API server calls)
-      task = queueSyncCustomer(customerId, source);
-      if (task) {
-        return { success: true, queued: true, taskId: task.id };
-      } else {
-        return { success: true, queued: false, reason: 'deduplicated' };
-      }
-    } else {
-      // Synchronous mode (default) - wait for completion
-      task = await queueSyncCustomerSync(customerId, source);
-      return { success: true, queued: !!task, completed: true, taskId: task?.id };
-    }
-  }
-);
-
-// Queue a sync-all (on-demand trigger)
-// Default: waits for completion (synchronous)
-// Use ?async=true to return immediately without waiting
-server.post('/api/queue/sync-all', async (request) => {
-  const query = request.query as { source?: string; async?: string };
-  const source = (query.source as 'api' | 'test' | 'manual') || 'manual';
   const runAsync = query.async === 'true';
 
   let task;
   if (runAsync) {
-    // Async mode - return immediately (for periodic timer)
-    task = queueSyncAll(source);
+    // Async mode - return immediately (for production API server calls)
+    task = queueSyncCustomer(params.customerId, query.source);
     if (task) {
       return { success: true, queued: true, taskId: task.id };
     } else {
@@ -222,7 +265,32 @@ server.post('/api/queue/sync-all', async (request) => {
     }
   } else {
     // Synchronous mode (default) - wait for completion
-    task = await queueSyncAllSync(source);
+    task = await queueSyncCustomerSync(params.customerId, query.source);
+    return { success: true, queued: !!task, completed: true, taskId: task?.id };
+  }
+});
+
+// Queue a sync-all (on-demand trigger)
+// Default: waits for completion (synchronous)
+// Use ?async=true to return immediately without waiting
+server.post('/api/queue/sync-all', async (request, reply) => {
+  const query = validate(syncAllQuerySchema, request.query, reply);
+  if (!query) return;
+
+  const runAsync = query.async === 'true';
+
+  let task;
+  if (runAsync) {
+    // Async mode - return immediately (for periodic timer)
+    task = queueSyncAll(query.source);
+    if (task) {
+      return { success: true, queued: true, taskId: task.id };
+    } else {
+      return { success: true, queued: false, reason: 'deduplicated' };
+    }
+  } else {
+    // Synchronous mode (default) - wait for completion
+    task = await queueSyncAllSync(query.source);
     return { success: true, queued: !!task, completed: true, taskId: task?.id };
   }
 });
@@ -250,22 +318,23 @@ if (process.env.NODE_ENV !== 'production') {
 
   // Clock mock endpoints - GM is the single source of truth
   // Sets local mock clock AND writes to test_kv for other processes
-  server.post('/api/test/clock/mock', async (request) => {
-    const body = request.body as { time?: string | number; autoAdvance?: boolean; timeScale?: number };
+  server.post('/api/test/clock/mock', async (request, reply) => {
+    const body = validate(clockMockBodySchema, request.body || {}, reply);
+    if (!body) return;
 
     let mockTime: Date | undefined;
-    if (body.time) {
+    if (body.time !== undefined) {
       mockTime = typeof body.time === 'string' ? new Date(body.time) : new Date(body.time);
       if (isNaN(mockTime.getTime())) {
-        return { error: 'Invalid date/time value' };
+        return reply.status(400).send({ error: 'Invalid date/time value' });
       }
     }
 
     // Set local mock clock AND persist to test_kv
     const mockClock = await dbClockProvider.useMockClockAndSync({
       currentTime: mockTime,
-      autoAdvance: body.autoAdvance || false,
-      timeScale: body.timeScale || 1.0,
+      autoAdvance: body.autoAdvance,
+      timeScale: body.timeScale,
     });
 
     return {
@@ -273,8 +342,8 @@ if (process.env.NODE_ENV !== 'production') {
       type: 'mock',
       currentTime: mockClock.now().toISOString(),
       config: {
-        autoAdvance: body.autoAdvance || false,
-        timeScale: body.timeScale || 1.0,
+        autoAdvance: body.autoAdvance,
+        timeScale: body.timeScale,
       },
     };
   });
@@ -301,13 +370,14 @@ if (process.env.NODE_ENV !== 'production') {
   });
 
   // Advance mock clock by specific duration
-  server.post('/api/test/clock/advance', async (request) => {
+  server.post('/api/test/clock/advance', async (request, reply) => {
     const mockClock = dbClockProvider.getMockClock();
     if (!mockClock) {
-      return { error: 'Mock clock not enabled. Use /api/test/clock/mock first.' };
+      return reply.status(400).send({ error: 'Mock clock not enabled. Use /api/test/clock/mock first.' });
     }
 
-    const body = request.body as { days?: number; hours?: number; minutes?: number; milliseconds?: number };
+    const body = validate(clockAdvanceBodySchema, request.body || {}, reply);
+    if (!body) return;
 
     // Advance by each specified unit
     if (body.days) {
@@ -330,30 +400,26 @@ if (process.env.NODE_ENV !== 'production') {
       success: true,
       currentTime: mockClock.now().toISOString(),
       advanced: {
-        days: body.days || 0,
-        hours: body.hours || 0,
-        minutes: body.minutes || 0,
-        milliseconds: body.milliseconds || 0,
+        days: body.days ?? 0,
+        hours: body.hours ?? 0,
+        minutes: body.minutes ?? 0,
+        milliseconds: body.milliseconds ?? 0,
       },
     };
   });
 
   // Create a test notification
-  server.post('/api/test/notification', async (request) => {
-    const body = request.body as {
-      severity?: string;
-      category?: string;
-      code?: string;
-      message?: string;
-    } | undefined;
+  server.post('/api/test/notification', async (request, reply) => {
+    const body = validate(testNotificationBodySchema, request.body || {}, reply);
+    if (!body) return;
 
     const [notification] = await db
       .insert(adminNotifications)
       .values({
-        severity: body?.severity || 'info',
-        category: body?.category || 'test',
-        code: body?.code || 'TEST_NOTIFICATION',
-        message: body?.message || 'This is a test notification',
+        severity: body.severity as 'info' | 'warning' | 'error',
+        category: body.category,
+        code: body.code,
+        message: body.message,
         details: JSON.stringify({ createdAt: new Date().toISOString(), test: true }),
       })
       .returning();
@@ -390,7 +456,7 @@ if (process.env.NODE_ENV !== 'production') {
 // ============================================================================
 
 const shutdown = async (signal: string) => {
-  console.log(`\n${signal} received, shutting down gracefully...`);
+  server.log.info(`${signal} received, shutting down gracefully...`);
   stopPeriodicSync();
   await server.close();
   process.exit(0);
@@ -403,7 +469,7 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 async function start() {
   try {
     await server.listen({ port: PORT, host: HOST });
-    console.log(`Global Manager (gm) listening on http://${HOST}:${PORT}`);
+    server.log.info(`Global Manager (gm) listening on http://${HOST}:${PORT}`);
 
     // Start periodic sync-all (1 hour interval in production, 5 minutes in dev)
     const syncInterval = process.env.NODE_ENV === 'production'

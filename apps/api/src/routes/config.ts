@@ -1,6 +1,6 @@
 /**
  * Config router
- * Public endpoints for fetching system configuration
+ * Public endpoint for fetching frontend configuration
  */
 
 import { router, publicProcedure } from '../lib/trpc';
@@ -33,23 +33,7 @@ export const configRouter = router({
     return configObj;
   }),
 
-  /**
-   * Get backend configuration values (b* keys)
-   * Protected in production - used by backend services
-   * Uses in-memory cache for fast access (no database query)
-   */
-  getBackendConfig: publicProcedure.query(async () => {
-    // Get all config from cache (O(1) lookup, no database query)
-    const allConfig = getAllConfig();
-
-    // Filter to backend keys (b* prefix)
-    const configObj: Record<string, string> = {};
-    for (const [key, value] of Object.entries(allConfig)) {
-      if (key.startsWith('b')) {
-        configObj[key] = value;
-      }
-    }
-
-    return configObj;
-  }),
+  // Note: Backend configuration (b* keys) is not implemented.
+  // If needed in the future, add getBackendConfig as protectedProcedure
+  // and define b* keys in init-config.ts.
 });
