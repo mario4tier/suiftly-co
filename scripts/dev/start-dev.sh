@@ -77,10 +77,10 @@ fi
 
 echo "✅ Admin Webapp started (PID: $ADMIN_PID)"
 
-# Start Local Manager (lm)
-echo "📍 Starting Local Manager (lm)..."
-cd /home/olet/suiftly-co
-npx tsx services/local-manager/src/server.ts > /tmp/suiftly-lm.log 2>&1 &
+# Start Local Manager (lm) from walrus repo
+echo "📍 Starting Local Manager (lm) from walrus..."
+cd /home/olet/walrus/services/local-manager
+npx tsx src/server.ts > /tmp/suiftly-lm.log 2>&1 &
 LM_PID=$!
 
 # Wait for lm to be ready (up to 5 seconds)

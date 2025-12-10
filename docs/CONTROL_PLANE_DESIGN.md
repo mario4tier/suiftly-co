@@ -67,7 +67,7 @@ The Suiftly control plane manages configuration distribution and status collecti
 │  │  Local Manager → consumes VAULT, updates HAProxy                      │  │
 │  │  HAProxy → enforces rate limits, logs requests                        │  │
 │  │  Fluentd → ships logs back to PostgreSQL                              │  │
-│  │  Status Reporter → reports health to Global Manager                   │  │
+│  │  Status API → responds to GM health polls (pull-based)                │  │
 │  └───────────────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -110,12 +110,15 @@ Global Manager (aggregates into usage_hourly)
 Billing calculation
 ```
 
-### 3. Status Reporting (Local → Global → UI)
+### 3. Status Reporting (Global polls Local)
 
 ```
-Local Manager (checks HAProxy, keyserver health)
+Global Manager (periodic polling, e.g., every 60s)
        ↓
-Status API call to Global Manager
+Fetches status from each Local Manager:
+  GET http://server-a:22610/api/status
+  GET http://server-b:22610/api/status
+  ...
        ↓
 PostgreSQL (server_status table)
        ↓
@@ -125,6 +128,8 @@ API Server
        ↓
 Webapp (admin dashboard)
 ```
+
+**Pull-based design**: GM initiates all status queries. LMs are passive responders - they don't push status to GM. This simplifies networking (no inbound connections to GM needed from remote servers).
 
 ---
 
@@ -152,6 +157,8 @@ Long-lived daemon process running on the primary database server. Handles all ce
 
 ### Implementation
 
+**Note:** Uses `pino` for logging - this is Fastify's built-in logger, same as the API server.
+
 ```typescript
 // services/global-manager/src/index.ts
 
@@ -162,9 +169,9 @@ import { calculateBills } from './tasks/calculate-bills'
 import { generateMAVault } from './tasks/generate-ma-vault'
 import { aggregateStatus } from './tasks/aggregate-status'
 import { cleanup } from './tasks/cleanup'
-import pino from 'pino'
 
-const logger = pino({ name: 'global-manager' })
+// pino is Fastify's built-in logger (same stack as API server)
+const logger = fastify.log  // or: import pino from 'pino'
 
 const CONFIG = {
   LOCK_ID: 1001,  // PostgreSQL advisory lock
@@ -505,11 +512,12 @@ Global Manager writes VAULT using `kvcrypt.py` from ~/walrus:
 
 ### Status Reporting Interface
 
-Local Managers report status via HTTP POST to the API:
+Global Manager polls Local Managers via HTTP GET:
 
 ```typescript
-// Expected payload from Local Manager
-interface ServerStatusReport {
+// GM polls: GET http://server-a:22610/api/status
+// LM responds with:
+interface ServerStatusResponse {
   server_name: string
   region: string
   status: 'healthy' | 'degraded' | 'unhealthy'
@@ -827,6 +835,745 @@ psql suiftly_prod -c "SELECT * FROM server_status ORDER BY reported_at DESC;"
 - Local Managers operate independently
 - VAULT updates queued until connectivity restored
 - Status reporting resumes automatically
+
+---
+
+## Configuration Propagation & Verification
+
+### Problem Statement
+
+When a user changes their configuration (e.g., upgrades tier, adds API key, updates IP allowlist), we need to:
+
+1. **Propagate changes** to all remote servers reliably
+2. **Verify application** - confirm HAProxy and key-server have the correct config
+3. **Handle different update cadences** - HAProxy is hot-reloadable, key-server requires restart
+4. **Provide visibility** - users should be able to check if their changes are live
+
+### Design Goals
+
+| Goal | Description |
+|------|-------------|
+| **Consistency** | All servers eventually have identical configuration for a given user |
+| **Verifiability** | Can confirm a specific user's config is applied on a specific server |
+| **Minimal Disruption** | Key-server restarts are debounced (max once per 5 minutes) |
+| **Observability** | Clear status reporting of propagation state per server |
+
+---
+
+### Configuration Versioning Strategy
+
+We use **two-level versioning**:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Global Config Version                        │
+│                                                                 │
+│  Version: 124                                                   │
+│  Generated: 2025-01-15T10:30:00Z                               │
+│  Hash: sha256:abc123...                                        │
+│                                                                 │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │              Per-User Change Tracking                    │  │
+│  │                                                          │  │
+│  │  customer:12345 → { lastModified: 124, tier: "pro" }    │  │
+│  │  customer:67890 → { lastModified: 120, tier: "starter" }│  │
+│  │  ...                                                     │  │
+│  └──────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Global Version**: Monotonically increasing integer, incremented on each MA_VAULT generation.
+
+**Per-User LastModified**: Records which global version last modified this user's config. Enables efficient per-user verification.
+
+---
+
+### HAProxy Configuration Verification
+
+HAProxy map files can be queried via the **stats socket**. We leverage this for verification.
+
+#### Map Files (Service-Specific)
+
+Each service has its own config map. See [~/walrus/docs/HAPROXY_CONTROLS.md](~/walrus/docs/HAPROXY_CONTROLS.md) for complete format specification.
+
+```
+/etc/haproxy/conf.d/204-mseal_config.map     # Mainnet Seal
+/etc/haproxy/conf.d/214-tseal_config.map     # Testnet Seal
+/etc/haproxy/conf.d/203-mssfn_config.map     # Mainnet SSFN
+/etc/haproxy/conf.d/213-tssfn_config.map     # Testnet SSFN
+```
+
+#### Map File Structure
+
+```
+# /etc/haproxy/conf.d/204-mseal_config.map
+# Format: <customer_id> <header_hex>,<api_keys_hex>,<ip_filter_hex>,<extra_hex>
+
+# Metadata (always present - stored as regular map entries)
+__version__     124
+__generated__   2025-01-15T10:30:00Z
+__hash__        abc123
+
+# Customer configurations (64-hex encoded, see HAPROXY_CONTROLS.md for field definitions)
+42   0000002020000000,48656C7200000000,0000000000000000,0000000000000000
+99   0000010060630000,AABBCCDD11223344,0000000000000000,0000000000000000
+1337 0000040181820004,12345678ABCDEF01,C0A80001C0A80002,0000000000000000
+```
+
+#### Verification Methods
+
+**Method 1: Version Check (Global)**
+```bash
+# Query map version via stats socket (example: mainnet seal)
+echo "show map /etc/haproxy/conf.d/204-mseal_config.map __version__" | \
+  socat stdio /run/haproxy/admin.sock
+# Returns: __version__ 124
+```
+
+**Method 2: User Lookup (Per-User)**
+```bash
+# Check specific customer config (example: mainnet seal)
+echo "show map /etc/haproxy/conf.d/204-mseal_config.map 42" | \
+  socat stdio /run/haproxy/admin.sock
+# Returns: 42 0000002020000000,48656C7200000000,0000000000000000,0000000000000000
+```
+
+**Method 3: HTTP Verification Endpoint (Remote)**
+
+LM exposes an internal API that wraps the stats socket:
+
+```
+GET /api/haproxy/verify/{service}/{customerId}
+Example: GET /api/haproxy/verify/mseal/42
+
+Response:
+{
+  "found": true,
+  "service": "mseal",
+  "customerId": 42,
+  "configHex": "0000002020000000,48656C7200000000,0000000000000000,0000000000000000",
+  "mapVersion": 124,
+  "serverName": "eu-west-1"
+}
+```
+
+```
+GET /api/haproxy/version/{service}
+Example: GET /api/haproxy/version/mseal
+
+Response:
+{
+  "service": "mseal",
+  "version": 124,
+  "generated": "2025-01-15T10:30:00Z",
+  "hash": "abc123",
+  "customerCount": 1500,
+  "serverName": "eu-west-1"
+}
+```
+
+---
+
+### HAProxy Update Flow (Hot Reload)
+
+HAProxy map files can be updated **without restart** using the stats socket. Each service has its own config map - the flow below is repeated for each service (mseal, tseal, mssfn, tssfn, etc.):
+
+```
+┌───────────────────────────────────────────────────────────────────────┐
+│                        HAProxy Update Flow                            │
+├───────────────────────────────────────────────────────────────────────┤
+│                                                                       │
+│  1. GM generates new MA_VAULT (version 124)                          │
+│                    ↓                                                  │
+│  2. sync-files.py distributes to all servers                         │
+│                    ↓                                                  │
+│  3. LM detects new VAULT (via inotify or polling)                    │
+│                    ↓                                                  │
+│  4. LM parses VAULT, generates new map file content                  │
+│                    ↓                                                  │
+│  5. LM applies via stats socket using ATOMIC TRANSACTION:            │
+│                                                                       │
+│     # HAProxy supports atomic multi-entry transactions!              │
+│     # See: haproxy.com/documentation/haproxy-runtime-api/reference/  │
+│                                                                       │
+│     # Example: mainnet seal config map                               │
+│     MAP=/etc/haproxy/conf.d/204-mseal_config.map                     │
+│     SOCK=/run/haproxy/admin.sock                                     │
+│                                                                       │
+│     # Step 1: Get current map state                                  │
+│     echo "show map $MAP" | socat stdio $SOCK                         │
+│                                                                       │
+│     # Step 2: Start transaction (returns new version number)         │
+│     echo "prepare map $MAP" | socat stdio $SOCK                      │
+│     # Response: "New version created: 42"                            │
+│                                                                       │
+│     # Step 3: Apply all changes to the transaction version           │
+│     # - Update metadata:                                             │
+│     echo "set map @42 $MAP __version__ 124" | socat stdio $SOCK      │
+│     # - For new entries:                                             │
+│     echo "add map @42 $MAP 42 <config_hex>" | socat stdio $SOCK      │
+│     # - For changed entries:                                         │
+│     echo "set map @42 $MAP 99 <config_hex>" | socat stdio $SOCK      │
+│     # - For removed entries:                                         │
+│     echo "del map @42 $MAP 1337" | socat stdio $SOCK                 │
+│                                                                       │
+│     # Step 4: Commit transaction (atomic - all changes apply at once)│
+│     echo "commit map @42 $MAP" | socat stdio $SOCK                   │
+│                                                                       │
+│  6. LM verifies via stats socket (check __version__ = expected)      │
+│                    ↓                                                  │
+│  7. LM reports to GM: { haproxyVersion: 124, status: "applied" }     │
+│                                                                       │
+└───────────────────────────────────────────────────────────────────────┘
+```
+
+**Key Points:**
+- **Atomic transactions**: Use `prepare map` → changes → `commit map` for all-or-nothing updates
+- **Never use `clear map`** - not hitless, leaves map empty during reload
+- `commit map` applies all changes **instantly** - no partial states visible
+- No HAProxy restart or reload needed
+- Changes take effect **immediately** for new requests
+- Existing connections continue with old config until complete
+
+**Sources:** [HAProxy Runtime API Reference](https://www.haproxy.com/documentation/haproxy-runtime-api/reference/), [prepare map](https://www.haproxy.com/documentation/haproxy-runtime-api/reference/prepare-map/), [commit map](https://www.haproxy.com/documentation/haproxy-runtime-api/reference/commit-map/)
+
+---
+
+### Key-Server Update Flow (Debounced Restart)
+
+Key-server changes require a restart which is potentially disruptive. We implement **debouncing** with a minimum 5-minute interval.
+
+#### State Machine
+
+```
+                    ┌─────────────────────────────────┐
+                    │           IDLE                  │
+                    │   (no pending changes)          │
+                    └─────────────────────────────────┘
+                                   │
+                                   │ Change arrives
+                                   ▼
+                    ┌─────────────────────────────────┐
+                    │        PENDING_BATCH            │
+      ┌───────────▶ │   (collecting changes)          │ ◀──────┐
+      │             │   Timer: 5 min from last restart │       │
+      │             └─────────────────────────────────┘        │
+      │                            │                           │
+      │                            │ Timer expires AND         │
+      │                            │ 5 min since last restart  │
+      │                            ▼                           │
+      │             ┌─────────────────────────────────┐        │
+      │             │         APPLYING                │        │
+      │             │   (updating config, restarting) │        │
+      │             └─────────────────────────────────┘        │
+      │                            │                           │
+      │   More changes             │ Success                   │
+      │   arrive during            ▼                           │
+      │   apply                   ┌─────────────────────────────┐
+      └───────────────────────────│       COOLDOWN             │
+                                  │   (5 min window)           │
+                                  │   Changes → PENDING_BATCH  │
+                                  └─────────────────────────────┘
+                                               │
+                                               │ 5 min elapsed, no pending
+                                               ▼
+                                  ┌─────────────────────────────┐
+                                  │           IDLE              │
+                                  └─────────────────────────────┘
+```
+
+#### Debounce Configuration
+
+```typescript
+interface KeyServerDebounceConfig {
+  minRestartIntervalMs: 5 * 60 * 1000;  // 5 minutes
+  maxBatchWaitMs: 10 * 60 * 1000;       // 10 minutes max wait for batching
+  gracefulShutdownTimeoutMs: 30 * 1000; // 30 seconds for graceful shutdown
+}
+```
+
+#### Implementation Sketch
+
+```typescript
+// In Local Manager
+class KeyServerConfigManager {
+  private pendingChanges: ConfigChange[] = [];
+  private lastRestartAt: Date | null = null;
+  private state: 'idle' | 'pending_batch' | 'applying' | 'cooldown' = 'idle';
+  private debounceTimer: NodeJS.Timeout | null = null;
+
+  async queueChange(change: ConfigChange): Promise<void> {
+    this.pendingChanges.push(change);
+
+    if (this.state === 'idle') {
+      this.state = 'pending_batch';
+      this.scheduleApply();
+    }
+    // If already pending/cooldown, changes accumulate automatically
+  }
+
+  private scheduleApply(): void {
+    const timeSinceLastRestart = this.lastRestartAt
+      ? Date.now() - this.lastRestartAt.getTime()
+      : Infinity;
+
+    const waitTime = Math.max(0, MIN_RESTART_INTERVAL - timeSinceLastRestart);
+
+    this.debounceTimer = setTimeout(() => this.applyChanges(), waitTime);
+  }
+
+  private async applyChanges(): Promise<void> {
+    this.state = 'applying';
+    const changes = [...this.pendingChanges];
+    this.pendingChanges = [];
+
+    try {
+      // 1. Generate new config file
+      await this.generateKeyServerConfig(changes);
+
+      // 2. Graceful restart
+      await this.restartKeyServer();
+
+      // 3. Verify health
+      await this.waitForHealthy();
+
+      this.lastRestartAt = new Date();
+      this.state = 'cooldown';
+
+      // Report success to GM
+      await this.reportStatus({ keyServerVersion: this.currentVersion, status: 'applied' });
+
+      // After cooldown, check if more changes accumulated
+      setTimeout(() => {
+        if (this.pendingChanges.length > 0) {
+          this.state = 'pending_batch';
+          this.scheduleApply();
+        } else {
+          this.state = 'idle';
+        }
+      }, MIN_RESTART_INTERVAL);
+
+    } catch (error) {
+      // On failure, retry with backoff
+      this.pendingChanges = [...changes, ...this.pendingChanges];
+      this.state = 'pending_batch';
+      setTimeout(() => this.scheduleApply(), 60_000); // Retry in 1 min
+    }
+  }
+}
+```
+
+---
+
+### Which Changes Affect Which Component?
+
+| Change Type               | HAProxy | Key-Server | Notes                               |
+|---------------------------|---------|------------|-------------------------------------|
+| API key added/revoked     | ✓       | ✗          | HAProxy validates API key           |
+| Seal key added            | ✓       | ✓          | HAProxy routes, key-server decrypts |
+| Seal key enabled/disabled | ✓       | ✗          | HAProxy blocks/allows traffic       |
+| Package changed           | ✗       | ✓          | Key-server encryption config        |
+| Tier change               | ✓       | ✗          | Rate limits only (HAProxy)          |
+| Rate limit adjustment     | ✓       | ✗          | Only HAProxy enforces limits        |
+| IP allowlist change       | ✓       | ✗          | HAProxy enforces IP restrictions    |
+| Service enabled/disabled  | ✓       | ✗          | HAProxy blocks/allows traffic       |
+
+**Key Insight:** Key-server restarts are rare - only triggered by:
+1. New Seal key added (needs decryption capability)
+2. Package configuration changed (encryption settings)
+
+All access control (enable/disable, IP allowlist, rate limits) is enforced by HAProxy, making the 5-minute debounce window rarely a bottleneck.
+
+---
+
+### Propagation Status Tracking
+
+#### Database Schema Additions
+
+```sql
+-- Track expected vs actual config per server
+CREATE TABLE server_config_status (
+  server_name TEXT NOT NULL,
+  component TEXT NOT NULL,  -- 'haproxy' or 'keyserver'
+  expected_version BIGINT NOT NULL,
+  actual_version BIGINT,
+  status TEXT NOT NULL,  -- 'synced', 'pending', 'applying', 'error'
+  last_verified_at TIMESTAMPTZ,
+  error_message TEXT,
+  PRIMARY KEY (server_name, component)
+);
+
+-- Track per-customer propagation for fine-grained verification
+CREATE TABLE customer_config_propagation (
+  customer_id INTEGER NOT NULL,
+  server_name TEXT NOT NULL,
+  component TEXT NOT NULL,
+  expected_version BIGINT NOT NULL,
+  actual_version BIGINT,
+  status TEXT NOT NULL,
+  verified_at TIMESTAMPTZ,
+  PRIMARY KEY (customer_id, server_name, component)
+);
+```
+
+#### API Endpoint for Propagation Status
+
+```typescript
+// GET /api/config/propagation-status?customerId=12345
+interface PropagationStatusResponse {
+  customerId: number;
+  expectedVersion: number;
+  fullyPropagated: boolean;
+  servers: {
+    name: string;
+    region: string;
+    haproxy: {
+      status: 'synced' | 'pending' | 'applying' | 'error';
+      version: number | null;
+      lastVerified: string;
+    };
+    keyserver: {
+      status: 'synced' | 'pending' | 'applying' | 'cooldown' | 'error';
+      version: number | null;
+      nextApplyAt: string | null;  // For debounced changes
+      lastVerified: string;
+    };
+  }[];
+}
+```
+
+---
+
+### Verification Flow (User-Initiated)
+
+```
+User: "Is my config change live?"
+            │
+            ▼
+┌───────────────────────────────────────────────────────────────────────┐
+│  1. API receives request: GET /api/config/propagation-status?cid=123 │
+└───────────────────────────────────────────────────────────────────────┘
+            │
+            ▼
+┌───────────────────────────────────────────────────────────────────────┐
+│  2. GM queries all LMs in parallel (for each service):                │
+│     GET http://server-a:22610/api/haproxy/verify/mseal/123           │
+│     GET http://server-a:22610/api/keyserver/verify/123               │
+│     GET http://server-b:22610/api/haproxy/verify/mseal/123           │
+│     GET http://server-b:22610/api/keyserver/verify/123               │
+│     ...                                                               │
+└───────────────────────────────────────────────────────────────────────┘
+            │
+            ▼
+┌───────────────────────────────────────────────────────────────────────┐
+│  3. GM aggregates responses:                                          │
+│                                                                       │
+│     Server A (EU-West):                                              │
+│       - HAProxy: version 124, customer found ✓                       │
+│       - Key-server: version 124, customer found ✓                    │
+│                                                                       │
+│     Server B (US-East):                                              │
+│       - HAProxy: version 124, customer found ✓                       │
+│       - Key-server: version 120, pending restart (2 min remaining)   │
+│                                                                       │
+│     Server C (AP-South):                                             │
+│       - HAProxy: version 122, sync in progress                       │
+│       - Key-server: version 120, waiting for HAProxy first           │
+│                                                                       │
+└───────────────────────────────────────────────────────────────────────┘
+            │
+            ▼
+┌───────────────────────────────────────────────────────────────────────┐
+│  4. Return aggregated status to user                                  │
+│                                                                       │
+│  {                                                                    │
+│    "customerId": 123,                                                │
+│    "expectedVersion": 124,                                           │
+│    "fullyPropagated": false,                                         │
+│    "estimatedCompletionSeconds": 180,                                │
+│    "servers": [...]                                                  │
+│  }                                                                    │
+└───────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Implementation Phases
+
+#### Phase 1: HAProxy Verification (Implement First)
+
+1. Add version metadata to map files (`__version__`, `__generated__`, `__hash__`)
+2. Add `lastModified` to per-customer config entries
+3. LM endpoint: `GET /api/haproxy/version` - returns current map version
+4. LM endpoint: `GET /api/haproxy/verify/{customerId}` - checks specific customer
+5. GM aggregates status from all LMs
+6. API endpoint: `GET /api/config/haproxy-status?customerId=...`
+
+#### Phase 2: Key-Server Debouncing
+
+1. Implement debounce state machine in LM
+2. Add `keyserver_pending_changes` tracking
+3. LM endpoint: `GET /api/keyserver/status` - includes pending/cooldown info
+4. LM endpoint: `GET /api/keyserver/verify/{customerId}`
+5. Extend propagation status to include key-server
+
+#### Phase 3: User-Facing Status
+
+1. API endpoint for full propagation status
+2. Webapp UI showing propagation progress
+3. Webhook/notification when propagation completes
+4. Admin dashboard for fleet-wide config status
+
+---
+
+### Design Decisions
+
+| Question | Decision |
+|----------|----------|
+| **Propagation timeout** | 15 minutes. After this, create admin notification (alarm). |
+| **Partial propagation** | Continue propagating to remaining servers. Don't roll back successful ones. |
+| **Key-server restart coordination** | Stagger restarts locally within each server. Only performed when two key-server processes are running and healthy on that server. No inter-region coordination - each server manages its own staggering independently. |
+| **User notification** | No explicit notification. Service shows "Updating..." status during propagation. |
+| **Emergency override** | Force version increase on-demand (useful for bug fixes). |
+
+---
+
+### Service Status During Propagation
+
+The service status has **two independent dimensions**:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Service Status Model                         │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Operational Status (mutually exclusive):                       │
+│    • disabled - User has disabled the service                   │
+│    • up       - Service is operational                          │
+│    • down     - Service is experiencing issues                  │
+│                                                                 │
+│  Propagation Status (independent overlay):                      │
+│    • (none)     - No changes pending                            │
+│    • Updating... - Configuration change propagating             │
+│                                                                 │
+│  Combined display examples:                                     │
+│    • "up"              - Normal operation                       │
+│    • "up • Updating..."    - Working, config propagating        │
+│    • "disabled"        - User disabled                          │
+│    • "disabled • Updating..." - Disabled, config propagating    │
+│    • "down"            - Service issue                          │
+│    • "down • Updating..."  - Down, config propagating           │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**UI Display:**
+- Service routes show current status with "Updating..." indicator when propagating
+- Dashboard shows aggregated status across all services
+- "Updating..." clears automatically when propagation completes (all servers verified)
+- After 15 minutes without completion, admin notification is raised but status continues showing "Updating..."
+
+---
+
+## Error Handling
+
+All errors are reported via **admin notifications** in the database (`admin_notifications` table). This provides a centralized audit trail and enables alerting integrations.
+
+### LM Unreachable
+
+When GM cannot reach a Local Manager during configuration propagation:
+
+1. **Skip and Continue** - GM skips the unreachable LM and continues with other servers
+2. **Mark Server Status** - The server's `last_seen` timestamp becomes stale
+3. **Retry Next Cycle** - Automatic retry on next polling cycle (default: 60 seconds)
+4. **Admin Notification** - If server remains unreachable for >5 minutes, create notification (severity: `warning`)
+
+```
+┌─────────────────────────────────────────────────────┐
+│  LM Unreachable Flow                                │
+├─────────────────────────────────────────────────────┤
+│                                                     │
+│  GM ──────────────────────────────────────────────► │
+│   │                                                 │
+│   ├─► LM-1: POST /config ─────► Success ✓           │
+│   │                                                 │
+│   ├─► LM-2: POST /config ─────► Timeout (5s)        │
+│   │                     │                           │
+│   │                     └──► Skip, mark stale       │
+│   │                                                 │
+│   └─► LM-3: POST /config ─────► Success ✓           │
+│                                                     │
+│  Result: 2/3 servers updated                        │
+│  LM-2 will receive config on next successful poll  │
+│                                                     │
+└─────────────────────────────────────────────────────┘
+```
+
+### HAProxy Socket Failure
+
+When LM cannot communicate with the local HAProxy Runtime API:
+
+1. **Retry with Backoff** - 3 attempts: immediate, +1s, +2s
+2. **Abort Transaction** - If `prepare map` succeeded, explicitly `abort map`
+3. **Report Failure** - Return error to GM with failure reason
+4. **Admin Notification** - GM creates notification (severity: `error`) and marks server status as `error`
+
+```typescript
+// LM retry logic for HAProxy socket operations
+async function executeHAProxyCommand(socket: string, command: string): Promise<string> {
+  const maxRetries = 3;
+  const backoffMs = [0, 1000, 2000];
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      if (attempt > 0) {
+        await sleep(backoffMs[attempt]);
+      }
+      return await sendCommand(socket, command);
+    } catch (error) {
+      if (attempt === maxRetries - 1) {
+        throw new HAProxySocketError(`Failed after ${maxRetries} attempts: ${error.message}`);
+      }
+    }
+  }
+}
+```
+
+### Version Mismatch After Commit
+
+When verification shows version doesn't match expected value after successful commit:
+
+1. **Log Warning** - Record mismatch details for debugging
+2. **Re-attempt Next Cycle** - Do not retry immediately (avoid rapid loops)
+3. **Increment Mismatch Counter** - Track for anomaly detection
+4. **Admin Notification** - If mismatches persist across 3 cycles, create notification (severity: `warning`)
+
+Possible causes:
+- Race condition with another GM instance (should not happen in single-GM design)
+- HAProxy reload between commit and verify
+- Map file corruption or disk issues
+
+### Error Response Format
+
+All LM API errors return consistent JSON format:
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "HAPROXY_SOCKET_TIMEOUT",
+    "message": "HAProxy socket connection timed out after 5000ms",
+    "retryable": true,
+    "details": {
+      "socket": "/run/haproxy/admin.sock",
+      "command": "prepare map /etc/haproxy/conf.d/204-mseal_config.map",
+      "attempt": 3
+    }
+  }
+}
+```
+
+Error codes:
+| Code | Description | Retryable |
+|------|-------------|-----------|
+| `HAPROXY_SOCKET_TIMEOUT` | Socket connection timeout | Yes |
+| `HAPROXY_SOCKET_ERROR` | Socket communication error | Yes |
+| `HAPROXY_TRANSACTION_FAILED` | Prepare/commit failed | Yes |
+| `HAPROXY_VERSION_MISMATCH` | Version verification failed | Yes |
+| `MAP_FILE_NOT_FOUND` | Map file doesn't exist | No |
+| `INVALID_CONFIG_FORMAT` | Config data validation failed | No |
+| `UNAUTHORIZED` | Request not from allowed IP | No |
+
+---
+
+## Security
+
+### KVCrypt for VAULT Distribution
+
+All VAULT data (customer configurations, API keys, secrets) **MUST** be encrypted using KVCrypt before distribution to servers.
+
+**Requirements:**
+
+1. **Encryption at Source** - GM encrypts VAULT payload before distribution
+2. **Shared Key** - Single encryption key shared across all servers
+3. **In-Transit Protection** - Even over TLS, VAULT data is KVCrypt-encrypted (defense in depth)
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  VAULT Distribution with KVCrypt                                │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  GM (NetOps)                                                    │
+│   │                                                             │
+│   ├─► Generate VAULT config (plaintext)                         │
+│   │                                                             │
+│   ├─► KVCrypt.encrypt(config, sharedKey) ──► ciphertext         │
+│   │                                                             │
+│   ├─► Distribute ciphertext to all LMs (via sync-files.py)      │
+│   │                                                             │
+│                                                                 │
+│  LM (each server)                                               │
+│   │                                                             │
+│   └─► KVCrypt.decrypt(ciphertext, sharedKey) ──► plaintext      │
+│       └─► Apply to HAProxy maps                                 │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Implementation Notes:**
+
+- KVCrypt library shared between GM and LM (`@suiftly/kvcrypt` package)
+- Shared key provisioned to all servers during initial setup
+- Failed decryption immediately rejects the request (no partial processing)
+
+### LM API Firewall
+
+Local Manager APIs are protected by IP allowlist firewall. Only IPs enumerated in `MA_VAULT` (Master Authority VAULT) are permitted to connect.
+
+**Firewall Rules:**
+
+1. **Default Deny** - All incoming connections to LM API port (default: 8080) blocked
+2. **MA_VAULT Allowlist** - Only IPs listed in `MA_VAULT.allowed_ips` permitted
+3. **Dynamic Updates** - Firewall rules update when MA_VAULT changes (via KVCrypt)
+4. **Localhost Always Allowed** - `127.0.0.1` permitted for local diagnostics
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  LM API Firewall Configuration                                  │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  MA_VAULT.allowed_ips:                                          │
+│    - 10.0.1.10    # GM primary (eu-w1-1)                        │
+│    - 10.0.1.11    # GM standby (eu-w1-2)                        │
+│    - 10.0.2.10    # Admin jumphost                              │
+│                                                                 │
+│  iptables rules (auto-generated):                               │
+│  ┌────────────────────────────────────────────────────────────┐ │
+│  │ -A INPUT -p tcp --dport 8080 -s 127.0.0.1 -j ACCEPT        │ │
+│  │ -A INPUT -p tcp --dport 8080 -s 10.0.1.10 -j ACCEPT        │ │
+│  │ -A INPUT -p tcp --dport 8080 -s 10.0.1.11 -j ACCEPT        │ │
+│  │ -A INPUT -p tcp --dport 8080 -s 10.0.2.10 -j ACCEPT        │ │
+│  │ -A INPUT -p tcp --dport 8080 -j DROP                       │ │
+│  └────────────────────────────────────────────────────────────┘ │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Security Properties:**
+
+| Property | Implementation |
+|----------|----------------|
+| Authentication | IP allowlist (network-level) + KVCrypt signature |
+| Authorization | All allowed IPs have full LM API access |
+| Confidentiality | KVCrypt encryption + TLS transport |
+| Integrity | KVCrypt signatures verify payload authenticity |
+| Audit | All API calls logged with source IP and timestamp |
+
+**Rejected Request Handling:**
+
+- Firewall-blocked requests: silently dropped (no response)
+- Invalid KVCrypt signature: HTTP 401 with `UNAUTHORIZED` error code
+- All rejections logged to security audit log
 
 ---
 
