@@ -39,6 +39,11 @@ export const serviceInstances = pgTable('service_instances', {
 
   // Usage billing: tracks last billed timestamp to prevent double-billing (STATS_DESIGN.md D3)
   lastBilledTimestamp: timestamp('last_billed_timestamp'),
+
+  // Vault sync tracking: records the vault seq that will first contain this service's config
+  // 0 = no pending changes (synced), >0 = waiting for LMs to reach this seq
+  // Set to (currentVaultSeq + 1) when config changes, reset to 0 when synced
+  configChangeVaultSeq: integer('config_change_vault_seq').default(0),
 }, (table) => ({
   uniqueCustomerService: unique().on(table.customerId, table.serviceType),
   // Index for efficient service-type iteration (backend synchronization)

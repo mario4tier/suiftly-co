@@ -106,32 +106,23 @@ export async function resetCustomerTestData(options: TestDataResetOptions = {}) 
     // 6. Clear Sui mock config (reset delays and failure injections)
     suiMockConfig.clearConfig();
 
-    // 7. Update customer with new balance/spending limit
-    // Use dbClock for consistent timestamps in testing
-    await tx
-      .update(customers)
-      .set({
-        currentBalanceUsdCents: balanceUsdCents,
-        spendingLimitUsdCents: spendingLimitUsdCents,
-        currentPeriodChargedUsdCents: 0,
-        escrowContractId: clearEscrowAccount ? null : customer.escrowContractId,
-        currentPeriodStart: dbClock.today().toISOString().split('T')[0],
-        updatedAt: dbClock.now(),
-      })
-      .where(eq(customers.customerId, customerId));
+    // 7. DELETE the customer record entirely
+    // This ensures a fresh customer ID is generated on next auth
+    // (fixes issues where old customer IDs might be invalid/negative)
+    await tx.delete(customers).where(eq(customers.customerId, customerId));
 
-    console.log(`[TEST DATA] Reset customer ${customerId}:`);
+    console.log(`[TEST DATA] Deleted customer ${customerId}:`);
     console.log(`  - Deleted ${deletedServices.length} service instances`);
     console.log(`  - Deleted ${deletedApiKeys.length} API keys`);
     console.log(`  - Deleted ${deletedSealKeys.length} Seal keys`);
     console.log(`  - Deleted all related data (ledger, tokens, billing, logs)`);
-    console.log(`  - Updated customer: balance=$${balanceUsdCents / 100}, spending limit=$${spendingLimitUsdCents / 100}, escrow cleared=${clearEscrowAccount}`);
+    console.log(`  - Customer will be recreated with fresh ID on next auth`);
   });
 
   return {
     success: true,
-    message: 'Customer reset successfully',
-    customerId: customerId,
+    message: 'Customer deleted - will be recreated on next auth',
+    deletedCustomerId: customerId,
   };
 }
 

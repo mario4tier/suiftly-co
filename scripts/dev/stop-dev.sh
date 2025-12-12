@@ -1,94 +1,140 @@
 #!/bin/bash
-# Stop all dev servers cleanly with robust port cleanup
+# Stop all dev servers cleanly
+# Uses sudob for systemd services (GM, LM), direct kill for others
 
-echo "🛑 Stopping dev servers..."
+SUDOB_URL="http://localhost:22800"
+SYSTEM_CONF="/etc/walrus/system.conf"
 
-# Function to check if port is free
+# ============================================================================
+# Check system.conf exists (required for proper dev setup)
+# ============================================================================
+if [ ! -f "$SYSTEM_CONF" ]; then
+  echo ""
+  echo "ERROR: $SYSTEM_CONF not found!"
+  echo ""
+  echo "  This file is required to identify the deployment type."
+  echo "  Create it with:"
+  echo ""
+  echo "    sudo ~/walrus/scripts/configure-deployment.py"
+  echo ""
+  exit 1
+fi
+
+echo "Stopping dev servers..."
+
+# ============================================================================
+# Helper functions
+# ============================================================================
+
 is_port_free() {
   local port=$1
   ! lsof -ti:$port >/dev/null 2>&1
 }
 
-# Function to force kill processes on port
 force_kill_port() {
   local port=$1
-  echo "  🧹 Cleaning up port $port..."
-
-  # Get PIDs of processes LISTENING on port (not just connected)
-  # This prevents killing parent processes that might have connections
   local pids=$(lsof -ti:$port -sTCP:LISTEN 2>/dev/null || true)
-
   if [ -n "$pids" ]; then
-    # Convert newlines to spaces for kill command
     local pids_spaced=$(echo "$pids" | tr '\n' ' ')
-    echo "     Killing PIDs: $pids_spaced"
-    # Suppress stderr to avoid npm error messages
     kill -9 $pids_spaced 2>/dev/null || true
     sleep 1
   fi
 }
 
-# Kill by saved PIDs first (fastest)
-if [ -f /tmp/suiftly-gm.pid ]; then
-  GM_PID=$(cat /tmp/suiftly-gm.pid)
-  echo "  📍 Killing Global Manager (PID $GM_PID)..."
-  kill -9 $GM_PID 2>/dev/null || true
-  rm /tmp/suiftly-gm.pid
+# Call sudob to manage a service
+sudob_service() {
+  local action=$1
+  local service=$2
+  curl -sf -X POST "$SUDOB_URL/api/service/$action" \
+    -H 'Content-Type: application/json' \
+    -d "{\"service\":\"$service\"}" 2>/dev/null
+}
+
+# ============================================================================
+# Stop systemd services via sudob (if sudob is running)
+# ============================================================================
+if curl -sf "$SUDOB_URL/api/health" >/dev/null 2>&1; then
+  echo "  Stopping GM via sudob..."
+  sudob_service stop suiftly-gm >/dev/null || true
+
+  echo "  Stopping LM via sudob..."
+  sudob_service stop suiftly-lm >/dev/null || true
+else
+  echo "  sudob not running - GM/LM must be stopped manually:"
+  echo "    sudo systemctl stop suiftly-gm suiftly-lm"
 fi
 
+# ============================================================================
+# Stop non-systemd processes by PID
+# ============================================================================
 if [ -f /tmp/suiftly-admin.pid ]; then
   ADMIN_PID=$(cat /tmp/suiftly-admin.pid)
-  echo "  📍 Killing Admin webapp (PID $ADMIN_PID)..."
+  echo "  Stopping Admin webapp (PID $ADMIN_PID)..."
   kill -9 $ADMIN_PID 2>/dev/null || true
   rm /tmp/suiftly-admin.pid
 fi
 
-if [ -f /tmp/suiftly-lm.pid ]; then
-  LM_PID=$(cat /tmp/suiftly-lm.pid)
-  echo "  📍 Killing Local Manager (PID $LM_PID)..."
-  kill -9 $LM_PID 2>/dev/null || true
-  rm /tmp/suiftly-lm.pid
-fi
-
 if [ -f /tmp/suiftly-api.pid ]; then
   API_PID=$(cat /tmp/suiftly-api.pid)
-  echo "  📍 Killing API server (PID $API_PID)..."
+  echo "  Stopping API server (PID $API_PID)..."
   kill -9 $API_PID 2>/dev/null || true
   rm /tmp/suiftly-api.pid
 fi
 
 if [ -f /tmp/suiftly-webapp.pid ]; then
   WEBAPP_PID=$(cat /tmp/suiftly-webapp.pid)
-  echo "  📍 Killing webapp (PID $WEBAPP_PID)..."
+  echo "  Stopping Webapp (PID $WEBAPP_PID)..."
   kill -9 $WEBAPP_PID 2>/dev/null || true
   rm /tmp/suiftly-webapp.pid
 fi
 
-# Fallback: kill by process name
-echo "  🔍 Cleaning up any remaining server processes..."
-pkill -9 -f "tsx.*server" 2>/dev/null || true
+# Clean up old PID files from previous script version
+rm -f /tmp/suiftly-gm.pid /tmp/suiftly-lm.pid 2>/dev/null
+
+# ============================================================================
+# Fallback: kill by process name (non-systemd only)
+# ============================================================================
+echo "  Cleaning up remaining processes..."
+pkill -9 -f "tsx.*apps/api" 2>/dev/null || true
 pkill -9 -f "vite" 2>/dev/null || true
 pkill -9 -f "node.*vite" 2>/dev/null || true
 
-# Final fallback: force kill by port (most robust)
-force_kill_port 22600
-force_kill_port 22601
-force_kill_port 22610
+# ============================================================================
+# Force kill by port (API and Webapp ports only - not GM/LM)
+# ============================================================================
 force_kill_port 22700
 force_kill_port 22710
+force_kill_port 22601
 force_kill_port 3000
 force_kill_port 5173
 force_kill_port 5174
 force_kill_port 5175
 
+# ============================================================================
 # Verify ports are free
-echo "  ✅ Verifying ports are free..."
-for port in 22600 22601 22610 22700 22710; do
+# ============================================================================
+echo "  Verifying ports..."
+ALL_FREE=true
+for port in 22700 22710; do
   if is_port_free $port; then
-    echo "     Port $port is free"
+    echo "    Port $port is free"
   else
-    echo "     ⚠️  Warning: Port $port still occupied (may need manual cleanup)"
+    echo "    WARNING: Port $port still occupied"
+    ALL_FREE=false
   fi
 done
 
-echo "✅ All dev servers stopped"
+# Check systemd service ports
+for port in 22600 22610; do
+  if is_port_free $port; then
+    echo "    Port $port is free"
+  else
+    echo "    Port $port in use (systemd service may still be running)"
+  fi
+done
+
+if [ "$ALL_FREE" = true ]; then
+  echo "All dev servers stopped"
+else
+  echo "Some processes may still be running"
+fi

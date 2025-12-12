@@ -25,6 +25,9 @@
   "devDependencies": {
     "@types/node": "^22.10.2",
     "@types/supertest": "^6.0.3",
+    "@walrus/kvcrypt": "file:/home/olet/walrus/packages/kvcrypt",
+    "@walrus/vault-codec": "file:/home/olet/walrus/packages/vault-codec",
+    "@walrus/local-manager": "file:/home/olet/walrus/services/local-manager",
     "supertest": "^7.1.4",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"

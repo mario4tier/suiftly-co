@@ -452,6 +452,165 @@ if (process.env.NODE_ENV !== 'production') {
 }
 
 // ============================================================================
+// Vault Status API (for Admin Dashboard KVCrypt Debug)
+// ============================================================================
+
+// Get vault status from data_tx
+server.get('/api/vault/status', async () => {
+  const { createVaultReader } = await import('@walrus/vault-codec');
+
+  const reader = createVaultReader({
+    storageDir: '/opt/syncf/data_tx',
+  });
+
+  // Get status for known vault types
+  const vaultTypes = ['sma'] as const; // Add more as implemented: 'smm', 'sms', etc.
+  const vaults: Record<string, {
+    vaultType: string;
+    latest: { seq: number; pg: number; filename: string } | null;
+    previous: { seq: number; pg: number; filename: string } | null;
+    allVersions: Array<{ seq: number; pg: number; filename: string }>;
+  }> = {};
+
+  for (const vaultType of vaultTypes) {
+    try {
+      const versions = await reader.listVersions(vaultType);
+      const latest = versions[0] || null;
+      const previous = versions[1] || null;
+
+      vaults[vaultType] = {
+        vaultType,
+        latest,
+        previous,
+        allVersions: versions.slice(0, 10), // Limit to 10 versions
+      };
+    } catch {
+      vaults[vaultType] = {
+        vaultType,
+        latest: null,
+        previous: null,
+        allVersions: [],
+      };
+    }
+  }
+
+  return { vaults };
+});
+
+// Get Local Manager statuses
+server.get('/api/lm/status', async () => {
+  // In development, we only have local LM
+  // In production, this would query multiple LMs based on configuration
+  const managers: Array<{
+    name: string;
+    host: string;
+    status: 'up' | 'down' | 'unknown';
+    vault: { type: string; seq: number } | null;
+    error?: string;
+  }> = [];
+
+  // Local LM (development)
+  const localLm = {
+    name: 'Local LM',
+    host: 'http://localhost:22610',
+    status: 'unknown' as 'up' | 'down' | 'unknown',
+    vault: null as { type: string; seq: number } | null,
+    error: undefined as string | undefined,
+  };
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3000);
+
+    const res = await fetch('http://localhost:22610/health', {
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    if (res.ok) {
+      const data = await res.json() as { status: string; vault?: { type: string; seq: number } };
+      localLm.status = 'up';
+      if (data.vault) {
+        localLm.vault = data.vault;
+      }
+    } else {
+      localLm.status = 'down';
+      localLm.error = `HTTP ${res.status}`;
+    }
+  } catch (err) {
+    localLm.status = 'down';
+    localLm.error = err instanceof Error ? err.message : 'Connection failed';
+  }
+
+  managers.push(localLm);
+
+  return { managers };
+});
+
+// ============================================================================
+// Sync Overview API (for Admin Dashboard)
+// ============================================================================
+
+// Get fleet-wide sync overview
+server.get('/api/sync/overview', async () => {
+  const { getLMStatuses, getMinLMVaultSeq, areAllLMsInSync } = await import('./tasks/poll-lm-status.js');
+  const { systemControl } = await import('@suiftly/database');
+  const { eq } = await import('drizzle-orm');
+
+  // Get current vault seq from system_control
+  const [control] = await db
+    .select()
+    .from(systemControl)
+    .where(eq(systemControl.id, 1))
+    .limit(1);
+
+  const currentVaultSeq = control?.smaVaultSeq ?? 0;
+
+  // Get LM statuses
+  const lmStatuses = await getLMStatuses();
+  const minLMSeq = await getMinLMVaultSeq();
+  const allInSync = await areAllLMsInSync();
+
+  // Calculate sync status
+  const lmsUp = lmStatuses.filter(s => s.status !== 'down').length;
+  const lmsInSync = lmStatuses.filter(s => s.inSync).length;
+  const lmsTotal = lmStatuses.length;
+
+  return {
+    vault: {
+      currentSeq: currentVaultSeq,
+      contentHash: control?.smaVaultContentHash ?? null,
+    },
+    lms: {
+      total: lmsTotal,
+      up: lmsUp,
+      inSync: lmsInSync,
+      minSeq: minLMSeq,
+      allInSync,
+      statuses: lmStatuses.map(s => ({
+        id: s.lmId,
+        name: s.displayName,
+        host: s.host,
+        region: s.region,
+        status: s.status,
+        vaultSeq: s.vaultSeq,
+        inSync: s.inSync,
+        components: {
+          vault: s.componentVault,
+          haproxy: s.componentHaproxy,
+          keyServer: s.componentKeyServer,
+        },
+        lastSeenAt: s.lastSeenAt?.toISOString() ?? null,
+        lastError: s.lastError,
+      })),
+    },
+    syncStatus: allInSync && minLMSeq !== null && minLMSeq >= currentVaultSeq
+      ? 'synced'
+      : 'pending',
+  };
+});
+
+// ============================================================================
 // Graceful shutdown
 // ============================================================================
 

@@ -1,0 +1,119 @@
+import { ReactNode } from 'react';
+import { Link, useLocation } from 'react-router-dom';
+
+interface LayoutProps {
+  children: ReactNode;
+}
+
+interface NavItem {
+  path: string;
+  label: string;
+  icon: string;
+}
+
+const navItems: NavItem[] = [
+  { path: '/', label: 'Dashboard', icon: 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6' },
+  { path: '/kvcrypt', label: 'KVCrypt Debug', icon: 'M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4' },
+];
+
+function NavIcon({ d }: { d: string }) {
+  return (
+    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={d} />
+    </svg>
+  );
+}
+
+export function Layout({ children }: LayoutProps) {
+  const location = useLocation();
+
+  return (
+    <div style={{ display: 'flex', minHeight: '100vh', background: '#0f172a' }}>
+      {/* Sidebar */}
+      <aside style={{
+        width: '220px',
+        background: '#1e293b',
+        borderRight: '1px solid #334155',
+        padding: '1rem 0',
+        flexShrink: 0,
+      }}>
+        {/* Logo */}
+        <div style={{ padding: '0 1rem 1rem', borderBottom: '1px solid #334155', marginBottom: '1rem' }}>
+          <h1 style={{ fontSize: '1.125rem', fontWeight: 'bold', color: '#60a5fa', margin: 0 }}>
+            Suiftly Admin
+          </h1>
+          <p style={{ fontSize: '0.75rem', color: '#64748b', margin: '0.25rem 0 0' }}>
+            Global Manager
+          </p>
+        </div>
+
+        {/* Navigation */}
+        <nav style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', padding: '0 0.5rem' }}>
+          {navItems.map((item) => {
+            const isActive = location.pathname === item.path;
+            return (
+              <Link
+                key={item.path}
+                to={item.path}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.75rem',
+                  padding: '0.625rem 0.75rem',
+                  borderRadius: '0.375rem',
+                  textDecoration: 'none',
+                  fontSize: '0.875rem',
+                  fontWeight: isActive ? 600 : 400,
+                  color: isActive ? '#60a5fa' : '#94a3b8',
+                  background: isActive ? '#1e3a5f' : 'transparent',
+                  transition: 'all 0.15s',
+                }}
+                onMouseEnter={(e) => {
+                  if (!isActive) {
+                    e.currentTarget.style.background = '#334155';
+                    e.currentTarget.style.color = '#e2e8f0';
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (!isActive) {
+                    e.currentTarget.style.background = 'transparent';
+                    e.currentTarget.style.color = '#94a3b8';
+                  }
+                }}
+              >
+                <NavIcon d={item.icon} />
+                {item.label}
+              </Link>
+            );
+          })}
+        </nav>
+      </aside>
+
+      {/* Main content */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+        {/* Header */}
+        <header style={{
+          height: '56px',
+          background: '#1e293b',
+          borderBottom: '1px solid #334155',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '0 1.5rem',
+        }}>
+          <h2 style={{ fontSize: '1rem', fontWeight: 500, color: '#e2e8f0', margin: 0 }}>
+            {navItems.find(item => item.path === location.pathname)?.label || 'Admin'}
+          </h2>
+          <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
+            Development Mode
+          </div>
+        </header>
+
+        {/* Page content */}
+        <main style={{ flex: 1, padding: '1.5rem', overflow: 'auto' }}>
+          {children}
+        </main>
+      </div>
+    </div>
+  );
+}

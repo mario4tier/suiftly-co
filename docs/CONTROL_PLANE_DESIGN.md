@@ -37,7 +37,7 @@ The Suiftly control plane manages configuration distribution and status collecti
 │  │  │                                                                 │  │  │
 │  │  │  1. Aggregate HAProxy logs → usage metrics                      │  │  │
 │  │  │  2. Calculate customer billing                                  │  │  │
-│  │  │  3. Generate MA_VAULT (API keys + rate limits)                  │  │  │
+│  │  │  3. Generate SMA_VAULT (API keys + rate limits)                 │  │  │
 │  │  │  4. Aggregate status from all Local Managers                    │  │  │
 │  │  │  5. Cleanup old data                                            │  │  │
 │  │  └─────────────────────────────────────────────────────────────────┘  │  │
@@ -47,7 +47,7 @@ The Suiftly control plane manages configuration distribution and status collecti
 │  │                    API Server → Webapp (UI)                           │  │
 │  └───────────────────────────────────────────────────────────────────────┘  │
 │                                 ↓                                           │
-│                    MA_VAULT files (to /opt/syncf/data_tx/ma/)               │
+│                    SMA_VAULT files (to /opt/syncf/data_tx/sma/)             │
 │                                 ↓                                           │
 │  ┌───────────────────────────────────────────────────────────────────────┐  │
 │  │                           ~/walrus                                    │  │
@@ -81,9 +81,9 @@ The Suiftly control plane manages configuration distribution and status collecti
 ```
 Database (customers, API keys, tiers)
            ↓
-Global Manager (generates MA_VAULT)
+Global Manager (generates SMA_VAULT)
            ↓
-/opt/syncf/data_tx/ma/*.enc files
+/opt/syncf/data_tx/sma/*.enc files
            ↓
 sync-files.py (rsync to all servers)
            ↓
@@ -141,7 +141,7 @@ Long-lived daemon process running on the primary database server. Handles all ce
 
 1. **Metering** - Aggregates HAProxy logs into usage metrics
 2. **Billing** - Calculates customer charges from usage data
-3. **Vault Generation** - Generates MA_VAULT (customer API keys and rate limits)
+3. **Vault Generation** - Generates SMA_VAULT (customer API keys and rate limits)
 4. **Status Aggregation** - Collects and aggregates status from all Local Managers
 5. **Data Cleanup** - Removes old logs and maintains database health
 
@@ -166,7 +166,7 @@ import { db } from '@suiftly/database'
 import { acquireLock, releaseLock } from './lib/lock'
 import { aggregateLogs } from './tasks/aggregate-logs'
 import { calculateBills } from './tasks/calculate-bills'
-import { generateMAVault } from './tasks/generate-ma-vault'
+import { generateSMAVault } from './tasks/generate-sma-vault'
 import { aggregateStatus } from './tasks/aggregate-status'
 import { cleanup } from './tasks/cleanup'
 
@@ -199,7 +199,7 @@ async function runGlobalManager() {
     // Run tasks in sequence (each is idempotent)
     await runWithMetrics('aggregate-logs', aggregateLogs)
     await runWithMetrics('calculate-bills', calculateBills)
-    await runWithMetrics('generate-ma-vault', generateMAVault)
+    await runWithMetrics('generate-sma-vault', generateSMAVault)
     await runWithMetrics('aggregate-status', aggregateStatus)
     await runWithMetrics('cleanup', cleanup)
 
@@ -364,10 +364,10 @@ export async function aggregateLogs() {
 }
 ```
 
-### Task: Generate MA_VAULT
+### Task: Generate SMA_VAULT
 
 ```typescript
-// services/global-manager/src/tasks/generate-ma-vault.ts
+// services/global-manager/src/tasks/generate-sma-vault.ts
 import { execSync } from 'child_process'
 
 export async function generateMAVault() {
@@ -380,7 +380,7 @@ export async function generateMAVault() {
     }
   })
 
-  // Build MA_VAULT data structure (key-value format for kvcrypt)
+  // Build SMA_VAULT data structure (key-value format for kvcrypt)
   const vaultData: Record<string, string> = {}
 
   for (const customer of customers) {
@@ -407,9 +407,9 @@ export async function generateMAVault() {
   })
 
   if (!existing) {
-    // New version - write to MA_VAULT using kvcrypt (from ~/walrus)
+    // New version - write to SMA_VAULT using kvcrypt (from ~/walrus)
     for (const [key, value] of Object.entries(vaultData)) {
-      execSync(`~/walrus/scripts/sync/kvcrypt.py put ma "${key}" '${value}'`, {
+      execSync(`~/walrus/scripts/sync/kvcrypt.py put sma "${key}" '${value}'`, {
         stdio: 'pipe'
       })
     }
@@ -421,10 +421,10 @@ export async function generateMAVault() {
       created_at: new Date()
     })
 
-    logger.info({ hash: vaultHash, count: customers.length }, 'New MA_VAULT version generated')
+    logger.info({ hash: vaultHash, count: customers.length }, 'New SMA_VAULT version generated')
     // sync-files.py (systemd timer in ~/walrus) distributes to all servers
   } else {
-    logger.info({ hash: vaultHash }, 'MA_VAULT unchanged, skipping generation')
+    logger.info({ hash: vaultHash }, 'SMA_VAULT unchanged, skipping generation')
   }
 }
 ```
@@ -480,7 +480,7 @@ export async function aggregateStatus() {
 
 The Local Manager runs on every server and is documented in the walrus project. Key responsibilities:
 
-1. **Consume VAULT** - Read MA_VAULT files distributed by sync-files.py
+1. **Consume VAULT** - Read SMA_VAULT files distributed by sync-files.py
 2. **Update HAProxy** - Apply rate limits and API key configurations
 3. **Report Status** - Send health information to Global Manager
 4. **Manage keyservers** - Coordinate Seal encryption services
@@ -501,10 +501,10 @@ The Local Manager runs on every server and is documented in the walrus project. 
 Global Manager writes VAULT using `kvcrypt.py` from ~/walrus:
 
 ```bash
-# Write customer config to MA_VAULT
-~/walrus/scripts/sync/kvcrypt.py put ma "customer:12345" '{"api_keys":["fp1","fp2"],"tier":"pro"}'
+# Write customer config to SMA_VAULT
+~/walrus/scripts/sync/kvcrypt.py put sma "customer:12345" '{"api_keys":["fp1","fp2"],"tier":"pro"}'
 
-# Files created in /opt/syncf/data_tx/ma/
+# Files created in /opt/syncf/data_tx/sma/
 # sync-files.py distributes to all servers
 ```
 
@@ -571,7 +571,7 @@ CREATE TABLE worker_runs (
   executed_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- MA_VAULT versions
+-- SMA_VAULT versions
 CREATE TABLE vault_versions (
   id SERIAL PRIMARY KEY,
   version BIGINT NOT NULL,
@@ -1347,24 +1347,44 @@ The service status has **two independent dimensions**:
 │                    Service Status Model                         │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
-│  Operational Status (mutually exclusive):                       │
-│    • disabled - User has disabled the service                   │
-│    • up       - Service is operational                          │
-│    • down     - Service is experiencing issues                  │
+│  Operational Status (mutually exclusive, priority order):       │
+│    • disabled      - User has disabled the service (grey)       │
+│    • config_needed - Missing required config to operate (yellow)│
+│    • up            - Service is operational (green)             │
+│    • down          - Service is experiencing issues (red)       │
 │                                                                 │
 │  Propagation Status (independent overlay):                      │
 │    • (none)     - No changes pending                            │
 │    • Updating... - Configuration change propagating             │
 │                                                                 │
 │  Combined display examples:                                     │
-│    • "up"              - Normal operation                       │
-│    • "up • Updating..."    - Working, config propagating        │
-│    • "disabled"        - User disabled                          │
-│    • "disabled • Updating..." - Disabled, config propagating    │
-│    • "down"            - Service issue                          │
-│    • "down • Updating..."  - Down, config propagating           │
+│    • "OK"                   - Normal operation (green)          │
+│    • "OK • Updating..."     - Working, config propagating       │
+│    • "Disabled"             - User disabled (grey)              │
+│    • "Disabled • Updating..." - Disabled, config propagating    │
+│    • "Config Needed"        - Missing API key/keys (yellow)     │
+│    • "Config Needed • Updating..." - Config needed, propagating │
+│    • "Down"                 - Service issue (red)               │
+│    • "Down • Updating..."   - Down, config propagating          │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
+```
+
+**Config Needed Conditions:**
+Service-specific requirements that must be met before service can operate:
+- **All services**: At least one active API key required
+- **Seal service**: Additionally requires at least one seal key configured
+
+**Status Logic (Backend Only):**
+All status determination logic lives in the backend (`services.getServicesStatus` query).
+Frontend displays exactly what backend reports - no client-side status overrides.
+
+```typescript
+// Status determination priority (first match wins):
+1. state === 'suspended_*' || state === 'cancellation_pending' → 'down'
+2. isUserEnabled === false → 'disabled'
+3. !hasActiveApiKey || (seal && !hasSealKeys) → 'config_needed'
+4. Otherwise → 'up'
 ```
 
 **UI Display:**
@@ -1372,6 +1392,32 @@ The service status has **two independent dimensions**:
 - Dashboard shows aggregated status across all services
 - "Updating..." clears automatically when propagation completes (all servers verified)
 - After 15 minutes without completion, admin notification is raised but status continues showing "Updating..."
+
+### Adaptive Status Polling
+
+Status polling frequency adapts based on user activity to balance responsiveness with server load:
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│                  Adaptive Polling Schedule                     │
+├────────────────────────────────────────────────────────────────┤
+│  User Activity State         │  Polling Interval              │
+│─────────────────────────────┼────────────────────────────────│
+│  Active (last 15 min)        │  Every 15 seconds              │
+│  Inactive > 15 min           │  Every 30 seconds              │
+│  Inactive > 1 hour           │  Every 15 minutes              │
+│  Inactive > 6 hours          │  Every 1 hour                  │
+├────────────────────────────────────────────────────────────────┤
+│  On-demand refresh: Always available via manual refresh       │
+│  Activity detection: Mouse, keyboard, focus, visibility       │
+└────────────────────────────────────────────────────────────────┘
+```
+
+**Implementation:**
+- Single `getServicesStatus` query returns status for ALL services at once
+- Dashboard and individual service pages share the same cached query
+- Hook tracks `lastActivityTime` and calculates appropriate `refetchInterval`
+- React Query handles caching and deduplication across components
 
 ---
 
@@ -1528,7 +1574,7 @@ All VAULT data (customer configurations, API keys, secrets) **MUST** be encrypte
 
 ### LM API Firewall
 
-Local Manager APIs are protected by IP allowlist firewall. Only IPs enumerated in `MA_VAULT` (Master Authority VAULT) are permitted to connect.
+Local Manager APIs are protected by IP allowlist firewall. Only IPs enumerated in `SMA_VAULT` (Seal Mainnet API VAULT) are permitted to connect.
 
 **Firewall Rules:**
 
@@ -1542,7 +1588,7 @@ Local Manager APIs are protected by IP allowlist firewall. Only IPs enumerated i
 │  LM API Firewall Configuration                                  │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
-│  MA_VAULT.allowed_ips:                                          │
+│  SMA_VAULT.allowed_ips:                                          │
 │    - 10.0.1.10    # GM primary (eu-w1-1)                        │
 │    - 10.0.1.11    # GM standby (eu-w1-2)                        │
 │    - 10.0.2.10    # Admin jumphost                              │

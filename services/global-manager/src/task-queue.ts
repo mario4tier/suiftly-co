@@ -25,6 +25,8 @@ import { getSuiService } from '@suiftly/database/sui-mock';
 import { getMockClockState, setMockClockState } from '@suiftly/database/test-kv';
 import { dbClockProvider } from '@suiftly/shared/db-clock';
 import { reconcilePayments } from './reconcile-payments.js';
+import { generateAllVaults } from './tasks/generate-vault.js';
+import { pollLMStatus } from './tasks/poll-lm-status.js';
 
 // Configure test_kv sync if not in production
 // This allows GM to read mock clock state from the database
@@ -425,8 +427,42 @@ async function executeSyncAll(): Promise<void> {
   }
 
   console.log(
-    `[SYNC] sync-all completed: ${result.phases.billing.customersProcessed} customers processed in ${result.durationMs}ms`
+    `[SYNC] sync-all billing: ${result.phases.billing.customersProcessed} customers processed in ${result.durationMs}ms`
   );
+
+  // Generate vaults after billing (captures any subscription changes)
+  try {
+    const vaultResults = await generateAllVaults();
+    const generated = Object.entries(vaultResults)
+      .filter(([_, r]) => r.generated)
+      .map(([type, r]) => `${type}:${r.seq}`)
+      .join(', ');
+    const unchanged = Object.entries(vaultResults)
+      .filter(([_, r]) => !r.generated)
+      .map(([type]) => type)
+      .join(', ');
+
+    if (generated) {
+      console.log(`[SYNC] sync-all vaults generated: ${generated}`);
+    }
+    if (unchanged) {
+      console.log(`[SYNC] sync-all vaults unchanged: ${unchanged}`);
+    }
+  } catch (vaultError) {
+    console.error('[SYNC] sync-all vault generation failed:', vaultError);
+    // Don't fail the entire sync-all for vault errors
+  }
+
+  // Poll LM status after vault generation (tracks propagation)
+  try {
+    const lmResult = await pollLMStatus();
+    console.log(
+      `[SYNC] sync-all LM poll: ${lmResult.up}/${lmResult.polled} up, ${lmResult.inSync} in-sync, minSeq=${lmResult.minVaultSeq ?? 'N/A'}`
+    );
+  } catch (lmError) {
+    console.error('[SYNC] sync-all LM polling failed:', lmError);
+    // Don't fail the entire sync-all for LM polling errors
+  }
 }
 
 /**

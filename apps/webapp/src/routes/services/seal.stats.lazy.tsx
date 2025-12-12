@@ -11,6 +11,8 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '../../components/ui/ta
 import { trpc } from '../../lib/trpc';
 import { mockAuth } from '../../lib/config';
 import { toast } from 'sonner';
+import { useServicesStatus } from '../../hooks/useServicesStatus';
+import { ServiceStatusIndicator } from '../../components/ui/service-status-indicator';
 import {
   BarChart3,
   Clock,
@@ -748,6 +750,16 @@ function SealStatsPage() {
 
   const utils = trpc.useUtils();
 
+  // Fetch service to check enabled state (for onboarding check)
+  const { data: services } = trpc.services.list.useQuery();
+  const sealService = services?.find(s => s.serviceType === 'seal');
+  const isEnabled = sealService?.isUserEnabled ?? false;
+
+  // Unified status tracking with adaptive polling
+  const { getServiceStatus } = useServicesStatus();
+  const sealStatus = getServiceStatus('seal');
+  const isSyncing = sealStatus?.syncStatus === 'pending';
+
   // Fetch summary stats
   const { data: summary, isLoading: summaryLoading } = trpc.stats.getSummary.useQuery({
     serviceType: 'seal',
@@ -894,7 +906,35 @@ function SealStatsPage() {
               </div>
             )}
           </div>
+          {/* Status indicator - uses shared component for consistency */}
+          {sealService && (
+            <div data-testid="service-status" className="mt-1">
+              <ServiceStatusIndicator
+                operationalStatus={sealStatus?.operationalStatus}
+                isSyncing={isSyncing}
+                fallbackIsEnabled={isEnabled}
+                showLabel
+              />
+            </div>
+          )}
         </div>
+
+        {/* Config Needed Banner - warn when service can't operate due to missing config */}
+        {sealStatus?.operationalStatus === 'config_needed' && sealStatus.configNeededReason && (
+          <div data-testid="config-needed-banner" className="rounded-lg border border-yellow-200 dark:border-yellow-900 bg-yellow-50 dark:bg-yellow-900/20 p-4">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="h-5 w-5 text-yellow-600 dark:text-yellow-500 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-semibold text-yellow-800 dark:text-yellow-200">
+                  Configuration Required
+                </p>
+                <p className="text-sm text-yellow-700 dark:text-yellow-300 mt-1">
+                  {sealStatus.configNeededReason}. Service cannot process requests until configured.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Time Range Tabs */}
         <Tabs value={timeRange} onValueChange={(v) => setTimeRange(v as TimeRange)}>

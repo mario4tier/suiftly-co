@@ -16,6 +16,8 @@ import { AlertCircle, PauseCircle, AlertTriangle, Loader2, Clock } from 'lucide-
 import { type ServiceState, type ServiceTier } from '@suiftly/shared/constants';
 import { trpc } from '../../lib/trpc';
 import { toast } from 'sonner';
+import { useServicesStatus } from '../../hooks/useServicesStatus';
+import { ServiceStatusIndicator } from '../../components/ui/service-status-indicator';
 
 export const Route = createLazyFileRoute('/services/seal/overview')({
   component: SealOverviewPage,
@@ -30,11 +32,23 @@ function SealOverviewPage() {
   // Fetch services using React Query hook
   const { data: services, isLoading, refetch } = trpc.services.list.useQuery();
 
+  // Unified status tracking with adaptive polling
+  const {
+    getServiceStatus,
+    refetch: refetchStatus,
+  } = useServicesStatus();
+
+  // Get seal service status from unified query
+  const sealStatus = getServiceStatus('seal');
+  const isSyncing = sealStatus?.syncStatus === 'pending';
+
   // Toggle service mutation
   const toggleServiceMutation = trpc.services.toggleService.useMutation({
     onSuccess: () => {
       // Refetch services to get updated state
       refetch();
+      // Refetch status - mutation sets configChangeVaultSeq, so status will be 'pending'
+      refetchStatus();
       setIsToggling(false);
     },
     onError: (error) => {
@@ -184,22 +198,33 @@ function SealOverviewPage() {
           </div>
         ) : (
           /* Interactive: Show service toggle at top */
-          <div className="flex items-center justify-between pb-4 border-b border-gray-200 dark:border-gray-800">
-            <h1 className="text-2xl font-semibold text-gray-900 dark:text-gray-50">
-              Seal Service
-            </h1>
-            <div className="flex items-center gap-3">
-              <div className="w-4 h-4 flex items-center justify-center">
-                {isToggling && <Loader2 className="h-3 w-3 animate-spin text-gray-500 dark:text-gray-400" />}
+          <div className="pb-4 border-b border-gray-200 dark:border-gray-800">
+            <div className="flex items-center justify-between">
+              <h1 className="text-2xl font-semibold text-gray-900 dark:text-gray-50">
+                Seal Service
+              </h1>
+              <div className="flex items-center gap-3">
+                <div className="w-4 h-4 flex items-center justify-center">
+                  {isToggling && <Loader2 className="h-3 w-3 animate-spin text-gray-500 dark:text-gray-400" />}
+                </div>
+                <Switch
+                  id="service-toggle"
+                  checked={localIsEnabled}
+                  onCheckedChange={handleToggleService}
+                />
+                <span className="text-sm font-medium text-gray-600 dark:text-gray-400">
+                  {localIsEnabled ? "ON" : "OFF"}
+                </span>
               </div>
-              <Switch
-                id="service-toggle"
-                checked={localIsEnabled}
-                onCheckedChange={handleToggleService}
+            </div>
+            {/* Status indicator - uses shared component for consistency */}
+            <div data-testid="service-status" className="mt-1">
+              <ServiceStatusIndicator
+                operationalStatus={sealStatus?.operationalStatus}
+                isSyncing={isSyncing}
+                fallbackIsEnabled={localIsEnabled}
+                showLabel
               />
-              <span className="text-sm font-medium text-gray-600 dark:text-gray-400">
-                {localIsEnabled ? "ON" : "OFF"}
-              </span>
             </div>
           </div>
         )}
@@ -211,6 +236,23 @@ function SealOverviewPage() {
             <div className="flex-1">
               <div className={`text-sm ${banner.textColor}`}>
                 {banner.message}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Config Needed Banner - warn when service can't operate due to missing config */}
+        {sealStatus?.operationalStatus === 'config_needed' && sealStatus.configNeededReason && (
+          <div data-testid="config-needed-banner" className="rounded-lg border border-yellow-200 dark:border-yellow-900 bg-yellow-50 dark:bg-yellow-900/20 p-4">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="h-5 w-5 text-yellow-600 dark:text-yellow-500 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-semibold text-yellow-800 dark:text-yellow-200">
+                  Configuration Required
+                </p>
+                <p className="text-sm text-yellow-700 dark:text-yellow-300 mt-1">
+                  {sealStatus.configNeededReason}. Service cannot process requests until configured.
+                </p>
               </div>
             </div>
           </div>

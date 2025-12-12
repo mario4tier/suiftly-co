@@ -7,8 +7,8 @@ import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import { router, protectedProcedure } from '../lib/trpc';
 import { db, withCustomerLockForAPI } from '@suiftly/database';
-import { customers, serviceInstances } from '@suiftly/database/schema';
-import { eq, and, sql } from 'drizzle-orm';
+import { customers, serviceInstances, systemControl, lmStatus, apiKeys, sealKeys } from '@suiftly/database/schema';
+import { eq, and, sql, min, ne, isNull, count } from 'drizzle-orm';
 import { SERVICE_TYPE, SERVICE_TIER, SERVICE_STATE, BALANCE_LIMITS } from '@suiftly/shared/constants';
 import type { ValidationResult, ValidationError, ValidationWarning } from '@suiftly/shared/types';
 import { testDelayManager } from '../lib/test-delays';
@@ -475,6 +475,15 @@ export const servicesRouter = router({
           }
 
           const now = dbClock.now();
+
+          // Get current vault seq for sync tracking
+          const [control] = await tx
+            .select({ smaVaultSeq: systemControl.smaVaultSeq })
+            .from(systemControl)
+            .where(eq(systemControl.id, 1))
+            .limit(1);
+          const expectedVaultSeq = (control?.smaVaultSeq ?? 0) + 1;
+
           const [updatedService] = await tx
             .update(serviceInstances)
             .set({
@@ -482,6 +491,7 @@ export const servicesRouter = router({
               state: input.enabled ? SERVICE_STATE.ENABLED : SERVICE_STATE.DISABLED,
               enabledAt: input.enabled ? now : service.enabledAt,
               disabledAt: !input.enabled ? now : service.disabledAt,
+              configChangeVaultSeq: expectedVaultSeq,
             })
             .where(eq(serviceInstances.instanceId, service.instanceId))
             .returning();
@@ -565,10 +575,19 @@ export const servicesRouter = router({
             });
           }
 
+          // Get current vault seq for sync tracking
+          const [control] = await tx
+            .select({ smaVaultSeq: systemControl.smaVaultSeq })
+            .from(systemControl)
+            .where(eq(systemControl.id, 1))
+            .limit(1);
+          const expectedVaultSeq = (control?.smaVaultSeq ?? 0) + 1;
+
           const [updated] = await tx
             .update(serviceInstances)
             .set({
               config: updatedConfig,
+              configChangeVaultSeq: expectedVaultSeq,
             })
             .where(eq(serviceInstances.instanceId, service.instanceId))
             .returning();
@@ -868,5 +887,152 @@ export const servicesRouter = router({
       );
 
       return result;
+    }),
+
+  /**
+   * Get status for all services (unified query for dashboard and service pages)
+   *
+   * Returns operational status and sync status for all customer services.
+   * Status logic is computed entirely in backend - frontend displays as-is.
+   *
+   * Operational Status priority (first match wins):
+   * 1. state === 'suspended_*' || 'cancellation_pending' → 'down'
+   * 2. isUserEnabled === false → 'disabled'
+   * 3. !hasActiveApiKey || (seal && !hasSealKeys) → 'config_needed'
+   * 4. Otherwise → 'up'
+   */
+  getServicesStatus: protectedProcedure
+    .query(async ({ ctx }) => {
+      if (!ctx.user) {
+        throw new TRPCError({
+          code: 'UNAUTHORIZED',
+          message: 'Not authenticated',
+        });
+      }
+
+      const customerId = ctx.user.customerId;
+
+      // 1. Get all services for customer
+      const services = await db.query.serviceInstances.findMany({
+        where: eq(serviceInstances.customerId, customerId),
+      });
+
+      if (services.length === 0) {
+        return { services: [], lmStatus: { lmCount: 0, lmInSyncCount: 0, minVaultSeq: null } };
+      }
+
+      // 2. Get active API key counts per service type
+      const apiKeyCounts = await db
+        .select({
+          serviceType: apiKeys.serviceType,
+          count: count(),
+        })
+        .from(apiKeys)
+        .where(and(
+          eq(apiKeys.customerId, customerId),
+          eq(apiKeys.isUserEnabled, true),
+          isNull(apiKeys.revokedAt),
+          isNull(apiKeys.deletedAt)
+        ))
+        .groupBy(apiKeys.serviceType);
+
+      const apiKeyCountMap = new Map(
+        apiKeyCounts.map(r => [r.serviceType, Number(r.count)])
+      );
+
+      // 3. Get active seal key count (for seal service)
+      const sealKeyCountResult = await db
+        .select({ count: count() })
+        .from(sealKeys)
+        .where(and(
+          eq(sealKeys.customerId, customerId),
+          eq(sealKeys.isUserEnabled, true)
+        ));
+      const sealKeyCount = Number(sealKeyCountResult[0]?.count ?? 0);
+
+      // 4. Get LM status for sync calculation
+      const lmStatuses = await db
+        .select({
+          lmId: lmStatus.lmId,
+          vaultSeq: lmStatus.vaultSeq,
+          inSync: lmStatus.inSync,
+          status: lmStatus.status,
+        })
+        .from(lmStatus)
+        .where(ne(lmStatus.status, 'down'));
+
+      const lmCount = lmStatuses.length;
+      const inSyncLms = lmStatuses.filter(lm => lm.inSync);
+      const lmInSyncCount = inSyncLms.length;
+      const minVaultSeq = inSyncLms.length > 0
+        ? Math.min(...inSyncLms.map(lm => lm.vaultSeq ?? 0))
+        : null;
+
+      // 5. Calculate status for each service
+      const serviceStatuses = services.map(service => {
+        const serviceType = service.serviceType;
+        const state = service.state;
+        const isUserEnabled = service.isUserEnabled ?? false;
+        const configChangeSeq = service.configChangeVaultSeq ?? 0;
+
+        // Active API keys for this service
+        const hasActiveApiKey = (apiKeyCountMap.get(serviceType) ?? 0) > 0;
+
+        // For seal, also need seal keys
+        const hasSealKeys = serviceType === 'seal' ? sealKeyCount > 0 : true;
+
+        // Determine operational status (priority order)
+        let operationalStatus: 'disabled' | 'config_needed' | 'up' | 'down';
+        let configNeededReason: string | undefined;
+
+        if (state === 'suspended_maintenance' || state === 'suspended_no_payment' || state === 'cancellation_pending') {
+          operationalStatus = 'down';
+        } else if (!isUserEnabled) {
+          operationalStatus = 'disabled';
+        } else if (!hasActiveApiKey) {
+          operationalStatus = 'config_needed';
+          configNeededReason = 'No active API key';
+        } else if (!hasSealKeys) {
+          operationalStatus = 'config_needed';
+          configNeededReason = 'No seal keys configured';
+        } else {
+          operationalStatus = 'up';
+        }
+
+        // Determine sync status
+        let syncStatus: 'synced' | 'pending' = 'synced';
+        let syncReason: string | undefined;
+
+        if (configChangeSeq > 0) {
+          if (lmCount === 0) {
+            syncStatus = 'pending';
+            syncReason = 'no_lms_available';
+          } else if (lmInSyncCount !== lmCount) {
+            syncStatus = 'pending';
+            syncReason = 'lms_not_in_sync';
+          } else if (minVaultSeq !== null && configChangeSeq > minVaultSeq) {
+            syncStatus = 'pending';
+            syncReason = 'vault_seq_behind';
+          }
+        }
+
+        return {
+          serviceType,
+          operationalStatus,
+          syncStatus,
+          configChangeVaultSeq: configChangeSeq,
+          ...(configNeededReason ? { configNeededReason } : {}),
+          ...(syncReason ? { syncReason } : {}),
+        };
+      });
+
+      return {
+        services: serviceStatuses,
+        lmStatus: {
+          lmCount,
+          lmInSyncCount,
+          minVaultSeq,
+        },
+      };
     }),
 });

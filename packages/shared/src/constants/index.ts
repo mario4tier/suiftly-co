@@ -72,6 +72,15 @@ export const SERVICE_TYPE_NUMBER = {
   [SERVICE_TYPE.GRAPHQL]: 3,
 } as const satisfies Record<ServiceType, number>;
 
+// Service Type to Single Character Mapping
+// Used in 3-letter vault type codes: {service}{network}{purpose}
+// Example: 'sma' = seal mainnet api
+export const SERVICE_TYPE_CHAR = {
+  [SERVICE_TYPE.SEAL]: 's',
+  [SERVICE_TYPE.GRPC]: 'r',
+  [SERVICE_TYPE.GRAPHQL]: 'g',
+} as const satisfies Record<ServiceType, string>;
+
 // Reverse mapping: number to service type
 export const SERVICE_NUMBER_TO_TYPE = {
   1: SERVICE_TYPE.SEAL,
@@ -179,9 +188,6 @@ export const FIELD_LIMITS = {
 
   // Business identifiers
   INVOICE_ID: 50,           // Invoice references
-
-  // System versioning
-  VAULT_VERSION: 64,        // MA/MM vault version hashes
 } as const;
 
 // Usage-Based Pricing (cents per 1000 requests)

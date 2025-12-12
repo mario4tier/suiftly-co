@@ -7,7 +7,9 @@
 import { createFileRoute, Link } from '@tanstack/react-router';
 import { DashboardLayout } from '../components/layout/DashboardLayout';
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/card';
+import { ServiceStatusIndicator } from '../components/ui/service-status-indicator';
 import { trpc } from '../lib/trpc';
+import { useServicesStatus } from '../hooks/useServicesStatus';
 import {
   Activity,
   ArrowRight,
@@ -47,51 +49,16 @@ const SERVICE_CONFIGS = {
 
 type ServiceType = keyof typeof SERVICE_CONFIGS;
 
-// Status badge for service state
-function ServiceStatusBadge({ state }: { state?: string }) {
-  const statusConfig: Record<string, { label: string; className: string }> = {
-    enabled: {
-      label: 'Active',
-      className: 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400',
-    },
-    disabled: {
-      label: 'Disabled',
-      className: 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400',
-    },
-    suspended_maintenance: {
-      label: 'Maintenance',
-      className: 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400',
-    },
-    suspended_no_payment: {
-      label: 'Suspended',
-      className: 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400',
-    },
-    cancellation_pending: {
-      label: 'Cancelling',
-      className: 'bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400',
-    },
-    provisioning: {
-      label: 'Provisioning',
-      className: 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400',
-    },
-  };
-
-  const config = state ? statusConfig[state] : null;
-  if (!config) return null;
-
-  return (
-    <span className={`text-xs px-2 py-0.5 rounded-full ${config.className}`}>
-      {config.label}
-    </span>
-  );
-}
-
 function ServiceCard({ serviceType }: { serviceType: ServiceType }) {
   const config = SERVICE_CONFIGS[serviceType];
   const Icon = config.icon;
 
   // Fetch services list to get service status
   const { data: services, isLoading: servicesLoading } = trpc.services.list.useQuery();
+
+  // Unified status from backend with adaptive polling
+  const { getServiceStatus } = useServicesStatus();
+  const serviceStatus = getServiceStatus(serviceType as 'seal' | 'grpc' | 'graphql');
 
   // Fetch 24h stats summary
   const { data: stats, isLoading: statsLoading } = trpc.stats.getSummary.useQuery(
@@ -101,6 +68,7 @@ function ServiceCard({ serviceType }: { serviceType: ServiceType }) {
 
   const service = services?.find(s => s.serviceType === serviceType);
   const isProvisioned = service?.state !== 'not_provisioned' && service?.state !== undefined;
+  const isEnabled = service?.isUserEnabled ?? false;
 
   // Format large numbers
   const formatNumber = (n: number) => {
@@ -156,7 +124,12 @@ function ServiceCard({ serviceType }: { serviceType: ServiceType }) {
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between">
             <h3 className="font-semibold text-gray-900 dark:text-gray-50">{config.name}</h3>
-            <ServiceStatusBadge state={service?.state} />
+            <ServiceStatusIndicator
+              operationalStatus={serviceStatus?.operationalStatus}
+              isSyncing={serviceStatus?.syncStatus === 'pending'}
+              fallbackIsEnabled={isEnabled}
+              size="sm"
+            />
           </div>
 
           {/* 24h Stats Summary */}

@@ -191,6 +191,7 @@ CREATE TABLE "service_instances" (
 	"cancellation_scheduled_for" date,
 	"cancellation_effective_at" timestamp with time zone,
 	"last_billed_timestamp" timestamp,
+	"config_change_vault_seq" integer DEFAULT 0,
 	CONSTRAINT "service_instances_customer_id_service_type_unique" UNIQUE("customer_id","service_type")
 );
 --> statement-breakpoint
@@ -284,12 +285,47 @@ CREATE TABLE "processing_state" (
 --> statement-breakpoint
 CREATE TABLE "system_control" (
 	"id" integer PRIMARY KEY NOT NULL,
-	"ma_vault_version" varchar(64),
-	"mm_vault_version" varchar(64),
+	"sma_vault_seq" integer DEFAULT 0,
+	"smm_vault_seq" integer DEFAULT 0,
+	"sms_vault_seq" integer DEFAULT 0,
+	"smo_vault_seq" integer DEFAULT 0,
+	"sta_vault_seq" integer DEFAULT 0,
+	"stm_vault_seq" integer DEFAULT 0,
+	"sts_vault_seq" integer DEFAULT 0,
+	"sto_vault_seq" integer DEFAULT 0,
+	"skk_vault_seq" integer DEFAULT 0,
+	"sma_vault_content_hash" varchar(16),
+	"smm_vault_content_hash" varchar(16),
+	"sms_vault_content_hash" varchar(16),
+	"smo_vault_content_hash" varchar(16),
+	"sta_vault_content_hash" varchar(16),
+	"stm_vault_content_hash" varchar(16),
+	"sts_vault_content_hash" varchar(16),
+	"sto_vault_content_hash" varchar(16),
+	"skk_vault_content_hash" varchar(16),
 	"last_monthly_reset" date,
 	"maintenance_mode" boolean DEFAULT false,
 	"updated_at" timestamp DEFAULT now() NOT NULL,
 	CONSTRAINT "check_singleton" CHECK ("system_control"."id" = 1)
+);
+--> statement-breakpoint
+CREATE TABLE "lm_status" (
+	"lm_id" varchar(64) PRIMARY KEY NOT NULL,
+	"display_name" varchar(128),
+	"host" varchar(256) NOT NULL,
+	"region" varchar(64),
+	"vault_type" varchar(8),
+	"vault_seq" integer DEFAULT 0,
+	"in_sync" boolean DEFAULT false,
+	"component_vault" boolean DEFAULT false,
+	"component_haproxy" boolean DEFAULT false,
+	"component_key_server" boolean DEFAULT false,
+	"status" varchar(16) DEFAULT 'unknown',
+	"last_seen_at" timestamp,
+	"last_error_at" timestamp,
+	"last_error" text,
+	"created_at" timestamp DEFAULT now() NOT NULL,
+	"updated_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE "mock_sui_transactions" (
