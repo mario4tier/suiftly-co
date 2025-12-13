@@ -259,6 +259,55 @@ export async function getSealKeysTestData(walletAddress: string = MOCK_WALLET_AD
 }
 
 /**
+ * Clear vault files via sudob
+ *
+ * Calls sudob to delete vault files from both tx (GM) and rx (LM) directories.
+ * Order: tx first (stops sync-files propagation), then rx.
+ *
+ * @param vaultTypes - Array of vault type codes to clear (default: ['sma'])
+ * @param sudodHost - Host of the sudob service (default: http://localhost:22612)
+ */
+export async function clearVaultFiles(
+  vaultTypes: string[] = ['sma'],
+  sudodHost: string = 'http://localhost:22612'
+): Promise<{ success: boolean; deleted: string[]; errors: string[] }> {
+  const deleted: string[] = [];
+  const errors: string[] = [];
+
+  for (const vaultType of vaultTypes) {
+    try {
+      const response = await fetch(`${sudodHost}/api/vault/clear`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vaultType, dir: 'both' }),
+      });
+
+      if (response.ok) {
+        const result = await response.json() as { deletedFiles?: string[] };
+        if (result.deletedFiles) {
+          deleted.push(...result.deletedFiles);
+        }
+        console.log(`[VAULT CLEAR] ${vaultType}: ${result.deletedFiles?.length ?? 0} files deleted`);
+      } else {
+        const error = await response.text();
+        errors.push(`${vaultType}: ${error}`);
+        console.error(`[VAULT CLEAR] ${vaultType}: HTTP ${response.status} - ${error}`);
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      errors.push(`${vaultType}: ${errorMsg}`);
+      console.error(`[VAULT CLEAR] ${vaultType}: ${errorMsg}`);
+    }
+  }
+
+  return {
+    success: errors.length === 0,
+    deleted,
+    errors,
+  };
+}
+
+/**
  * Get service instance by type for current mock wallet user
  */
 export async function getServiceInstanceTestData(

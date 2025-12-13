@@ -97,7 +97,8 @@ if (config.NODE_ENV !== 'production') {
     getCustomerTestData,
     getApiKeysTestData,
     getSealKeysTestData,
-    getServiceInstanceTestData
+    getServiceInstanceTestData,
+    clearVaultFiles,
   } = await import('./lib/test-data.js');
 
   // Get test configuration - allows tests to verify server config
@@ -233,6 +234,12 @@ if (config.NODE_ENV !== 'production') {
     const { sql } = await import('drizzle-orm');
 
     try {
+      // 1. Clear vault files FIRST (before DB reset)
+      // Order: tx (GM) first to stop propagation, then rx (LM)
+      const vaultClearResult = await clearVaultFiles(['sma']);
+      console.log('[TRUNCATE] Vault files cleared:', vaultClearResult);
+
+      // 2. Truncate database tables
       await db.transaction(async (tx) => {
         // Disable triggers to avoid foreign key issues
         await tx.execute(sql`SET CONSTRAINTS ALL DEFERRED`);
@@ -251,14 +258,41 @@ if (config.NODE_ENV !== 'production') {
             seal_keys,
             auth_nonces,
             refresh_tokens,
-            billing_records
+            billing_records,
+            lm_status
           CASCADE
+        `);
+
+        // 3. Reset vault sequence numbers in system_control
+        // This ensures next vault generation starts fresh at seq=1
+        await tx.execute(sql`
+          UPDATE system_control SET
+            sma_vault_seq = 0,
+            sma_vault_content_hash = NULL,
+            smm_vault_seq = 0,
+            smm_vault_content_hash = NULL,
+            sms_vault_seq = 0,
+            sms_vault_content_hash = NULL,
+            smo_vault_seq = 0,
+            smo_vault_content_hash = NULL,
+            sta_vault_seq = 0,
+            sta_vault_content_hash = NULL,
+            stm_vault_seq = 0,
+            stm_vault_content_hash = NULL,
+            sts_vault_seq = 0,
+            sts_vault_content_hash = NULL,
+            sto_vault_seq = 0,
+            sto_vault_content_hash = NULL,
+            skk_vault_seq = 0,
+            skk_vault_content_hash = NULL
+          WHERE id = 1
         `);
       });
 
       reply.send({
         success: true,
-        message: 'All tables truncated successfully',
+        message: 'All tables truncated and vault files cleared',
+        vaultFilesDeleted: vaultClearResult.deleted.length,
       });
     } catch (error: any) {
       console.error('[TRUNCATE ERROR]', error);
