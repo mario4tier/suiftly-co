@@ -27,10 +27,11 @@ import { dbClockProvider } from '@suiftly/shared/db-clock';
 import { reconcilePayments } from './reconcile-payments.js';
 import { generateAllVaults } from './tasks/generate-vault.js';
 import { pollLMStatus } from './tasks/poll-lm-status.js';
+import { isTestDeployment } from './config/lm-config.js';
 
 // Configure test_kv sync if not in production
 // This allows GM to read mock clock state from the database
-if (process.env.NODE_ENV !== 'production') {
+if (isTestDeployment()) {
   dbClockProvider.configureTestKvSync(getMockClockState, setMockClockState);
   dbClockProvider.enableTestKvSync();
 }
@@ -431,11 +432,14 @@ async function executeSyncAll(): Promise<void> {
   );
 
   // Generate vaults after billing (captures any subscription changes)
+  // Vault generation handles two scenarios:
+  // - Scenario 1 (Reactive): Customer has configChangeVaultSeq > currentVaultSeq
+  // - Scenario 2 (Drift): DB content differs from data_tx content
   try {
     const vaultResults = await generateAllVaults();
     const generated = Object.entries(vaultResults)
       .filter(([_, r]) => r.generated)
-      .map(([type, r]) => `${type}:${r.seq}`)
+      .map(([type, r]) => `${type}:${r.seq}(${r.trigger})`)
       .join(', ');
     const unchanged = Object.entries(vaultResults)
       .filter(([_, r]) => !r.generated)
@@ -450,6 +454,8 @@ async function executeSyncAll(): Promise<void> {
     }
   } catch (vaultError) {
     console.error('[SYNC] sync-all vault generation failed:', vaultError);
+    // Create admin notification for vault generation failure
+    await createVaultFailureNotification(vaultError);
     // Don't fail the entire sync-all for vault errors
   }
 
@@ -461,7 +467,51 @@ async function executeSyncAll(): Promise<void> {
     );
   } catch (lmError) {
     console.error('[SYNC] sync-all LM polling failed:', lmError);
+    // Create admin notification for LM polling failure
+    await createLMPollFailureNotification(lmError);
     // Don't fail the entire sync-all for LM polling errors
+  }
+}
+
+/**
+ * Create an admin notification for vault generation failure
+ */
+async function createVaultFailureNotification(error: unknown): Promise<void> {
+  try {
+    await db.insert(adminNotifications).values({
+      severity: 'error',
+      category: 'vault',
+      code: 'VAULT_GENERATION_FAILED',
+      message: 'Vault generation failed during sync-all',
+      details: JSON.stringify({
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+        timestamp: new Date().toISOString(),
+      }),
+    });
+  } catch (notifyError) {
+    console.error('[QUEUE] Failed to create vault failure notification:', notifyError);
+  }
+}
+
+/**
+ * Create an admin notification for LM polling failure
+ */
+async function createLMPollFailureNotification(error: unknown): Promise<void> {
+  try {
+    await db.insert(adminNotifications).values({
+      severity: 'warning',
+      category: 'lm',
+      code: 'LM_POLL_FAILED',
+      message: 'LM status polling failed during sync-all',
+      details: JSON.stringify({
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+        timestamp: new Date().toISOString(),
+      }),
+    });
+  } catch (notifyError) {
+    console.error('[QUEUE] Failed to create LM poll failure notification:', notifyError);
   }
 }
 

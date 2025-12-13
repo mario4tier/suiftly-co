@@ -185,6 +185,15 @@ ORDER BY table_name, privilege_type;
 EOF
 echo "   ✅ Permissions granted to deploy user (DML + TRUNCATE)"
 
+# Step 7: Initialize system_control singleton row
+echo "7️⃣  Initializing system_control..."
+sudo -u postgres psql -d "$DB_NAME" <<EOF
+-- Insert singleton row for system_control (vault seq tracking, etc.)
+INSERT INTO system_control (id, updated_at) VALUES (1, NOW())
+ON CONFLICT (id) DO NOTHING;
+EOF
+echo "   ✅ System control initialized"
+
 echo ""
 echo "🎉 Database reset complete!"
 echo ""

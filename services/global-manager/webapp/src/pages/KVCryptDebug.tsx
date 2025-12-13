@@ -13,14 +13,21 @@ interface VaultInfo {
   allVersions: VaultVersion[];
 }
 
+interface LMVaultStatus {
+  type: string;
+  seq: number;
+  customerCount: number;
+  inSync: boolean;
+  fullSync: boolean;
+}
+
 interface LMStatus {
   name: string;
   host: string;
-  status: 'up' | 'down' | 'unknown';
-  vault: {
-    type: string;
-    seq: number;
-  } | null;
+  reachable: boolean;
+  inSync: boolean;
+  fullSync: boolean;
+  vaults: LMVaultStatus[];
   error?: string;
 }
 
@@ -29,13 +36,41 @@ interface GMVaultStatus {
   error?: string;
 }
 
-function StatusBadge({ status }: { status: 'up' | 'down' | 'unknown' }) {
-  const colors = {
-    up: { bg: '#064e3b', text: '#4ade80', label: 'UP' },
-    down: { bg: '#7f1d1d', text: '#f87171', label: 'DOWN' },
-    unknown: { bg: '#44403c', text: '#a8a29e', label: 'UNKNOWN' },
-  };
-  const { bg, text, label } = colors[status];
+function SyncBadge({ reachable, inSync, fullSync, behind }: {
+  reachable: boolean;
+  inSync: boolean;
+  fullSync: boolean;
+  behind?: boolean;  // true if seq is behind GM
+}) {
+  let bg: string;
+  let text: string;
+  let label: string;
+
+  if (!reachable) {
+    bg = '#7f1d1d';
+    text = '#f87171';
+    label = 'DOWN';
+  } else if (behind) {
+    // Vault hasn't propagated yet - yellow BEHIND
+    bg = '#78350f';
+    text = '#fbbf24';
+    label = 'BEHIND';
+  } else if (fullSync) {
+    // All components confirmed and seq matches - green SYNC
+    bg = '#064e3b';
+    text = '#4ade80';
+    label = 'SYNC';
+  } else if (inSync) {
+    // HAProxy updated but components still confirming - yellow SYNC
+    bg = '#78350f';
+    text = '#fbbf24';
+    label = 'SYNC';
+  } else {
+    bg = '#44403c';
+    text = '#a8a29e';
+    label = 'PENDING';
+  }
+
   return (
     <span style={{
       background: bg,
@@ -327,48 +362,73 @@ export function KVCryptDebug() {
                   border: '1px solid #334155',
                 }}
               >
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  marginBottom: lm.vault ? '0.5rem' : 0,
-                }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                    <span style={{ color: '#e2e8f0', fontWeight: 500 }}>{lm.name}</span>
-                    <span style={{ color: '#64748b', fontSize: '0.75rem' }}>{lm.host}</span>
-                  </div>
-                  <StatusBadge status={lm.status} />
-                </div>
-
-                {lm.status === 'up' && lm.vault && (
-                  <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '1rem',
-                    fontSize: '0.875rem',
-                  }}>
-                    <span style={{ color: '#94a3b8' }}>
-                      Vault: <span style={{ fontFamily: 'monospace' }}>{lm.vault.type}</span>
-                    </span>
-                    <span style={{ color: '#94a3b8' }}>
-                      Seq: <span style={{ fontFamily: 'monospace', color: '#4ade80' }}>{lm.vault.seq}</span>
-                    </span>
-
-                    {/* Show sync status */}
-                    {gmVaults?.vaults?.[lm.vault.type]?.latest && (
-                      <span style={{
-                        color: gmVaults.vaults[lm.vault.type].latest!.seq === lm.vault.seq
-                          ? '#4ade80'
-                          : '#fbbf24',
-                        fontSize: '0.75rem',
+                {/* Check if any vault is behind GM */}
+                {(() => {
+                  const isLmBehind = lm.reachable && lm.vaults.some((v) => {
+                    const gmSeq = gmVaults?.vaults?.[v.type]?.latest?.seq;
+                    return gmSeq !== undefined && v.seq < gmSeq;
+                  });
+                  return (
+                    <>
+                      <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        marginBottom: lm.vaults.length > 0 ? '0.5rem' : 0,
                       }}>
-                        {gmVaults.vaults[lm.vault.type].latest!.seq === lm.vault.seq
-                          ? 'IN SYNC'
-                          : `BEHIND (GM: ${gmVaults.vaults[lm.vault.type].latest!.seq})`}
-                      </span>
-                    )}
-                  </div>
-                )}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                          <span style={{ color: '#e2e8f0', fontWeight: 500 }}>{lm.name}</span>
+                          <span style={{ color: '#64748b', fontSize: '0.75rem' }}>{lm.host}</span>
+                        </div>
+                        <SyncBadge
+                          reachable={lm.reachable}
+                          inSync={lm.inSync}
+                          fullSync={lm.fullSync}
+                          behind={isLmBehind}
+                        />
+                      </div>
+
+                      {lm.reachable && lm.vaults.length > 0 && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                          {lm.vaults.map((vault) => {
+                            const gmSeq = gmVaults?.vaults?.[vault.type]?.latest?.seq;
+                            const isBehind = gmSeq !== undefined && vault.seq < gmSeq;
+                            return (
+                              <div
+                                key={vault.type}
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '1rem',
+                                  fontSize: '0.875rem',
+                                }}
+                              >
+                                <span style={{ color: '#94a3b8' }}>
+                                  <span style={{ fontFamily: 'monospace' }}>{vault.type.toUpperCase()}</span>
+                                </span>
+                                <span style={{ color: '#94a3b8' }}>
+                                  seq=<span style={{ fontFamily: 'monospace' }}>{vault.seq}</span>
+                                  {isBehind && (
+                                    <span style={{ color: '#fbbf24' }}> (GM: {gmSeq})</span>
+                                  )}
+                                </span>
+                                <span style={{ color: '#94a3b8' }}>
+                                  customers=<span style={{ fontFamily: 'monospace' }}>{vault.customerCount}</span>
+                                </span>
+                                <SyncBadge
+                                  reachable={true}
+                                  inSync={vault.inSync}
+                                  fullSync={vault.fullSync}
+                                  behind={isBehind}
+                                />
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
 
                 {lm.error && (
                   <p style={{ color: '#f87171', fontSize: '0.75rem', margin: '0.5rem 0 0' }}>

@@ -44,6 +44,12 @@ export const serviceInstances = pgTable('service_instances', {
   // 0 = no pending changes (synced), >0 = waiting for LMs to reach this seq
   // Set to (currentVaultSeq + 1) when config changes, reset to 0 when synced
   configChangeVaultSeq: integer('config_change_vault_seq').default(0),
+
+  // Control-plane enabled: true once service has been provisioned to gateways
+  // Transitions to true when: isUserEnabled=true AND has seal key with package
+  // Once true, stays true (gateways keep config even if user disables service)
+  // HAProxy blocks traffic when disabled, but key-server keeps the keys loaded
+  cpEnabled: boolean('cp_enabled').notNull().default(false),
 }, (table) => ({
   uniqueCustomerService: unique().on(table.customerId, table.serviceType),
   // Index for efficient service-type iteration (backend synchronization)

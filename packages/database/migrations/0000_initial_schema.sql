@@ -6,7 +6,7 @@ CREATE TYPE "public"."service_state" AS ENUM('not_provisioned', 'provisioning', 
 CREATE TYPE "public"."service_tier" AS ENUM('starter', 'pro', 'enterprise');--> statement-breakpoint
 CREATE TYPE "public"."service_type" AS ENUM('seal', 'grpc', 'graphql');--> statement-breakpoint
 CREATE TYPE "public"."transaction_type" AS ENUM('deposit', 'withdraw', 'charge', 'credit');--> statement-breakpoint
-CREATE SEQUENCE "invoice_number_seq" START WITH 1000;--> statement-breakpoint
+CREATE SEQUENCE IF NOT EXISTS invoice_number_seq START WITH 148372;--> statement-breakpoint
 CREATE TABLE "admin_notifications" (
 	"notification_id" serial PRIMARY KEY NOT NULL,
 	"severity" varchar(20) NOT NULL,
@@ -192,6 +192,7 @@ CREATE TABLE "service_instances" (
 	"cancellation_effective_at" timestamp with time zone,
 	"last_billed_timestamp" timestamp,
 	"config_change_vault_seq" integer DEFAULT 0,
+	"cp_enabled" boolean DEFAULT false NOT NULL,
 	CONSTRAINT "service_instances_customer_id_service_type_unique" UNIQUE("customer_id","service_type")
 );
 --> statement-breakpoint
@@ -277,6 +278,23 @@ CREATE TABLE "config_global" (
 	"updated_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE "lm_status" (
+	"lm_id" varchar(64) PRIMARY KEY NOT NULL,
+	"display_name" varchar(128),
+	"host" varchar(256) NOT NULL,
+	"region" varchar(64),
+	"vault_type" varchar(8),
+	"vault_seq" integer DEFAULT 0,
+	"in_sync" boolean DEFAULT false,
+	"full_sync" boolean DEFAULT false,
+	"customer_count" integer DEFAULT 0,
+	"last_seen_at" timestamp,
+	"last_error_at" timestamp,
+	"last_error" text,
+	"created_at" timestamp DEFAULT now() NOT NULL,
+	"updated_at" timestamp DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
 CREATE TABLE "processing_state" (
 	"key" text PRIMARY KEY NOT NULL,
 	"value" text NOT NULL,
@@ -307,25 +325,6 @@ CREATE TABLE "system_control" (
 	"maintenance_mode" boolean DEFAULT false,
 	"updated_at" timestamp DEFAULT now() NOT NULL,
 	CONSTRAINT "check_singleton" CHECK ("system_control"."id" = 1)
-);
---> statement-breakpoint
-CREATE TABLE "lm_status" (
-	"lm_id" varchar(64) PRIMARY KEY NOT NULL,
-	"display_name" varchar(128),
-	"host" varchar(256) NOT NULL,
-	"region" varchar(64),
-	"vault_type" varchar(8),
-	"vault_seq" integer DEFAULT 0,
-	"in_sync" boolean DEFAULT false,
-	"component_vault" boolean DEFAULT false,
-	"component_haproxy" boolean DEFAULT false,
-	"component_key_server" boolean DEFAULT false,
-	"status" varchar(16) DEFAULT 'unknown',
-	"last_seen_at" timestamp,
-	"last_error_at" timestamp,
-	"last_error" text,
-	"created_at" timestamp DEFAULT now() NOT NULL,
-	"updated_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE "mock_sui_transactions" (

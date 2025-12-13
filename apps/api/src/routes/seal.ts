@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import { router, protectedProcedure } from '../lib/trpc';
 import { db, withCustomerLockForAPI } from '@suiftly/database';
-import { sealKeys, sealPackages, serviceInstances, apiKeys, configGlobal, customers } from '@suiftly/database/schema';
+import { sealKeys, sealPackages, serviceInstances, apiKeys, configGlobal, customers, systemControl } from '@suiftly/database/schema';
 import { eq, and, sql, isNull } from 'drizzle-orm';
 import { SERVICE_TYPE } from '@suiftly/shared/constants';
 import { storeApiKey, getApiKeys, revokeApiKey, deleteApiKey, reEnableApiKey, type SealType } from '../lib/api-keys';
@@ -16,6 +16,7 @@ import { decryptSecret } from '../lib/encryption';
 import { generateSealKey } from '../lib/seal-key-generation';
 import { getTierPriceUsdCents } from '../lib/config-cache';
 import { dbClock } from '@suiftly/shared/db-clock';
+import { triggerVaultSync } from '../lib/gm-sync';
 
 export const sealRouter = router({
   /**
@@ -142,7 +143,7 @@ export const sealRouter = router({
       }
 
       // Use customer lock to prevent race condition on package limit check
-      return await withCustomerLockForAPI(
+      const result = await withCustomerLockForAPI(
         ctx.user.customerId,
         'createPackage',
         async (tx) => {
@@ -203,6 +204,46 @@ export const sealRouter = router({
             })
             .returning();
 
+          // Check if this makes the service cpEnabled (provisioned to control plane)
+          // cpEnabled becomes true when: isUserEnabled=true AND has seal key with package
+          if (key.instanceId) {
+            const service = await tx.query.serviceInstances.findFirst({
+              where: eq(serviceInstances.instanceId, key.instanceId),
+            });
+
+            if (service && service.isUserEnabled && !service.cpEnabled) {
+              // Get current vault seq for sync tracking
+              const [control] = await tx
+                .select({ smaVaultSeq: systemControl.smaVaultSeq })
+                .from(systemControl)
+                .where(eq(systemControl.id, 1))
+                .limit(1);
+              const expectedVaultSeq = (control?.smaVaultSeq ?? 0) + 1;
+
+              // Set cpEnabled=true and update vault seq
+              await tx
+                .update(serviceInstances)
+                .set({
+                  cpEnabled: true,
+                  configChangeVaultSeq: expectedVaultSeq,
+                })
+                .where(eq(serviceInstances.instanceId, key.instanceId));
+            } else if (service && service.cpEnabled) {
+              // Service is already cpEnabled, just update vault seq for the new package
+              const [control] = await tx
+                .select({ smaVaultSeq: systemControl.smaVaultSeq })
+                .from(systemControl)
+                .where(eq(systemControl.id, 1))
+                .limit(1);
+              const expectedVaultSeq = (control?.smaVaultSeq ?? 0) + 1;
+
+              await tx
+                .update(serviceInstances)
+                .set({ configChangeVaultSeq: expectedVaultSeq })
+                .where(eq(serviceInstances.instanceId, key.instanceId));
+            }
+          }
+
           return {
             id: newPackage.packageId.toString(),
             packageId: newPackage.packageId,
@@ -215,6 +256,12 @@ export const sealRouter = router({
         },
         { sealKeyId: input.sealKeyId }
       );
+
+      // Trigger vault regeneration (fire-and-forget, outside transaction)
+      // This ensures the new package is included in HAProxy config
+      void triggerVaultSync();
+
+      return result;
     }),
 
   /**

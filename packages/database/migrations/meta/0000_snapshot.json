@@ -1,5 +1,5 @@
 {
-  "id": "104a7881-c50d-4038-84ea-d0a520021808",
+  "id": "b004f831-c8bb-4614-8923-b3c3a92b2dab",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -1693,6 +1693,20 @@
           "type": "timestamp",
           "primaryKey": false,
           "notNull": false
+        },
+        "config_change_vault_seq": {
+          "name": "config_change_vault_seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 0
+        },
+        "cp_enabled": {
+          "name": "cp_enabled",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
         }
       },
       "indexes": {
@@ -2672,6 +2686,109 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.lm_status": {
+      "name": "lm_status",
+      "schema": "",
+      "columns": {
+        "lm_id": {
+          "name": "lm_id",
+          "type": "varchar(64)",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "display_name": {
+          "name": "display_name",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "host": {
+          "name": "host",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "region": {
+          "name": "region",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "vault_type": {
+          "name": "vault_type",
+          "type": "varchar(8)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "vault_seq": {
+          "name": "vault_seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 0
+        },
+        "in_sync": {
+          "name": "in_sync",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": false,
+          "default": false
+        },
+        "full_sync": {
+          "name": "full_sync",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": false,
+          "default": false
+        },
+        "customer_count": {
+          "name": "customer_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 0
+        },
+        "last_seen_at": {
+          "name": "last_seen_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_error_at": {
+          "name": "last_error_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_error": {
+          "name": "last_error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.processing_state": {
       "name": "processing_state",
       "schema": "",
@@ -2714,15 +2831,120 @@
           "primaryKey": true,
           "notNull": true
         },
-        "ma_vault_version": {
-          "name": "ma_vault_version",
-          "type": "varchar(64)",
+        "sma_vault_seq": {
+          "name": "sma_vault_seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 0
+        },
+        "smm_vault_seq": {
+          "name": "smm_vault_seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 0
+        },
+        "sms_vault_seq": {
+          "name": "sms_vault_seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 0
+        },
+        "smo_vault_seq": {
+          "name": "smo_vault_seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 0
+        },
+        "sta_vault_seq": {
+          "name": "sta_vault_seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 0
+        },
+        "stm_vault_seq": {
+          "name": "stm_vault_seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 0
+        },
+        "sts_vault_seq": {
+          "name": "sts_vault_seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 0
+        },
+        "sto_vault_seq": {
+          "name": "sto_vault_seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 0
+        },
+        "skk_vault_seq": {
+          "name": "skk_vault_seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 0
+        },
+        "sma_vault_content_hash": {
+          "name": "sma_vault_content_hash",
+          "type": "varchar(16)",
           "primaryKey": false,
           "notNull": false
         },
-        "mm_vault_version": {
-          "name": "mm_vault_version",
-          "type": "varchar(64)",
+        "smm_vault_content_hash": {
+          "name": "smm_vault_content_hash",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "sms_vault_content_hash": {
+          "name": "sms_vault_content_hash",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "smo_vault_content_hash": {
+          "name": "smo_vault_content_hash",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "sta_vault_content_hash": {
+          "name": "sta_vault_content_hash",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "stm_vault_content_hash": {
+          "name": "stm_vault_content_hash",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "sts_vault_content_hash": {
+          "name": "sts_vault_content_hash",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "sto_vault_content_hash": {
+          "name": "sto_vault_content_hash",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "skk_vault_content_hash": {
+          "name": "skk_vault_content_hash",
+          "type": "varchar(16)",
           "primaryKey": false,
           "notNull": false
         },

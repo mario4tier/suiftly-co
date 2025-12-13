@@ -192,10 +192,30 @@ See [docs/ROUTE_SECURITY.md](docs/ROUTE_SECURITY.md) for complete details.
 
 **ALWAYS use the provided scripts to start/stop servers** - they are more robust than manual commands.
 
+**CRITICAL: ALWAYS use these scripts for GM and LM!**
+- GM (Global Manager) and LM (Local Manager) run as systemd services
+- The scripts use sudob to manage them properly
+- **NEVER** try to start/stop GM or LM manually with `systemctl`, `pkill`, or direct node commands
+- **NEVER** try to restart services by killing processes directly
+
+**Sudob Service:**
+- Sudob runs as a privileged systemd service (port 22800)
+- **You cannot start sudob yourself** - ask the user to start it if needed
+- Sudob is required for start-dev.sh and stop-dev.sh to work properly
+
 ### Starting Servers
 ```bash
 ./scripts/dev/start-dev.sh
 ```
+
+**What it starts:**
+- GM (suiftly-gm) - via systemd/sudob on port 22600
+- LM (suiftly-lm) - via systemd/sudob on port 22610
+- Admin webapp on port 22601
+- API server on port 22700
+- Webapp on port 22710
+
+**Port Reference:** See `~/walrus/PORT_MAP.md` for the single source of truth on all port allocations.
 
 **Benefits:**
 - Aggressive cleanup of stale processes (multiple passes)

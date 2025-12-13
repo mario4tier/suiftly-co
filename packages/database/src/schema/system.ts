@@ -77,15 +77,16 @@ export const lmStatus = pgTable('lm_status', {
   vaultType: varchar('vault_type', { length: 8 }),
   vaultSeq: integer('vault_seq').default(0),
 
-  // Component status (from LM health response)
-  // LM reports true only after validating each component
+  // Sync status (from LM health response)
+  // inSync: Service operational (vault + HAProxy updated) - yellow indicator
+  // fullSync: All components confirmed including key-servers - green indicator
   inSync: boolean('in_sync').default(false),
-  componentVault: boolean('component_vault').default(false),     // Vault loaded successfully
-  componentHaproxy: boolean('component_haproxy').default(false), // HAProxy maps updated
-  componentKeyServer: boolean('component_key_server').default(false), // Key-server running
+  fullSync: boolean('full_sync').default(false),
 
-  // Connection status
-  status: varchar('status', { length: 16 }).default('unknown'), // 'up' | 'down' | 'unknown'
+  // Customer count from vault
+  customerCount: integer('customer_count').default(0),
+
+  // Connection status - derived from response availability
   lastSeenAt: timestamp('last_seen_at'),
   lastErrorAt: timestamp('last_error_at'),
   lastError: text('last_error'),

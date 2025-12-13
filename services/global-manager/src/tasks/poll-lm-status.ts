@@ -13,29 +13,33 @@ import { getLMEndpoints, LM_HEALTH_CHECK_TIMEOUT, type LMEndpoint } from '../con
 import { eq } from 'drizzle-orm';
 
 /**
- * LM Health Response (matches LM server response format)
+ * Per-vault status in the vaults array
+ */
+interface VaultStatus {
+  type: string;
+  seq: number;
+  customerCount: number;
+  inSync: boolean; // Vault loaded + HAProxy updated (service operational)
+  fullSync: boolean; // All components confirmed including key-servers
+  applied: {
+    seq: number;
+    startedAt: string;
+    haproxy: { confirmedAt: string };
+    keyServers: Record<string, { confirmedAt: string }>;
+  } | null;
+  processing: object | null;
+  lastError: string | null;
+}
+
+/**
+ * LM Health Response (new format with vaults array)
  */
 interface LMHealthResponse {
-  status: 'up' | 'degraded' | 'down';
   service: string;
   timestamp: string;
-  vault: {
-    type: string;
-    seq: number;
-    customerCount: number;
-  };
-  components: {
-    vault: boolean;
-    haproxy: boolean;
-    keyServer: boolean;
-  };
-  inSync: boolean;
-  debug?: {
-    vaultLoadedAt: string | null;
-    haproxyUpdatedAt: string | null;
-    keyServerCheckedAt: string | null;
-    lastError: string | null;
-  };
+  vaults: VaultStatus[];
+  inSync: boolean; // All vaults have HAProxy updated (service operational)
+  fullSync: boolean; // All vaults have all components confirmed
 }
 
 /**
@@ -80,7 +84,9 @@ async function updateLMStatus(
   const now = new Date();
 
   if (result.success && result.data) {
-    // LM is reachable - update status
+    // LM is reachable - extract first vault status (currently only 'sma')
+    const smaVault = result.data.vaults.find((v) => v.type === 'sma');
+
     await db
       .insert(lmStatus)
       .values({
@@ -88,13 +94,11 @@ async function updateLMStatus(
         displayName: endpoint.name,
         host: endpoint.host,
         region: endpoint.region ?? null,
-        vaultType: result.data.vault.type,
-        vaultSeq: result.data.vault.seq,
+        vaultType: smaVault?.type ?? 'unknown',
+        vaultSeq: smaVault?.seq ?? 0,
         inSync: result.data.inSync,
-        componentVault: result.data.components.vault,
-        componentHaproxy: result.data.components.haproxy,
-        componentKeyServer: result.data.components.keyServer,
-        status: result.data.status,
+        fullSync: result.data.fullSync,
+        customerCount: smaVault?.customerCount ?? 0,
         lastSeenAt: now,
         lastError: null,
         updatedAt: now,
@@ -105,20 +109,18 @@ async function updateLMStatus(
           displayName: endpoint.name,
           host: endpoint.host,
           region: endpoint.region ?? null,
-          vaultType: result.data.vault.type,
-          vaultSeq: result.data.vault.seq,
+          vaultType: smaVault?.type ?? 'unknown',
+          vaultSeq: smaVault?.seq ?? 0,
           inSync: result.data.inSync,
-          componentVault: result.data.components.vault,
-          componentHaproxy: result.data.components.haproxy,
-          componentKeyServer: result.data.components.keyServer,
-          status: result.data.status,
+          fullSync: result.data.fullSync,
+          customerCount: smaVault?.customerCount ?? 0,
           lastSeenAt: now,
           lastError: null,
           updatedAt: now,
         },
       });
   } else {
-    // LM is unreachable - mark as down
+    // LM is unreachable
     await db
       .insert(lmStatus)
       .values({
@@ -126,8 +128,8 @@ async function updateLMStatus(
         displayName: endpoint.name,
         host: endpoint.host,
         region: endpoint.region ?? null,
-        status: 'down',
         inSync: false,
+        fullSync: false,
         lastErrorAt: now,
         lastError: result.error ?? 'Unknown error',
         updatedAt: now,
@@ -138,8 +140,8 @@ async function updateLMStatus(
           displayName: endpoint.name,
           host: endpoint.host,
           region: endpoint.region ?? null,
-          status: 'down',
           inSync: false,
+          fullSync: false,
           lastErrorAt: now,
           lastError: result.error ?? 'Unknown error',
           updatedAt: now,
@@ -158,6 +160,7 @@ export async function pollLMStatus(): Promise<{
   up: number;
   down: number;
   inSync: number;
+  fullSync: number;
   minVaultSeq: number | null;
 }> {
   const endpoints = getLMEndpoints();
@@ -165,6 +168,7 @@ export async function pollLMStatus(): Promise<{
   let up = 0;
   let down = 0;
   let inSync = 0;
+  let fullSync = 0;
   let minVaultSeq: number | null = null;
 
   // Poll all LMs in parallel
@@ -183,9 +187,13 @@ export async function pollLMStatus(): Promise<{
       if (result.data.inSync) {
         inSync++;
       }
-      // Track minimum vault seq across all reachable LMs
-      if (minVaultSeq === null || result.data.vault.seq < minVaultSeq) {
-        minVaultSeq = result.data.vault.seq;
+      if (result.data.fullSync) {
+        fullSync++;
+      }
+      // Track minimum vault seq across all reachable LMs (from first vault)
+      const smaVault = result.data.vaults.find((v) => v.type === 'sma');
+      if (smaVault && (minVaultSeq === null || smaVault.seq < minVaultSeq)) {
+        minVaultSeq = smaVault.seq;
       }
     } else {
       down++;
@@ -193,7 +201,7 @@ export async function pollLMStatus(): Promise<{
   }
 
   console.log(
-    `[LM-POLL] Polled ${endpoints.length} LMs: ${up} up, ${down} down, ${inSync} in-sync, minSeq=${minVaultSeq ?? 'N/A'}`
+    `[LM-POLL] Polled ${endpoints.length} LMs: ${up} up, ${down} down, ${inSync} in-sync, ${fullSync} full-sync, minSeq=${minVaultSeq ?? 'N/A'}`
   );
 
   return {
@@ -201,6 +209,7 @@ export async function pollLMStatus(): Promise<{
     up,
     down,
     inSync,
+    fullSync,
     minVaultSeq,
   };
 }
@@ -213,17 +222,17 @@ export async function getLMStatuses(): Promise<Array<typeof lmStatus.$inferSelec
 }
 
 /**
- * Get minimum vault seq from all reachable LMs that are in-sync
+ * Get minimum vault seq from all reachable LMs
  *
- * Returns null if no LMs are in-sync
+ * Returns null if no LMs are reachable
  */
 export async function getMinLMVaultSeq(): Promise<number | null> {
   const statuses = await db.select().from(lmStatus);
 
   let minSeq: number | null = null;
   for (const status of statuses) {
-    // Only consider LMs that are up (not down) - we include degraded
-    if (status.status !== 'down' && status.vaultSeq !== null) {
+    // Only consider LMs that have been seen recently (lastSeenAt not null and no recent error)
+    if (status.lastSeenAt && !status.lastError && status.vaultSeq !== null) {
       if (minSeq === null || (status.vaultSeq ?? 0) < minSeq) {
         minSeq = status.vaultSeq ?? 0;
       }
@@ -234,7 +243,7 @@ export async function getMinLMVaultSeq(): Promise<number | null> {
 }
 
 /**
- * Check if all LMs are in-sync
+ * Check if all LMs are in-sync (service operational)
  */
 export async function areAllLMsInSync(): Promise<boolean> {
   const statuses = await db.select().from(lmStatus);
@@ -243,6 +252,6 @@ export async function areAllLMsInSync(): Promise<boolean> {
     return false; // No LMs configured
   }
 
-  // All LMs must be up and in-sync
-  return statuses.every((s) => s.status !== 'down' && s.inSync);
+  // All LMs must be reachable and in-sync
+  return statuses.every((s) => s.lastSeenAt && !s.lastError && s.inSync);
 }

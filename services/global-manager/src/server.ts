@@ -3,13 +3,14 @@
 // Environment variables:
 //   GM_PORT - Server port (default: 22600)
 //   GM_HOST - Server host (default: 0.0.0.0)
-//   NODE_ENV - Environment (production/development)
+// Deployment type from /etc/walrus/system.conf (DEPLOYMENT_TYPE=test|production)
 
 import Fastify from 'fastify';
 import { z } from 'zod';
 import { db, adminNotifications } from '@suiftly/database';
 import { getMockClockState, setMockClockState } from '@suiftly/database/test-kv';
 import { desc, eq } from 'drizzle-orm';
+import { isTestDeployment } from './config/lm-config.js';
 import {
   queueSyncCustomer,
   queueSyncCustomerSync,
@@ -94,7 +95,7 @@ function validate<T extends z.ZodTypeAny>(
 
 const server = Fastify({
   logger: {
-    level: process.env.NODE_ENV === 'production' ? 'info' : 'debug',
+    level: isTestDeployment() ? 'debug' : 'info',
   },
 });
 
@@ -309,7 +310,7 @@ server.get('/api/queue/pending', async () => {
 // Test Endpoints (development only)
 // ============================================================================
 
-if (process.env.NODE_ENV !== 'production') {
+if (isTestDeployment()) {
   const { dbClockProvider } = await import('@suiftly/shared/db-clock');
 
   // Configure test_kv sync for cross-process clock sharing
@@ -497,25 +498,35 @@ server.get('/api/vault/status', async () => {
   return { vaults };
 });
 
-// Get Local Manager statuses
+// Get Local Manager statuses (live polling)
 server.get('/api/lm/status', async () => {
-  // In development, we only have local LM
-  // In production, this would query multiple LMs based on configuration
-  const managers: Array<{
+  // Poll LM directly for live status
+  interface LMStatus {
     name: string;
     host: string;
-    status: 'up' | 'down' | 'unknown';
-    vault: { type: string; seq: number } | null;
+    reachable: boolean;
+    inSync: boolean;
+    fullSync: boolean;
+    vaults: Array<{
+      type: string;
+      seq: number;
+      customerCount: number;
+      inSync: boolean;
+      fullSync: boolean;
+    }>;
     error?: string;
-  }> = [];
+  }
+
+  const managers: LMStatus[] = [];
 
   // Local LM (development)
-  const localLm = {
+  const localLm: LMStatus = {
     name: 'Local LM',
     host: 'http://localhost:22610',
-    status: 'unknown' as 'up' | 'down' | 'unknown',
-    vault: null as { type: string; seq: number } | null,
-    error: undefined as string | undefined,
+    reachable: false,
+    inSync: false,
+    fullSync: false,
+    vaults: [],
   };
 
   try {
@@ -528,17 +539,31 @@ server.get('/api/lm/status', async () => {
     clearTimeout(timeout);
 
     if (res.ok) {
-      const data = await res.json() as { status: string; vault?: { type: string; seq: number } };
-      localLm.status = 'up';
-      if (data.vault) {
-        localLm.vault = data.vault;
-      }
+      const data = await res.json() as {
+        vaults: Array<{
+          type: string;
+          seq: number;
+          customerCount: number;
+          inSync: boolean;
+          fullSync: boolean;
+        }>;
+        inSync: boolean;
+        fullSync: boolean;
+      };
+      localLm.reachable = true;
+      localLm.inSync = data.inSync;
+      localLm.fullSync = data.fullSync;
+      localLm.vaults = data.vaults.map((v) => ({
+        type: v.type,
+        seq: v.seq,
+        customerCount: v.customerCount,
+        inSync: v.inSync,
+        fullSync: v.fullSync,
+      }));
     } else {
-      localLm.status = 'down';
       localLm.error = `HTTP ${res.status}`;
     }
   } catch (err) {
-    localLm.status = 'down';
     localLm.error = err instanceof Error ? err.message : 'Connection failed';
   }
 
@@ -572,8 +597,11 @@ server.get('/api/sync/overview', async () => {
   const allInSync = await areAllLMsInSync();
 
   // Calculate sync status
-  const lmsUp = lmStatuses.filter(s => s.status !== 'down').length;
+  // LM is "reachable" if we've seen it recently (within last 30 seconds)
+  const recentThreshold = new Date(Date.now() - 30000);
+  const lmsReachable = lmStatuses.filter(s => s.lastSeenAt && s.lastSeenAt > recentThreshold).length;
   const lmsInSync = lmStatuses.filter(s => s.inSync).length;
+  const lmsFullSync = lmStatuses.filter(s => s.fullSync).length;
   const lmsTotal = lmStatuses.length;
 
   return {
@@ -583,26 +611,27 @@ server.get('/api/sync/overview', async () => {
     },
     lms: {
       total: lmsTotal,
-      up: lmsUp,
+      reachable: lmsReachable,
       inSync: lmsInSync,
+      fullSync: lmsFullSync,
       minSeq: minLMSeq,
       allInSync,
-      statuses: lmStatuses.map(s => ({
-        id: s.lmId,
-        name: s.displayName,
-        host: s.host,
-        region: s.region,
-        status: s.status,
-        vaultSeq: s.vaultSeq,
-        inSync: s.inSync,
-        components: {
-          vault: s.componentVault,
-          haproxy: s.componentHaproxy,
-          keyServer: s.componentKeyServer,
-        },
-        lastSeenAt: s.lastSeenAt?.toISOString() ?? null,
-        lastError: s.lastError,
-      })),
+      statuses: lmStatuses.map(s => {
+        const isReachable = s.lastSeenAt && s.lastSeenAt > recentThreshold;
+        return {
+          id: s.lmId,
+          name: s.displayName,
+          host: s.host,
+          region: s.region,
+          reachable: isReachable,
+          vaultSeq: s.vaultSeq,
+          customerCount: s.customerCount,
+          inSync: s.inSync,
+          fullSync: s.fullSync,
+          lastSeenAt: s.lastSeenAt?.toISOString() ?? null,
+          lastError: s.lastError,
+        };
+      }),
     },
     syncStatus: allInSync && minLMSeq !== null && minLMSeq >= currentVaultSeq
       ? 'synced'
@@ -630,10 +659,23 @@ async function start() {
     await server.listen({ port: PORT, host: HOST });
     server.log.info(`Global Manager (gm) listening on http://${HOST}:${PORT}`);
 
-    // Start periodic sync-all (1 hour interval in production, 5 minutes in dev)
-    const syncInterval = process.env.NODE_ENV === 'production'
-      ? 60 * 60 * 1000  // 1 hour
-      : 5 * 60 * 1000;  // 5 minutes
+    // Reconcile vault state (data_tx vs DB) on startup
+    // This handles scenarios where DB was reset but vault files still exist
+    try {
+      const { reconcileVaultState } = await import('./tasks/reconcile-vault-state.js');
+      const results = await reconcileVaultState();
+      const updated = results.filter((r) => r.action === 'updated_db');
+      if (updated.length > 0) {
+        server.log.info(`Vault state reconciled: ${updated.map((r) => `${r.vaultType} seq ${r.dbSeq} → ${r.newDbSeq}`).join(', ')}`);
+      }
+    } catch (err) {
+      server.log.warn(`Vault reconciliation failed (non-fatal): ${err instanceof Error ? err.message : err}`);
+    }
+
+    // Start periodic sync-all (10 minutes in production, 1 minute in dev)
+    const syncInterval = isTestDeployment()
+      ? 1 * 60 * 1000   // 1 minute (test/dev)
+      : 10 * 60 * 1000; // 10 minutes (production)
     startPeriodicSync(syncInterval);
   } catch (err) {
     server.log.error(err);

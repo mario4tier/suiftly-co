@@ -98,7 +98,6 @@ if (config.NODE_ENV !== 'production') {
     getApiKeysTestData,
     getSealKeysTestData,
     getServiceInstanceTestData,
-    clearVaultFiles,
   } = await import('./lib/test-data.js');
 
   // Get test configuration - allows tests to verify server config
@@ -226,7 +225,8 @@ if (config.NODE_ENV !== 'production') {
     reply.send(result);
   });
 
-  // Truncate all tables - full database reset (no sudo required with TRUNCATE permission)
+  // Truncate all tables - DB-only reset (vault cleanup handled by sudob)
+  // Use sudob's /api/test/reset-all for full reset including vault files
   server.post('/test/data/truncate-all', {
     config: { rateLimit: false },
   }, async (request, reply) => {
@@ -234,18 +234,11 @@ if (config.NODE_ENV !== 'production') {
     const { sql } = await import('drizzle-orm');
 
     try {
-      // 1. Clear vault files FIRST (before DB reset)
-      // Order: tx (GM) first to stop propagation, then rx (LM)
-      const vaultClearResult = await clearVaultFiles(['sma']);
-      console.log('[TRUNCATE] Vault files cleared:', vaultClearResult);
-
-      // 2. Truncate database tables
       await db.transaction(async (tx) => {
         // Disable triggers to avoid foreign key issues
         await tx.execute(sql`SET CONSTRAINTS ALL DEFERRED`);
 
         // Truncate all tables (CASCADE handles foreign keys)
-        // Note: Only truncate core tables that tests use
         await tx.execute(sql`
           TRUNCATE TABLE
             customers,
@@ -263,7 +256,7 @@ if (config.NODE_ENV !== 'production') {
           CASCADE
         `);
 
-        // 3. Reset vault sequence numbers in system_control
+        // Reset vault sequence numbers in system_control
         // This ensures next vault generation starts fresh at seq=1
         await tx.execute(sql`
           UPDATE system_control SET
@@ -291,8 +284,7 @@ if (config.NODE_ENV !== 'production') {
 
       reply.send({
         success: true,
-        message: 'All tables truncated and vault files cleared',
-        vaultFilesDeleted: vaultClearResult.deleted.length,
+        message: 'All tables truncated and vault sequences reset',
       });
     } catch (error: any) {
       console.error('[TRUNCATE ERROR]', error);

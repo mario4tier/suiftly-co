@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import { router, protectedProcedure } from '../lib/trpc';
 import { db, withCustomerLockForAPI } from '@suiftly/database';
-import { customers, serviceInstances, systemControl, lmStatus, apiKeys, sealKeys } from '@suiftly/database/schema';
+import { customers, serviceInstances, systemControl, lmStatus, apiKeys, sealKeys, sealPackages } from '@suiftly/database/schema';
 import { eq, and, sql, min, ne, isNull, count } from 'drizzle-orm';
 import { SERVICE_TYPE, SERVICE_TIER, SERVICE_STATE, BALANCE_LIMITS } from '@suiftly/shared/constants';
 import type { ValidationResult, ValidationError, ValidationWarning } from '@suiftly/shared/types';
@@ -27,6 +27,7 @@ import {
   getTierChangeOptions,
 } from '@suiftly/database/billing';
 import { dbClock } from '@suiftly/shared/db-clock';
+import { triggerVaultSync } from '../lib/gm-sync';
 
 // Zod schemas for input validation
 const serviceTypeSchema = z.enum([SERVICE_TYPE.SEAL, SERVICE_TYPE.GRPC, SERVICE_TYPE.GRAPHQL]);
@@ -407,7 +408,7 @@ export const servicesRouter = router({
       }
 
       // Wrap entire operation in customer advisory lock
-      return await withCustomerLockForAPI(
+      const result = await withCustomerLockForAPI(
         ctx.user.customerId,
         'toggleService',
         async (tx) => {
@@ -484,6 +485,21 @@ export const servicesRouter = router({
             .limit(1);
           const expectedVaultSeq = (control?.smaVaultSeq ?? 0) + 1;
 
+          // For Seal service: check if cpEnabled should be set
+          // cpEnabled becomes true when: isUserEnabled=true AND has seal key with package
+          let shouldSetCpEnabled = false;
+          if (input.enabled && input.serviceType === SERVICE_TYPE.SEAL && !service.cpEnabled) {
+            // Check if there's any seal key with at least one package
+            const keysWithPackages = await tx
+              .select({ sealKeyId: sealKeys.sealKeyId })
+              .from(sealKeys)
+              .innerJoin(sealPackages, eq(sealPackages.sealKeyId, sealKeys.sealKeyId))
+              .where(eq(sealKeys.instanceId, service.instanceId))
+              .limit(1);
+
+            shouldSetCpEnabled = keysWithPackages.length > 0;
+          }
+
           const [updatedService] = await tx
             .update(serviceInstances)
             .set({
@@ -492,6 +508,7 @@ export const servicesRouter = router({
               enabledAt: input.enabled ? now : service.enabledAt,
               disabledAt: !input.enabled ? now : service.disabledAt,
               configChangeVaultSeq: expectedVaultSeq,
+              ...(shouldSetCpEnabled ? { cpEnabled: true } : {}),
             })
             .where(eq(serviceInstances.instanceId, service.instanceId))
             .returning();
@@ -500,6 +517,12 @@ export const servicesRouter = router({
         },
         { serviceType: input.serviceType, enabled: input.enabled }
       );
+
+      // Trigger vault regeneration (fire-and-forget, outside transaction)
+      // This ensures HAProxy gets updated with the new isUserEnabled state
+      void triggerVaultSync();
+
+      return result;
     }),
 
   /**

@@ -5,6 +5,7 @@
  * IMPORTANT: Only active in test/development environments
  */
 
+import { randomInt } from 'node:crypto';
 import { db } from '@suiftly/database';
 import {
   customers, serviceInstances, serviceCancellationHistory, ledgerEntries, apiKeys, sealKeys,
@@ -47,15 +48,52 @@ export async function resetCustomerTestData(options: TestDataResetOptions = {}) 
   const clearEscrowAccount = options.clearEscrowAccount ?? false;
 
   // Find customer
-  const customer = await db.query.customers.findFirst({
+  let customer = await db.query.customers.findFirst({
     where: eq(customers.walletAddress, walletAddress),
   });
 
+  // Create customer if doesn't exist (for first-time test runs)
   if (!customer) {
-    console.log(`[TEST DATA] Customer not found (will be created on next auth): ${walletAddress}`);
+    console.log(`[TEST DATA] Customer not found, creating with specified balance: ${walletAddress}`);
+
+    // Generate random customer ID with collision retry (matching auth.ts pattern)
+    const MAX_RETRIES = 10;
+    let newCustomer: typeof customers.$inferSelect | undefined;
+
+    for (let attempt = 0; attempt < MAX_RETRIES && !newCustomer; attempt++) {
+      const customerId = randomInt(1, 2147483648);
+
+      try {
+        const [inserted] = await db.insert(customers).values({
+          customerId,
+          walletAddress,
+          status: 'active',
+          currentBalanceUsdCents: balanceUsdCents,
+          spendingLimitUsdCents: spendingLimitUsdCents,
+          currentPeriodChargedUsdCents: 0,
+          currentPeriodStart: (() => {
+            const now = dbClock.now();
+            return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString().split('T')[0];
+          })(),
+        }).returning();
+        newCustomer = inserted;
+      } catch (error: any) {
+        if (error.code === '23505' && error.constraint === 'customers_pkey') {
+          continue; // Collision - retry with new ID
+        }
+        throw error; // Other error - rethrow
+      }
+    }
+
+    if (!newCustomer) {
+      throw new Error('Failed to create customer after max retries (ID collision)');
+    }
+
+    console.log(`[TEST DATA] Created customer ${newCustomer.customerId} with $${(balanceUsdCents / 100).toFixed(2)} balance`);
     return {
       success: true,
-      message: 'Customer does not exist - will be created with production defaults on next auth',
+      message: `Customer created with $${(balanceUsdCents / 100).toFixed(2)} balance`,
+      customerId: newCustomer.customerId,
     };
   }
 
@@ -106,23 +144,30 @@ export async function resetCustomerTestData(options: TestDataResetOptions = {}) 
     // 6. Clear Sui mock config (reset delays and failure injections)
     suiMockConfig.clearConfig();
 
-    // 7. DELETE the customer record entirely
-    // This ensures a fresh customer ID is generated on next auth
-    // (fixes issues where old customer IDs might be invalid/negative)
-    await tx.delete(customers).where(eq(customers.customerId, customerId));
+    // 7. Reset customer to clean state with specified balance
+    // (Keep customer to preserve wallet address association)
+    await tx.update(customers)
+      .set({
+        currentBalanceUsdCents: balanceUsdCents,
+        spendingLimitUsdCents: spendingLimitUsdCents,
+        currentPeriodChargedUsdCents: 0,
+        ...(clearEscrowAccount ? { escrowContractId: null } : {}),
+      })
+      .where(eq(customers.customerId, customerId));
 
-    console.log(`[TEST DATA] Deleted customer ${customerId}:`);
+    console.log(`[TEST DATA] Reset customer ${customerId}:`);
     console.log(`  - Deleted ${deletedServices.length} service instances`);
     console.log(`  - Deleted ${deletedApiKeys.length} API keys`);
     console.log(`  - Deleted ${deletedSealKeys.length} Seal keys`);
     console.log(`  - Deleted all related data (ledger, tokens, billing, logs)`);
-    console.log(`  - Customer will be recreated with fresh ID on next auth`);
+    console.log(`  - Set balance to $${(balanceUsdCents / 100).toFixed(2)}`);
+    console.log(`  - Set spending limit to $${(spendingLimitUsdCents / 100).toFixed(2)}`);
   });
 
   return {
     success: true,
-    message: 'Customer deleted - will be recreated on next auth',
-    deletedCustomerId: customerId,
+    message: `Customer reset with $${(balanceUsdCents / 100).toFixed(2)} balance`,
+    customerId: customerId,
   };
 }
 
@@ -255,55 +300,6 @@ export async function getSealKeysTestData(walletAddress: string = MOCK_WALLET_AD
       createdAt: k.createdAt,
       packages: k.packages,
     })),
-  };
-}
-
-/**
- * Clear vault files via sudob
- *
- * Calls sudob to delete vault files from both tx (GM) and rx (LM) directories.
- * Order: tx first (stops sync-files propagation), then rx.
- *
- * @param vaultTypes - Array of vault type codes to clear (default: ['sma'])
- * @param sudodHost - Host of the sudob service (default: http://localhost:22612)
- */
-export async function clearVaultFiles(
-  vaultTypes: string[] = ['sma'],
-  sudodHost: string = 'http://localhost:22612'
-): Promise<{ success: boolean; deleted: string[]; errors: string[] }> {
-  const deleted: string[] = [];
-  const errors: string[] = [];
-
-  for (const vaultType of vaultTypes) {
-    try {
-      const response = await fetch(`${sudodHost}/api/vault/clear`, {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ vaultType, dir: 'both' }),
-      });
-
-      if (response.ok) {
-        const result = await response.json() as { deletedFiles?: string[] };
-        if (result.deletedFiles) {
-          deleted.push(...result.deletedFiles);
-        }
-        console.log(`[VAULT CLEAR] ${vaultType}: ${result.deletedFiles?.length ?? 0} files deleted`);
-      } else {
-        const error = await response.text();
-        errors.push(`${vaultType}: ${error}`);
-        console.error(`[VAULT CLEAR] ${vaultType}: HTTP ${response.status} - ${error}`);
-      }
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      errors.push(`${vaultType}: ${errorMsg}`);
-      console.error(`[VAULT CLEAR] ${vaultType}: ${errorMsg}`);
-    }
-  }
-
-  return {
-    success: errors.length === 0,
-    deleted,
-    errors,
   };
 }
 
