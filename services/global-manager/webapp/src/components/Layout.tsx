@@ -1,8 +1,19 @@
-import { ReactNode } from 'react';
+import { ReactNode, useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
+import { useAdminPollingContext } from '../contexts/AdminPollingContext';
 
 interface LayoutProps {
   children: ReactNode;
+}
+
+function formatTimeAgo(date: Date): string {
+  const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (seconds < 5) return 'just now';
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ago`;
 }
 
 interface NavItem {
@@ -18,7 +29,7 @@ const navItems: NavItem[] = [
 
 function NavIcon({ d }: { d: string }) {
   return (
-    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" style={{ width: '14px', height: '14px' }}>
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={d} />
     </svg>
   );
@@ -26,6 +37,18 @@ function NavIcon({ d }: { d: string }) {
 
 export function Layout({ children }: LayoutProps) {
   const location = useLocation();
+  const { lastUpdate, pollingInterval } = useAdminPollingContext();
+  const [timeAgo, setTimeAgo] = useState(lastUpdate ? formatTimeAgo(lastUpdate) : '');
+
+  // Update the "time ago" display every second
+  useEffect(() => {
+    if (!lastUpdate) return;
+    setTimeAgo(formatTimeAgo(lastUpdate));
+    const timer = setInterval(() => {
+      setTimeAgo(formatTimeAgo(lastUpdate));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [lastUpdate]);
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh', background: '#0f172a' }}>
@@ -36,6 +59,8 @@ export function Layout({ children }: LayoutProps) {
         borderRight: '1px solid #334155',
         padding: '1rem 0',
         flexShrink: 0,
+        display: 'flex',
+        flexDirection: 'column',
       }}>
         {/* Logo */}
         <div style={{ padding: '0 1rem 1rem', borderBottom: '1px solid #334155', marginBottom: '1rem' }}>
@@ -87,6 +112,26 @@ export function Layout({ children }: LayoutProps) {
             );
           })}
         </nav>
+
+        {/* Footer with update status */}
+        <div style={{
+          marginTop: 'auto',
+          padding: '1rem',
+          borderTop: '1px solid #334155',
+          fontSize: '0.75rem',
+          color: '#64748b',
+        }}>
+          {lastUpdate && (
+            <div style={{ marginBottom: '0.25rem' }}>
+              Updated {timeAgo}
+            </div>
+          )}
+          {pollingInterval !== undefined && (
+            <div>
+              Polling: {pollingInterval < 1000 ? `${pollingInterval}ms` : `${pollingInterval / 1000}s`}
+            </div>
+          )}
+        </div>
       </aside>
 
       {/* Main content */}

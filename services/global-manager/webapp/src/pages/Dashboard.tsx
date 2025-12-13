@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
+import { useAdminPollingContext } from '../contexts/AdminPollingContext';
 
 interface HealthStatus {
   service: string;
@@ -60,6 +61,9 @@ export function Dashboard() {
   const [showAcknowledged, setShowAcknowledged] = useState(false);
   const [loading, setLoading] = useState(true);
   const [notifError, setNotifError] = useState<string | null>(null);
+
+  // Adaptive polling based on user activity
+  const { pollingInterval, markUpdated } = useAdminPollingContext();
 
   const fetchHealth = useCallback(async () => {
     try {
@@ -142,16 +146,14 @@ export function Dashboard() {
   };
 
   useEffect(() => {
-    fetchHealth();
-    fetchLMStatus();
-    fetchCounts();
-    const interval = setInterval(() => {
-      fetchHealth();
-      fetchLMStatus();
-      fetchCounts();
-    }, 5000);
+    const fetchAll = async () => {
+      await Promise.all([fetchHealth(), fetchLMStatus(), fetchCounts()]);
+      markUpdated();
+    };
+    fetchAll();
+    const interval = setInterval(fetchAll, pollingInterval);
     return () => clearInterval(interval);
-  }, [fetchHealth, fetchLMStatus, fetchCounts]);
+  }, [fetchHealth, fetchLMStatus, fetchCounts, pollingInterval, markUpdated]);
 
   useEffect(() => {
     fetchNotifications();

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useAdminPolling } from './hooks/useAdminPolling';
 
 interface HealthStatus {
   status: string;
@@ -36,6 +37,9 @@ function App() {
   const [showAcknowledged, setShowAcknowledged] = useState(false);
   const [loading, setLoading] = useState(true);
   const [notifError, setNotifError] = useState<string | null>(null);
+
+  // Adaptive polling based on user activity
+  const { pollingInterval } = useAdminPolling();
 
   const fetchHealth = useCallback(async () => {
     try {
@@ -110,9 +114,9 @@ function App() {
     const interval = setInterval(() => {
       fetchHealth();
       fetchCounts();
-    }, 5000);
+    }, pollingInterval);
     return () => clearInterval(interval);
-  }, [fetchHealth, fetchCounts]);
+  }, [fetchHealth, fetchCounts, pollingInterval]);
 
   useEffect(() => {
     fetchNotifications();

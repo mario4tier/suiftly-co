@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useAdminPollingContext } from '../contexts/AdminPollingContext';
 
 interface VaultVersion {
   seq: number;
@@ -135,6 +136,9 @@ export function KVCryptDebug() {
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
+  // Adaptive polling based on user activity
+  const { pollingInterval, markUpdated } = useAdminPollingContext();
+
   const fetchData = useCallback(async () => {
     try {
       // Fetch GM vault status
@@ -175,10 +179,14 @@ export function KVCryptDebug() {
   };
 
   useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 10000);
+    const fetchAndMark = async () => {
+      await fetchData();
+      markUpdated();
+    };
+    fetchAndMark();
+    const interval = setInterval(fetchAndMark, pollingInterval);
     return () => clearInterval(interval);
-  }, [fetchData]);
+  }, [fetchData, pollingInterval, markUpdated]);
 
   if (loading) {
     return (
