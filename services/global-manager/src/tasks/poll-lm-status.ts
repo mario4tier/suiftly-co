@@ -4,7 +4,11 @@
  * Polls all configured Local Managers (LMs) and stores their status in the database.
  * Used to track vault propagation and component sync status across the fleet.
  *
- * The GM uses this data to calculate customer sync status:
+ * Sync status derivation from LM response:
+ * - inSync: vault applied successfully (!processing && applied !== null)
+ * - vaultSeq: processing?.seq ?? applied?.seq ?? 0
+ *
+ * Customer sync status calculation:
  * customer is synced when configChangeVaultSeq <= MIN(vaultSeq from all LMs where inSync=true)
  */
 
@@ -13,33 +17,44 @@ import { getLMEndpoints, LM_HEALTH_CHECK_TIMEOUT, type LMEndpoint } from '../con
 import { eq } from 'drizzle-orm';
 
 /**
- * Per-vault status in the vaults array
+ * Applied state from LM health response
  */
-interface VaultStatus {
-  type: string;
+interface AppliedState {
   seq: number;
-  customerCount: number;
-  inSync: boolean; // Vault loaded + HAProxy updated (service operational)
-  fullSync: boolean; // All components confirmed including key-servers
-  applied: {
-    seq: number;
-    startedAt: string;
-    haproxy: { confirmedAt: string };
-    keyServers: Record<string, { confirmedAt: string }>;
-  } | null;
-  processing: object | null;
-  lastError: string | null;
+  at: string; // ISO timestamp
 }
 
 /**
- * LM Health Response (new format with vaults array)
+ * Processing state from LM health response
+ */
+interface ProcessingState {
+  seq: number;
+  startedAt: string;
+  error: string | null;
+}
+
+/**
+ * Per-vault status in the vaults array (actual LM response format)
+ *
+ * Sync status derivation:
+ * - Current seq: processing?.seq ?? applied?.seq ?? 0
+ * - inSync: !processing && applied !== null (vault applied successfully)
+ * - fullSync: deprecated (was for key-server confirmation, no longer tracked)
+ */
+interface VaultStatus {
+  type: string;
+  customerCount: number;
+  applied: AppliedState | null;
+  processing: ProcessingState | null;
+}
+
+/**
+ * LM Health Response (actual format from LM)
  */
 interface LMHealthResponse {
   service: string;
   timestamp: string;
   vaults: VaultStatus[];
-  inSync: boolean; // All vaults have HAProxy updated (service operational)
-  fullSync: boolean; // All vaults have all components confirmed
 }
 
 /**
@@ -87,6 +102,11 @@ async function updateLMStatus(
     // LM is reachable - extract first vault status (currently only 'sma')
     const smaVault = result.data.vaults.find((v) => v.type === 'sma');
 
+    // Derive seq and sync status from applied/processing states
+    const vaultSeq = smaVault?.processing?.seq ?? smaVault?.applied?.seq ?? 0;
+    const inSync = smaVault ? !smaVault.processing && smaVault.applied !== null : false;
+    const fullSync = inSync; // fullSync deprecated - set same as inSync for now
+
     await db
       .insert(lmStatus)
       .values({
@@ -95,9 +115,9 @@ async function updateLMStatus(
         host: endpoint.host,
         region: endpoint.region ?? null,
         vaultType: smaVault?.type ?? 'unknown',
-        vaultSeq: smaVault?.seq ?? 0,
-        inSync: result.data.inSync,
-        fullSync: result.data.fullSync,
+        vaultSeq,
+        inSync,
+        fullSync,
         customerCount: smaVault?.customerCount ?? 0,
         lastSeenAt: now,
         lastError: null,
@@ -110,9 +130,9 @@ async function updateLMStatus(
           host: endpoint.host,
           region: endpoint.region ?? null,
           vaultType: smaVault?.type ?? 'unknown',
-          vaultSeq: smaVault?.seq ?? 0,
-          inSync: result.data.inSync,
-          fullSync: result.data.fullSync,
+          vaultSeq,
+          inSync,
+          fullSync,
           customerCount: smaVault?.customerCount ?? 0,
           lastSeenAt: now,
           lastError: null,
@@ -184,16 +204,20 @@ export async function pollLMStatus(): Promise<{
   for (const { result } of results) {
     if (result.success && result.data) {
       up++;
-      if (result.data.inSync) {
-        inSync++;
-      }
-      if (result.data.fullSync) {
-        fullSync++;
-      }
-      // Track minimum vault seq across all reachable LMs (from first vault)
+
+      // Derive sync status from vaults (LM no longer provides top-level inSync/fullSync)
       const smaVault = result.data.vaults.find((v) => v.type === 'sma');
-      if (smaVault && (minVaultSeq === null || smaVault.seq < minVaultSeq)) {
-        minVaultSeq = smaVault.seq;
+      const vaultInSync = smaVault ? !smaVault.processing && smaVault.applied !== null : false;
+
+      if (vaultInSync) {
+        inSync++;
+        fullSync++; // fullSync deprecated - count same as inSync
+      }
+
+      // Track minimum vault seq across all reachable LMs
+      const vaultSeq = smaVault?.processing?.seq ?? smaVault?.applied?.seq ?? 0;
+      if (smaVault && (minVaultSeq === null || vaultSeq < minVaultSeq)) {
+        minVaultSeq = vaultSeq;
       }
     } else {
       down++;

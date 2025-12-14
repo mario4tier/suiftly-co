@@ -66,6 +66,15 @@ export const systemControl = pgTable('system_control', {
  * GM polls each LM's /api/health endpoint and stores results here.
  * Used to calculate sync status: customer is synced when
  * configChangeVaultSeq <= MIN(vaultSeq from all LMs where inSync=true)
+ *
+ * LM health response format (applied/processing model):
+ * - vaults[].applied: {seq, at} - last successfully applied vault
+ * - vaults[].processing: {seq, startedAt, error} - currently processing vault
+ *
+ * GM derives status from LM response:
+ * - vaultSeq = processing?.seq ?? applied?.seq ?? 0
+ * - inSync = !processing && applied !== null (vault applied successfully)
+ * - fullSync = deprecated (was for key-server confirmation, set same as inSync)
  */
 export const lmStatus = pgTable('lm_status', {
   lmId: varchar('lm_id', { length: 64 }).primaryKey(),
@@ -73,13 +82,13 @@ export const lmStatus = pgTable('lm_status', {
   host: varchar('host', { length: 256 }).notNull(),
   region: varchar('region', { length: 64 }),
 
-  // Vault status (from LM health response)
+  // Vault status (derived from LM health response)
   vaultType: varchar('vault_type', { length: 8 }),
-  vaultSeq: integer('vault_seq').default(0),
+  vaultSeq: integer('vault_seq').default(0), // processing?.seq ?? applied?.seq ?? 0
 
-  // Sync status (from LM health response)
-  // inSync: Service operational (vault + HAProxy updated) - yellow indicator
-  // fullSync: All components confirmed including key-servers - green indicator
+  // Sync status (derived from LM health response)
+  // inSync: !processing && applied !== null (vault applied successfully)
+  // fullSync: deprecated (was for key-server confirmation, set same as inSync)
   inSync: boolean('in_sync').default(false),
   fullSync: boolean('full_sync').default(false),
 
