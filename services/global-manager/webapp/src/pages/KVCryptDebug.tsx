@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useAdminPollingContext } from '../contexts/AdminPollingContext';
+import { SyncIndicator, SyncState } from '../components/SyncIndicator';
 
 interface VaultVersion {
   seq: number;
@@ -20,6 +21,7 @@ interface LMVaultStatus {
   customerCount: number;
   inSync: boolean;
   fullSync: boolean;
+  error?: string;
 }
 
 interface LMStatus {
@@ -30,60 +32,12 @@ interface LMStatus {
   fullSync: boolean;
   vaults: LMVaultStatus[];
   error?: string;
+  rawData?: any;
 }
 
 interface GMVaultStatus {
   vaults: Record<string, VaultInfo>;
   error?: string;
-}
-
-function SyncBadge({ reachable, inSync, fullSync, behind }: {
-  reachable: boolean;
-  inSync: boolean;
-  fullSync: boolean;
-  behind?: boolean;  // true if seq is behind GM
-}) {
-  let bg: string;
-  let text: string;
-  let label: string;
-
-  if (!reachable) {
-    bg = '#7f1d1d';
-    text = '#f87171';
-    label = 'DOWN';
-  } else if (behind) {
-    // Vault hasn't propagated yet - yellow BEHIND
-    bg = '#78350f';
-    text = '#fbbf24';
-    label = 'BEHIND';
-  } else if (fullSync) {
-    // All components confirmed and seq matches - green SYNC
-    bg = '#064e3b';
-    text = '#4ade80';
-    label = 'SYNC';
-  } else if (inSync) {
-    // HAProxy updated but components still confirming - yellow SYNC
-    bg = '#78350f';
-    text = '#fbbf24';
-    label = 'SYNC';
-  } else {
-    bg = '#44403c';
-    text = '#a8a29e';
-    label = 'PENDING';
-  }
-
-  return (
-    <span style={{
-      background: bg,
-      color: text,
-      padding: '0.125rem 0.5rem',
-      borderRadius: '0.25rem',
-      fontSize: '0.75rem',
-      fontWeight: 600,
-    }}>
-      {label}
-    </span>
-  );
 }
 
 function VaultVersionRow({ version, isLatest, isPrevious }: { version: VaultVersion; isLatest?: boolean; isPrevious?: boolean }) {
@@ -135,6 +89,7 @@ export function KVCryptDebug() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [expandedLM, setExpandedLM] = useState<string | null>(null);
 
   // Adaptive polling based on user activity
   const { pollingInterval, markUpdated } = useAdminPollingContext();
@@ -176,6 +131,25 @@ export function KVCryptDebug() {
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Sync failed');
     }
+  };
+
+  // Calculate LM sync state
+  const getLMState = (lm: LMStatus, isLmBehind: boolean): SyncState => {
+    if (!lm.reachable) return SyncState.Down;
+    if (lm.error) return SyncState.Error;
+    if (isLmBehind) return SyncState.Pending;
+    if (lm.fullSync) return SyncState.Sync;
+    if (lm.inSync) return SyncState.Sync;
+    return SyncState.Pending;
+  };
+
+  // Calculate vault sync state
+  const getVaultState = (vault: LMVaultStatus, isBehind: boolean): SyncState => {
+    if (vault.error) return SyncState.Error;
+    if (isBehind) return SyncState.Pending;
+    if (vault.fullSync) return SyncState.Sync;
+    if (vault.inSync) return SyncState.Sync;
+    return SyncState.Pending;
   };
 
   useEffect(() => {
@@ -388,12 +362,36 @@ export function KVCryptDebug() {
                           <span style={{ color: '#e2e8f0', fontWeight: 500 }}>{lm.name}</span>
                           <span style={{ color: '#64748b', fontSize: '0.75rem' }}>{lm.host}</span>
                         </div>
-                        <SyncBadge
-                          reachable={lm.reachable}
-                          inSync={lm.inSync}
-                          fullSync={lm.fullSync}
-                          behind={isLmBehind}
-                        />
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <SyncIndicator state={getLMState(lm, isLmBehind)} />
+                          {lm.rawData && (
+                            <button
+                              onClick={() => setExpandedLM(expandedLM === lm.name ? null : lm.name)}
+                              style={{
+                                background: 'transparent',
+                                border: '1px solid #475569',
+                                color: '#94a3b8',
+                                cursor: 'pointer',
+                                padding: '0.25rem 0.5rem',
+                                borderRadius: '0.25rem',
+                                fontSize: '0.7rem',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.25rem'
+                              }}
+                              title="Toggle JSON viewer"
+                            >
+                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                                <polyline points="14 2 14 8 20 8" />
+                                <line x1="16" y1="13" x2="8" y2="13" />
+                                <line x1="16" y1="17" x2="8" y2="17" />
+                                <polyline points="10 9 9 9 8 9" />
+                              </svg>
+                              JSON
+                            </button>
+                          )}
+                        </div>
                       </div>
 
                       {lm.reachable && lm.vaults.length > 0 && (
@@ -423,12 +421,7 @@ export function KVCryptDebug() {
                                 <span style={{ color: '#94a3b8' }}>
                                   customers=<span style={{ fontFamily: 'monospace' }}>{vault.customerCount}</span>
                                 </span>
-                                <SyncBadge
-                                  reachable={true}
-                                  inSync={vault.inSync}
-                                  fullSync={vault.fullSync}
-                                  behind={isBehind}
-                                />
+                                <SyncIndicator state={getVaultState(vault, isBehind)} />
                               </div>
                             );
                           })}
@@ -442,6 +435,40 @@ export function KVCryptDebug() {
                   <p style={{ color: '#f87171', fontSize: '0.75rem', margin: '0.5rem 0 0' }}>
                     {lm.error}
                   </p>
+                )}
+
+                {/* JSON Accordion */}
+                {expandedLM === lm.name && lm.rawData && (
+                  <div style={{
+                    marginTop: '0.75rem',
+                    padding: '0.75rem',
+                    background: '#020617',
+                    borderRadius: '0.25rem',
+                    border: '1px solid #334155'
+                  }}>
+                    <div style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      marginBottom: '0.5rem'
+                    }}>
+                      <span style={{ color: '#94a3b8', fontSize: '0.75rem', fontWeight: 'bold' }}>
+                        Raw LM Status
+                      </span>
+                    </div>
+                    <pre style={{
+                      color: '#94a3b8',
+                      fontSize: '0.7rem',
+                      margin: 0,
+                      overflow: 'auto',
+                      maxHeight: '400px',
+                      background: '#0f172a',
+                      padding: '0.75rem',
+                      borderRadius: '0.25rem'
+                    }}>
+                      {JSON.stringify(lm.rawData, null, 2)}
+                    </pre>
+                  </div>
                 )}
               </div>
             ))}

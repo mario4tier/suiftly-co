@@ -513,8 +513,10 @@ server.get('/api/lm/status', async () => {
       customerCount: number;
       inSync: boolean;
       fullSync: boolean;
+      error?: string;
     }>;
     error?: string;
+    rawData?: any;
   }
 
   const managers: LMStatus[] = [];
@@ -539,27 +541,52 @@ server.get('/api/lm/status', async () => {
     clearTimeout(timeout);
 
     if (res.ok) {
+      // New LM response format (simplified)
       const data = await res.json() as {
         vaults: Array<{
           type: string;
-          seq: number;
           customerCount: number;
-          inSync: boolean;
-          fullSync: boolean;
+          applied: { seq: number; at: string } | null;
+          processing: { seq: number; startedAt: string; error: string | null } | null;
         }>;
-        inSync: boolean;
-        fullSync: boolean;
       };
+
       localLm.reachable = true;
-      localLm.inSync = data.inSync;
-      localLm.fullSync = data.fullSync;
-      localLm.vaults = data.vaults.map((v) => ({
-        type: v.type,
-        seq: v.seq,
-        customerCount: v.customerCount,
-        inSync: v.inSync,
-        fullSync: v.fullSync,
-      }));
+
+      // Transform new format to old format for admin webapp
+      localLm.vaults = data.vaults.map((v) => {
+        const currentSeq = v.processing?.seq ?? v.applied?.seq ?? 0;
+
+        // Derive status from new format:
+        // - SYNC: !processing && applied exists
+        // - ERROR: processing with error
+        // - PENDING: processing without error
+        const hasError = v.processing && v.processing.error !== null;
+        const inSync = !v.processing && v.applied !== null;
+        const fullSync = inSync;
+
+        return {
+          type: v.type,
+          seq: currentSeq,
+          customerCount: v.customerCount,
+          inSync,
+          fullSync,
+          error: hasError ? v.processing!.error! : undefined,
+        };
+      });
+
+      // Overall LM sync status
+      localLm.inSync = localLm.vaults.every(v => v.inSync);
+      localLm.fullSync = localLm.vaults.every(v => v.fullSync);
+
+      // Propagate vault errors to LM level
+      const vaultErrors = localLm.vaults.filter(v => v.error).map(v => v.error);
+      if (vaultErrors.length > 0) {
+        localLm.error = vaultErrors.join('; ');
+      }
+
+      // Store raw LM data for debugging
+      localLm.rawData = data;
     } else {
       localLm.error = `HTTP ${res.status}`;
     }

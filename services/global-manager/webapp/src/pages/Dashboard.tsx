@@ -1,18 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { useAdminPollingContext } from '../contexts/AdminPollingContext';
+import { SyncIndicator, SyncState } from '../components/SyncIndicator';
 
 interface HealthStatus {
   service: string;
   timestamp: string;
-}
-
-interface LMVaultStatus {
-  type: string;
-  seq: number;
-  customerCount: number;
-  inSync: boolean;
-  fullSync: boolean;
 }
 
 interface LMStatus {
@@ -21,7 +14,6 @@ interface LMStatus {
   reachable: boolean;
   inSync: boolean;
   fullSync: boolean;
-  vaults: LMVaultStatus[];
   error?: string;
 }
 
@@ -168,41 +160,13 @@ export function Dashboard() {
     }
   };
 
-  // Sync status indicator component
-  const SyncIndicator = ({ inSync, fullSync, label }: { inSync: boolean; fullSync: boolean; label?: string }) => {
-    let color = '#f87171'; // red - not reachable/synced
-    let text = 'Down';
-
-    if (fullSync) {
-      color = '#4ade80'; // green - fully synced
-      text = 'Sync';
-    } else if (inSync) {
-      color = '#fbbf24'; // yellow - in sync but not full
-      text = 'Sync';
-    }
-
-    return (
-      <span style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: '0.25rem',
-        padding: '0.125rem 0.5rem',
-        background: `${color}20`,
-        border: `1px solid ${color}`,
-        borderRadius: '0.25rem',
-        fontSize: '0.75rem',
-        color,
-        fontWeight: 'bold',
-      }}>
-        <span style={{
-          width: '6px',
-          height: '6px',
-          borderRadius: '50%',
-          background: color,
-        }} />
-        {label || text}
-      </span>
-    );
+  // Calculate LM sync state from status
+  const getLMState = (lm: LMStatus): SyncState => {
+    if (!lm.reachable) return SyncState.Down;
+    if (lm.error) return SyncState.Error;
+    if (lm.fullSync) return SyncState.Sync;
+    if (lm.inSync) return SyncState.Sync;
+    return SyncState.Pending;
   };
 
   return (
@@ -249,7 +213,7 @@ export function Dashboard() {
           <p style={{ color: '#f87171' }}>Error: {healthError}</p>
         ) : health ? (
           <div style={{ display: 'flex', gap: '2rem', alignItems: 'center' }}>
-            <SyncIndicator inSync={true} fullSync={true} label="Up" />
+            <SyncIndicator state={SyncState.Sync} label="Up" />
             <span style={{ color: '#94a3b8', fontSize: '0.875rem' }}>
               Last check: {new Date(health.timestamp).toLocaleTimeString()}
             </span>
@@ -274,47 +238,14 @@ export function Dashboard() {
         ) : lmStatus?.managers && lmStatus.managers.length > 0 ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
             {lmStatus.managers.map((lm, idx) => (
-              <div key={idx} style={{
-                background: '#0f172a',
-                padding: '0.75rem',
-                borderRadius: '0.25rem',
-                borderLeft: `3px solid ${lm.reachable ? (lm.fullSync ? '#4ade80' : lm.inSync ? '#fbbf24' : '#f87171') : '#f87171'}`,
-              }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                    <span style={{ color: '#e2e8f0', fontWeight: 'bold' }}>{lm.name}</span>
-                    <SyncIndicator
-                      inSync={lm.reachable && lm.inSync}
-                      fullSync={lm.reachable && lm.fullSync}
-                    />
-                  </div>
-                  <span style={{ color: '#64748b', fontSize: '0.75rem' }}>{lm.host}</span>
+              <div key={idx} style={{ display: 'flex', gap: '2rem', alignItems: 'center' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                  <span style={{ color: '#e2e8f0', fontWeight: 'bold' }}>{lm.name}</span>
+                  <SyncIndicator state={getLMState(lm)} />
                 </div>
-
-                {lm.error ? (
-                  <p style={{ color: '#f87171', fontSize: '0.75rem', margin: 0 }}>Error: {lm.error}</p>
-                ) : lm.vaults.length > 0 ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                    {lm.vaults.map((vault, vidx) => (
-                      <div key={vidx} style={{
-                        display: 'flex',
-                        gap: '1rem',
-                        alignItems: 'center',
-                        fontSize: '0.75rem',
-                        color: '#94a3b8',
-                        padding: '0.25rem 0.5rem',
-                        background: '#1e293b',
-                        borderRadius: '0.25rem',
-                      }}>
-                        <span style={{ fontWeight: 'bold', color: '#e2e8f0' }}>{vault.type.toUpperCase()}</span>
-                        <span>seq: {vault.seq}</span>
-                        <span>customers: {vault.customerCount}</span>
-                        <SyncIndicator inSync={vault.inSync} fullSync={vault.fullSync} />
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p style={{ color: '#64748b', fontSize: '0.75rem', margin: 0 }}>No vaults loaded</p>
+                <span style={{ color: '#94a3b8', fontSize: '0.875rem' }}>{lm.host}</span>
+                {lm.error && (
+                  <span style={{ color: '#f87171', fontSize: '0.75rem' }}>Error: {lm.error}</span>
                 )}
               </div>
             ))}
