@@ -126,23 +126,88 @@ read -r
 # Database connection settings (after safety checks)
 # Use postgres superuser for setup/migrations
 
-# Step 1: Drop database
-echo "1️⃣  Dropping database $DB_NAME..."
+# Step 1: Stop GM and clean vault directories
+echo "1️⃣  Stopping Global Manager and cleaning vault directories..."
+
+# SAFETY: Check Walrus deployment type from /etc/walrus/system.conf
+# Vault cleanup ONLY safe for test deployments (DEPLOYMENT_TYPE=test)
+# NEVER run in production (DEPLOYMENT_TYPE=production)
+WALRUS_CONF="/etc/walrus/system.conf"
+if [ -f "$WALRUS_CONF" ]; then
+  # Source walrus system config to get DEPLOYMENT_TYPE
+  source "$WALRUS_CONF"
+
+  # Block vault cleanup if production deployment
+  if [ "${DEPLOYMENT_TYPE:-}" = "production" ]; then
+    echo "❌ ERROR: Production walrus deployment detected"
+    echo "   DEPLOYMENT_TYPE=$DEPLOYMENT_TYPE (from $WALRUS_CONF)"
+    echo "   Vault cleanup is ONLY for test deployments."
+    echo "   Production vaults contain live customer data and must NEVER be deleted."
+    exit 1
+  fi
+
+  echo "   ✅ Walrus DEPLOYMENT_TYPE=${DEPLOYMENT_TYPE:-not set} (safe to clean vaults)"
+else
+  echo "   ℹ️  No walrus system.conf found (OK for development)"
+fi
+
+# Stop GM if running (so vault files aren't being written during cleanup)
+if systemctl is-active --quiet suiftly-gm; then
+  echo "   🛑 Stopping Global Manager..."
+  systemctl stop suiftly-gm
+  echo "   ✅ Global Manager stopped"
+else
+  echo "   ℹ️  Global Manager not running (OK)"
+fi
+
+# Clean vault directories (GM first, then LM)
+# Prevents stale vault files from causing seq mismatches after DB reset
+GM_VAULT_DIRS=("/opt/syncf/data_tx" "/opt/syncf/data_rx" "/opt/syncf/data")
+LM_VAULT_DIRS=("/opt/syncf/data_tx" "/opt/syncf/data_rx" "/opt/syncf/data")
+
+echo "   🗑️  Cleaning GM vault directories..."
+for dir in "${GM_VAULT_DIRS[@]}"; do
+  if [ -d "$dir" ]; then
+    # Delete vault files (.enc and .rsa) recursively
+    # Preserves directory structure - only deletes files
+    find "$dir" -type f -name "sma-*.enc" -delete 2>/dev/null || true
+    find "$dir" -type f -name "sta-*.enc" -delete 2>/dev/null || true
+    find "$dir" -type f -name "*.rsa" -delete 2>/dev/null || true
+    echo "      ✅ Cleaned $dir"
+  fi
+done
+
+echo "   🗑️  Cleaning LM vault directories..."
+for dir in "${LM_VAULT_DIRS[@]}"; do
+  if [ -d "$dir" ]; then
+    # Delete vault files (.enc and .rsa) recursively
+    # Preserves directory structure - only deletes files
+    find "$dir" -type f -name "sma-*.enc" -delete 2>/dev/null || true
+    find "$dir" -type f -name "sta-*.enc" -delete 2>/dev/null || true
+    find "$dir" -type f -name "*.rsa" -delete 2>/dev/null || true
+    echo "      ✅ Cleaned $dir"
+  fi
+done
+
+echo "   ✅ Vault directories cleaned"
+
+# Step 2: Drop database
+echo "2️⃣  Dropping database $DB_NAME..."
 sudo -u postgres psql -c "DROP DATABASE IF EXISTS $DB_NAME;"
 echo "   ✅ Database dropped"
 
-# Step 2: Create database
-echo "2️⃣  Creating fresh database $DB_NAME..."
+# Step 3: Create database
+echo "3️⃣  Creating fresh database $DB_NAME..."
 sudo -u postgres psql -c "CREATE DATABASE $DB_NAME;"
 echo "   ✅ Database created"
 
-# Step 3: Install TimescaleDB extension
-echo "3️⃣  Installing TimescaleDB extension..."
+# Step 4: Install TimescaleDB extension
+echo "4️⃣  Installing TimescaleDB extension..."
 sudo -u postgres psql -d "$DB_NAME" -c "CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;"
 echo "   ✅ TimescaleDB extension installed"
 
-# Step 4: Apply migrations
-echo "4️⃣  Applying migrations..."
+# Step 5: Apply migrations
+echo "5️⃣  Applying migrations..."
 # Run as current user, but connect to database as postgres user
 # Use localhost TCP connection (pg_hba.conf should have 'trust' for local postgres user)
 # This avoids needing the postgres Unix user to access home directories
@@ -150,13 +215,13 @@ cd "$SCRIPT_DIR/../../packages/database"
 DATABASE_URL="postgresql://postgres@localhost:5432/$DB_NAME" node --import tsx src/migrate.ts
 echo "   ✅ Migrations applied"
 
-# Step 5: Setup TimescaleDB hypertables
-echo "5️⃣  Setting up TimescaleDB hypertables..."
+# Step 6: Setup TimescaleDB hypertables
+echo "6️⃣  Setting up TimescaleDB hypertables..."
 DATABASE_URL="postgresql://postgres@localhost:5432/$DB_NAME" node --import tsx src/timescale-setup.ts
 echo "   ✅ TimescaleDB configured"
 
-# Step 6: Grant permissions to deploy user (DML + TRUNCATE for test resets)
-echo "6️⃣  Granting permissions to deploy user..."
+# Step 7: Grant permissions to deploy user (DML + TRUNCATE for test resets)
+echo "7️⃣  Granting permissions to deploy user..."
 sudo -u postgres psql -d "$DB_NAME" <<EOF
 -- Grant CONNECT privilege
 GRANT CONNECT ON DATABASE $DB_NAME TO deploy;
@@ -185,8 +250,8 @@ ORDER BY table_name, privilege_type;
 EOF
 echo "   ✅ Permissions granted to deploy user (DML + TRUNCATE)"
 
-# Step 7: Initialize system_control singleton row
-echo "7️⃣  Initializing system_control..."
+# Step 8: Initialize system_control singleton row
+echo "8️⃣  Initializing system_control..."
 sudo -u postgres psql -d "$DB_NAME" <<EOF
 -- Insert singleton row for system_control (vault seq tracking, etc.)
 INSERT INTO system_control (id, updated_at) VALUES (1, NOW())
