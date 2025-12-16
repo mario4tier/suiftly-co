@@ -36,13 +36,18 @@
  * 6. Calculate newSeq (max of maxPendingSeq and currentSeq+1)
  * 7. Write vault to data_tx
  * 8. Update DB with new seq, content hash, reset nextSeq to newSeq+1
- * 9. Reset configChangeVaultSeq for synced customers
+ *
+ * Sync status determination:
+ * - API compares service.configChangeVaultSeq vs LM.minAppliedSeq
+ * - If configChangeVaultSeq > minAppliedSeq → service is "pending" (not synced)
+ * - If configChangeVaultSeq <= minAppliedSeq → service is "synced"
+ * - No reset of configChangeVaultSeq needed - the comparison handles it
  */
 
 import { db, systemControl, serviceInstances, apiKeys, sealKeys, sealPackages } from '@suiftly/database';
 import { SERVICE_TYPE, SERVICE_STATE, type ServiceType } from '@suiftly/shared/constants';
 import { createVaultWriter, createVaultReader, computeContentHash, type VaultInstance } from '@walrus/vault-codec';
-import { eq, and, isNull, gt, lte } from 'drizzle-orm';
+import { eq, and, isNull, gt } from 'drizzle-orm';
 
 // Type for vault type codes
 type VaultTypeCode = 'sma' | 'smm' | 'sms' | 'smo' | 'sta' | 'stm' | 'sts' | 'sto' | 'skk';
@@ -155,46 +160,6 @@ async function hasPendingCustomerChanges(
     console.error(`[VAULT] ERROR: hasPendingCustomerChanges query failed:`, error);
     throw error; // Re-throw to propagate to caller
   }
-}
-
-// Column mapping for service-specific configChangeVaultSeq per vault type
-type VaultConfigChangeColumn = keyof Pick<typeof serviceInstances.$inferSelect,
-  'smaConfigChangeVaultSeq'
->;
-
-const VAULT_CONFIG_CHANGE_COLUMNS: Partial<Record<VaultTypeCode, VaultConfigChangeColumn>> = {
-  sma: 'smaConfigChangeVaultSeq',
-  // sta: 'staConfigChangeVaultSeq', // Future: add when testnet tracking is needed
-};
-
-/**
- * Reset configChangeVaultSeq for customers that are now synced.
- * Called after successful vault generation.
- */
-async function resetSyncedCustomers(
-  vaultType: VaultTypeCode,
-  newVaultSeq: number
-): Promise<number> {
-  const configColumn = VAULT_CONFIG_CHANGE_COLUMNS[vaultType];
-  if (!configColumn) {
-    // This vault type doesn't track config changes
-    return 0;
-  }
-
-  // Reset configChangeVaultSeq to 0 for all services where configChangeVaultSeq <= newVaultSeq
-  // Note: We need to use the column reference for the where clause
-  await db
-    .update(serviceInstances)
-    .set({ [configColumn]: 0 })
-    .where(
-      and(
-        gt(serviceInstances[configColumn], 0),
-        lte(serviceInstances[configColumn], newVaultSeq)
-      )
-    );
-
-  // Drizzle doesn't return rowCount directly, so we can't easily count affected rows
-  return 0;
 }
 
 // ============================================================================
@@ -521,12 +486,12 @@ export async function generateVault(
     };
   }
 
-  // 8. Determine new seq number
+  // 8. Calculate new seq number
   // For pending changes: use the max pending seq (ensures we satisfy all pending requests)
   // For drift: increment current seq by 1
   const newSeq = hasPending ? Math.max(currentSeq + 1, maxPendingSeq) : currentSeq + 1;
 
-  // 9. Write vault
+  // 9. Write vault to data_tx
   const writer = createVaultWriter({
     storageDir,
     // TODO: Add keyProvider and emergencyPublicKey from config
@@ -545,18 +510,12 @@ export async function generateVault(
     .set({
       [columns.seq]: newSeq,
       [columns.hash]: contentHash,
-      [columns.nextSeq]: newSeq + 1,
+      [columns.nextSeq]: newSeq + 1, // Reset for next cycle
       updatedAt: new Date(),
     })
     .where(eq(systemControl.id, 1));
 
-  // 11. Reset configChangeVaultSeq for synced customers
-  if (hasPending) {
-    await resetSyncedCustomers(vaultType, newSeq);
-  }
-
-  // 12. Update cache with new vault (construct a VaultInstance-like object)
-  // Clear cache to force reload on next access (simpler than constructing full instance)
+  // 11. Clear vault cache to force reload on next access
   vaultCache.delete(vaultType);
 
   const trigger = hasPending ? 'pending_changes' : 'drift';

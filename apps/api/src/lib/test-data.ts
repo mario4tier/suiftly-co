@@ -304,6 +304,131 @@ export async function getSealKeysTestData(walletAddress: string = MOCK_WALLET_AD
 }
 
 /**
+ * Setup seal service with cpEnabled=true (for control plane sync tests)
+ *
+ * Creates the minimum setup needed to trigger vault generation:
+ * 1. Subscribe to seal service (creates service instance)
+ * 2. Enable the service (isUserEnabled=true)
+ * 3. Create a seal key
+ * 4. Add a package to the seal key (triggers cpEnabled=true)
+ *
+ * This is a common setup for many tests that need to verify vault sync.
+ */
+export async function setupSealWithCpEnabled(walletAddress: string = MOCK_WALLET_ADDRESS) {
+  const customer = await db.query.customers.findFirst({
+    where: eq(customers.walletAddress, walletAddress),
+  });
+
+  if (!customer) {
+    return {
+      success: false,
+      error: `Customer not found with wallet: ${walletAddress}`,
+    };
+  }
+
+  const customerId = customer.customerId;
+
+  // Step 1: Create or update service instance (subscribe + enable)
+  let service = await db.query.serviceInstances.findFirst({
+    where: eq(serviceInstances.customerId, customerId),
+  });
+
+  if (!service) {
+    // Create new service instance (simulating subscription)
+    const [newService] = await db.insert(serviceInstances).values({
+      customerId,
+      serviceType: 'seal',
+      state: 'enabled',
+      tier: 'starter',
+      isUserEnabled: true,
+      paidOnce: true, // Skip payment requirement for tests
+      enabledAt: dbClock.now(),
+    }).returning();
+    service = newService;
+    console.log(`[TEST DATA] Created seal service instance for customer ${customerId}`);
+  } else if (!service.isUserEnabled) {
+    // Enable existing service
+    await db.update(serviceInstances)
+      .set({ isUserEnabled: true, enabledAt: dbClock.now() })
+      .where(eq(serviceInstances.customerId, customerId));
+    console.log(`[TEST DATA] Enabled existing seal service for customer ${customerId}`);
+  }
+
+  // Step 2: Create seal key
+  const existingSealKeys = await db.query.sealKeys.findMany({
+    where: eq(sealKeys.customerId, customerId),
+  });
+
+  // Need the service instance ID for the seal key
+  const currentService = await db.query.serviceInstances.findFirst({
+    where: eq(serviceInstances.customerId, customerId),
+  });
+  const instanceId = currentService?.instanceId;
+
+  let sealKeyId: number;
+  if (existingSealKeys.length === 0) {
+    // Generate a test public key (48 bytes for BLS12-381 G1 compressed point)
+    // Use Buffer.from with hex encoding (96 hex chars = 48 bytes)
+    const testPublicKey = Buffer.from('0'.repeat(96), 'hex');
+
+    const [newSealKey] = await db.insert(sealKeys).values({
+      customerId,
+      instanceId: instanceId ?? null,
+      publicKey: testPublicKey,
+      derivationIndex: 0, // Required for derived keys
+      isUserEnabled: true,
+    }).returning();
+    sealKeyId = newSealKey.sealKeyId;
+    console.log(`[TEST DATA] Created seal key ${sealKeyId} for customer ${customerId}`);
+  } else {
+    sealKeyId = existingSealKeys[0].sealKeyId;
+    console.log(`[TEST DATA] Using existing seal key ${sealKeyId}`);
+  }
+
+  // Step 3: Create package for the seal key
+  // Import schema dynamically to avoid circular dependency
+  const { sealPackages } = await import('@suiftly/database/schema');
+
+  const existingPackages = await db.query.sealPackages.findMany({
+    where: eq(sealPackages.sealKeyId, sealKeyId),
+  });
+
+  if (existingPackages.length === 0) {
+    // Package address must be exactly 32 bytes (64 hex chars = 32 bytes)
+    const packageAddress = Buffer.from('0'.repeat(64), 'hex');
+    await db.insert(sealPackages).values({
+      sealKeyId,
+      packageAddress,
+      name: 'Test Package',
+      isUserEnabled: true,
+    });
+    console.log(`[TEST DATA] Created package for seal key ${sealKeyId}`);
+  } else {
+    console.log(`[TEST DATA] Using existing package for seal key ${sealKeyId}`);
+  }
+
+  // Step 4: Set cpEnabled=true (this is what triggers vault generation)
+  // This should be set automatically by the trigger/logic, but we set it explicitly for tests
+  await db.update(serviceInstances)
+    .set({ cpEnabled: true })
+    .where(eq(serviceInstances.customerId, customerId));
+  console.log(`[TEST DATA] Set cpEnabled=true for customer ${customerId}`);
+
+  // Get final state
+  const finalService = await db.query.serviceInstances.findFirst({
+    where: eq(serviceInstances.customerId, customerId),
+  });
+
+  return {
+    success: true,
+    customerId,
+    sealKeyId,
+    cpEnabled: finalService?.cpEnabled ?? false,
+    smaConfigChangeVaultSeq: finalService?.smaConfigChangeVaultSeq ?? 0,
+  };
+}
+
+/**
  * Get service instance by type for current mock wallet user
  */
 export async function getServiceInstanceTestData(

@@ -19,6 +19,7 @@
     "@suiftly/database": "*",
     "@suiftly/shared": "*",
     "@trpc/server": "^11.0.0-rc.665",
+    "@walrus/system-config": "file:/home/olet/walrus/packages/system-config",
     "fastify": "^5.1.0",
     "jose": "^5.9.6"
   },

@@ -13,13 +13,17 @@ import { desc, eq } from 'drizzle-orm';
 import { isTestDeployment } from './config/lm-config.js';
 import {
   queueSyncCustomer,
-  queueSyncCustomerSync,
+  queueSyncCustomerAwait,
   queueSyncAll,
-  queueSyncAllSync,
+  queueSyncAllAwait,
+  queueSyncLMStatus,
+  queueSyncLMStatusAwait,
   getQueueStats,
   getPendingTasks,
   startPeriodicSync,
   stopPeriodicSync,
+  SYNC_ALL_INTERVAL_DEV_MS,
+  SYNC_ALL_INTERVAL_PROD_MS,
 } from './task-queue.js';
 
 const PORT = parseInt(process.env.GM_PORT || '22600', 10);
@@ -265,14 +269,14 @@ server.post('/api/queue/sync-customer/:customerId', async (request, reply) => {
       return { success: true, queued: false, reason: 'deduplicated' };
     }
   } else {
-    // Synchronous mode (default) - wait for completion
-    task = await queueSyncCustomerSync(params.customerId, query.source);
+    // Await mode (default) - wait for completion
+    task = await queueSyncCustomerAwait(params.customerId, query.source);
     return { success: true, queued: !!task, completed: true, taskId: task?.id };
   }
 });
 
 // Queue a sync-all (on-demand trigger)
-// Default: waits for completion (synchronous)
+// Default: waits for completion
 // Use ?async=true to return immediately without waiting
 server.post('/api/queue/sync-all', async (request, reply) => {
   const query = validate(syncAllQuerySchema, request.query, reply);
@@ -290,8 +294,31 @@ server.post('/api/queue/sync-all', async (request, reply) => {
       return { success: true, queued: false, reason: 'deduplicated' };
     }
   } else {
-    // Synchronous mode (default) - wait for completion
-    task = await queueSyncAllSync(query.source);
+    // Await mode (default) - wait for completion
+    task = await queueSyncAllAwait(query.source);
+    return { success: true, queued: !!task, completed: true, taskId: task?.id };
+  }
+});
+
+// Queue a sync-lm-status (on-demand LM polling)
+// Default: waits for completion
+// Use ?async=true to return immediately without waiting
+server.post('/api/queue/sync-lm-status', async (request, reply) => {
+  const query = validate(syncAllQuerySchema, request.query, reply);
+  if (!query) return;
+
+  const runAsync = query.async === 'true';
+
+  let task;
+  if (runAsync) {
+    task = queueSyncLMStatus(query.source);
+    if (task) {
+      return { success: true, queued: true, taskId: task.id };
+    } else {
+      return { success: true, queued: false, reason: 'deduplicated' };
+    }
+  } else {
+    task = await queueSyncLMStatusAwait(query.source);
     return { success: true, queued: !!task, completed: true, taskId: task?.id };
   }
 });
@@ -674,11 +701,13 @@ async function start() {
       server.log.warn(`Vault reconciliation failed (non-fatal): ${err instanceof Error ? err.message : err}`);
     }
 
-    // Start periodic sync-all (10 minutes in production, 1 minute in dev)
-    const syncInterval = isTestDeployment()
-      ? 1 * 60 * 1000   // 1 minute (test/dev)
-      : 10 * 60 * 1000; // 10 minutes (production)
-    startPeriodicSync(syncInterval);
+    // Start periodic tasks:
+    // - sync-all (billing, drift): 30s in dev, 5 min in production
+    // - sync-lm-status: 5s in both (for fast "Updating..." feedback)
+    const syncAllInterval = isTestDeployment()
+      ? SYNC_ALL_INTERVAL_DEV_MS   // 30 seconds (test/dev)
+      : SYNC_ALL_INTERVAL_PROD_MS; // 5 minutes (production)
+    startPeriodicSync(syncAllInterval);
   } catch (err) {
     server.log.error(err);
     process.exit(1);

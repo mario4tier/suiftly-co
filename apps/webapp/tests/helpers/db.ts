@@ -81,6 +81,29 @@ export async function getCustomerData(
 }
 
 /**
+ * Setup seal service with cpEnabled=true for control plane sync tests
+ * - Creates service instance (subscribed)
+ * - Creates seal key
+ * - Creates package (triggers cpEnabled=true)
+ *
+ * Use this when tests need to trigger vault generation.
+ */
+export async function setupCpEnabled(
+  request: APIRequestContext,
+  walletAddress?: string
+): Promise<{ success: boolean; customerId?: number; sealKeyId?: number; error?: string }> {
+  const response = await request.post(`${API_BASE}/test/data/setup-cp-enabled`, {
+    data: walletAddress ? { walletAddress } : {},
+  });
+
+  if (!response.ok()) {
+    throw new Error(`Failed to setup cpEnabled: ${await response.text()}`);
+  }
+
+  return response.json();
+}
+
+/**
  * Ensure the test wallet has a specific balance
  * - Deposits or withdraws as needed to reach the target balance
  * - Creates escrow account if it doesn't exist

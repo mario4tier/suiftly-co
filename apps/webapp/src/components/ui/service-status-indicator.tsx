@@ -6,7 +6,8 @@
  *
  * Two independent dimensions per CONTROL_PLANE_DESIGN.md:
  * 1. Operational status (color): disabled (grey), config_needed (yellow), up (green), down (red)
- * 2. Propagation status (overlay): "Updating..." appears with any operational status
+ * 2. Propagation status (overlay): "Updating..." appears when syncing, except for "config_needed"
+ *    (config_needed means the service isn't on the control plane yet, so no sync is relevant)
  */
 
 import { RefreshCw } from 'lucide-react';
@@ -90,8 +91,9 @@ export function ServiceStatusIndicator({
       <span className={`${textSize} font-medium ${display.textColor}`}>
         {display.label}
       </span>
-      {/* Propagation overlay - independent of operational status */}
-      {isSyncing && (
+      {/* Propagation overlay - only show when syncing AND not config_needed
+          (config_needed = not on control plane yet, so no sync is relevant) */}
+      {isSyncing && operationalStatus !== 'config_needed' && (
         <span className={`inline-flex items-center gap-1 ${textSize} text-gray-500 dark:text-gray-400`}>
           <RefreshCw className={`${iconSize} animate-spin`} />
           Updating...

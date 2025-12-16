@@ -97,10 +97,13 @@ test.describe('Service Toggle - Enable/Disable', () => {
     expect(updatedData.enabledAt).toBeTruthy();
     console.log('✅ Database updated: service is now ENABLED');
 
-    // Verify UI updated
+    // Verify UI updated - toggle is checked (ON)
+    // Note: Status shows "Config Needed" because cpEnabled=false (no seal keys/packages)
     await expect(toggleSwitch).toBeChecked();
-    await expect(page.locator('span.text-sm.font-medium:has-text("ON")')).toBeVisible();
-    console.log('✅ UI shows service as ON');
+    // The status will show "Config Needed" (yellow) because the service is enabled
+    // but not yet configured for the control plane (cpEnabled=false)
+    await expect(page.getByText('Config Needed')).toBeVisible();
+    console.log('✅ UI shows toggle ON with Config Needed status (cpEnabled=false)');
 
     // Verify disabled banner is hidden (no banner shown when enabled)
     await expect(page.locator('text=/Service is currently OFF/i')).not.toBeVisible();
@@ -169,9 +172,9 @@ test.describe('Service Toggle - Enable/Disable', () => {
     await expect(page.locator('svg.animate-spin')).toBeVisible({ timeout: 500 });
     console.log('✅ Loading spinner appears');
 
-    // Wait for completion - spinner should disappear and show ON
-    await expect(page.locator('span.text-sm.font-medium:has-text("ON")')).toBeVisible({ timeout: 3000 });
-    console.log('✅ Toggle completed, shows ON');
+    // Wait for completion - spinner should disappear and show Config Needed (cpEnabled=false)
+    await expect(page.getByText('Config Needed')).toBeVisible({ timeout: 3000 });
+    console.log('✅ Toggle completed, shows Config Needed (cpEnabled=false)');
 
     // Verify spinner is gone
     await expect(page.locator('svg.animate-spin')).not.toBeVisible();
@@ -200,9 +203,9 @@ test.describe('Service Toggle - Enable/Disable', () => {
     await expect(page.locator('svg.animate-spin')).toBeVisible();
     console.log('✅ Still loading after 2 seconds');
 
-    // Wait for completion (another 2.5 seconds + buffer)
-    await expect(page.locator('span.text-sm.font-medium:has-text("ON")')).toBeVisible({ timeout: 3000 });
-    console.log('✅ Toggle eventually completes');
+    // Wait for completion (another 2.5 seconds + buffer) - shows Config Needed (cpEnabled=false)
+    await expect(page.getByText('Config Needed')).toBeVisible({ timeout: 3000 });
+    console.log('✅ Toggle eventually completes, shows Config Needed (cpEnabled=false)');
 
     // Wait for API call to complete and database to update (smart polling)
     await waitForCondition(
@@ -259,10 +262,10 @@ test.describe('Service Toggle - Enable/Disable', () => {
     expect(serviceData.isUserEnabled).toBe(true);
     console.log('✅ Database was updated even after navigation away');
 
-    // Verify UI now reflects the updated state
+    // Verify UI now reflects the updated state - shows Config Needed (cpEnabled=false)
     await expect(page.locator('#service-toggle')).toBeChecked();
-    await expect(page.locator('span.text-sm.font-medium:has-text("ON")')).toBeVisible();
-    console.log('✅ UI correctly shows ENABLED state after returning');
+    await expect(page.getByText('Config Needed')).toBeVisible();
+    console.log('✅ UI correctly shows ENABLED with Config Needed status after returning');
   });
 
   test('multiple rapid toggles (eventual consistency)', async ({ page, request }) => {
@@ -280,8 +283,8 @@ test.describe('Service Toggle - Enable/Disable', () => {
     await toggle.click(); // 1st click (should start enabling)
     await page.waitForTimeout(100); // INTENTIONAL: Small wait to test rapid click handling
 
-    // Wait for completion
-    await expect(page.locator('span.text-sm.font-medium:has-text("ON")')).toBeVisible({ timeout: 2000 });
+    // Wait for completion - shows Config Needed (cpEnabled=false)
+    await expect(page.getByText('Config Needed')).toBeVisible({ timeout: 2000 });
 
     // Wait for API call to complete and database to update (smart polling)
     await waitForCondition(

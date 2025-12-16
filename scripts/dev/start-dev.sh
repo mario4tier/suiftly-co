@@ -97,7 +97,13 @@ pkill -9 -f "node.*vite" 2>/dev/null || true
 sleep 1
 
 # Kill by port (API and Webapp ports only - not GM/LM which are systemd)
-lsof -ti:22700,22710,3000,5173,5174,5175 2>/dev/null | xargs kill -9 2>/dev/null || true
+# IMPORTANT: Must use -sTCP:LISTEN to only kill servers, not client connections
+lsof -ti:22700 -sTCP:LISTEN 2>/dev/null | xargs kill -9 2>/dev/null || true
+lsof -ti:22710 -sTCP:LISTEN 2>/dev/null | xargs kill -9 2>/dev/null || true
+lsof -ti:3000 -sTCP:LISTEN 2>/dev/null | xargs kill -9 2>/dev/null || true
+lsof -ti:5173 -sTCP:LISTEN 2>/dev/null | xargs kill -9 2>/dev/null || true
+lsof -ti:5174 -sTCP:LISTEN 2>/dev/null | xargs kill -9 2>/dev/null || true
+lsof -ti:5175 -sTCP:LISTEN 2>/dev/null | xargs kill -9 2>/dev/null || true
 sleep 1
 
 # ============================================================================

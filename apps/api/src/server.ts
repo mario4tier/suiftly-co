@@ -98,6 +98,7 @@ if (config.NODE_ENV !== 'production') {
     getApiKeysTestData,
     getSealKeysTestData,
     getServiceInstanceTestData,
+    setupSealWithCpEnabled,
   } = await import('./lib/test-data.js');
 
   // Get test configuration - allows tests to verify server config
@@ -222,6 +223,17 @@ if (config.NODE_ENV !== 'production') {
     const serviceType = query.serviceType || 'seal';
     const walletAddress = query.walletAddress || undefined;
     const result = await getServiceInstanceTestData(serviceType, walletAddress);
+    reply.send(result);
+  });
+
+  // Setup seal service with cpEnabled=true (for control plane sync tests)
+  // Creates: service instance, seal key, package -> triggers cpEnabled
+  server.post('/test/data/setup-cp-enabled', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    const body = request.body as any;
+    const walletAddress = body.walletAddress || undefined;
+    const result = await setupSealWithCpEnabled(walletAddress);
     reply.send(result);
   });
 

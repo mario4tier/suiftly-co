@@ -107,6 +107,24 @@ cat ~/.suiftly.env  # Copy to 1Password/Bitwarden
 - Project `.env` files loaded by package-specific tools (Drizzle, test runners)
 - See [docs/APP_SECURITY_DESIGN.md](docs/APP_SECURITY_DESIGN.md) for complete details
 
+## Environment Detection
+
+**IMPORTANT: Never use NODE_ENV for environment detection in runtime code.** Use `system.conf` and `@walrus/system-config` instead.
+
+See [~/walrus/CLAUDE.md](~/walrus/CLAUDE.md) "Environment Detection (system.conf)" section for full documentation.
+
+Quick reference:
+```typescript
+import { isDevelopment, isProduction, isTestFeaturesEnabled } from '@walrus/system-config';
+
+// Enable test features only in non-production
+if (isTestFeaturesEnabled()) {
+  // Register test endpoints, debug routes, etc.
+}
+```
+
+The `system.conf` file in `~/walrus/` or `~/suiftly-co/` determines the environment. Copy from `system.conf.example` and set `ENVIRONMENT=development` (dev) or `ENVIRONMENT=production` (prod).
+
 ## Database Management
 
 ### Quick Reset (Destroys all data)

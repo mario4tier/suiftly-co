@@ -2,8 +2,10 @@
  * Test delay manager
  * Allows tests to inject artificial delays for UI testing
  *
- * IMPORTANT: Only active in test/development environments
+ * IMPORTANT: Only active in non-production environments (per system.conf)
  */
+
+import { isTestFeaturesEnabled } from '@walrus/system-config';
 
 interface DelayConfig {
   validateSubscription?: number; // ms
@@ -11,6 +13,7 @@ interface DelayConfig {
   sealFormMutation?: number; // ms - applies to all seal form mutations (toggle, config update, etc.)
   tierChange?: number; // ms - applies to tier upgrade/downgrade operations (Phase 1C)
   cancellation?: number; // ms - applies to cancellation operations (Phase 1C)
+  postToggle?: number; // ms - delay AFTER toggle mutation completes, BEFORE GM sync (for observing "Updating..." state)
   // Add more endpoints as needed
 }
 
@@ -19,9 +22,8 @@ class TestDelayManager {
   private enabled = false;
 
   constructor() {
-    // Only enable in test/development
-    const env = process.env.NODE_ENV || 'development';
-    this.enabled = env === 'test' || env === 'development';
+    // Only enable in non-production environments (per system.conf)
+    this.enabled = isTestFeaturesEnabled();
   }
 
   /**

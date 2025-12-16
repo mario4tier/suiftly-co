@@ -2,11 +2,12 @@
  * Task Queue for Global Manager
  *
  * In-memory queue with "at most 2" deduplication for background processing tasks.
- * Two task types:
+ * Three task types:
  * - sync-customer: On-demand sync for a specific customer (from API or test)
- * - sync-all: Periodic or on-demand sync for all customers (billing, reconciliation, etc.)
+ * - sync-all: Periodic billing, vault generation, and drift detection
+ * - sync-lm-status: Fast LM status polling (every 5s) for quick "Updating..." feedback
  *
- * Deduplication strategy (per-customer for sync-customer, global for sync-all):
+ * Deduplication strategy (per-customer for sync-customer, global for sync-all/sync-lm-status):
  * - If not processing: start processing immediately
  * - If processing and no pending: mark one pending
  * - If processing and already pending: deduplicate (ignore)
@@ -14,8 +15,12 @@
  * This ensures at most 2 instances: 1 processing + 1 pending.
  * The pending one catches any state changes that occurred during processing.
  *
- * Synchronous mode (for testing):
- * - Use queueSyncCustomerSync() or queueSyncAllSync() to wait for completion
+ * Interval configuration:
+ * - sync-lm-status: 5s (both dev and prod) - fast status updates for UX
+ * - sync-all: 30s (test/dev), 5 min (prod) - billing and drift detection
+ *
+ * Await mode (for testing):
+ * - Use queueSyncCustomerAwait() or queueSyncAllAwait() to wait for completion
  * - Returns only after the task (and any pending follow-up) completes
  */
 
@@ -40,7 +45,7 @@ if (isTestDeployment()) {
 // Types
 // ============================================================================
 
-export type TaskType = 'sync-customer' | 'sync-all';
+export type TaskType = 'sync-customer' | 'sync-all' | 'sync-lm-status';
 
 export interface QueuedTask {
   id: string;
@@ -64,6 +69,8 @@ interface QueueStats {
   customersPending: number;
   syncAllProcessing: boolean;
   syncAllPending: boolean;
+  syncLMStatusProcessing: boolean;
+  syncLMStatusPending: boolean;
   lastProcessedAt: Date | null;
   totalProcessed: number;
   totalFailed: number;
@@ -82,6 +89,13 @@ let syncAllPendingAfterCurrent = false;
 let syncAllLastSource: QueuedTask['source'] = 'periodic';
 let syncAllCompletionPromise: Promise<void> | null = null;
 let syncAllResolveCompletion: (() => void) | null = null;
+
+// Global sync-lm-status state (fast LM polling)
+let syncLMStatusProcessing = false;
+let syncLMStatusPendingAfterCurrent = false;
+let syncLMStatusLastSource: QueuedTask['source'] = 'periodic';
+let syncLMStatusCompletionPromise: Promise<void> | null = null;
+let syncLMStatusResolveCompletion: (() => void) | null = null;
 
 // Stats
 let lastProcessedAt: Date | null = null;
@@ -174,10 +188,10 @@ export function queueSyncCustomer(
 }
 
 /**
- * Queue a sync-customer task and wait for completion (synchronous mode for testing)
+ * Queue a sync-customer task and wait for completion
  * Returns after the task (and any pending follow-up) completes
  */
-export async function queueSyncCustomerSync(
+export async function queueSyncCustomerAwait(
   customerId: number,
   source: QueuedTask['source'] = 'test'
 ): Promise<QueuedTask | null> {
@@ -241,16 +255,82 @@ export function queueSyncAll(source: QueuedTask['source'] = 'periodic'): QueuedT
 }
 
 /**
- * Queue a sync-all task and wait for completion (synchronous mode for testing)
+ * Queue a sync-all task and wait for completion
  * Returns after the task (and any pending follow-up) completes
  */
-export async function queueSyncAllSync(
+export async function queueSyncAllAwait(
   source: QueuedTask['source'] = 'test'
 ): Promise<QueuedTask | null> {
   const task = queueSyncAll(source);
 
   if (syncAllCompletionPromise) {
     await syncAllCompletionPromise;
+  }
+
+  return task;
+}
+
+/**
+ * Queue a sync-lm-status task with "at most 2" deduplication
+ * Fast LM polling for quick "Updating..." feedback (every 5s)
+ * Returns the task if queued/will run, null if deduplicated
+ */
+export function queueSyncLMStatus(source: QueuedTask['source'] = 'periodic'): QueuedTask | null {
+  if (!syncLMStatusProcessing) {
+    // Not processing - start immediately
+    syncLMStatusProcessing = true;
+    syncLMStatusLastSource = source;
+
+    // Create completion promise for sync callers
+    syncLMStatusCompletionPromise = new Promise<void>((resolve) => {
+      syncLMStatusResolveCompletion = resolve;
+    });
+
+    const task: QueuedTask = {
+      id: generateTaskId(),
+      type: 'sync-lm-status',
+      createdAt: new Date(),
+      source,
+    };
+
+    // Process async (don't await) - silent mode, no logging for periodic polls
+    void processSyncLMStatusTask(task.id, source !== 'periodic');
+
+    return task;
+  } else if (!syncLMStatusPendingAfterCurrent) {
+    // Processing but no pending - queue one more
+    syncLMStatusPendingAfterCurrent = true;
+    syncLMStatusLastSource = source;
+
+    const task: QueuedTask = {
+      id: generateTaskId(),
+      type: 'sync-lm-status',
+      createdAt: new Date(),
+      source,
+    };
+
+    // Silent: don't log periodic pending
+    if (source !== 'periodic') {
+      console.log(`[QUEUE] Queued pending sync-lm-status (source: ${source})`);
+    }
+    return task;
+  } else {
+    // Already processing with one pending - deduplicate silently
+    return null;
+  }
+}
+
+/**
+ * Queue a sync-lm-status task and wait for completion
+ * Returns after the task (and any pending follow-up) completes
+ */
+export async function queueSyncLMStatusAwait(
+  source: QueuedTask['source'] = 'test'
+): Promise<QueuedTask | null> {
+  const task = queueSyncLMStatus(source);
+
+  if (syncLMStatusCompletionPromise) {
+    await syncLMStatusCompletionPromise;
   }
 
   return task;
@@ -273,6 +353,8 @@ export function getQueueStats(): QueueStats {
     customersPending,
     syncAllProcessing,
     syncAllPending: syncAllPendingAfterCurrent,
+    syncLMStatusProcessing,
+    syncLMStatusPending: syncLMStatusPendingAfterCurrent,
     lastProcessedAt,
     totalProcessed,
     totalFailed,
@@ -383,6 +465,46 @@ async function processSyncAllTask(taskId: string): Promise<void> {
 }
 
 /**
+ * Process a sync-lm-status task (fast LM polling)
+ */
+async function processSyncLMStatusTask(taskId: string, verbose: boolean = false): Promise<void> {
+  const startTime = Date.now();
+
+  try {
+    await executeSyncLMStatus();
+    totalProcessed++;
+    lastProcessedAt = new Date();
+
+    if (verbose) {
+      const duration = Date.now() - startTime;
+      console.log(`[QUEUE] Completed sync-lm-status ${taskId} in ${duration}ms`);
+    }
+  } catch (error) {
+    totalFailed++;
+    console.error(`[QUEUE] Task ${taskId} (sync-lm-status) failed:`, error);
+
+    // Create admin notification for failed LM polling
+    await createLMPollFailureNotification(error);
+  } finally {
+    // Check if there's a pending request
+    if (syncLMStatusPendingAfterCurrent) {
+      syncLMStatusPendingAfterCurrent = false;
+      const newTaskId = generateTaskId();
+      // Recursively process the pending one (await to chain completion)
+      await processSyncLMStatusTask(newTaskId, verbose);
+    } else {
+      // No more pending - mark as not processing and resolve completion
+      syncLMStatusProcessing = false;
+      if (syncLMStatusResolveCompletion) {
+        syncLMStatusResolveCompletion();
+        syncLMStatusResolveCompletion = null;
+        syncLMStatusCompletionPromise = null;
+      }
+    }
+  }
+}
+
+/**
  * Execute sync-customer: reconcile payments for a specific customer
  * Calls the shared reconcilePayments function directly
  */
@@ -459,17 +581,22 @@ async function executeSyncAll(): Promise<void> {
     // Don't fail the entire sync-all for vault errors
   }
 
-  // Poll LM status after vault generation (tracks propagation)
-  try {
-    const lmResult = await pollLMStatus();
+  // Note: LM status polling is now handled by the separate sync-lm-status task
+  // which runs every 5 seconds for fast "Updating..." feedback
+}
+
+/**
+ * Execute sync-lm-status: poll LM status for fast UI updates
+ * Runs frequently (every 5s) to quickly reflect vault sync status
+ */
+async function executeSyncLMStatus(): Promise<void> {
+  const lmResult = await pollLMStatus();
+
+  // Only log if there are issues (silent for normal operation)
+  if (lmResult.down > 0) {
     console.log(
-      `[SYNC] sync-all LM poll: ${lmResult.up}/${lmResult.polled} up, minAppliedSeq=${lmResult.minAppliedSeq ?? 'N/A'}`
+      `[SYNC] LM poll: ${lmResult.up}/${lmResult.polled} up, ${lmResult.down} down, minAppliedSeq=${lmResult.minAppliedSeq ?? 'N/A'}`
     );
-  } catch (lmError) {
-    console.error('[SYNC] sync-all LM polling failed:', lmError);
-    // Create admin notification for LM polling failure
-    await createLMPollFailureNotification(lmError);
-    // Don't fail the entire sync-all for LM polling errors
   }
 }
 
@@ -545,15 +672,23 @@ async function createFailureNotification(
 // Periodic Processing
 // ============================================================================
 
-let periodicInterval: ReturnType<typeof setInterval> | null = null;
+let periodicSyncAllInterval: ReturnType<typeof setInterval> | null = null;
+let periodicLMStatusInterval: ReturnType<typeof setInterval> | null = null;
 
 /**
- * Start periodic sync-all processing
- * @param intervalMs - Interval between sync-all runs (default: 1 hour)
+ * Interval constants for periodic tasks
  */
-export function startPeriodicSync(intervalMs: number = 60 * 60 * 1000): void {
-  if (periodicInterval) {
-    console.log('[QUEUE] Periodic sync already running');
+export const LM_STATUS_INTERVAL_MS = 5 * 1000; // 5 seconds (both dev and prod)
+export const SYNC_ALL_INTERVAL_DEV_MS = 30 * 1000; // 30 seconds (test/dev)
+export const SYNC_ALL_INTERVAL_PROD_MS = 5 * 60 * 1000; // 5 minutes (production)
+
+/**
+ * Start periodic sync-all processing (billing, vault generation, drift detection)
+ * @param intervalMs - Interval between sync-all runs
+ */
+export function startPeriodicSyncAll(intervalMs: number): void {
+  if (periodicSyncAllInterval) {
+    console.log('[QUEUE] Periodic sync-all already running');
     return;
   }
 
@@ -563,18 +698,56 @@ export function startPeriodicSync(intervalMs: number = 60 * 60 * 1000): void {
   queueSyncAll('periodic');
 
   // Schedule periodic sync-all
-  periodicInterval = setInterval(() => {
+  periodicSyncAllInterval = setInterval(() => {
     queueSyncAll('periodic');
   }, intervalMs);
 }
 
 /**
- * Stop periodic sync-all processing
+ * Start periodic LM status polling (fast, for quick UI updates)
+ * @param intervalMs - Interval between LM polls (default: 5s)
+ */
+export function startPeriodicLMStatus(intervalMs: number = LM_STATUS_INTERVAL_MS): void {
+  if (periodicLMStatusInterval) {
+    console.log('[QUEUE] Periodic LM status already running');
+    return;
+  }
+
+  console.log(`[QUEUE] Starting periodic LM status every ${intervalMs / 1000}s`);
+
+  // Queue initial LM status poll
+  queueSyncLMStatus('periodic');
+
+  // Schedule periodic LM status polling
+  periodicLMStatusInterval = setInterval(() => {
+    queueSyncLMStatus('periodic');
+  }, intervalMs);
+}
+
+/**
+ * Start all periodic processing (convenience function)
+ * @param syncAllIntervalMs - Interval for sync-all (billing, drift detection)
+ * @param lmStatusIntervalMs - Interval for LM status polling (default: 5s)
+ */
+export function startPeriodicSync(
+  syncAllIntervalMs: number,
+  lmStatusIntervalMs: number = LM_STATUS_INTERVAL_MS
+): void {
+  startPeriodicSyncAll(syncAllIntervalMs);
+  startPeriodicLMStatus(lmStatusIntervalMs);
+}
+
+/**
+ * Stop all periodic processing
  */
 export function stopPeriodicSync(): void {
-  if (periodicInterval) {
-    clearInterval(periodicInterval);
-    periodicInterval = null;
-    console.log('[QUEUE] Stopped periodic sync');
+  if (periodicSyncAllInterval) {
+    clearInterval(periodicSyncAllInterval);
+    periodicSyncAllInterval = null;
   }
+  if (periodicLMStatusInterval) {
+    clearInterval(periodicLMStatusInterval);
+    periodicLMStatusInterval = null;
+  }
+  console.log('[QUEUE] Stopped all periodic sync');
 }

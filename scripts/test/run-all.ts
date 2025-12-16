@@ -14,9 +14,21 @@
  *   tsx scripts/test/run-all.ts
  */
 
-import { spawn, execSync } from 'child_process';
+import { spawn, execSync, spawnSync } from 'child_process';
 import { writeFileSync, appendFileSync } from 'fs';
 import { waitForPortFree } from '../../playwright-test-utils';
+
+/**
+ * Run a shell script synchronously.
+ */
+function runScriptIsolated(scriptPath: string): void {
+  // Run script directly with execSync
+  // The scripts handle their own process management
+  execSync(scriptPath, {
+    stdio: 'inherit',
+    env: process.env,
+  });
+}
 
 interface TestResult {
   name: string;
@@ -139,11 +151,14 @@ async function startDevServers(): Promise<void> {
   section('Starting dev servers...');
 
   // Use start-dev.sh which handles process backgrounding, detaching, and logging
-  // This is simpler and more robust than managing processes directly in Node
+  // IMPORTANT: Run in isolated process group to prevent signals from killing test runner
   try {
-    execSync('./scripts/dev/start-dev.sh', { stdio: 'inherit' });
+    console.log('[DEBUG] Before runScriptIsolated(start-dev.sh)');
+    runScriptIsolated('./scripts/dev/start-dev.sh');
+    console.log('[DEBUG] After runScriptIsolated(start-dev.sh)');
     startedServers = true;
     success('Dev servers started');
+    console.log('[DEBUG] startDevServers complete, returning to caller');
   } catch (error: any) {
     throw new Error(`Failed to start dev servers: ${error.message}`);
   }
@@ -155,9 +170,9 @@ async function stopDevServers(): Promise<void> {
   section('Stopping dev servers...');
 
   // Use the robust stop-dev.sh script which handles all cleanup logic
-  // This centralizes port cleanup for both manual and automated use
+  // IMPORTANT: Run in isolated process group to prevent signals from killing test runner
   try {
-    execSync('./scripts/dev/stop-dev.sh', { stdio: 'inherit' });
+    runScriptIsolated('./scripts/dev/stop-dev.sh');
   } catch (error: any) {
     // Script might exit non-zero if processes were already stopped
     warning(`stop-dev.sh exited with error (may be OK): ${error.message}`);
@@ -180,6 +195,112 @@ async function stopDevServers(): Promise<void> {
   startedServers = false;
 
   success('Dev servers stopped');
+}
+
+/**
+ * Stop only API and Webapp servers (not GM/LM) - for mid-test restarts
+ * This avoids the GM/LM management that may be causing the test runner to die
+ */
+async function stopApiWebappOnly(): Promise<void> {
+  section('Stopping API and Webapp only (keeping GM/LM/Admin)...');
+
+  // Kill API by PID
+  try {
+    execSync('if [ -f /tmp/suiftly-api.pid ]; then kill -9 $(cat /tmp/suiftly-api.pid) 2>/dev/null; rm /tmp/suiftly-api.pid; fi', { stdio: 'inherit' });
+  } catch {
+    // Ignore errors - process may already be dead
+  }
+
+  // Kill Webapp by PID
+  try {
+    execSync('if [ -f /tmp/suiftly-webapp.pid ]; then kill -9 $(cat /tmp/suiftly-webapp.pid) 2>/dev/null; rm /tmp/suiftly-webapp.pid; fi', { stdio: 'inherit' });
+  } catch {
+    // Ignore errors - process may already be dead
+  }
+
+  // Note: Don't touch Admin webapp (22601) - it doesn't need restart for E2E tests
+
+  // Fallback: kill by port (ONLY processes LISTENING on the port, not connected clients)
+  // IMPORTANT: Must use -sTCP:LISTEN to avoid killing the test runner which has connections to these ports
+  try {
+    execSync('lsof -ti:22700 -sTCP:LISTEN 2>/dev/null | xargs kill -9 2>/dev/null || true', { stdio: 'inherit' });
+    execSync('lsof -ti:22710 -sTCP:LISTEN 2>/dev/null | xargs kill -9 2>/dev/null || true', { stdio: 'inherit' });
+  } catch {
+    // Ignore errors
+  }
+
+  // Wait for ports to be free
+  await new Promise(resolve => setTimeout(resolve, 1000));
+
+  success('API and Webapp stopped (GM/LM/Admin still running)');
+}
+
+/**
+ * Start only API and Webapp servers (assumes GM/LM already running)
+ */
+async function startApiWebappOnly(): Promise<void> {
+  section('Starting API and Webapp only...');
+
+  // Note: Skip Admin webapp for mid-test restart - not needed for E2E tests
+  // and was causing issues with process management
+
+  console.log('[DEBUG] About to start API server...');
+  // Start API server using spawn with detached to avoid process group issues
+  const apiProc = spawn('npx', ['tsx', 'apps/api/src/server.ts'], {
+    cwd: '/home/olet/suiftly-co',
+    env: {
+      ...process.env,
+      MOCK_AUTH: 'true',
+      DATABASE_URL: 'postgresql://deploy:deploy_password_change_me@localhost/suiftly_dev',
+    },
+    detached: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  apiProc.unref();
+
+  // Write PID and redirect output
+  const fs = await import('fs');
+  fs.writeFileSync('/tmp/suiftly-api.pid', String(apiProc.pid));
+  const apiLogStream = fs.createWriteStream('/tmp/suiftly-api.log', { flags: 'a' });
+  apiProc.stdout?.pipe(apiLogStream);
+  apiProc.stderr?.pipe(apiLogStream);
+
+  console.log(`[DEBUG] API server started (PID: ${apiProc.pid})`);
+
+  // Wait for API to be ready
+  for (let i = 0; i < 10; i++) {
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    try {
+      const response = await fetch('http://localhost:22700/health');
+      if (response.ok) break;
+    } catch {
+      // Keep waiting
+    }
+    console.log(`  Waiting for API... (${i + 1}/10)`);
+  }
+
+  console.log('[DEBUG] About to start Webapp...');
+  // Start Webapp using spawn with detached to avoid process group issues
+  const webappProc = spawn('npm', ['run', 'dev'], {
+    cwd: '/home/olet/suiftly-co/apps/webapp',
+    env: process.env,
+    detached: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  webappProc.unref();
+
+  // Write PID and redirect output
+  fs.writeFileSync('/tmp/suiftly-webapp.pid', String(webappProc.pid));
+  const webappLogStream = fs.createWriteStream('/tmp/suiftly-webapp.log', { flags: 'a' });
+  webappProc.stdout?.pipe(webappLogStream);
+  webappProc.stderr?.pipe(webappLogStream);
+
+  console.log(`[DEBUG] Webapp started (PID: ${webappProc.pid})`);
+
+  // Wait for Webapp to be ready
+  await new Promise(resolve => setTimeout(resolve, 3000));
+
+  success('API and Webapp started');
 }
 
 function printSummary(results: TestResult[]): void {
@@ -325,11 +446,15 @@ async function main() {
     warning('Database cleanup failed or timed out');
   }
 
-  // Stop servers to ensure clean process state
-  await stopDevServers();
+  // Restart only API and Webapp (keep GM/LM running) to test if GM/LM is causing the issue
+  // TODO: If this works, investigate why full stop/start kills the test runner
+  console.log('[DEBUG] About to stopApiWebappOnly');
+  await stopApiWebappOnly();
+  console.log('[DEBUG] stopApiWebappOnly complete');
 
-  // Restart servers for short-expiry tests
-  await startDevServers();
+  console.log('[DEBUG] About to startApiWebappOnly');
+  await startApiWebappOnly();
+  console.log('[DEBUG] startApiWebappOnly complete - about to run short-expiry tests');
 
   // Run short-expiry tests (global setup will configure JWT via /test/jwt-config)
   result = await runCommand(
