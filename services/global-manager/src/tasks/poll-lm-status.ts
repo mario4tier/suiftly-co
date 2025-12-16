@@ -2,14 +2,12 @@
  * Poll LM Status Task
  *
  * Polls all configured Local Managers (LMs) and stores their status in the database.
- * Used to track vault propagation and component sync status across the fleet.
+ * Used to track vault propagation across the fleet.
  *
- * Sync status derivation from LM response:
- * - inSync: vault applied successfully (!processing && applied !== null)
- * - vaultSeq: processing?.seq ?? applied?.seq ?? 0
- *
- * Customer sync status calculation:
- * customer is synced when configChangeVaultSeq <= MIN(vaultSeq from all LMs where inSync=true)
+ * Sequence-based sync tracking:
+ * - Extracts appliedSeq (vaults[].applied.seq) and processingSeq (vaults[].processing.seq)
+ * - API calculates MIN(appliedSeq) across all LMs for each vault type
+ * - Service is synced when configChangeVaultSeq <= MIN(appliedSeq for all relevant vaults)
  */
 
 import { db, lmStatus } from '@suiftly/database';
@@ -35,11 +33,6 @@ interface ProcessingState {
 
 /**
  * Per-vault status in the vaults array (actual LM response format)
- *
- * Sync status derivation:
- * - Current seq: processing?.seq ?? applied?.seq ?? 0
- * - inSync: !processing && applied !== null (vault applied successfully)
- * - fullSync: deprecated (was for key-server confirmation, no longer tracked)
  */
 interface VaultStatus {
   type: string;
@@ -102,10 +95,9 @@ async function updateLMStatus(
     // LM is reachable - extract first vault status (currently only 'sma')
     const smaVault = result.data.vaults.find((v) => v.type === 'sma');
 
-    // Derive seq and sync status from applied/processing states
-    const vaultSeq = smaVault?.processing?.seq ?? smaVault?.applied?.seq ?? 0;
-    const inSync = smaVault ? !smaVault.processing && smaVault.applied !== null : false;
-    const fullSync = inSync; // fullSync deprecated - set same as inSync for now
+    // Extract applied and processing sequences
+    const appliedSeq = smaVault?.applied?.seq ?? 0;
+    const processingSeq = smaVault?.processing?.seq ?? null;
 
     await db
       .insert(lmStatus)
@@ -115,9 +107,8 @@ async function updateLMStatus(
         host: endpoint.host,
         region: endpoint.region ?? null,
         vaultType: smaVault?.type ?? 'unknown',
-        vaultSeq,
-        inSync,
-        fullSync,
+        appliedSeq,
+        processingSeq,
         customerCount: smaVault?.customerCount ?? 0,
         lastSeenAt: now,
         lastError: null,
@@ -130,9 +121,8 @@ async function updateLMStatus(
           host: endpoint.host,
           region: endpoint.region ?? null,
           vaultType: smaVault?.type ?? 'unknown',
-          vaultSeq,
-          inSync,
-          fullSync,
+          appliedSeq,
+          processingSeq,
           customerCount: smaVault?.customerCount ?? 0,
           lastSeenAt: now,
           lastError: null,
@@ -140,7 +130,7 @@ async function updateLMStatus(
         },
       });
   } else {
-    // LM is unreachable
+    // LM is unreachable - only update error status, preserve existing seq values
     await db
       .insert(lmStatus)
       .values({
@@ -148,8 +138,6 @@ async function updateLMStatus(
         displayName: endpoint.name,
         host: endpoint.host,
         region: endpoint.region ?? null,
-        inSync: false,
-        fullSync: false,
         lastErrorAt: now,
         lastError: result.error ?? 'Unknown error',
         updatedAt: now,
@@ -160,8 +148,6 @@ async function updateLMStatus(
           displayName: endpoint.name,
           host: endpoint.host,
           region: endpoint.region ?? null,
-          inSync: false,
-          fullSync: false,
           lastErrorAt: now,
           lastError: result.error ?? 'Unknown error',
           updatedAt: now,
@@ -179,17 +165,13 @@ export async function pollLMStatus(): Promise<{
   polled: number;
   up: number;
   down: number;
-  inSync: number;
-  fullSync: number;
-  minVaultSeq: number | null;
+  minAppliedSeq: number | null;
 }> {
   const endpoints = getLMEndpoints();
 
   let up = 0;
   let down = 0;
-  let inSync = 0;
-  let fullSync = 0;
-  let minVaultSeq: number | null = null;
+  let minAppliedSeq: number | null = null;
 
   // Poll all LMs in parallel
   const results = await Promise.all(
@@ -205,19 +187,11 @@ export async function pollLMStatus(): Promise<{
     if (result.success && result.data) {
       up++;
 
-      // Derive sync status from vaults (LM no longer provides top-level inSync/fullSync)
+      // Track minimum applied seq across all reachable LMs
       const smaVault = result.data.vaults.find((v) => v.type === 'sma');
-      const vaultInSync = smaVault ? !smaVault.processing && smaVault.applied !== null : false;
-
-      if (vaultInSync) {
-        inSync++;
-        fullSync++; // fullSync deprecated - count same as inSync
-      }
-
-      // Track minimum vault seq across all reachable LMs
-      const vaultSeq = smaVault?.processing?.seq ?? smaVault?.applied?.seq ?? 0;
-      if (smaVault && (minVaultSeq === null || vaultSeq < minVaultSeq)) {
-        minVaultSeq = vaultSeq;
+      const appliedSeq = smaVault?.applied?.seq ?? 0;
+      if (smaVault && smaVault.applied && (minAppliedSeq === null || appliedSeq < minAppliedSeq)) {
+        minAppliedSeq = appliedSeq;
       }
     } else {
       down++;
@@ -225,16 +199,14 @@ export async function pollLMStatus(): Promise<{
   }
 
   console.log(
-    `[LM-POLL] Polled ${endpoints.length} LMs: ${up} up, ${down} down, ${inSync} in-sync, ${fullSync} full-sync, minSeq=${minVaultSeq ?? 'N/A'}`
+    `[LM-POLL] Polled ${endpoints.length} LMs: ${up} up, ${down} down, minAppliedSeq=${minAppliedSeq ?? 'N/A'}`
   );
 
   return {
     polled: endpoints.length,
     up,
     down,
-    inSync,
-    fullSync,
-    minVaultSeq,
+    minAppliedSeq,
   };
 }
 
@@ -246,36 +218,35 @@ export async function getLMStatuses(): Promise<Array<typeof lmStatus.$inferSelec
 }
 
 /**
- * Get minimum vault seq from all reachable LMs
+ * Get minimum applied seq from all reachable LMs for a specific vault type
  *
- * Returns null if no LMs are reachable
+ * Returns null if no LMs are reachable for that vault type
  */
-export async function getMinLMVaultSeq(): Promise<number | null> {
+export async function getMinAppliedSeq(vaultType: string): Promise<number | null> {
   const statuses = await db.select().from(lmStatus);
+
+  // LM must have been seen within last 30 seconds to be considered reachable
+  const freshnessThreshold = new Date(Date.now() - 30000);
 
   let minSeq: number | null = null;
   for (const status of statuses) {
-    // Only consider LMs that have been seen recently (lastSeenAt not null and no recent error)
-    if (status.lastSeenAt && !status.lastError && status.vaultSeq !== null) {
-      if (minSeq === null || (status.vaultSeq ?? 0) < minSeq) {
-        minSeq = status.vaultSeq ?? 0;
+    // Only consider LMs that:
+    // - Match the vault type
+    // - Have been seen recently (within 30s, no error)
+    // - Have applied at least one vault (appliedSeq > 0)
+    const isRecent = status.lastSeenAt && status.lastSeenAt > freshnessThreshold;
+    if (
+      status.vaultType === vaultType &&
+      isRecent &&
+      !status.lastError &&
+      status.appliedSeq !== null &&
+      status.appliedSeq > 0
+    ) {
+      if (minSeq === null || status.appliedSeq < minSeq) {
+        minSeq = status.appliedSeq;
       }
     }
   }
 
   return minSeq;
-}
-
-/**
- * Check if all LMs are in-sync (service operational)
- */
-export async function areAllLMsInSync(): Promise<boolean> {
-  const statuses = await db.select().from(lmStatus);
-
-  if (statuses.length === 0) {
-    return false; // No LMs configured
-  }
-
-  // All LMs must be reachable and in-sync
-  return statuses.every((s) => s.lastSeenAt && !s.lastError && s.inSync);
 }

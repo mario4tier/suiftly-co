@@ -212,34 +212,50 @@ export const sealRouter = router({
             });
 
             if (service && service.isUserEnabled && !service.cpEnabled) {
-              // Get current vault seq for sync tracking
+              // Read nextVaultSeq - the seq to use for pending changes
               const [control] = await tx
-                .select({ smaVaultSeq: systemControl.smaVaultSeq })
+                .select({ smaNextVaultSeq: systemControl.smaNextVaultSeq })
                 .from(systemControl)
                 .where(eq(systemControl.id, 1))
                 .limit(1);
-              const expectedVaultSeq = (control?.smaVaultSeq ?? 0) + 1;
+              const expectedVaultSeq = control?.smaNextVaultSeq ?? 1;
+
+              // Atomically update global max configChangeSeq (for GM's O(1) pending check)
+              await tx
+                .update(systemControl)
+                .set({
+                  smaMaxConfigChangeSeq: sql`GREATEST(${systemControl.smaMaxConfigChangeSeq}, ${expectedVaultSeq})`,
+                })
+                .where(eq(systemControl.id, 1));
 
               // Set cpEnabled=true and update vault seq
               await tx
                 .update(serviceInstances)
                 .set({
                   cpEnabled: true,
-                  configChangeVaultSeq: expectedVaultSeq,
+                  smaConfigChangeVaultSeq: expectedVaultSeq,
                 })
                 .where(eq(serviceInstances.instanceId, key.instanceId));
             } else if (service && service.cpEnabled) {
               // Service is already cpEnabled, just update vault seq for the new package
               const [control] = await tx
-                .select({ smaVaultSeq: systemControl.smaVaultSeq })
+                .select({ smaNextVaultSeq: systemControl.smaNextVaultSeq })
                 .from(systemControl)
                 .where(eq(systemControl.id, 1))
                 .limit(1);
-              const expectedVaultSeq = (control?.smaVaultSeq ?? 0) + 1;
+              const expectedVaultSeq = control?.smaNextVaultSeq ?? 1;
+
+              // Atomically update global max configChangeSeq (for GM's O(1) pending check)
+              await tx
+                .update(systemControl)
+                .set({
+                  smaMaxConfigChangeSeq: sql`GREATEST(${systemControl.smaMaxConfigChangeSeq}, ${expectedVaultSeq})`,
+                })
+                .where(eq(systemControl.id, 1));
 
               await tx
                 .update(serviceInstances)
-                .set({ configChangeVaultSeq: expectedVaultSeq })
+                .set({ smaConfigChangeVaultSeq: expectedVaultSeq })
                 .where(eq(serviceInstances.instanceId, key.instanceId));
             }
           }

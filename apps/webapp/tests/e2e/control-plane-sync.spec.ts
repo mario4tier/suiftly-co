@@ -245,7 +245,7 @@ test.describe('Control Plane Sync Flow', () => {
     await createSealKeyViaUI(page);
     await addPackageViaUI(page, '0x' + '2'.repeat(64), 'Vault Test Package');
 
-    // Check that configChangeVaultSeq was set after cpEnabled became true
+    // Check that smaConfigChangeVaultSeq was set after cpEnabled became true
     const service = await db.query.serviceInstances.findFirst({
       where: and(
         eq(serviceInstances.customerId, customerId),
@@ -254,10 +254,10 @@ test.describe('Control Plane Sync Flow', () => {
     });
 
     expect(service?.cpEnabled).toBe(true);
-    expect(service?.configChangeVaultSeq).toBeGreaterThan(0);
+    expect(service?.smaConfigChangeVaultSeq).toBeGreaterThan(0);
 
     console.log('Service cpEnabled:', service?.cpEnabled);
-    console.log('configChangeVaultSeq:', service?.configChangeVaultSeq);
+    console.log('smaConfigChangeVaultSeq:', service?.smaConfigChangeVaultSeq);
   });
 
   test('LM picks up vault and reports sync status', async ({ page }) => {
@@ -350,7 +350,7 @@ test.describe('Control Plane Sync Flow', () => {
     expect(smaVault.applied!.keyServers.mseal1.confirmedAt).toBeTruthy();
     expect(smaVault.applied!.keyServers.mseal2.confirmedAt).toBeTruthy();
 
-    // Verify the service has cpEnabled=true and configChangeVaultSeq is set
+    // Verify the service has cpEnabled=true and smaConfigChangeVaultSeq is set
     const finalCustomerData = await page.request.get('http://localhost:22700/test/data/customer');
     const { services } = await finalCustomerData.json();
     const sealService = services.find((s: { serviceType: string }) => s.serviceType === 'seal');

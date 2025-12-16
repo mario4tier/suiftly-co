@@ -93,7 +93,6 @@ export function ServiceStatusIndicator({
       {/* Propagation overlay - independent of operational status */}
       {isSyncing && (
         <span className={`inline-flex items-center gap-1 ${textSize} text-gray-500 dark:text-gray-400`}>
-          <span className="mx-0.5">•</span>
           <RefreshCw className={`${iconSize} animate-spin`} />
           Updating...
         </span>

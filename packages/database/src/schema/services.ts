@@ -40,10 +40,11 @@ export const serviceInstances = pgTable('service_instances', {
   // Usage billing: tracks last billed timestamp to prevent double-billing (STATS_DESIGN.md D3)
   lastBilledTimestamp: timestamp('last_billed_timestamp'),
 
-  // Vault sync tracking: records the vault seq that will first contain this service's config
+  // Vault sync tracking per vault type: records the vault seq that will contain this service's config
   // 0 = no pending changes (synced), >0 = waiting for LMs to reach this seq
-  // Set to (currentVaultSeq + 1) when config changes, reset to 0 when synced
-  configChangeVaultSeq: integer('config_change_vault_seq').default(0),
+  // Set to nextVaultSeq when config changes
+  // Currently only sma (seal mainnet api) vault is used
+  smaConfigChangeVaultSeq: integer('sma_config_change_vault_seq').default(0),
 
   // Control-plane enabled: true once service has been provisioned to gateways
   // Transitions to true when: isUserEnabled=true AND has seal key with package

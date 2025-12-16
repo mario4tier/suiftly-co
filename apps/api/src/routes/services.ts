@@ -477,13 +477,22 @@ export const servicesRouter = router({
 
           const now = dbClock.now();
 
-          // Get current vault seq for sync tracking
+          // Read nextVaultSeq - the seq to use for pending changes
+          // GM bumps this to currentSeq+2 when processing, preventing collisions
           const [control] = await tx
-            .select({ smaVaultSeq: systemControl.smaVaultSeq })
+            .select({ smaNextVaultSeq: systemControl.smaNextVaultSeq })
             .from(systemControl)
             .where(eq(systemControl.id, 1))
             .limit(1);
-          const expectedVaultSeq = (control?.smaVaultSeq ?? 0) + 1;
+          const expectedVaultSeq = control?.smaNextVaultSeq ?? 1;
+
+          // Atomically update global max configChangeSeq (for GM's O(1) pending check)
+          await tx
+            .update(systemControl)
+            .set({
+              smaMaxConfigChangeSeq: sql`GREATEST(${systemControl.smaMaxConfigChangeSeq}, ${expectedVaultSeq})`,
+            })
+            .where(eq(systemControl.id, 1));
 
           // For Seal service: check if cpEnabled should be set
           // cpEnabled becomes true when: isUserEnabled=true AND has seal key with package
@@ -507,7 +516,7 @@ export const servicesRouter = router({
               state: input.enabled ? SERVICE_STATE.ENABLED : SERVICE_STATE.DISABLED,
               enabledAt: input.enabled ? now : service.enabledAt,
               disabledAt: !input.enabled ? now : service.disabledAt,
-              configChangeVaultSeq: expectedVaultSeq,
+              smaConfigChangeVaultSeq: expectedVaultSeq,
               ...(shouldSetCpEnabled ? { cpEnabled: true } : {}),
             })
             .where(eq(serviceInstances.instanceId, service.instanceId))
@@ -598,19 +607,27 @@ export const servicesRouter = router({
             });
           }
 
-          // Get current vault seq for sync tracking
+          // Read nextVaultSeq - the seq to use for pending changes
           const [control] = await tx
-            .select({ smaVaultSeq: systemControl.smaVaultSeq })
+            .select({ smaNextVaultSeq: systemControl.smaNextVaultSeq })
             .from(systemControl)
             .where(eq(systemControl.id, 1))
             .limit(1);
-          const expectedVaultSeq = (control?.smaVaultSeq ?? 0) + 1;
+          const expectedVaultSeq = control?.smaNextVaultSeq ?? 1;
+
+          // Atomically update global max configChangeSeq (for GM's O(1) pending check)
+          await tx
+            .update(systemControl)
+            .set({
+              smaMaxConfigChangeSeq: sql`GREATEST(${systemControl.smaMaxConfigChangeSeq}, ${expectedVaultSeq})`,
+            })
+            .where(eq(systemControl.id, 1));
 
           const [updated] = await tx
             .update(serviceInstances)
             .set({
               config: updatedConfig,
-              configChangeVaultSeq: expectedVaultSeq,
+              smaConfigChangeVaultSeq: expectedVaultSeq,
             })
             .where(eq(serviceInstances.instanceId, service.instanceId))
             .returning();
@@ -941,7 +958,7 @@ export const servicesRouter = router({
       });
 
       if (services.length === 0) {
-        return { services: [], lmStatus: { lmCount: 0, lmInSyncCount: 0, minVaultSeq: null } };
+        return { services: [], lmStatus: { lmCount: 0, minAppliedSeq: null } };
       }
 
       // 2. Get active API key counts per service type
@@ -974,29 +991,46 @@ export const servicesRouter = router({
       const sealKeyCount = Number(sealKeyCountResult[0]?.count ?? 0);
 
       // 4. Get LM status for sync calculation
+      // Get min applied seq per vault type from reachable LMs
       const lmStatuses = await db
         .select({
           lmId: lmStatus.lmId,
-          vaultSeq: lmStatus.vaultSeq,
-          inSync: lmStatus.inSync,
-          status: lmStatus.status,
+          vaultType: lmStatus.vaultType,
+          appliedSeq: lmStatus.appliedSeq,
+          lastSeenAt: lmStatus.lastSeenAt,
+          lastError: lmStatus.lastError,
         })
-        .from(lmStatus)
-        .where(ne(lmStatus.status, 'down'));
+        .from(lmStatus);
 
-      const lmCount = lmStatuses.length;
-      const inSyncLms = lmStatuses.filter(lm => lm.inSync);
-      const lmInSyncCount = inSyncLms.length;
-      const minVaultSeq = inSyncLms.length > 0
-        ? Math.min(...inSyncLms.map(lm => lm.vaultSeq ?? 0))
-        : null;
+      // LM must have been seen within last 30 seconds to be considered reachable
+      const freshnessThreshold = new Date(Date.now() - 30000);
+
+      // Group by vault type and calculate min applied seq
+      const vaultSeqMap = new Map<string, number>();
+      for (const lm of lmStatuses) {
+        // Only consider recently reachable LMs with applied vaults
+        const isRecent = lm.lastSeenAt && lm.lastSeenAt > freshnessThreshold;
+        if (isRecent && !lm.lastError && lm.appliedSeq && lm.appliedSeq > 0 && lm.vaultType) {
+          const currentMin = vaultSeqMap.get(lm.vaultType);
+          if (currentMin === undefined || lm.appliedSeq < currentMin) {
+            vaultSeqMap.set(lm.vaultType, lm.appliedSeq);
+          }
+        }
+      }
+
+      // For now, all services use 'sma' vault (can be extended to multi-vault later)
+      const minAppliedSeq = vaultSeqMap.get('sma') ?? null;
+      const lmCount = lmStatuses.filter(lm => {
+        const isRecent = lm.lastSeenAt && lm.lastSeenAt > freshnessThreshold;
+        return isRecent && !lm.lastError;
+      }).length;
 
       // 5. Calculate status for each service
       const serviceStatuses = services.map(service => {
         const serviceType = service.serviceType;
         const state = service.state;
         const isUserEnabled = service.isUserEnabled ?? false;
-        const configChangeSeq = service.configChangeVaultSeq ?? 0;
+        const configChangeSeq = service.smaConfigChangeVaultSeq ?? 0;
 
         // Active API keys for this service
         const hasActiveApiKey = (apiKeyCountMap.get(serviceType) ?? 0) > 0;
@@ -1022,7 +1056,8 @@ export const servicesRouter = router({
           operationalStatus = 'up';
         }
 
-        // Determine sync status
+        // Determine sync status (sequence-based)
+        // Service is synced when configChangeSeq <= minAppliedSeq across all relevant vaults
         let syncStatus: 'synced' | 'pending' = 'synced';
         let syncReason: string | undefined;
 
@@ -1030,10 +1065,10 @@ export const servicesRouter = router({
           if (lmCount === 0) {
             syncStatus = 'pending';
             syncReason = 'no_lms_available';
-          } else if (lmInSyncCount !== lmCount) {
+          } else if (minAppliedSeq === null) {
             syncStatus = 'pending';
-            syncReason = 'lms_not_in_sync';
-          } else if (minVaultSeq !== null && configChangeSeq > minVaultSeq) {
+            syncReason = 'no_vaults_applied';
+          } else if (configChangeSeq > minAppliedSeq) {
             syncStatus = 'pending';
             syncReason = 'vault_seq_behind';
           }
@@ -1053,8 +1088,7 @@ export const servicesRouter = router({
         services: serviceStatuses,
         lmStatus: {
           lmCount,
-          lmInSyncCount,
-          minVaultSeq,
+          minAppliedSeq,
         },
       };
     }),

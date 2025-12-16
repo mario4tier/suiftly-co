@@ -17,10 +17,9 @@ interface VaultInfo {
 
 interface LMVaultStatus {
   type: string;
-  seq: number;
+  appliedSeq: number;
+  processingSeq: number | null;
   customerCount: number;
-  inSync: boolean;
-  fullSync: boolean;
   error?: string;
 }
 
@@ -28,8 +27,6 @@ interface LMStatus {
   name: string;
   host: string;
   reachable: boolean;
-  inSync: boolean;
-  fullSync: boolean;
   vaults: LMVaultStatus[];
   error?: string;
   rawData?: any;
@@ -138,8 +135,9 @@ export function KVCryptDebug() {
     if (!lm.reachable) return SyncState.Down;
     if (lm.error) return SyncState.Error;
     if (isLmBehind) return SyncState.Pending;
-    if (lm.fullSync) return SyncState.Sync;
-    if (lm.inSync) return SyncState.Sync;
+    // Synced if all vaults have applied >= 1 and no processing
+    const allApplied = lm.vaults.every(v => v.appliedSeq > 0 && v.processingSeq === null);
+    if (allApplied) return SyncState.Sync;
     return SyncState.Pending;
   };
 
@@ -147,8 +145,8 @@ export function KVCryptDebug() {
   const getVaultState = (vault: LMVaultStatus, isBehind: boolean): SyncState => {
     if (vault.error) return SyncState.Error;
     if (isBehind) return SyncState.Pending;
-    if (vault.fullSync) return SyncState.Sync;
-    if (vault.inSync) return SyncState.Sync;
+    // Synced if applied >= 1 and not processing
+    if (vault.appliedSeq > 0 && vault.processingSeq === null) return SyncState.Sync;
     return SyncState.Pending;
   };
 
@@ -398,7 +396,7 @@ export function KVCryptDebug() {
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
                           {lm.vaults.map((vault) => {
                             const gmSeq = gmVaults?.vaults?.[vault.type]?.latest?.seq;
-                            const isBehind = gmSeq !== undefined && vault.seq < gmSeq;
+                            const isBehind = gmSeq !== undefined && vault.appliedSeq < gmSeq;
                             return (
                               <div
                                 key={vault.type}
@@ -413,7 +411,10 @@ export function KVCryptDebug() {
                                   <span style={{ fontFamily: 'monospace' }}>{vault.type.toUpperCase()}</span>
                                 </span>
                                 <span style={{ color: '#94a3b8' }}>
-                                  seq=<span style={{ fontFamily: 'monospace' }}>{vault.seq}</span>
+                                  applied=<span style={{ fontFamily: 'monospace' }}>{vault.appliedSeq}</span>
+                                  {vault.processingSeq !== null && (
+                                    <span style={{ color: '#60a5fa' }}> (processing: {vault.processingSeq})</span>
+                                  )}
                                   {isBehind && (
                                     <span style={{ color: '#fbbf24' }}> (GM: {gmSeq})</span>
                                   )}

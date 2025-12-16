@@ -6,26 +6,37 @@
  *
  * Vault types generated:
  * - sma: Seal Mainnet API (customer API keys, rate limits, HAProxy config)
+ * - sta: Seal Testnet API (future)
  *
  * Two scenarios trigger vault generation:
  *
  * Scenario 1 (Reactive): Customer config change
- * - User action sets configChangeVaultSeq = currentVaultSeq + 1
- * - If any customer has configChangeVaultSeq > currentVaultSeq, MUST create new vault
- * - No content comparison needed - the higher seq is the signal
+ * - API reads nextVaultSeq and sets configChangeVaultSeq to that value
+ * - API atomically updates maxConfigChangeSeq = GREATEST(maxConfigChangeSeq, nextVaultSeq)
+ * - GM detects pending when maxConfigChangeSeq > currentVaultSeq (O(1) check)
  *
  * Scenario 2 (Drift Detection): Periodic check
  * - Compare what vault SHOULD contain (from DB) vs what it DOES contain (data_tx)
  * - If different, increment seq and create new vault
  * - Catches file corruption, manual changes, DB/file desync
  *
+ * Race condition prevention:
+ * - GM bumps nextSeq to currentSeq+2 BEFORE building vault data
+ * - Any API changes during vault build get assigned currentSeq+2
+ * - These changes won't be in the vault (built before they happened)
+ * - But configChangeSeq = currentSeq+2 > newSeq, so they appear "not synced"
+ * - Next generation cycle will include them
+ *
  * Process:
- * 1. Check for pending customer changes (scenario 1)
- * 2. Build vault data from DB
- * 3. Compare against actual data_tx content (scenario 2)
- * 4. If changes detected, increment seq and write vault
- * 5. Update DB with new seq and content hash
- * 6. Reset configChangeVaultSeq for customers now synced
+ * 1. Read currentSeq and maxPendingSeq from system_control
+ * 2. Bump nextSeq to currentSeq+2 (reserves slot, prevents race conditions)
+ * 3. Build vault data from DB
+ * 4. Check drift against cached data_tx content
+ * 5. If no changes, return early
+ * 6. Calculate newSeq (max of maxPendingSeq and currentSeq+1)
+ * 7. Write vault to data_tx
+ * 8. Update DB with new seq, content hash, reset nextSeq to newSeq+1
+ * 9. Reset configChangeVaultSeq for synced customers
  */
 
 import { db, systemControl, serviceInstances, apiKeys, sealKeys, sealPackages } from '@suiftly/database';
@@ -45,17 +56,21 @@ type VaultHashColumn = keyof Pick<typeof systemControl.$inferSelect,
   'smaVaultContentHash' | 'smmVaultContentHash' | 'smsVaultContentHash' | 'smoVaultContentHash' |
   'staVaultContentHash' | 'stmVaultContentHash' | 'stsVaultContentHash' | 'stoVaultContentHash' | 'skkVaultContentHash'
 >;
+type VaultNextSeqColumn = keyof Pick<typeof systemControl.$inferSelect,
+  'smaNextVaultSeq' | 'smmNextVaultSeq' | 'smsNextVaultSeq' | 'smoNextVaultSeq' |
+  'staNextVaultSeq' | 'stmNextVaultSeq' | 'stsNextVaultSeq' | 'stoNextVaultSeq' | 'skkNextVaultSeq'
+>;
 
-const VAULT_COLUMNS: Record<VaultTypeCode, { seq: VaultSeqColumn; hash: VaultHashColumn }> = {
-  sma: { seq: 'smaVaultSeq', hash: 'smaVaultContentHash' },
-  smm: { seq: 'smmVaultSeq', hash: 'smmVaultContentHash' },
-  sms: { seq: 'smsVaultSeq', hash: 'smsVaultContentHash' },
-  smo: { seq: 'smoVaultSeq', hash: 'smoVaultContentHash' },
-  sta: { seq: 'staVaultSeq', hash: 'staVaultContentHash' },
-  stm: { seq: 'stmVaultSeq', hash: 'stmVaultContentHash' },
-  sts: { seq: 'stsVaultSeq', hash: 'stsVaultContentHash' },
-  sto: { seq: 'stoVaultSeq', hash: 'stoVaultContentHash' },
-  skk: { seq: 'skkVaultSeq', hash: 'skkVaultContentHash' },
+const VAULT_COLUMNS: Record<VaultTypeCode, { seq: VaultSeqColumn; hash: VaultHashColumn; nextSeq: VaultNextSeqColumn }> = {
+  sma: { seq: 'smaVaultSeq', hash: 'smaVaultContentHash', nextSeq: 'smaNextVaultSeq' },
+  smm: { seq: 'smmVaultSeq', hash: 'smmVaultContentHash', nextSeq: 'smmNextVaultSeq' },
+  sms: { seq: 'smsVaultSeq', hash: 'smsVaultContentHash', nextSeq: 'smsNextVaultSeq' },
+  smo: { seq: 'smoVaultSeq', hash: 'smoVaultContentHash', nextSeq: 'smoNextVaultSeq' },
+  sta: { seq: 'staVaultSeq', hash: 'staVaultContentHash', nextSeq: 'staNextVaultSeq' },
+  stm: { seq: 'stmVaultSeq', hash: 'stmVaultContentHash', nextSeq: 'stmNextVaultSeq' },
+  sts: { seq: 'stsVaultSeq', hash: 'stsVaultContentHash', nextSeq: 'stsNextVaultSeq' },
+  sto: { seq: 'stoVaultSeq', hash: 'stoVaultContentHash', nextSeq: 'stoNextVaultSeq' },
+  skk: { seq: 'skkVaultSeq', hash: 'skkVaultContentHash', nextSeq: 'skkNextVaultSeq' },
 };
 
 // ============================================================================
@@ -92,39 +107,47 @@ async function getCachedVault(
 // Scenario 1: Check for Pending Customer Changes
 // ============================================================================
 
+// Column mapping for global max configChangeSeq per vault type
+type VaultMaxConfigChangeColumn = keyof Pick<typeof systemControl.$inferSelect,
+  'smaMaxConfigChangeSeq' | 'staMaxConfigChangeSeq'
+>;
+
+const VAULT_MAX_CONFIG_COLUMNS: Partial<Record<VaultTypeCode, VaultMaxConfigChangeColumn>> = {
+  sma: 'smaMaxConfigChangeSeq',
+  sta: 'staMaxConfigChangeSeq',
+};
+
 /**
  * Check if any customer has a pending config change that requires vault regeneration.
- * Returns true if any customer's configChangeVaultSeq > currentVaultSeq.
+ * Uses O(1) global max check instead of O(n) MAX query on all services.
+ * Returns { hasPending: true, maxPendingSeq } if maxConfigChangeSeq > currentVaultSeq.
  */
 async function hasPendingCustomerChanges(
-  serviceType: ServiceType,
+  vaultType: VaultTypeCode,
   currentVaultSeq: number
 ): Promise<{ hasPending: boolean; maxPendingSeq: number }> {
   try {
-    // Find any service with configChangeVaultSeq > current vault seq
-    const pendingServices = await db
-      .select({
-        customerId: serviceInstances.customerId,
-        configChangeVaultSeq: serviceInstances.configChangeVaultSeq,
-      })
-      .from(serviceInstances)
-      .where(
-        and(
-          eq(serviceInstances.serviceType, serviceType),
-          eq(serviceInstances.cpEnabled, true),
-          gt(serviceInstances.configChangeVaultSeq, currentVaultSeq)
-        )
-      );
-
-    if (pendingServices.length === 0) {
+    const maxColumn = VAULT_MAX_CONFIG_COLUMNS[vaultType];
+    if (!maxColumn) {
+      // This vault type doesn't track config changes (e.g., master/seed vaults)
       return { hasPending: false, maxPendingSeq: 0 };
     }
 
-    // Find the maximum pending seq
-    const maxPendingSeq = Math.max(...pendingServices.map(s => s.configChangeVaultSeq ?? 0));
+    // O(1) read of global max from system_control
+    const [control] = await db
+      .select({ maxSeq: systemControl[maxColumn] })
+      .from(systemControl)
+      .where(eq(systemControl.id, 1))
+      .limit(1);
+
+    const maxPendingSeq = control?.maxSeq ?? 0;
+
+    if (maxPendingSeq <= currentVaultSeq) {
+      return { hasPending: false, maxPendingSeq: 0 };
+    }
 
     console.log(
-      `[VAULT] ${pendingServices.length} customers have pending changes (max seq=${maxPendingSeq}, current=${currentVaultSeq})`
+      `[VAULT] Pending changes detected (max configChangeSeq=${maxPendingSeq}, currentVaultSeq=${currentVaultSeq})`
     );
 
     return { hasPending: true, maxPendingSeq };
@@ -134,28 +157,43 @@ async function hasPendingCustomerChanges(
   }
 }
 
+// Column mapping for service-specific configChangeVaultSeq per vault type
+type VaultConfigChangeColumn = keyof Pick<typeof serviceInstances.$inferSelect,
+  'smaConfigChangeVaultSeq'
+>;
+
+const VAULT_CONFIG_CHANGE_COLUMNS: Partial<Record<VaultTypeCode, VaultConfigChangeColumn>> = {
+  sma: 'smaConfigChangeVaultSeq',
+  // sta: 'staConfigChangeVaultSeq', // Future: add when testnet tracking is needed
+};
+
 /**
  * Reset configChangeVaultSeq for customers that are now synced.
  * Called after successful vault generation.
  */
 async function resetSyncedCustomers(
-  serviceType: ServiceType,
+  vaultType: VaultTypeCode,
   newVaultSeq: number
 ): Promise<number> {
+  const configColumn = VAULT_CONFIG_CHANGE_COLUMNS[vaultType];
+  if (!configColumn) {
+    // This vault type doesn't track config changes
+    return 0;
+  }
+
   // Reset configChangeVaultSeq to 0 for all services where configChangeVaultSeq <= newVaultSeq
-  const result = await db
+  // Note: We need to use the column reference for the where clause
+  await db
     .update(serviceInstances)
-    .set({ configChangeVaultSeq: 0 })
+    .set({ [configColumn]: 0 })
     .where(
       and(
-        eq(serviceInstances.serviceType, serviceType),
-        gt(serviceInstances.configChangeVaultSeq, 0),
-        lte(serviceInstances.configChangeVaultSeq, newVaultSeq)
+        gt(serviceInstances[configColumn], 0),
+        lte(serviceInstances[configColumn], newVaultSeq)
       )
     );
 
   // Drizzle doesn't return rowCount directly, so we can't easily count affected rows
-  // Just return 0 for now (the operation still works)
   return 0;
 }
 
@@ -399,6 +437,7 @@ export async function generateVault(
     .limit(1);
 
   const currentSeq = (control?.[columns.seq] as number) ?? 0;
+  const currentNextSeq = (control?.[columns.nextSeq] as number) ?? 1;
 
   // 2. Determine service type from vault code
   const serviceTypeChar = vaultType[0];
@@ -418,14 +457,37 @@ export async function generateVault(
   }
 
   // 3. Check Scenario 1: Pending customer changes
-  const { hasPending, maxPendingSeq } = await hasPendingCustomerChanges(serviceType, currentSeq);
+  // Read maxPendingSeq BEFORE bumping nextSeq (snapshot for newSeq calculation)
+  const { hasPending, maxPendingSeq } = await hasPendingCustomerChanges(vaultType, currentSeq);
 
-  // 4. Build vault data from DB (needed for both scenarios)
+  // 4. Bump nextSeq to currentSeq+2 BEFORE building vault data
+  // This is critical for preventing race conditions:
+  // - Any API changes that happen during buildVaultData will get assigned currentSeq+2
+  // - Those changes won't be in this vault (built before they happened)
+  // - But they'll have configChangeSeq = currentSeq+2 > newSeq, so they appear "not synced"
+  // - Next generation cycle will include them
+  //
+  // If we bump AFTER buildVaultData, a concurrent change would:
+  // - Use the OLD nextSeq (currentSeq+1)
+  // - Not be in the vault (happened during build)
+  // - But configChangeSeq would match vault seq → appears synced when it's NOT!
+  //
+  // Skip write if already at target value (reduces DB writes during idle periods)
+  const targetNextSeq = currentSeq + 2;
+  if (currentNextSeq !== targetNextSeq) {
+    await db
+      .update(systemControl)
+      .set({ [columns.nextSeq]: targetNextSeq })
+      .where(eq(systemControl.id, 1));
+  }
+
+  // 5. Build vault data from DB (needed for both scenarios)
+  // Any API changes from this point forward will use currentSeq+2
   const vaultData = await buildVaultData(serviceType);
   const customerCount = Object.keys(vaultData).length;
   const contentHash = computeContentHash(vaultData);
 
-  // 5. Check Scenario 2: Drift detection (only if no pending changes)
+  // 6. Check Scenario 2: Drift detection (only if no pending changes)
   let hasDrift = false;
   let driftReason: string | undefined;
 
@@ -441,7 +503,10 @@ export async function generateVault(
     }
   }
 
-  // 6. Determine if we need to generate
+  // 7. Determine if we need to generate
+  // Note: nextSeq was already bumped in step 4 - this is intentional.
+  // Even if we return early here, the bump is acceptable (one extra write per cycle)
+  // vs the alternative of a race condition causing false "synced" status.
   const shouldGenerate = hasPending || hasDrift;
 
   if (!shouldGenerate) {
@@ -456,12 +521,12 @@ export async function generateVault(
     };
   }
 
-  // 7. Determine new seq number
+  // 8. Determine new seq number
   // For pending changes: use the max pending seq (ensures we satisfy all pending requests)
   // For drift: increment current seq by 1
   const newSeq = hasPending ? Math.max(currentSeq + 1, maxPendingSeq) : currentSeq + 1;
 
-  // 8. Write vault
+  // 9. Write vault
   const writer = createVaultWriter({
     storageDir,
     // TODO: Add keyProvider and emergencyPublicKey from config
@@ -474,22 +539,23 @@ export async function generateVault(
     enableEmergencyBackup: false, // TODO: Enable when emergency keys are configured
   });
 
-  // 9. Update DB with new seq and content hash
+  // 10. Update DB with new seq, content hash, and reset nextSeq
   await db
     .update(systemControl)
     .set({
       [columns.seq]: newSeq,
       [columns.hash]: contentHash,
+      [columns.nextSeq]: newSeq + 1,
       updatedAt: new Date(),
     })
     .where(eq(systemControl.id, 1));
 
-  // 10. Reset configChangeVaultSeq for synced customers
+  // 11. Reset configChangeVaultSeq for synced customers
   if (hasPending) {
-    await resetSyncedCustomers(serviceType, newSeq);
+    await resetSyncedCustomers(vaultType, newSeq);
   }
 
-  // 11. Update cache with new vault (construct a VaultInstance-like object)
+  // 12. Update cache with new vault (construct a VaultInstance-like object)
   // Clear cache to force reload on next access (simpler than constructing full instance)
   vaultCache.delete(vaultType);
 

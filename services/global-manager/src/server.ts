@@ -505,14 +505,11 @@ server.get('/api/lm/status', async () => {
     name: string;
     host: string;
     reachable: boolean;
-    inSync: boolean;
-    fullSync: boolean;
     vaults: Array<{
       type: string;
-      seq: number;
+      appliedSeq: number;
+      processingSeq: number | null;
       customerCount: number;
-      inSync: boolean;
-      fullSync: boolean;
       error?: string;
     }>;
     error?: string;
@@ -526,8 +523,6 @@ server.get('/api/lm/status', async () => {
     name: 'Local LM',
     host: 'http://localhost:22610',
     reachable: false,
-    inSync: false,
-    fullSync: false,
     vaults: [],
   };
 
@@ -541,7 +536,6 @@ server.get('/api/lm/status', async () => {
     clearTimeout(timeout);
 
     if (res.ok) {
-      // New LM response format (simplified)
       const data = await res.json() as {
         vaults: Array<{
           type: string;
@@ -553,31 +547,17 @@ server.get('/api/lm/status', async () => {
 
       localLm.reachable = true;
 
-      // Transform new format to old format for admin webapp
       localLm.vaults = data.vaults.map((v) => {
-        const currentSeq = v.processing?.seq ?? v.applied?.seq ?? 0;
-
-        // Derive status from new format:
-        // - SYNC: !processing && applied exists
-        // - ERROR: processing with error
-        // - PENDING: processing without error
         const hasError = v.processing && v.processing.error !== null;
-        const inSync = !v.processing && v.applied !== null;
-        const fullSync = inSync;
 
         return {
           type: v.type,
-          seq: currentSeq,
+          appliedSeq: v.applied?.seq ?? 0,
+          processingSeq: v.processing?.seq ?? null,
           customerCount: v.customerCount,
-          inSync,
-          fullSync,
           error: hasError ? v.processing!.error! : undefined,
         };
       });
-
-      // Overall LM sync status
-      localLm.inSync = localLm.vaults.every(v => v.inSync);
-      localLm.fullSync = localLm.vaults.every(v => v.fullSync);
 
       // Propagate vault errors to LM level
       const vaultErrors = localLm.vaults.filter(v => v.error).map(v => v.error);
@@ -605,7 +585,7 @@ server.get('/api/lm/status', async () => {
 
 // Get fleet-wide sync overview
 server.get('/api/sync/overview', async () => {
-  const { getLMStatuses, getMinLMVaultSeq, areAllLMsInSync } = await import('./tasks/poll-lm-status.js');
+  const { getLMStatuses, getMinAppliedSeq } = await import('./tasks/poll-lm-status.js');
   const { systemControl } = await import('@suiftly/database');
   const { eq } = await import('drizzle-orm');
 
@@ -620,16 +600,16 @@ server.get('/api/sync/overview', async () => {
 
   // Get LM statuses
   const lmStatuses = await getLMStatuses();
-  const minLMSeq = await getMinLMVaultSeq();
-  const allInSync = await areAllLMsInSync();
+  const minAppliedSeq = await getMinAppliedSeq('sma');
 
   // Calculate sync status
   // LM is "reachable" if we've seen it recently (within last 30 seconds)
   const recentThreshold = new Date(Date.now() - 30000);
   const lmsReachable = lmStatuses.filter(s => s.lastSeenAt && s.lastSeenAt > recentThreshold).length;
-  const lmsInSync = lmStatuses.filter(s => s.inSync).length;
-  const lmsFullSync = lmStatuses.filter(s => s.fullSync).length;
   const lmsTotal = lmStatuses.length;
+
+  // Fleet is synced if all LMs have appliedSeq >= currentVaultSeq
+  const allSynced = minAppliedSeq !== null && minAppliedSeq >= currentVaultSeq;
 
   return {
     vault: {
@@ -639,10 +619,8 @@ server.get('/api/sync/overview', async () => {
     lms: {
       total: lmsTotal,
       reachable: lmsReachable,
-      inSync: lmsInSync,
-      fullSync: lmsFullSync,
-      minSeq: minLMSeq,
-      allInSync,
+      minAppliedSeq,
+      allSynced,
       statuses: lmStatuses.map(s => {
         const isReachable = s.lastSeenAt && s.lastSeenAt > recentThreshold;
         return {
@@ -651,18 +629,15 @@ server.get('/api/sync/overview', async () => {
           host: s.host,
           region: s.region,
           reachable: isReachable,
-          vaultSeq: s.vaultSeq,
+          appliedSeq: s.appliedSeq,
+          processingSeq: s.processingSeq,
           customerCount: s.customerCount,
-          inSync: s.inSync,
-          fullSync: s.fullSync,
           lastSeenAt: s.lastSeenAt?.toISOString() ?? null,
           lastError: s.lastError,
         };
       }),
     },
-    syncStatus: allInSync && minLMSeq !== null && minLMSeq >= currentVaultSeq
-      ? 'synced'
-      : 'pending',
+    syncStatus: allSynced ? 'synced' : 'pending',
   };
 });
 

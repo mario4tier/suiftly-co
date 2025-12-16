@@ -12,8 +12,11 @@ interface LMStatus {
   name: string;
   host: string;
   reachable: boolean;
-  inSync: boolean;
-  fullSync: boolean;
+  vaults: Array<{
+    type: string;
+    appliedSeq: number;
+    processingSeq: number | null;
+  }>;
   error?: string;
 }
 
@@ -164,8 +167,9 @@ export function Dashboard() {
   const getLMState = (lm: LMStatus): SyncState => {
     if (!lm.reachable) return SyncState.Down;
     if (lm.error) return SyncState.Error;
-    if (lm.fullSync) return SyncState.Sync;
-    if (lm.inSync) return SyncState.Sync;
+    // Synced if all vaults have applied >= 1 and no processing
+    const allApplied = lm.vaults.every(v => v.appliedSeq > 0 && v.processingSeq === null);
+    if (allApplied) return SyncState.Sync;
     return SyncState.Pending;
   };
 

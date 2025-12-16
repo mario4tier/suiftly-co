@@ -463,7 +463,7 @@ async function executeSyncAll(): Promise<void> {
   try {
     const lmResult = await pollLMStatus();
     console.log(
-      `[SYNC] sync-all LM poll: ${lmResult.up}/${lmResult.polled} up, ${lmResult.inSync} in-sync, minSeq=${lmResult.minVaultSeq ?? 'N/A'}`
+      `[SYNC] sync-all LM poll: ${lmResult.up}/${lmResult.polled} up, minAppliedSeq=${lmResult.minAppliedSeq ?? 'N/A'}`
     );
   } catch (lmError) {
     console.error('[SYNC] sync-all LM polling failed:', lmError);
