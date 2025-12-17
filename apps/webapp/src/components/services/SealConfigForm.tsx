@@ -39,6 +39,7 @@ import {
 } from "@/lib/config";
 import { TermsOfServiceContent } from "@/components/content/TermsOfServiceContent";
 import { SERVICE_TIER, type ServiceTier } from "@suiftly/shared/constants";
+import { formatTierName } from "@/lib/billing-utils";
 
 interface SealConfigFormProps {
   onTierChange?: (tierSelected: boolean) => void;
@@ -82,19 +83,16 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
   // Tier info using global config variables (zero-cost access)
   const tierInfo = {
     [SERVICE_TIER.STARTER]: {
-      name: "STARTER",
       reqPerRegion: fbw_sta,
       reqGlobal: fbw_sta * freg_count,
       price: fsubs_usd_sta,
     },
     [SERVICE_TIER.PRO]: {
-      name: "PRO",
       reqPerRegion: fbw_pro,
       reqGlobal: fbw_pro * freg_count,
       price: fsubs_usd_pro,
     },
     [SERVICE_TIER.ENTERPRISE]: {
-      name: "ENTERPRISE",
       reqPerRegion: fbw_ent,
       reqGlobal: fbw_ent * freg_count,
       price: fsubs_usd_ent,
@@ -203,7 +201,7 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
                   {/* Left Column: Title and Bandwidth */}
                   <div className="flex-1 min-w-0">
                     <h4 className="text-base font-bold text-gray-900 dark:text-gray-100 mb-1">
-                      {info.name}
+                      {formatTierName(tier).toUpperCase()}
                     </h4>
                     <p className="text-sm text-gray-600 dark:text-gray-400">
                       {info.reqPerRegion} req/s per region ( ~{info.reqGlobal}{" "}

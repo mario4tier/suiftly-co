@@ -57,6 +57,7 @@ import {
   formatIpAddressListForDisplay,
   areIpListsEqual,
 } from "@suiftly/shared/schemas";
+import { formatTierName } from "@/lib/billing-utils";
 
 interface SealInteractiveFormProps {
   serviceState: ServiceState;
@@ -386,17 +387,14 @@ export function SealInteractiveForm({
   // Tier info
   const tierInfo = {
     [SERVICE_TIER.STARTER]: {
-      name: "STARTER",
       reqPerRegion: fbw_sta,
       price: fsubs_usd_sta,
     },
     [SERVICE_TIER.PRO]: {
-      name: "PRO",
       reqPerRegion: fbw_pro,
       price: fsubs_usd_pro,
     },
     [SERVICE_TIER.ENTERPRISE]: {
-      name: "ENTERPRISE",
       reqPerRegion: fbw_ent,
       price: fsubs_usd_ent,
     },
@@ -724,7 +722,7 @@ export function SealInteractiveForm({
           {/* Monthly Charges Section */}
           <div className="space-y-4">
             <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-              {currentTier.name} Tier{' '}
+              {formatTierName(tier).toUpperCase()} Tier{' '}
               <ActionButton
                 onClick={onChangePlan}
                 disabled={isReadOnly}

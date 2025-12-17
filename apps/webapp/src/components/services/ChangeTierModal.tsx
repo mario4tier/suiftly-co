@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
+import { formatTierName } from "@/lib/billing-utils";
 import type { ServiceType, ServiceTier } from "@suiftly/shared/constants";
 
 interface ChangeTierModalProps {
@@ -231,16 +232,6 @@ export function ChangeTierModal({
     });
   };
 
-  // Get tier display info
-  const getTierDisplayInfo = (tier: ServiceTier) => {
-    const tierNames: Record<ServiceTier, string> = {
-      starter: 'STARTER',
-      pro: 'PRO',
-      enterprise: 'ENTERPRISE',
-    };
-    return tierNames[tier];
-  };
-
   return (
     <>
       <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
@@ -295,7 +286,7 @@ export function ChangeTierModal({
                         Downgrade Scheduled
                       </p>
                       <p className="text-sm text-amber-700 dark:text-amber-300 mt-1">
-                        Your plan will change to {getTierDisplayInfo(tierOptions.scheduledTier)} on {formatDate(tierOptions.scheduledTierEffectiveDate)}.
+                        Your plan will change to {formatTierName(tierOptions.scheduledTier).toUpperCase()} on {formatDate(tierOptions.scheduledTierEffectiveDate)}.
                       </p>
                       <Button
                         variant="outline"
@@ -340,7 +331,7 @@ export function ChangeTierModal({
                         <div className="flex-1">
                           <div className="flex items-center gap-2">
                             <h4 className="text-base font-bold text-gray-900 dark:text-gray-100">
-                              {getTierDisplayInfo(option.tier as ServiceTier)}
+                              {formatTierName(option.tier as ServiceTier).toUpperCase()}
                             </h4>
                             {isCurrent && (
                               <span className="px-2 py-0.5 text-xs font-semibold rounded-full bg-[#f38020] text-white">
@@ -448,8 +439,8 @@ export function ChangeTierModal({
               {confirmDialog?.type === 'upgrade' && confirmDialog.tier && tierOptions && (
                 <>
                   <p>
-                    You are upgrading from <strong>{getTierDisplayInfo(tierOptions.currentTier)}</strong> to{' '}
-                    <strong>{getTierDisplayInfo(confirmDialog.tier)}</strong>.
+                    You are upgrading from <strong>{formatTierName(tierOptions.currentTier).toUpperCase()}</strong> to{' '}
+                    <strong>{formatTierName(confirmDialog.tier).toUpperCase()}</strong>.
                   </p>
                   {(() => {
                     const option = tierOptions.availableTiers.find(t => t.tier === confirmDialog.tier);
@@ -472,8 +463,8 @@ export function ChangeTierModal({
               {confirmDialog?.type === 'downgrade' && confirmDialog.tier && tierOptions && (
                 <>
                   <p>
-                    You are {tierOptions.paidOnce ? 'scheduling a downgrade' : 'changing'} from <strong>{getTierDisplayInfo(tierOptions.currentTier)}</strong> to{' '}
-                    <strong>{getTierDisplayInfo(confirmDialog.tier)}</strong>.
+                    You are {tierOptions.paidOnce ? 'scheduling a downgrade' : 'changing'} from <strong>{formatTierName(tierOptions.currentTier).toUpperCase()}</strong> to{' '}
+                    <strong>{formatTierName(confirmDialog.tier).toUpperCase()}</strong>.
                   </p>
                   {tierOptions.paidOnce ? (
                     (() => {
@@ -502,7 +493,7 @@ export function ChangeTierModal({
                     // Paid subscription - show full cancellation flow info
                     <>
                       <p>
-                        Are you sure you want to cancel your <strong>{getTierDisplayInfo(tierOptions.currentTier)}</strong> subscription?
+                        Are you sure you want to cancel your <strong>{formatTierName(tierOptions.currentTier).toUpperCase()}</strong> subscription?
                       </p>
                       <p className="mt-2">
                         Your service will continue until the end of the current billing period.
@@ -515,7 +506,7 @@ export function ChangeTierModal({
                   ) : (
                     // Unpaid subscription - simple immediate cancellation
                     <p>
-                      Cancel your <strong>{getTierDisplayInfo(tierOptions.currentTier)}</strong> subscription?
+                      Cancel your <strong>{formatTierName(tierOptions.currentTier).toUpperCase()}</strong> subscription?
                     </p>
                   )}
                 </>

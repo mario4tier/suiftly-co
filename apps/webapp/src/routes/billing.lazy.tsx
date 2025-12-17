@@ -20,7 +20,7 @@ import { toast } from 'sonner';
 import { getTierPriceUsdCents } from '@suiftly/shared/pricing';
 import { SERVICE_TYPE, SPENDING_LIMIT } from '@suiftly/shared/constants';
 import type { InvoiceLineItem } from '@suiftly/shared/types';
-import { formatLineItemDescription } from '@/lib/billing-utils';
+import { formatLineItemDescription, formatTierName } from '@/lib/billing-utils';
 
 export const Route = createLazyFileRoute('/billing')({
   component: BillingPage,
@@ -203,7 +203,7 @@ function BillingPage() {
                 <p>
                   {pendingServices.length === 1 ? (
                     <>
-                      Your {pendingServices[0].serviceType.charAt(0).toUpperCase() + pendingServices[0].serviceType.slice(1)} subscription ({pendingServices[0].tier} tier - ${(getTierPriceUsdCents(pendingServices[0].tier) / 100).toFixed(2)}/month) requires payment.
+                      Your {pendingServices[0].serviceType.charAt(0).toUpperCase() + pendingServices[0].serviceType.slice(1)} subscription ({formatTierName(pendingServices[0].tier)} tier - ${(getTierPriceUsdCents(pendingServices[0].tier) / 100).toFixed(2)}/month) requires payment.
                     </>
                   ) : (
                     <>

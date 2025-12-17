@@ -68,6 +68,8 @@ function formatLineItemDescription(
     case INVOICE_LINE_ITEM_TYPE.TAX:
       return 'Tax';
     default:
+      // Log unexpected itemType - indicates new enum value or bad data
+      console.error(`[billing] Unhandled itemType in formatLineItemDescription: ${JSON.stringify(itemType)}`);
       return 'Charge';
   }
 }

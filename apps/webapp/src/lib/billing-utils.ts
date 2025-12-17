@@ -8,8 +8,36 @@
  * - Email templates
  */
 
-import { INVOICE_LINE_ITEM_TYPE } from '@suiftly/shared/constants';
-import type { InvoiceLineItem } from '@suiftly/shared/types';
+import { INVOICE_LINE_ITEM_TYPE, SERVICE_TIER } from '@suiftly/shared/constants';
+import type { InvoiceLineItem, ServiceTier } from '@suiftly/shared/types';
+
+/**
+ * TypeScript exhaustiveness check helper.
+ * If a new enum value is added, TypeScript will error here at compile time.
+ */
+function assertNever(value: never, context: string): string {
+  console.error(`[billing-utils] Unhandled ${context}: ${JSON.stringify(value)}`);
+  return 'Charge'; // Graceful fallback for runtime
+}
+
+/**
+ * Tier display names (Title case)
+ * Use .toUpperCase() for button/badge display
+ */
+const TIER_DISPLAY_NAMES: Record<ServiceTier, string> = {
+  [SERVICE_TIER.STARTER]: 'Starter',
+  [SERVICE_TIER.PRO]: 'Pro',
+  [SERVICE_TIER.ENTERPRISE]: 'Enterprise',
+};
+
+/**
+ * Format a tier for display (Title case)
+ * @example formatTierName('starter') => 'Starter'
+ * @example formatTierName('pro').toUpperCase() => 'PRO'
+ */
+export function formatTierName(tier: ServiceTier): string {
+  return TIER_DISPLAY_NAMES[tier] ?? tier;
+}
 
 /**
  * Format an invoice line item for display
@@ -46,6 +74,7 @@ export function formatLineItemDescription(item: InvoiceLineItem): string {
     case INVOICE_LINE_ITEM_TYPE.TAX:
       return 'Tax';
     default:
-      return 'Charge';
+      // TypeScript exhaustiveness check - will error at compile time if new enum values are added
+      return assertNever(item.itemType as never, `itemType in formatLineItemDescription`);
   }
 }
