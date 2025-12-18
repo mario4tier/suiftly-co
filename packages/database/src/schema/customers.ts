@@ -8,6 +8,7 @@ import { customerStatusEnum } from './enums';
  *
  * Billing fields track 28-day rolling periods (see CONSTANTS.md):
  * - spendingLimitUsdCents: 28-day spending limit (default $250, min $10, 0=unlimited)
+ * - currentBalanceUsdCents: Escrow account balance (synced from blockchain/mock)
  * - currentPeriodChargedUsdCents: Amount charged in current 28-day period
  * - currentPeriodStart: Start of current 28-day period (date only, no time)
  */
@@ -16,9 +17,9 @@ export const customers = pgTable('customers', {
   walletAddress: varchar('wallet_address', { length: FIELD_LIMITS.SUI_ADDRESS }).notNull().unique(),
   escrowContractId: varchar('escrow_contract_id', { length: FIELD_LIMITS.SUI_ADDRESS }),
   status: customerStatusEnum('status').notNull().default('active'),
-  spendingLimitUsdCents: bigint('spending_limit_usd_cents', { mode: 'number' }), // 28-day spending limit
-  currentBalanceUsdCents: bigint('current_balance_usd_cents', { mode: 'number' }),
-  currentPeriodChargedUsdCents: bigint('current_period_charged_usd_cents', { mode: 'number' }), // Charged this 28-day period
+  spendingLimitUsdCents: bigint('spending_limit_usd_cents', { mode: 'number' }).default(25000), // 28-day spending limit ($250 default from CONSTANTS.md)
+  currentBalanceUsdCents: bigint('current_balance_usd_cents', { mode: 'number' }).default(0), // Escrow balance (synced from blockchain/mock)
+  currentPeriodChargedUsdCents: bigint('current_period_charged_usd_cents', { mode: 'number' }).default(0), // Charged this 28-day period
   currentPeriodStart: date('current_period_start'), // Start of current 28-day period
 
   // Billing state tracking (Phase 1A)

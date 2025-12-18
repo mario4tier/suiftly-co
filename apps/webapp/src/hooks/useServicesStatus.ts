@@ -51,8 +51,7 @@ export interface ServicesStatusResult {
   /** LM fleet status */
   lmStatus: {
     lmCount: number;
-    lmInSyncCount: number;
-    minVaultSeq: number | null;
+    minAppliedSeq: number | null;
   };
   /** Whether we're currently loading */
   isLoading: boolean;
@@ -166,7 +165,7 @@ export function useServicesStatus(): ServicesStatusResult {
     services: data?.services ?? [],
     getServiceStatus,
     isAnySyncing,
-    lmStatus: data?.lmStatus ?? { lmCount: 0, lmInSyncCount: 0, minVaultSeq: null },
+    lmStatus: data?.lmStatus ?? { lmCount: 0, minAppliedSeq: null },
     isLoading,
     refetch: () => void refetch(),
     currentPollingInterval,

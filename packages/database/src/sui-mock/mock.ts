@@ -37,7 +37,7 @@ import type {
   TransactionHistoryEntry,
 } from '@suiftly/shared/sui-service';
 import type { Transaction } from '@mysten/sui/transactions';
-import { randomBytes } from 'crypto';
+import { randomBytes, randomInt } from 'crypto';
 import { suiMockConfig } from './mock-config.js';
 
 /**
@@ -863,14 +863,16 @@ export class MockSuiService implements ISuiService {
   }
 
   /**
-   * Generate customer ID (random positive 32-bit integer)
+   * Generate customer ID (cryptographically secure random positive 32-bit integer)
    * Range: 1 to 2147483647 (positive signed 32-bit)
-   * This ensures compatibility with both PostgreSQL INTEGER and validation that requires customerId > 0
+   * Uses crypto.randomInt for security (same as auth endpoints)
+   *
+   * Note: Collision handling is at the caller level (insert will fail on duplicate)
+   * For mock/test scenarios, collisions are extremely rare and acceptable
    */
   private generateCustomerId(): number {
-    // Generate positive 32-bit signed value (1 to 2147483647)
-    // Using 2147483646 as max to add 1 safely (avoiding 0)
-    return Math.floor(Math.random() * 2147483646) + 1;
+    // Cryptographically secure random [1, 2^31-1]
+    return randomInt(1, 2147483647);
   }
 
   /**

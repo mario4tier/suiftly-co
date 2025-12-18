@@ -17,9 +17,9 @@ import { serviceInstances, sealKeys, systemControl } from '@suiftly/database/sch
 import { eq, and } from 'drizzle-orm';
 import { SERVICE_TYPE } from '@suiftly/shared/constants';
 
-// Sudob API for test reset and vault sync
-const SUDOB_URL = 'http://localhost:22800';
+// Service URLs
 const LM_URL = 'http://localhost:22610';
+const GM_URL = 'http://localhost:22600';
 
 // Helper function to create a seal key via UI
 async function createSealKeyViaUI(page: Page): Promise<void> {
@@ -69,56 +69,56 @@ async function getCurrentVaultSeq(): Promise<number> {
   return control?.seq ?? 0;
 }
 
-// Helper to trigger vault sync via sudob (simulates sync-files)
-async function triggerVaultSync(): Promise<void> {
-  const response = await fetch(`${SUDOB_URL}/api/vault/sync`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ vaultType: 'sma' }),
-  });
-  if (!response.ok) {
-    throw new Error(`Vault sync failed: ${await response.text()}`);
+// Helper to wait for vault to propagate via syncf and LM to pick it up
+// Polls LM health every 500ms for up to 30 seconds
+async function waitForVaultSync(expectedMinSeq: number): Promise<void> {
+  const maxAttempts = 60; // 30 seconds total
+  const pollInterval = 500; // 500ms
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const response = await fetch(`${LM_URL}/api/health`);
+      if (!response.ok) continue;
+
+      const health = await response.json() as {
+        vaults: Array<{ type: string; applied?: { seq: number }; processing: unknown | null }>;
+      };
+      const smaVault = health.vaults.find(v => v.type === 'sma');
+
+      // Check if vault is applied (not processing) and has expected seq
+      if (smaVault?.applied && smaVault.applied.seq >= expectedMinSeq && !smaVault.processing) {
+        console.log(`Vault sync detected after ${(attempt + 1) * pollInterval}ms (seq=${smaVault.applied.seq})`);
+        return;
+      }
+    } catch {
+      // LM not responding, keep polling
+    }
+
+    await new Promise(resolve => setTimeout(resolve, pollInterval));
   }
+
+  throw new Error(`Vault sync timed out after ${maxAttempts * pollInterval}ms waiting for seq >= ${expectedMinSeq}`);
 }
 
-// Component confirmation status
-interface ComponentConfirmation {
-  confirmedAt: string;
-}
-
-// Key-server confirmation status
-interface KeyServersApplied {
-  mseal1: ComponentConfirmation;
-  mseal2: ComponentConfirmation;
-}
-
-// Applied state (fully confirmed)
+// Applied state from LM
 interface AppliedState {
   seq: number;
-  startedAt: string;
-  haproxy: ComponentConfirmation;
-  keyServers: KeyServersApplied;
+  at: string;
 }
 
-// Per-vault status in the vaults array
+// Per-vault status in the vaults array (actual LM format)
 interface VaultStatus {
   type: string;
-  seq: number;
   customerCount: number;
-  inSync: boolean; // Vault loaded + HAProxy updated (service operational)
-  fullSync: boolean; // All components confirmed including key-servers
   applied: AppliedState | null;
   processing: object | null;
-  lastError: string | null;
 }
 
-// LM health response structure (no 'status' field - if there's a response, LM is up)
+// LM health response structure (actual format)
 interface LMHealthResponse {
   service: string;
   timestamp: string;
   vaults: VaultStatus[];
-  inSync: boolean; // All vaults have HAProxy updated (service operational)
-  fullSync: boolean; // All vaults have all components confirmed
 }
 
 // Helper to get LM health status
@@ -305,50 +305,32 @@ test.describe('Control Plane Sync Flow', () => {
     await createSealKeyViaUI(page);
     await addPackageViaUI(page, '0x' + '3'.repeat(64), 'Sync Test Package');
 
-    // Trigger vault sync (simulates sync-files) - optional if LM not running
-    await triggerVaultSync();
+    // Get expected vault seq from database (set when cpEnabled became true)
+    const expectedSeq = await getCurrentVaultSeq();
+    console.log('Expected vault seq after config change:', expectedSeq);
 
-    // Wait a bit for LM to process
-    await page.waitForTimeout(2000);
+    // Trigger GM sync-all to generate the vault
+    await fetch(`${GM_URL}/api/queue/sync-all?source=e2e-test`, { method: 'POST' });
 
-    // Force LM to reload vault
-    await fetch(`${LM_URL}/api/vault/reload`, { method: 'POST' });
-
-    // Wait for LM to process
-    await page.waitForTimeout(1000);
+    // Wait for syncf to propagate vault to LM (polls every 500ms for up to 10s)
+    await waitForVaultSync(expectedSeq);
 
     // Check LM health
     const finalLMHealth = await getLMHealth();
 
     console.log('=== LM Health Status ===');
     console.log('Vaults:', JSON.stringify(finalLMHealth.vaults, null, 2));
-    console.log('inSync:', finalLMHealth.inSync);
-    console.log('fullSync:', finalLMHealth.fullSync);
     console.log('Initial LM seq was:', initialLMSeq);
-
-    // Global sync status (if we got a response, LM is up)
-    expect(finalLMHealth.inSync).toBe(true);
-    expect(finalLMHealth.fullSync).toBe(true);
 
     // Vaults array assertions
     expect(finalLMHealth.vaults).toHaveLength(1);
     const smaVault = finalLMHealth.vaults[0];
     expect(smaVault.type).toBe('sma');
-    expect(smaVault.seq).toBeGreaterThanOrEqual(initialLMSeq);
-
-    // Per-vault sync status
-    expect(smaVault.inSync).toBe(true);
-    expect(smaVault.fullSync).toBe(true);
 
     // Vault should be applied (not processing)
     expect(smaVault.applied).not.toBeNull();
+    expect(smaVault.applied!.seq).toBeGreaterThanOrEqual(initialLMSeq);
     expect(smaVault.processing).toBeNull();
-    expect(smaVault.lastError).toBeNull();
-
-    // Applied state should have all components confirmed
-    expect(smaVault.applied!.haproxy.confirmedAt).toBeTruthy();
-    expect(smaVault.applied!.keyServers.mseal1.confirmedAt).toBeTruthy();
-    expect(smaVault.applied!.keyServers.mseal2.confirmedAt).toBeTruthy();
 
     // Verify the service has cpEnabled=true and smaConfigChangeVaultSeq is set
     const finalCustomerData = await page.request.get('http://localhost:22700/test/data/customer');

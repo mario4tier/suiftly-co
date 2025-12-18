@@ -7,12 +7,11 @@ import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import { router, protectedProcedure } from '../lib/trpc';
 import { getSuiService } from '@suiftly/database/sui-mock';
-import { db, logActivity } from '@suiftly/database';
-import { ledgerEntries, customers, billingRecords, customerCredits, invoiceLineItems } from '@suiftly/database/schema';
-import { eq, and, desc, sql, gt } from 'drizzle-orm';
+import { db, logActivity, findOrCreateCustomerWithEscrow } from '@suiftly/database';
+import { ledgerEntries, customers, billingRecords, invoiceLineItems } from '@suiftly/database/schema';
+import { eq, and, desc, sql } from 'drizzle-orm';
 import { SPENDING_LIMIT, INVOICE_LINE_ITEM_TYPE } from '@suiftly/shared/constants';
 import { config } from '../lib/config';
-import { dbClock } from '@suiftly/shared/db-clock';
 import { buildDraftLineItems } from '../lib/invoice-formatter';
 
 /**
@@ -416,27 +415,11 @@ export const billingRouter = router({
 
       // If account was created, update the database with the escrow address
       if (result.accountCreated && result.createdObjects) {
-        if (!customer) {
-          // Create new customer record with escrow address
-          const newCustomer = await db
-            .insert(customers)
-            .values({
-              customerId: Math.floor(Math.random() * 1000000000),
-              walletAddress: ctx.user.walletAddress,
-              escrowContractId: result.createdObjects.escrowAddress,
-            })
-            .returning();
-          customer = newCustomer[0];
-        } else if (!customer.escrowContractId) {
-          // Update existing customer with escrow address
-          await db
-            .update(customers)
-            .set({
-              escrowContractId: result.createdObjects.escrowAddress,
-              updatedAt: dbClock.now(),
-            })
-            .where(eq(customers.customerId, customer.customerId));
-        }
+        const escrowResult = await findOrCreateCustomerWithEscrow({
+          walletAddress: ctx.user.walletAddress,
+          escrowContractId: result.createdObjects.escrowAddress,
+        });
+        customer = escrowResult.customer;
       }
 
       // Get customer ID for ledger entry (re-fetch if needed)
@@ -472,14 +455,25 @@ export const billingRouter = router({
       // Sync with Global Manager to reconcile pending subscription charges
       // This waits for completion so the response reflects the updated state
       // (better UX - user sees subscription activated immediately after deposit)
+      // Timeout after 5s to avoid blocking the deposit if GM is slow
       const gmUrl = config.GM_URL || 'http://localhost:22600';
       try {
-        await fetch(`${gmUrl}/api/queue/sync-customer/${customer.customerId}?source=api`, {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
+        const gmResponse = await fetch(`${gmUrl}/api/queue/sync-customer/${customer.customerId}?source=api`, {
           method: 'POST',
+          signal: controller.signal,
         });
+        clearTimeout(timeoutId);
+        if (!gmResponse.ok) {
+          // GM returned an error - log it (don't fail the deposit)
+          const errorText = await gmResponse.text().catch(() => 'unknown error');
+          console.error(`[DEPOSIT] GM sync-customer returned ${gmResponse.status}: ${errorText}`);
+        }
       } catch (err: any) {
-        // Log but don't fail - the deposit itself succeeded
-        console.error(`[DEPOSIT] Failed to sync with GM:`, err.message);
+        // Network/timeout error connecting to GM - log but don't fail the deposit
+        const isTimeout = err.name === 'AbortError';
+        console.error(`[DEPOSIT] Failed to sync with GM:`, isTimeout ? 'timeout after 5s' : err.message);
       }
 
       // Get new balance
@@ -537,27 +531,11 @@ export const billingRouter = router({
 
       // If account was created, update the database with the escrow address
       if (result.accountCreated && result.createdObjects) {
-        if (!customer) {
-          // Create new customer record with escrow address
-          const newCustomer = await db
-            .insert(customers)
-            .values({
-              customerId: Math.floor(Math.random() * 1000000000),
-              walletAddress: ctx.user.walletAddress,
-              escrowContractId: result.createdObjects.escrowAddress,
-            })
-            .returning();
-          customer = newCustomer[0];
-        } else if (!customer.escrowContractId) {
-          // Update existing customer with escrow address
-          await db
-            .update(customers)
-            .set({
-              escrowContractId: result.createdObjects.escrowAddress,
-              updatedAt: dbClock.now(),
-            })
-            .where(eq(customers.customerId, customer.customerId));
-        }
+        const escrowResult = await findOrCreateCustomerWithEscrow({
+          walletAddress: ctx.user.walletAddress,
+          escrowContractId: result.createdObjects.escrowAddress,
+        });
+        customer = escrowResult.customer;
       }
 
       // Get customer ID for ledger entry (re-fetch if needed)
@@ -610,12 +588,6 @@ export const billingRouter = router({
       z.object({
         escrowAddress: z.string()
           .regex(/^0x[0-9a-fA-F]{64}$/, 'Invalid Sui address format (must be 0x + 64 hex chars)'),
-        userTrackingAddress: z.string()
-          .regex(/^0x[0-9a-fA-F]{64}$/, 'Invalid Sui address format')
-          .optional(),
-        suiftlyTrackingAddress: z.string()
-          .regex(/^0x[0-9a-fA-F]{64}$/, 'Invalid Sui address format')
-          .optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -634,37 +606,22 @@ export const billingRouter = router({
         });
       }
 
-      // Find or create the customer record
-      let customer = await db.query.customers.findFirst({
-        where: eq(customers.walletAddress, ctx.user.walletAddress),
-      });
-
-      if (!customer) {
-        // Create customer record if doesn't exist
-        const result = await db
-          .insert(customers)
-          .values({
-            customerId: Math.floor(Math.random() * 1000000000), // Generate random ID
-            walletAddress: ctx.user.walletAddress,
-            escrowContractId: input.escrowAddress,
-          })
-          .returning();
-        customer = result[0];
-      } else if (!customer.escrowContractId) {
-        // Update existing customer with escrow address
-        await db
-          .update(customers)
-          .set({
-            escrowContractId: input.escrowAddress,
-            updatedAt: dbClock.now(),
-          })
-          .where(eq(customers.customerId, customer.customerId));
-      } else if (customer.escrowContractId !== input.escrowAddress) {
-        // Customer already has a different escrow address - this is an error
-        throw new TRPCError({
-          code: 'CONFLICT',
-          message: `Customer already has escrow address ${customer.escrowContractId}`,
+      // Find or create the customer record with escrow address
+      let customer;
+      try {
+        const result = await findOrCreateCustomerWithEscrow({
+          walletAddress: ctx.user.walletAddress,
+          escrowContractId: input.escrowAddress,
         });
+        customer = result.customer;
+      } catch (error: any) {
+        if (error.code === 'ESCROW_CONFLICT') {
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: error.message,
+          });
+        }
+        throw error;
       }
 
       // Log the activity
@@ -742,27 +699,11 @@ export const billingRouter = router({
 
       // If account was created, update the database with the escrow address
       if (result.accountCreated && result.createdObjects) {
-        if (!customer) {
-          // Create new customer record with escrow address
-          const newCustomer = await db
-            .insert(customers)
-            .values({
-              customerId: Math.floor(Math.random() * 1000000000),
-              walletAddress: ctx.user.walletAddress,
-              escrowContractId: result.createdObjects.escrowAddress,
-            })
-            .returning();
-          customer = newCustomer[0];
-        } else if (!customer.escrowContractId) {
-          // Update existing customer with escrow address
-          await db
-            .update(customers)
-            .set({
-              escrowContractId: result.createdObjects.escrowAddress,
-              updatedAt: dbClock.now(),
-            })
-            .where(eq(customers.customerId, customer.customerId));
-        }
+        const escrowResult = await findOrCreateCustomerWithEscrow({
+          walletAddress: ctx.user.walletAddress,
+          escrowContractId: result.createdObjects.escrowAddress,
+        });
+        customer = escrowResult.customer;
       }
 
       // Get customer ID for activity log (re-fetch if needed)

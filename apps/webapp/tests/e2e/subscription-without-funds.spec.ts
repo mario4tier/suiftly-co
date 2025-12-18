@@ -155,7 +155,7 @@ test.describe('Subscription Without Funds', () => {
 
     // Notification should mention Seal service and Pro tier price
     await expect(notification).toContainText('Seal');
-    await expect(notification).toContainText('pro');
+    await expect(notification).toContainText('Pro'); // formatTierName() capitalizes tier names
     await expect(notification).toContainText('$29.00');
 
     // Should show how much to deposit

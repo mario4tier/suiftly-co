@@ -8,10 +8,10 @@ import { router, publicProcedure } from '../lib/trpc';
 import { walletConnectSchema, verifySignatureSchema } from '@suiftly/shared/schemas';
 import { generateAccessToken, generateRefreshToken } from '../lib/jwt';
 import { getJWTConfig, parseExpiryToMs } from '../lib/jwt-config';
-import { db } from '@suiftly/database';
-import { customers, authNonces, refreshTokens } from '@suiftly/database/schema';
+import { db, findOrCreateCustomer } from '@suiftly/database';
+import { authNonces, refreshTokens } from '@suiftly/database/schema';
 import { eq, and, gt } from 'drizzle-orm';
-import { randomBytes, randomInt, createHash } from 'crypto';
+import { randomBytes, createHash } from 'crypto';
 import { TRPCError } from '@trpc/server';
 import { config } from '../lib/config.js';
 import { dbClock } from '@suiftly/shared/db-clock';
@@ -147,57 +147,9 @@ export const authRouter = router({
       // Delete used nonce (prevent replay)
       await db.delete(authNonces).where(eq(authNonces.address, walletAddress));
 
-      // Find or create customer
-      let customer = await db
-        .select()
-        .from(customers)
-        .where(eq(customers.walletAddress, walletAddress))
-        .limit(1);
-
-      let customerId = 0; // Initialize to satisfy TypeScript (will be set below)
-
-      if (customer.length === 0) {
-        // New customer - generate random ID with collision retry
-        const MAX_RETRIES = 10;
-        let inserted = false;
-
-        for (let attempt = 0; attempt < MAX_RETRIES && !inserted; attempt++) {
-          customerId = randomInt(1, 2147483648); // Cryptographically secure random [1, 2^31-1]
-
-          try {
-            await db.insert(customers).values({
-              customerId,
-              walletAddress,
-              status: 'active',
-              spendingLimitUsdCents: 25000, // $250 default from CONSTANTS.md
-              currentBalanceUsdCents: 0,
-              currentPeriodChargedUsdCents: 0,
-              currentPeriodStart: (() => {
-                const now = dbClock.now();
-                return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString().split('T')[0];
-              })(),
-            });
-            inserted = true;
-          } catch (error: any) {
-            // Check if it's a primary key collision
-            if (error.code === '23505' && error.constraint === 'customers_pkey') {
-              // Collision - retry with new ID
-              if (attempt === MAX_RETRIES - 1) {
-                throw new TRPCError({
-                  code: 'INTERNAL_SERVER_ERROR',
-                  message: 'Failed to generate unique customer ID after multiple attempts',
-                });
-              }
-              // Continue to next iteration
-            } else {
-              // Different error - rethrow
-              throw error;
-            }
-          }
-        }
-      } else {
-        customerId = customer[0].customerId;
-      }
+      // Find or create customer (uses centralized robust ID generation with collision handling)
+      const { customer } = await findOrCreateCustomer({ walletAddress });
+      const customerId = customer.customerId;
 
       // Generate JWT tokens
       const payload = { customerId, walletAddress };

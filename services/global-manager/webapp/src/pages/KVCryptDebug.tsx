@@ -346,7 +346,7 @@ export function KVCryptDebug() {
                 {(() => {
                   const isLmBehind = lm.reachable && lm.vaults.some((v) => {
                     const gmSeq = gmVaults?.vaults?.[v.type]?.latest?.seq;
-                    return gmSeq !== undefined && v.seq < gmSeq;
+                    return gmSeq !== undefined && v.appliedSeq < gmSeq;
                   });
                   return (
                     <>
