@@ -65,17 +65,15 @@ export async function sealHealthCheck(
     'CF-Connecting-IP': clientIp,
   };
 
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeout);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
 
+  try {
     const response = await fetch(url, {
       method: 'GET',
       headers,
       signal: controller.signal,
     });
-
-    clearTimeout(timeoutId);
 
     // Try to parse response body
     let body: unknown;
@@ -128,6 +126,8 @@ export async function sealHealthCheck(
       statusText: 'Request failed',
       error: errorMessage,
     };
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
@@ -157,10 +157,10 @@ export async function sealRequest(
     'Content-Type': 'application/json',
   };
 
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeout);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
 
+  try {
     const fetchOptions: RequestInit = {
       method,
       headers,
@@ -172,8 +172,6 @@ export async function sealRequest(
     }
 
     const response = await fetch(url, fetchOptions);
-
-    clearTimeout(timeoutId);
 
     // Try to parse response body
     let responseBody: unknown;
@@ -200,28 +198,28 @@ export async function sealRequest(
       statusText: 'Request failed',
       error: errorMessage,
     };
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
 /**
- * Check if HAProxy is running and accessible on the given port
+ * Check if HAProxy is running and accessible (via stats endpoint on port 1936)
  */
-export async function isHAProxyAvailable(
-  port: number = DEFAULT_SEAL_PORT
-): Promise<boolean> {
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 2000);
+export async function isHAProxyAvailable(): Promise<boolean> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 2000);
 
+  try {
     // HAProxy stats endpoint is always available
     const response = await fetch(`http://localhost:1936/haproxy?stats`, {
       signal: controller.signal,
     });
-
-    clearTimeout(timeoutId);
     return response.status === 200;
   } catch {
     return false;
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
@@ -230,18 +228,18 @@ export async function isHAProxyAvailable(
  * Uses the direct backend port (SEAL_BACKEND_PORT.MAINNET_1 = 20401 for mseal1)
  */
 export async function isSealBackendAvailable(): Promise<boolean> {
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 2000);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 2000);
 
+  try {
     // Direct backend health check
     const response = await fetch(`http://localhost:${SEAL_BACKEND_PORT.MAINNET_1}/health`, {
       signal: controller.signal,
     });
-
-    clearTimeout(timeoutId);
     return response.status === 200;
   } catch {
     return false;
+  } finally {
+    clearTimeout(timeoutId);
   }
 }

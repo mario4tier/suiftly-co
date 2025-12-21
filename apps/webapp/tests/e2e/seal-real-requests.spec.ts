@@ -141,7 +141,7 @@ async function getApiKeys(request: import('@playwright/test').APIRequestContext)
 test.describe('Real Seal Requests', () => {
   test.beforeAll(async () => {
     // Check prerequisites - HAProxy and LM must be running
-    const haproxyAvailable = await isHAProxyAvailable(SEAL_METERED_PORT);
+    const haproxyAvailable = await isHAProxyAvailable();
     const lmHealth = await getLMHealth();
 
     if (!haproxyAvailable) {
@@ -290,7 +290,7 @@ test.describe('Real Seal Requests', () => {
     test.setTimeout(120000); // Extended timeout for full flow
 
     // Check prerequisites
-    const haproxyAvailable = await isHAProxyAvailable(SEAL_METERED_PORT);
+    const haproxyAvailable = await isHAProxyAvailable();
     const lmHealth = await getLMHealth();
 
     if (!haproxyAvailable) {
@@ -382,7 +382,7 @@ test.describe('Real Seal Requests', () => {
 
   test('local port (20202) bypasses API key validation - returns 200', async () => {
     // Check if HAProxy is available on local port
-    const haproxyAvailable = await isHAProxyAvailable(SEAL_LOCAL_PORT);
+    const haproxyAvailable = await isHAProxyAvailable();
     if (!haproxyAvailable) {
       console.log('Skipping: HAProxy not available on local port');
       test.skip();
@@ -420,7 +420,7 @@ test.describe('Real Seal Requests', () => {
     // - LM running and applying vaults to HAProxy
     // - GM running for vault generation
     // - mseal1 backend running
-    const haproxyAvailable = await isHAProxyAvailable(SEAL_METERED_PORT);
+    const haproxyAvailable = await isHAProxyAvailable();
     const lmHealth = await getLMHealth();
     const backendAvailable = await isSealBackendAvailable();
 
@@ -548,7 +548,7 @@ test.describe('Real Seal Requests', () => {
 
   test('metered port (20002) rejects request without API key', async () => {
     // Check if HAProxy is available on metered port
-    const haproxyAvailable = await isHAProxyAvailable(SEAL_METERED_PORT);
+    const haproxyAvailable = await isHAProxyAvailable();
     if (!haproxyAvailable) {
       test.skip();
       return;
@@ -569,7 +569,7 @@ test.describe('Real Seal Requests', () => {
 
   test('metered port (20002) rejects request with invalid API key', async () => {
     // Check if HAProxy is available on metered port
-    const haproxyAvailable = await isHAProxyAvailable(SEAL_METERED_PORT);
+    const haproxyAvailable = await isHAProxyAvailable();
     if (!haproxyAvailable) {
       test.skip();
       return;
