@@ -429,6 +429,65 @@ export async function setupSealWithCpEnabled(walletAddress: string = MOCK_WALLET
 }
 
 /**
+ * Create an API key for testing (returns plain key for E2E tests)
+ *
+ * This creates a real API key using the production code path,
+ * which is needed for testing HAProxy authentication.
+ *
+ * The plain key is returned so tests can use it in X-API-Key headers.
+ * Note: This key uses the test SECRET_KEY for encryption.
+ */
+export async function createApiKeyForTesting(walletAddress: string = MOCK_WALLET_ADDRESS) {
+  const customer = await db.query.customers.findFirst({
+    where: eq(customers.walletAddress, walletAddress),
+  });
+
+  if (!customer) {
+    return {
+      success: false,
+      error: `Customer not found with wallet: ${walletAddress}`,
+    };
+  }
+
+  const customerId = customer.customerId;
+
+  // Import API key generation module
+  const { storeApiKey } = await import('./api-keys');
+
+  try {
+    const result = await storeApiKey({
+      customerId,
+      serviceType: 'seal',
+      sealType: {
+        network: 'mainnet',
+        access: 'permission',
+        source: 'derived',
+      },
+      procGroup: 1,
+      metadata: {
+        name: 'Test API Key',
+        createdBy: 'test-data',
+      },
+    });
+
+    console.log(`[TEST DATA] Created API key for customer ${customerId}`);
+
+    return {
+      success: true,
+      customerId,
+      apiKeyFp: result.record.apiKeyFp,
+      plainKey: result.plainKey, // Return plain key for tests
+    };
+  } catch (error: any) {
+    console.error(`[TEST DATA] Failed to create API key:`, error);
+    return {
+      success: false,
+      error: error.message || 'Failed to create API key',
+    };
+  }
+}
+
+/**
  * Get service instance by type for current mock wallet user
  */
 export async function getServiceInstanceTestData(

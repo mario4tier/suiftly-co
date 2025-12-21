@@ -99,6 +99,7 @@ if (config.NODE_ENV !== 'production') {
     getSealKeysTestData,
     getServiceInstanceTestData,
     setupSealWithCpEnabled,
+    createApiKeyForTesting,
   } = await import('./lib/test-data.js');
 
   // Get test configuration - allows tests to verify server config
@@ -234,6 +235,17 @@ if (config.NODE_ENV !== 'production') {
     const body = request.body as any;
     const walletAddress = body.walletAddress || undefined;
     const result = await setupSealWithCpEnabled(walletAddress);
+    reply.send(result);
+  });
+
+  // Create API key for testing (returns plain key for E2E tests)
+  // Use this when you need a real API key that works with HAProxy
+  server.post('/test/data/create-api-key', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    const body = request.body as any;
+    const walletAddress = body.walletAddress || undefined;
+    const result = await createApiKeyForTesting(walletAddress);
     reply.send(result);
   });
 

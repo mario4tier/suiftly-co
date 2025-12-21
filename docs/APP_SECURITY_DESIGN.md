@@ -10,10 +10,14 @@
 JWT_SECRET=<32-byte-base64>
 DB_APP_FIELDS_ENCRYPTION_KEY=<32-byte-base64>
 COOKIE_SECRET=<32-byte-base64>
+# X_API_KEY_SECRET: 64 hex chars - MUST be identical on API server AND all HAProxy nodes
+X_API_KEY_SECRET=<64-hex-chars>
 DATABASE_URL=postgresql://deploy:PROD_PASSWORD@localhost/suiftly_prod
 
-# Generate: openssl rand -base64 32
+# Generate base64 secrets: openssl rand -base64 32
+# Generate X_API_KEY_SECRET: python3 -c "import secrets; print(secrets.token_hex(32))"
 # Backup to password manager BEFORE using in production
+# CRITICAL: X_API_KEY_SECRET must be copied to all HAProxy nodes
 ```
 
 **Development (optional - config has safe defaults):**
@@ -23,6 +27,8 @@ DATABASE_URL=postgresql://deploy:PROD_PASSWORD@localhost/suiftly_prod
 JWT_SECRET=ZGV2LXNlY3JldC1mb3ItdGVzdGluZy1vbmx5ISEhISE=
 DB_APP_FIELDS_ENCRYPTION_KEY=ZGV2LWVuY3J5cHRpb24ta2V5LXRlc3Qtb25seSEhISE=
 COOKIE_SECRET=ZGV2LWNvb2tpZS1zZWNyZXQtdGVzdGluZy1vbmx5ISE=
+# X_API_KEY_SECRET: 64 hex chars (shared with HAProxy test infrastructure)
+X_API_KEY_SECRET=8776c4c0e84428c6e86fca4647abe16459649aa78fe4c72e7643dc3a14343337
 DATABASE_URL=postgresql://deploy:deploy_password_change_me@localhost/suiftly_dev
 ```
 
@@ -41,12 +47,51 @@ DATABASE_URL=postgresql://deploy:deploy_password_change_me@localhost/suiftly_dev
 
 ### Required Secrets
 
-| Secret | Purpose | Min Length | Notes |
-|--------|---------|-----------|-------|
-| `JWT_SECRET` | Sign/verify access & refresh tokens | 32 bytes | AUTHENTICATION_DESIGN.md |
-| `DB_APP_FIELDS_ENCRYPTION_KEY` | Encrypt API keys, Seal keys, refresh tokens | 32 bytes | This doc |
-| `COOKIE_SECRET` | Secure cookie signing | 32 bytes | Fastify cookie plugin |
-| `DATABASE_URL` | PostgreSQL connection (contains password) | N/A | Production only |
+| Secret | Purpose | Format | Notes |
+|--------|---------|--------|-------|
+| `JWT_SECRET` | Sign/verify access & refresh tokens | 32+ bytes base64 | AUTHENTICATION_DESIGN.md |
+| `DB_APP_FIELDS_ENCRYPTION_KEY` | Encrypt DB fields (API keys, tokens) | 32+ bytes base64 | This doc |
+| `COOKIE_SECRET` | Secure cookie signing | 32+ bytes base64 | Fastify cookie plugin |
+| `X_API_KEY_SECRET` | Encrypt API keys for HAProxy validation | 64 hex chars (32 bytes) | Shared with HAProxy |
+| `DATABASE_URL` | PostgreSQL connection (contains password) | URI | Production only |
+
+### X_API_KEY_SECRET (Special Case)
+
+**Purpose:** Encrypts the customer ID embedded in API keys (37-char format: `S<36-chars>`).
+
+**Why separate from DB_APP_FIELDS_ENCRYPTION_KEY:**
+- `DB_APP_FIELDS_ENCRYPTION_KEY`: AES-256-GCM for DB storage (API Server only)
+- `X_API_KEY_SECRET`: AES-128-CTR + HMAC for API key encryption (shared with HAProxy Lua)
+
+**Storage locations (different for each service):**
+
+| Service | Location | Permissions | Why |
+|---------|----------|-------------|-----|
+| API Server | `~/.suiftly.env` | 600 (user only) | Loaded by config.ts at startup |
+| HAProxy | `/etc/default/haproxy` | 600 (root only) | Sourced by systemd as root |
+
+**API Server** reads from user's home directory because it runs as a regular user.
+
+**HAProxy** uses `/etc/default/haproxy` (a file, not a directory):
+- Standard Debian/Ubuntu location for HAProxy environment variables
+- Systemd's `EnvironmentFile=/etc/default/haproxy` sources this file **as root**
+- HAProxy receives env vars from systemd (never reads the file directly)
+- 600 permissions (root-only) protects the secret from other users
+
+```bash
+# /etc/default/haproxy (file contents)
+X_API_KEY_SECRET="8776c4c0e84428c6e86fca4647abe16459649aa78fe4c72e7643dc3a14343337"
+```
+
+**Setup script** (`setup-user.py`) configures both locations automatically in dev/test.
+
+**CRITICAL - Must be identical on:**
+- API Server (`~/.suiftly.env`)
+- All HAProxy nodes (`/etc/default/haproxy`)
+
+**If keys differ:** HAProxy cannot decrypt API keys → all authenticated requests fail with 401
+
+**See:** [API_KEY_DESIGN.md](API_KEY_DESIGN.md) for cryptographic details
 
 ### Environment Detection
 
@@ -175,17 +220,23 @@ const plaintext = decryptSecret(record.keyEncrypted);
 ### Disaster Recovery
 
 ```bash
-# 1. Restore master key from password manager
+# 1. Restore API Server secrets from password manager
 echo "JWT_SECRET=..." > ~/.suiftly.env
 echo "DB_APP_FIELDS_ENCRYPTION_KEY=..." >> ~/.suiftly.env
 echo "COOKIE_SECRET=..." >> ~/.suiftly.env
+echo "X_API_KEY_SECRET=..." >> ~/.suiftly.env  # MUST match HAProxy nodes!
 echo "DATABASE_URL=..." >> ~/.suiftly.env
 chmod 600 ~/.suiftly.env
 
-# 2. Restore database from backup
+# 2. Copy X_API_KEY_SECRET to all HAProxy nodes
+# HAProxy uses /etc/default/haproxy (NOT ~/.suiftly.env)
+ssh haproxy-node 'echo "X_API_KEY_SECRET=\"...\"" | sudo tee -a /etc/default/haproxy'
+ssh haproxy-node 'sudo systemctl restart haproxy'
+
+# 3. Restore database from backup
 psql suiftly_prod < backup.sql
 
-# 3. Verify encryption works
+# 4. Verify encryption works
 curl https://api.suiftly.io/health
 ```
 
@@ -198,8 +249,13 @@ curl https://api.suiftly.io/health
 **System enforces security through:**
 1. Secrets in `~/.suiftly.env` (outside git, chmod 600)
 2. Startup validation (crashes if weak/wrong secrets)
-3. AES-256-GCM encryption (authenticated, random IV)
-4. Environment isolation (dev secrets blocked in prod)
-5. Backup security (only ciphertext in DB dumps)
+3. AES-256-GCM encryption for DB fields (authenticated, random IV)
+4. AES-128-CTR + HMAC for API keys (shared with HAProxy)
+5. Environment isolation (dev secrets blocked in prod)
+6. Backup security (only ciphertext in DB dumps)
+
+**Two encryption layers:**
+- `DB_APP_FIELDS_ENCRYPTION_KEY`: Protects data at rest in database
+- `X_API_KEY_SECRET`: Protects API keys in transit (HAProxy validation)
 
 **Defense in depth:** Even if one layer breached, secrets remain protected.

@@ -208,6 +208,35 @@ export const PORT = {
   LM: 22610,      // Local Manager (22610-22613 for multi-server dev simulation)
 } as const;
 
+// HAProxy Frontend Ports - Single source of truth: ~/walrus/PORT_MAP.md
+// These are the ports where HAProxy listens for Seal service requests
+// Pattern: 2NXXY where N=network (0=mainnet, 1=testnet), XX=access (00=public, 01=private, 02=local), Y=service (2=seal)
+export const SEAL_PORT = {
+  // Mainnet (20XXX)
+  MAINNET_PUBLIC: 20002,   // Cloudflare tunnel, metered
+  MAINNET_PRIVATE: 20102,  // Private network, unmetered
+  MAINNET_LOCAL: 20202,    // Local access, unmetered (development)
+  // Testnet (21XXX)
+  TESTNET_PUBLIC: 21002,   // Cloudflare tunnel, metered
+  TESTNET_PRIVATE: 21102,  // Private network, unmetered
+  TESTNET_LOCAL: 21202,    // Local access, unmetered (development)
+  // Test infrastructure (23XXX) - dev/test servers only
+  TEST_PUBLIC: 23001,      // Simulates prod 20002/21002
+  TEST_PRIVATE: 23101,     // Simulates prod 20102/21102
+  TEST_LOCAL: 23201,       // Simulates prod 20202/21202
+} as const;
+
+// Seal Backend Ports - for direct backend access (bypassing HAProxy)
+export const SEAL_BACKEND_PORT = {
+  MAINNET_1: 20401,        // mseal1 backend
+  MAINNET_2: 20402,        // mseal2 backend
+  TESTNET_1: 21401,        // tseal1 backend
+  TESTNET_2: 21402,        // tseal2 backend
+  // Test mock backends (23XXX)
+  TEST_BACKEND_1: 23301,   // mock-backend-1
+  TEST_BACKEND_2: 23302,   // mock-backend-2
+} as const;
+
 // Convenience URLs for tests
 export const API_URL = `http://localhost:${PORT.API}`;
 export const WEB_URL = `http://localhost:${PORT.WEB}`;

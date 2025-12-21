@@ -47,7 +47,26 @@
 import { db, systemControl, serviceInstances, apiKeys, sealKeys, sealPackages } from '@suiftly/database';
 import { SERVICE_TYPE, SERVICE_STATE, type ServiceType } from '@suiftly/shared/constants';
 import { createVaultWriter, createVaultReader, computeContentHash, type VaultInstance } from '@walrus/vault-codec';
-import { eq, and, isNull, gt } from 'drizzle-orm';
+import { eq, and, isNull } from 'drizzle-orm';
+
+// ============================================================================
+// HAProxy Map Encoding - Tier Configuration
+// ============================================================================
+
+/**
+ * Tier configuration for HAProxy rate limiting
+ * See: HAPROXY_CONTROLS.md for format details
+ *
+ * - ilim: Per-IP rate limit (ILIM × 4 req/sec)
+ * - glim: Guaranteed rate limit (GLIM × 4 req/sec)
+ * - blim: Burst rate limit (BLIM × 4 req/sec, 0 = no burst)
+ * - bqos: Burst QoS priority (0-15, 0 = burst disabled)
+ */
+const TIER_CONFIG: Record<string, { ilim: number; glim: number; blim: number; bqos: number }> = {
+  starter: { ilim: 0x02, glim: 0x02, blim: 0x00, bqos: 0x0 },    // 8 req/sec, no burst
+  pro: { ilim: 0x10, glim: 0x06, blim: 0x06, bqos: 0x2 },        // 24 req/sec + burst
+  enterprise: { ilim: 0x40, glim: 0x18, blim: 0x18, bqos: 0x3 }, // 96 req/sec + burst
+};
 
 // Type for vault type codes
 type VaultTypeCode = 'sma' | 'smm' | 'sms' | 'smo' | 'sta' | 'stm' | 'sts' | 'sto' | 'skk';
@@ -238,12 +257,14 @@ interface SealKeyVaultConfig {
 }
 
 /**
- * Customer configuration stored in vault
- * This is the structure HAProxy/key-server uses for rate limiting and access control
+ * Service-specific configuration within a customer vault entry
+ * Each customer can have multiple services (seal, grpc, graphql)
  */
-interface CustomerVaultConfig {
-  /** Customer ID */
-  customerId: number;
+interface ServiceVaultConfig {
+  /** Service type */
+  serviceType: 'seal' | 'grpc' | 'graphql';
+  /** Network (mainnet or testnet) */
+  network: 'mainnet' | 'testnet';
   /** API key fingerprints (32-bit integers) */
   apiKeyFps: number[];
   /** Service tier */
@@ -254,14 +275,172 @@ interface CustomerVaultConfig {
   isUserEnabled: boolean;
   /** Seal keys with their packages (for seal service only) */
   sealKeys?: SealKeyVaultConfig[];
+  /** IP allowlist CIDRs (for control bit 1) */
+  ipAllowlist?: string[];
+  /** Pre-encoded HAProxy map config (67 chars CSV format) */
+  mapConfigHex: string;
+  /** Extra API key fingerprints for extra_keys.map (when >2 keys) */
+  extraApiKeyFps?: number[];
+}
+
+/**
+ * Customer configuration stored in vault
+ * Top-level structure with customerId and services array
+ */
+interface CustomerVaultConfig {
+  /** Customer ID */
+  customerId: number;
+  /** Services for this customer */
+  services: ServiceVaultConfig[];
+}
+
+// ============================================================================
+// HAProxy Map Encoding Functions
+// ============================================================================
+
+/**
+ * Encode IP filter field from allowlist
+ * Extracts first 2 /32 IPv4 addresses from CIDR list
+ *
+ * @param allowlist - Array of CIDR strings
+ * @returns 16-char hex string for IP filter field
+ */
+function encodeIpFilterField(allowlist?: string[]): string {
+  if (!allowlist || allowlist.length === 0) {
+    return '0000000000000000';
+  }
+
+  // Extract first 2 /32 IPv4 addresses
+  const ipv4s: number[] = [];
+  for (const cidr of allowlist) {
+    if (ipv4s.length >= 2) break;
+    const match = cidr.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)\/32$/);
+    if (match) {
+      const ip =
+        (parseInt(match[1], 10) << 24) |
+        (parseInt(match[2], 10) << 16) |
+        (parseInt(match[3], 10) << 8) |
+        parseInt(match[4], 10);
+      ipv4s.push(ip >>> 0); // Convert to unsigned
+    }
+  }
+
+  const ip1 = (ipv4s[0] ?? 0).toString(16).padStart(8, '0');
+  const ip2 = (ipv4s[1] ?? 0).toString(16).padStart(8, '0');
+  return ip1 + ip2;
+}
+
+/**
+ * Encode customer map configuration for HAProxy
+ * Produces 67-char CSV format: header,api_keys,ip_filter,extra
+ *
+ * Header format (16 hex): 00000ILGLBLQCCCC
+ * - Positions 5-6: ILIM (per-IP limit)
+ * - Positions 7-8: GLIM (guaranteed limit)
+ * - Positions 9-10: BLIM (burst limit)
+ * - Position 11: BQoS (0-F)
+ * - Positions 12-15: Control flags
+ *
+ * @param tier - Service tier (starter, pro, enterprise)
+ * @param status - Service status (active, suspended, disabled)
+ * @param isUserEnabled - User toggle state
+ * @param apiKeyFps - Array of API key fingerprints
+ * @param ipAllowlist - Optional array of CIDR strings
+ */
+function encodeCustomerMapConfig(
+  tier: string,
+  status: 'active' | 'suspended' | 'disabled',
+  isUserEnabled: boolean,
+  apiKeyFps: number[],
+  ipAllowlist?: string[]
+): {
+  mapConfigHex: string;
+  extraApiKeyFps?: number[];
+  controlFlags: number;
+} {
+  const tierCfg = TIER_CONFIG[tier] ?? TIER_CONFIG.starter;
+  const isActive = status === 'active' && isUserEnabled;
+
+  // Compute effective limits (0 if disabled/suspended)
+  const ilim = isActive ? tierCfg.ilim : 0;
+  const glim = isActive ? tierCfg.glim : 0;
+  const blim = isActive ? tierCfg.blim : 0;
+  const bqos = isActive ? tierCfg.bqos : 0;
+
+  // Compute control flags
+  let control = 0x0000;
+  const hasIpAllowlist = (ipAllowlist?.length ?? 0) > 0;
+  const hasExtraKeys = apiKeyFps.length > 2;
+
+  if (hasIpAllowlist) control |= 0x0002; // Bit 1: IP_ALLOWLIST_ENABLED
+  if (hasExtraKeys) control |= 0x0004; // Bit 2: EXTRA_KEYS_ENABLED
+
+  // Header: 00000ILGLBLQCCCC (16 hex chars)
+  const headerHex =
+    '00000' +
+    ilim.toString(16).padStart(2, '0') +
+    glim.toString(16).padStart(2, '0') +
+    blim.toString(16).padStart(2, '0') +
+    bqos.toString(16) +
+    control.toString(16).padStart(4, '0');
+
+  // API Keys: first 2 fingerprints (16 hex chars)
+  // Use unsigned right shift to convert signed int32 to unsigned for hex encoding
+  const fp1 = ((apiKeyFps[0] ?? 0) >>> 0).toString(16).padStart(8, '0');
+  const fp2 = ((apiKeyFps[1] ?? 0) >>> 0).toString(16).padStart(8, '0');
+  const apiKeysHex = fp1 + fp2;
+
+  // IP Filter: first 2 IPv4 /32 addresses (16 hex chars)
+  const ipFilterHex = encodeIpFilterField(ipAllowlist);
+
+  // Extra: reserved (16 hex chars, all zeros)
+  const extraHex = '0000000000000000';
+
+  return {
+    mapConfigHex: `${headerHex},${apiKeysHex},${ipFilterHex},${extraHex}`,
+    extraApiKeyFps: hasExtraKeys ? apiKeyFps.slice(2) : undefined,
+    controlFlags: control,
+  };
+}
+
+/**
+ * Get network from vault type code
+ */
+function getNetworkFromVaultType(vaultType: string): 'mainnet' | 'testnet' {
+  // Second character: m = mainnet, t = testnet
+  return vaultType[1] === 'm' ? 'mainnet' : 'testnet';
+}
+
+/**
+ * Get service type string for ServiceVaultConfig
+ */
+function getServiceTypeString(serviceType: ServiceType): 'seal' | 'grpc' | 'graphql' {
+  switch (serviceType) {
+    case SERVICE_TYPE.SEAL:
+      return 'seal';
+    case SERVICE_TYPE.GRPC:
+      return 'grpc';
+    case SERVICE_TYPE.GRAPHQL:
+      return 'graphql';
+    default:
+      return 'seal'; // Default fallback
+  }
 }
 
 /**
  * Build vault data for a specific service type
  * Only includes services where cpEnabled=true (provisioned to control plane)
+ *
+ * New structure: CustomerVaultConfig with services[] array
+ * Each service contains pre-encoded mapConfigHex for HAProxy
  */
-async function buildVaultData(serviceType: ServiceType): Promise<Record<string, string>> {
+async function buildVaultData(
+  serviceType: ServiceType,
+  vaultType: string
+): Promise<Record<string, string>> {
   const vaultData: Record<string, string> = {};
+  const network = getNetworkFromVaultType(vaultType);
+  const serviceTypeStr = getServiceTypeString(serviceType);
 
   // Get all cpEnabled services for this service type
   // cpEnabled=true means the service has been provisioned to gateways
@@ -307,13 +486,43 @@ async function buildVaultData(serviceType: ServiceType): Promise<Record<string, 
           )
         );
 
-      const config: CustomerVaultConfig = {
-        customerId: service.customerId,
-        apiKeyFps: keys.map(k => k.apiKeyFp),
+      const apiKeyFps = keys.map((k) => k.apiKeyFp);
+      const status = getVaultStatus(service.state);
+
+      // TODO: Get IP allowlist from database when implemented
+      // For now, ipAllowlist is undefined (no IP restrictions)
+      const ipAllowlist: string[] | undefined = undefined;
+
+      // Encode HAProxy map config
+      const { mapConfigHex, extraApiKeyFps } = encodeCustomerMapConfig(
+        service.tier,
+        status,
+        service.isUserEnabled,
+        apiKeyFps,
+        ipAllowlist
+      );
+
+      // Build service config
+      const serviceConfig: ServiceVaultConfig = {
+        serviceType: serviceTypeStr,
+        network,
+        apiKeyFps,
         tier: service.tier,
-        status: getVaultStatus(service.state),
+        status,
         isUserEnabled: service.isUserEnabled,
+        mapConfigHex,
       };
+
+      // Add extra API key fingerprints if >2 keys
+      if (extraApiKeyFps && extraApiKeyFps.length > 0) {
+        serviceConfig.extraApiKeyFps = extraApiKeyFps;
+      }
+
+      // Add IP allowlist if configured
+      // TODO: Enable when IP allowlist is implemented in database
+      // if (ipAllowlist && ipAllowlist.length > 0) {
+      //   serviceConfig.ipAllowlist = ipAllowlist;
+      // }
 
       // For seal services, include seal keys with their packages
       if (serviceType === SERVICE_TYPE.SEAL) {
@@ -336,24 +545,27 @@ async function buildVaultData(serviceType: ServiceType): Promise<Record<string, 
             })
             .from(sealPackages)
             .where(
-              and(
-                eq(sealPackages.sealKeyId, sk.sealKeyId),
-                eq(sealPackages.isUserEnabled, true)
-              )
+              and(eq(sealPackages.sealKeyId, sk.sealKeyId), eq(sealPackages.isUserEnabled, true))
             );
 
           sealKeysConfig.push({
             sealKeyId: sk.sealKeyId,
             publicKey: Buffer.from(sk.publicKey).toString('hex'),
-            packages: packages.map(p => Buffer.from(p.packageAddress).toString('hex')),
+            packages: packages.map((p) => Buffer.from(p.packageAddress).toString('hex')),
             isUserEnabled: sk.isUserEnabled,
           });
         }
 
         if (sealKeysConfig.length > 0) {
-          config.sealKeys = sealKeysConfig;
+          serviceConfig.sealKeys = sealKeysConfig;
         }
       }
+
+      // Build customer vault config with services array
+      const config: CustomerVaultConfig = {
+        customerId: service.customerId,
+        services: [serviceConfig],
+      };
 
       // Store as JSON string with customer: prefix
       vaultData[`customer:${service.customerId}`] = JSON.stringify(config);
@@ -448,7 +660,7 @@ export async function generateVault(
 
   // 5. Build vault data from DB (needed for both scenarios)
   // Any API changes from this point forward will use currentSeq+2
-  const vaultData = await buildVaultData(serviceType);
+  const vaultData = await buildVaultData(serviceType, vaultType);
   const customerCount = Object.keys(vaultData).length;
   const contentHash = computeContentHash(vaultData);
 

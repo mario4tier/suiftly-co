@@ -81,6 +81,29 @@ export async function getCustomerData(
 }
 
 /**
+ * Create an API key for testing (returns plain key for HAProxy tests)
+ * - Uses production API key generation code
+ * - Returns plain key so tests can use it in X-API-Key headers
+ * - Key is encrypted with test SECRET_KEY (shared with HAProxy)
+ *
+ * @returns Object with success, customerId, apiKeyFp, and plainKey
+ */
+export async function createApiKey(
+  request: APIRequestContext,
+  walletAddress?: string
+): Promise<{ success: boolean; customerId?: number; apiKeyFp?: number; plainKey?: string; error?: string }> {
+  const response = await request.post(`${API_BASE}/test/data/create-api-key`, {
+    data: walletAddress ? { walletAddress } : {},
+  });
+
+  if (!response.ok()) {
+    throw new Error(`Failed to create API key: ${await response.text()}`);
+  }
+
+  return response.json();
+}
+
+/**
  * Setup seal service with cpEnabled=true for control plane sync tests
  * - Creates service instance (subscribed)
  * - Creates seal key

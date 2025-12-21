@@ -15,6 +15,8 @@ export default defineConfig({
     baseURL: 'http://localhost:22710', // See ~/walrus/PORT_MAP.md for port allocation
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
+    // Grant clipboard permissions for tests that verify copy functionality
+    permissions: ['clipboard-read', 'clipboard-write'],
   },
 
   projects: [

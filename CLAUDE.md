@@ -47,11 +47,12 @@ Initial setup phase - no code scaffolded yet.
 
 1. **`~/.suiftly.env`** (Home directory) - **SENSITIVE SECRETS AND CREDENTIALS**
    - Location: `~/.suiftly.env` (NOT in project directory)
-   - Contains: `JWT_SECRET`, `DB_APP_FIELDS_ENCRYPTION_KEY`, `COOKIE_SECRET`, `DATABASE_URL` (production)
+   - Contains: `JWT_SECRET`, `DB_APP_FIELDS_ENCRYPTION_KEY`, `COOKIE_SECRET`, `X_API_KEY_SECRET`, `DATABASE_URL`
    - Permissions: `chmod 600 ~/.suiftly.env`
    - **Why `~/.suiftly.env` not `~/.env`?** Avoids conflicts with Python venvs
    - **Production:** Each server has its own `~/.suiftly.env` with unique secrets
    - **Development:** Optional (config.ts provides safe defaults)
+   - **Shared secrets:** `X_API_KEY_SECRET` must be IDENTICAL on API server and all HAProxy nodes
 
 2. **Project `.env` files** (In repo directories) - **DEVELOPMENT DEFAULTS ONLY**
    - Examples: `packages/database/.env`, `.env` (root)
@@ -79,20 +80,25 @@ vim ~/.suiftly.env
 JWT_SECRET=ZGV2LXNlY3JldC1mb3ItdGVzdGluZy1vbmx5ISEhISE=
 DB_APP_FIELDS_ENCRYPTION_KEY=ZGV2LWVuY3J5cHRpb24ta2V5LXRlc3Qtb25seSEhISE=
 COOKIE_SECRET=ZGV2LWNvb2tpZS1zZWNyZXQtdGVzdGluZy1vbmx5ISE=
+# X_API_KEY_SECRET: 64 hex chars (32 bytes) - encrypts API keys, shared with HAProxy
+X_API_KEY_SECRET=8776c4c0e84428c6e86fca4647abe16459649aa78fe4c72e7643dc3a14343337
 DATABASE_URL=postgresql://deploy:deploy_password_change_me@localhost/suiftly_dev
 ```
 
 **Production setup:**
 ```bash
-# Generate secure production secrets (base64-encoded random bytes)
+# Generate secure production secrets
 cd ~
 echo "JWT_SECRET=$(openssl rand -base64 32)" > ~/.suiftly.env
 echo "DB_APP_FIELDS_ENCRYPTION_KEY=$(openssl rand -base64 32)" >> ~/.suiftly.env
 echo "COOKIE_SECRET=$(openssl rand -base64 32)" >> ~/.suiftly.env
+# X_API_KEY_SECRET: 64 hex chars - MUST be identical on API server AND all HAProxy nodes
+echo "X_API_KEY_SECRET=$(python3 -c 'import secrets; print(secrets.token_hex(32))')" >> ~/.suiftly.env
 echo "DATABASE_URL=postgresql://deploy:PROD_PASSWORD@localhost/suiftly_prod" >> ~/.suiftly.env
 chmod 600 ~/.suiftly.env
 
 # IMPORTANT: Back up these secrets to a password manager!
+# CRITICAL: Copy X_API_KEY_SECRET to ALL HAProxy nodes (must be identical)
 cat ~/.suiftly.env  # Copy to 1Password/Bitwarden
 ```
 

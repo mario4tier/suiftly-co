@@ -247,9 +247,15 @@ export const servicesRouter = router({
           .returning();
 
         // 5. Generate initial API key immediately (part of service creation)
+        // Only pass sealType for Seal services - other services use default metadata
         const { plainKey } = await storeApiKey({
           customerId: ctx.user!.customerId,
           serviceType: input.serviceType,
+          // sealType is Seal-specific metadata (network + access mode)
+          // Future gRPC/GraphQL services will have their own metadata encoding
+          ...(input.serviceType === SERVICE_TYPE.SEAL && {
+            sealType: { network: 'mainnet', access: 'open' },
+          }),
           metadata: {
             generatedAt: 'subscription',
             instanceId: newService.instanceId,
