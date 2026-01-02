@@ -497,7 +497,6 @@ export function ChangeTierModal({
                       </p>
                       <p className="mt-2">
                         Your service will continue until the end of the current billing period.
-                        After that, you will have a 7-day grace period before your data is deleted.
                       </p>
                       <p className="mt-2 text-amber-700 dark:text-amber-400">
                         You can undo this cancellation anytime before the billing period ends.
