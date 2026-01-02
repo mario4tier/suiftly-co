@@ -16,7 +16,7 @@ import { decryptSecret } from '../lib/encryption';
 import { generateSealKey } from '../lib/seal-key-generation';
 import { getTierPriceUsdCents } from '../lib/config-cache';
 import { dbClock } from '@suiftly/shared/db-clock';
-import { triggerVaultSync } from '../lib/gm-sync';
+import { triggerVaultSync, markConfigChanged } from '../lib/gm-sync';
 
 export const sealRouter = router({
   /**
@@ -211,52 +211,26 @@ export const sealRouter = router({
               where: eq(serviceInstances.instanceId, key.instanceId),
             });
 
-            if (service && service.isUserEnabled && !service.cpEnabled) {
-              // Read nextVaultSeq - the seq to use for pending changes
-              const [control] = await tx
-                .select({ smaNextVaultSeq: systemControl.smaNextVaultSeq })
-                .from(systemControl)
-                .where(eq(systemControl.id, 1))
-                .limit(1);
-              const expectedVaultSeq = control?.smaNextVaultSeq ?? 1;
+            if (service && service.isUserEnabled) {
+              // Mark config change for vault sync (new package needs Key-Server sync)
+              const expectedVaultSeq = await markConfigChanged(tx, SERVICE_TYPE.SEAL, 'mainnet');
 
-              // Atomically update global max configChangeSeq (for GM's O(1) pending check)
-              await tx
-                .update(systemControl)
-                .set({
-                  smaMaxConfigChangeSeq: sql`GREATEST(${systemControl.smaMaxConfigChangeSeq}, ${expectedVaultSeq})`,
-                })
-                .where(eq(systemControl.id, 1));
-
-              // Set cpEnabled=true and update vault seq
-              await tx
-                .update(serviceInstances)
-                .set({
-                  cpEnabled: true,
-                  smaConfigChangeVaultSeq: expectedVaultSeq,
-                })
-                .where(eq(serviceInstances.instanceId, key.instanceId));
-            } else if (service && service.cpEnabled) {
-              // Service is already cpEnabled, just update vault seq for the new package
-              const [control] = await tx
-                .select({ smaNextVaultSeq: systemControl.smaNextVaultSeq })
-                .from(systemControl)
-                .where(eq(systemControl.id, 1))
-                .limit(1);
-              const expectedVaultSeq = control?.smaNextVaultSeq ?? 1;
-
-              // Atomically update global max configChangeSeq (for GM's O(1) pending check)
-              await tx
-                .update(systemControl)
-                .set({
-                  smaMaxConfigChangeSeq: sql`GREATEST(${systemControl.smaMaxConfigChangeSeq}, ${expectedVaultSeq})`,
-                })
-                .where(eq(systemControl.id, 1));
-
-              await tx
-                .update(serviceInstances)
-                .set({ smaConfigChangeVaultSeq: expectedVaultSeq })
-                .where(eq(serviceInstances.instanceId, key.instanceId));
+              if (!service.cpEnabled) {
+                // First package - set cpEnabled=true along with vault seq
+                await tx
+                  .update(serviceInstances)
+                  .set({
+                    cpEnabled: true,
+                    smaConfigChangeVaultSeq: expectedVaultSeq,
+                  })
+                  .where(eq(serviceInstances.instanceId, key.instanceId));
+              } else {
+                // Service already cpEnabled, just update vault seq
+                await tx
+                  .update(serviceInstances)
+                  .set({ smaConfigChangeVaultSeq: expectedVaultSeq })
+                  .where(eq(serviceInstances.instanceId, key.instanceId));
+              }
             }
           }
 
@@ -282,6 +256,9 @@ export const sealRouter = router({
 
   /**
    * Update package address/name
+   *
+   * VAULT SYNC: If packageAddress changes, needs Key-Server sync.
+   * Name changes don't affect vault (display only).
    */
   updatePackage: protectedProcedure
     .input(z.object({
@@ -297,49 +274,106 @@ export const sealRouter = router({
         });
       }
 
-      // Verify the package belongs to the user via seal key
-      const pkg = await db.query.sealPackages.findFirst({
-        where: eq(sealPackages.packageId, input.packageId),
-        with: {
-          sealKey: true,
-        },
-      });
+      // Address changes need vault sync, name changes don't
+      const needsSync = !!input.packageAddress;
 
-      if (!pkg || pkg.sealKey.customerId !== ctx.user.customerId) {
-        throw new TRPCError({
-          code: 'NOT_FOUND',
-          message: 'Package not found',
+      if (needsSync) {
+        // Use customer lock for address changes (affects Key-Server config)
+        const result = await withCustomerLockForAPI(
+          ctx.user.customerId,
+          'updatePackage',
+          async (tx) => {
+            // Verify the package belongs to the user via seal key
+            const pkg = await tx.query.sealPackages.findFirst({
+              where: eq(sealPackages.packageId, input.packageId),
+              with: {
+                sealKey: true,
+              },
+            });
+
+            if (!pkg || pkg.sealKey.customerId !== ctx.user!.customerId) {
+              throw new TRPCError({
+                code: 'NOT_FOUND',
+                message: 'Package not found',
+              });
+            }
+
+            // Prepare update values
+            const updateValues: any = {};
+            updateValues.packageAddress = Buffer.from(input.packageAddress!.slice(2), 'hex');
+            if (input.name !== undefined) {
+              updateValues.name = input.name || null;
+            }
+
+            const [updated] = await tx
+              .update(sealPackages)
+              .set(updateValues)
+              .where(eq(sealPackages.packageId, input.packageId))
+              .returning();
+
+            // Mark config change for vault sync (Key-Server needs new address)
+            if (pkg.sealKey.instanceId) {
+              const expectedVaultSeq = await markConfigChanged(tx, SERVICE_TYPE.SEAL, 'mainnet');
+
+              await tx
+                .update(serviceInstances)
+                .set({ smaConfigChangeVaultSeq: expectedVaultSeq })
+                .where(eq(serviceInstances.instanceId, pkg.sealKey.instanceId));
+            }
+
+            return {
+              id: updated.packageId.toString(),
+              packageId: updated.packageId,
+              name: updated.name,
+              packageAddress: `0x${updated.packageAddress.toString('hex')}`,
+              packageAddressPreview: `0x${updated.packageAddress.toString('hex').slice(0, 6)}...${updated.packageAddress.toString('hex').slice(-4)}`,
+              isUserEnabled: updated.isUserEnabled,
+              createdAt: updated.createdAt,
+            };
+          },
+          { packageId: input.packageId }
+        );
+
+        // Trigger vault regeneration (fire-and-forget)
+        void triggerVaultSync();
+
+        return result;
+      } else {
+        // Name-only change: no lock or sync needed
+        const pkg = await db.query.sealPackages.findFirst({
+          where: eq(sealPackages.packageId, input.packageId),
+          with: {
+            sealKey: true,
+          },
         });
-      }
 
-      // Prepare update values
-      const updateValues: any = {};
-      if (input.packageAddress) {
-        updateValues.packageAddress = Buffer.from(input.packageAddress.slice(2), 'hex');
-      }
-      if (input.name !== undefined) {
-        updateValues.name = input.name || null;
-      }
+        if (!pkg || pkg.sealKey.customerId !== ctx.user.customerId) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'Package not found',
+          });
+        }
 
-      const [updated] = await db
-        .update(sealPackages)
-        .set(updateValues)
-        .where(eq(sealPackages.packageId, input.packageId))
-        .returning();
+        const [updated] = await db
+          .update(sealPackages)
+          .set({ name: input.name || null })
+          .where(eq(sealPackages.packageId, input.packageId))
+          .returning();
 
-      return {
-        id: updated.packageId.toString(),
-        packageId: updated.packageId,
-        name: updated.name,
-        packageAddress: `0x${updated.packageAddress.toString('hex')}`,
-        packageAddressPreview: `0x${updated.packageAddress.toString('hex').slice(0, 6)}...${updated.packageAddress.toString('hex').slice(-4)}`,
-        isUserEnabled: updated.isUserEnabled,
-        createdAt: updated.createdAt,
-      };
+        return {
+          id: updated.packageId.toString(),
+          packageId: updated.packageId,
+          name: updated.name,
+          packageAddress: `0x${updated.packageAddress.toString('hex')}`,
+          packageAddressPreview: `0x${updated.packageAddress.toString('hex').slice(0, 6)}...${updated.packageAddress.toString('hex').slice(-4)}`,
+          isUserEnabled: updated.isUserEnabled,
+          createdAt: updated.createdAt,
+        };
+      }
     }),
 
   /**
-   * Delete a package (soft delete - mark as inactive)
+   * Delete a package (hard delete)
    */
   deletePackage: protectedProcedure
     .input(z.object({
@@ -353,28 +387,52 @@ export const sealRouter = router({
         });
       }
 
-      // Verify the package belongs to the user via seal key
-      const pkg = await db.query.sealPackages.findFirst({
-        where: eq(sealPackages.packageId, input.packageId),
-        with: {
-          sealKey: true,
+      // Use customer lock to ensure consistent vault sync
+      const result = await withCustomerLockForAPI(
+        ctx.user.customerId,
+        'deletePackage',
+        async (tx) => {
+          // Verify the package belongs to the user via seal key
+          const pkg = await tx.query.sealPackages.findFirst({
+            where: eq(sealPackages.packageId, input.packageId),
+            with: {
+              sealKey: true,
+            },
+          });
+
+          if (!pkg || pkg.sealKey.customerId !== ctx.user!.customerId) {
+            throw new TRPCError({
+              code: 'NOT_FOUND',
+              message: 'Package not found',
+            });
+          }
+
+          // Hard delete the package record
+          // Note: Package can only be deleted if already disabled (enforced in UI)
+          await tx
+            .delete(sealPackages)
+            .where(eq(sealPackages.packageId, input.packageId));
+
+          // Get service instance to update vault sync
+          if (pkg.sealKey.instanceId) {
+            // Mark config change for vault sync (Key-server needs to remove this package)
+            const expectedVaultSeq = await markConfigChanged(tx, SERVICE_TYPE.SEAL, 'mainnet');
+
+            await tx
+              .update(serviceInstances)
+              .set({ smaConfigChangeVaultSeq: expectedVaultSeq })
+              .where(eq(serviceInstances.instanceId, pkg.sealKey.instanceId));
+          }
+
+          return { success: true };
         },
-      });
+        { packageId: input.packageId }
+      );
 
-      if (!pkg || pkg.sealKey.customerId !== ctx.user.customerId) {
-        throw new TRPCError({
-          code: 'NOT_FOUND',
-          message: 'Package not found',
-        });
-      }
+      // Trigger vault regeneration (fire-and-forget)
+      void triggerVaultSync();
 
-      // Hard delete the package record
-      // Note: Package can only be deleted if already disabled (enforced in UI)
-      await db
-        .delete(sealPackages)
-        .where(eq(sealPackages.packageId, input.packageId));
-
-      return { success: true };
+      return result;
     }),
 
   /**
@@ -444,30 +502,53 @@ export const sealRouter = router({
         });
       }
 
-      // Verify the seal key belongs to the user
-      const key = await db.query.sealKeys.findFirst({
-        where: and(
-          eq(sealKeys.sealKeyId, input.sealKeyId),
-          eq(sealKeys.customerId, ctx.user.customerId)
-        ),
-      });
+      // Use customer lock to ensure consistent vault sync
+      const result = await withCustomerLockForAPI(
+        ctx.user.customerId,
+        'toggleKey',
+        async (tx) => {
+          // Verify the seal key belongs to the user
+          const key = await tx.query.sealKeys.findFirst({
+            where: and(
+              eq(sealKeys.sealKeyId, input.sealKeyId),
+              eq(sealKeys.customerId, ctx.user!.customerId)
+            ),
+          });
 
-      if (!key) {
-        throw new TRPCError({
-          code: 'NOT_FOUND',
-          message: 'Seal key not found',
-        });
-      }
+          if (!key) {
+            throw new TRPCError({
+              code: 'NOT_FOUND',
+              message: 'Seal key not found',
+            });
+          }
 
-      const [updated] = await db
-        .update(sealKeys)
-        .set({
-          isUserEnabled: input.enabled,
-        })
-        .where(eq(sealKeys.sealKeyId, input.sealKeyId))
-        .returning();
+          await tx
+            .update(sealKeys)
+            .set({
+              isUserEnabled: input.enabled,
+            })
+            .where(eq(sealKeys.sealKeyId, input.sealKeyId));
 
-      return { success: true };
+          // Update vault sync for the service
+          if (key.instanceId) {
+            // Mark config change for vault sync (Key-server needs to know key state)
+            const expectedVaultSeq = await markConfigChanged(tx, SERVICE_TYPE.SEAL, 'mainnet');
+
+            await tx
+              .update(serviceInstances)
+              .set({ smaConfigChangeVaultSeq: expectedVaultSeq })
+              .where(eq(serviceInstances.instanceId, key.instanceId));
+          }
+
+          return { success: true };
+        },
+        { sealKeyId: input.sealKeyId, enabled: input.enabled }
+      );
+
+      // Trigger vault regeneration (fire-and-forget)
+      void triggerVaultSync();
+
+      return result;
     }),
 
   /**
@@ -486,30 +567,53 @@ export const sealRouter = router({
         });
       }
 
-      // Verify the package belongs to the user via seal key
-      const pkg = await db.query.sealPackages.findFirst({
-        where: eq(sealPackages.packageId, input.packageId),
-        with: {
-          sealKey: true,
+      // Use customer lock to ensure consistent vault sync
+      const result = await withCustomerLockForAPI(
+        ctx.user.customerId,
+        'togglePackage',
+        async (tx) => {
+          // Verify the package belongs to the user via seal key
+          const pkg = await tx.query.sealPackages.findFirst({
+            where: eq(sealPackages.packageId, input.packageId),
+            with: {
+              sealKey: true,
+            },
+          });
+
+          if (!pkg || pkg.sealKey.customerId !== ctx.user!.customerId) {
+            throw new TRPCError({
+              code: 'NOT_FOUND',
+              message: 'Package not found',
+            });
+          }
+
+          await tx
+            .update(sealPackages)
+            .set({
+              isUserEnabled: input.enabled,
+            })
+            .where(eq(sealPackages.packageId, input.packageId));
+
+          // Update vault sync for the service
+          if (pkg.sealKey.instanceId) {
+            // Mark config change for vault sync (Key-server needs to know package state)
+            const expectedVaultSeq = await markConfigChanged(tx, SERVICE_TYPE.SEAL, 'mainnet');
+
+            await tx
+              .update(serviceInstances)
+              .set({ smaConfigChangeVaultSeq: expectedVaultSeq })
+              .where(eq(serviceInstances.instanceId, pkg.sealKey.instanceId));
+          }
+
+          return { success: true };
         },
-      });
+        { packageId: input.packageId, enabled: input.enabled }
+      );
 
-      if (!pkg || pkg.sealKey.customerId !== ctx.user.customerId) {
-        throw new TRPCError({
-          code: 'NOT_FOUND',
-          message: 'Package not found',
-        });
-      }
+      // Trigger vault regeneration (fire-and-forget)
+      void triggerVaultSync();
 
-      const [updated] = await db
-        .update(sealPackages)
-        .set({
-          isUserEnabled: input.enabled,
-        })
-        .where(eq(sealPackages.packageId, input.packageId))
-        .returning();
-
-      return { success: true };
+      return result;
     }),
 
   /**
@@ -530,6 +634,9 @@ export const sealRouter = router({
    *
    * Name is auto-generated as "seal-key-N" where N is the next sequential number.
    * Users can rename keys after creation if desired.
+   *
+   * VAULT SYNC: New seal keys need to propagate to both HAProxy (routing)
+   * and Key-Server (decryption config).
    */
   createKey: protectedProcedure
     .input(z.object({
@@ -547,7 +654,7 @@ export const sealRouter = router({
       // NOTE: Lock is held during key generation (EXPENSIVE) to ensure atomicity
       // This is acceptable since key creation is infrequent and the alternative
       // (two concurrent requests both generating keys) wastes more resources
-      return await withCustomerLockForAPI(
+      const result = await withCustomerLockForAPI(
         ctx.user.customerId,
         'createKey',
         async (tx) => {
@@ -683,6 +790,18 @@ export const sealRouter = router({
             .returning();
 
           // ====================================================================
+          // VAULT SYNC PHASE - Mark config changed for propagation
+          // ====================================================================
+
+          // Mark config change for vault sync (HAProxy routing + Key-Server decryption)
+          const expectedVaultSeq = await markConfigChanged(tx, SERVICE_TYPE.SEAL, 'mainnet');
+
+          await tx
+            .update(serviceInstances)
+            .set({ smaConfigChangeVaultSeq: expectedVaultSeq })
+            .where(eq(serviceInstances.instanceId, service.instanceId));
+
+          // ====================================================================
           // RESPONSE FORMATTING
           // ====================================================================
 
@@ -703,6 +822,11 @@ export const sealRouter = router({
         },
         { serviceType: 'seal' }
       );
+
+      // Trigger vault regeneration (fire-and-forget)
+      void triggerVaultSync();
+
+      return result;
     }),
 
   /**
@@ -835,7 +959,7 @@ export const sealRouter = router({
       }
 
       // Use customer lock to prevent race condition on API key limit check
-      return await withCustomerLockForAPI(
+      const result = await withCustomerLockForAPI(
         ctx.user.customerId,
         'createApiKey',
         async (tx) => {
@@ -887,6 +1011,14 @@ export const sealRouter = router({
             tx, // Use the same transaction
           });
 
+          // Mark config change for vault sync (API keys need to propagate to HAProxy)
+          const expectedVaultSeq = await markConfigChanged(tx, SERVICE_TYPE.SEAL, 'mainnet');
+
+          await tx
+            .update(serviceInstances)
+            .set({ smaConfigChangeVaultSeq: expectedVaultSeq })
+            .where(eq(serviceInstances.instanceId, service.instanceId));
+
           return {
             apiKey: plainKey, // Show only once!
             created: record,
@@ -894,6 +1026,11 @@ export const sealRouter = router({
         },
         { serviceType: 'seal' }
       );
+
+      // Trigger vault regeneration (fire-and-forget)
+      void triggerVaultSync();
+
+      return result;
     }),
 
   /**
@@ -940,29 +1077,60 @@ export const sealRouter = router({
         });
       }
 
-      // Revoke by fingerprint (primary key) - no decryption needed
-      const result = await db
-        .update(apiKeys)
-        .set({
-          isUserEnabled: false,
-          revokedAt: dbClock.now(),
-        })
-        .where(
-          and(
-            eq(apiKeys.apiKeyFp, input.apiKeyFp),
-            eq(apiKeys.customerId, ctx.user.customerId)
-          )
-        )
-        .returning();
+      // Use customer lock to ensure consistent vault sync
+      const result = await withCustomerLockForAPI(
+        ctx.user.customerId,
+        'revokeApiKey',
+        async (tx) => {
+          // Revoke by fingerprint (primary key) - no decryption needed
+          const updated = await tx
+            .update(apiKeys)
+            .set({
+              isUserEnabled: false,
+              revokedAt: dbClock.now(),
+            })
+            .where(
+              and(
+                eq(apiKeys.apiKeyFp, input.apiKeyFp),
+                eq(apiKeys.customerId, ctx.user!.customerId)
+              )
+            )
+            .returning();
 
-      if (result.length === 0) {
-        throw new TRPCError({
-          code: 'NOT_FOUND',
-          message: 'API key not found or already revoked',
-        });
-      }
+          if (updated.length === 0) {
+            throw new TRPCError({
+              code: 'NOT_FOUND',
+              message: 'API key not found or already revoked',
+            });
+          }
 
-      return { success: true };
+          // Get service instance to update vault sync
+          const service = await tx.query.serviceInstances.findFirst({
+            where: and(
+              eq(serviceInstances.customerId, ctx.user!.customerId),
+              eq(serviceInstances.serviceType, SERVICE_TYPE.SEAL)
+            ),
+          });
+
+          if (service) {
+            // Mark config change for vault sync (HAProxy needs to reject this key)
+            const expectedVaultSeq = await markConfigChanged(tx, SERVICE_TYPE.SEAL, 'mainnet');
+
+            await tx
+              .update(serviceInstances)
+              .set({ smaConfigChangeVaultSeq: expectedVaultSeq })
+              .where(eq(serviceInstances.instanceId, service.instanceId));
+          }
+
+          return { success: true };
+        },
+        { apiKeyFp: input.apiKeyFp }
+      );
+
+      // Trigger vault regeneration (fire-and-forget)
+      void triggerVaultSync();
+
+      return result;
     }),
 
   /**
@@ -980,30 +1148,61 @@ export const sealRouter = router({
         });
       }
 
-      // Re-enable by fingerprint (primary key) - no decryption needed
-      const result = await db
-        .update(apiKeys)
-        .set({
-          isUserEnabled: true,
-          revokedAt: null,
-        })
-        .where(
-          and(
-            eq(apiKeys.apiKeyFp, input.apiKeyFp),
-            eq(apiKeys.customerId, ctx.user.customerId),
-            isNull(apiKeys.deletedAt) // Cannot re-enable deleted keys
-          )
-        )
-        .returning();
+      // Use customer lock to ensure consistent vault sync
+      const result = await withCustomerLockForAPI(
+        ctx.user.customerId,
+        'reEnableApiKey',
+        async (tx) => {
+          // Re-enable by fingerprint (primary key) - no decryption needed
+          const updated = await tx
+            .update(apiKeys)
+            .set({
+              isUserEnabled: true,
+              revokedAt: null,
+            })
+            .where(
+              and(
+                eq(apiKeys.apiKeyFp, input.apiKeyFp),
+                eq(apiKeys.customerId, ctx.user!.customerId),
+                isNull(apiKeys.deletedAt) // Cannot re-enable deleted keys
+              )
+            )
+            .returning();
 
-      if (result.length === 0) {
-        throw new TRPCError({
-          code: 'NOT_FOUND',
-          message: 'API key not found or cannot be re-enabled',
-        });
-      }
+          if (updated.length === 0) {
+            throw new TRPCError({
+              code: 'NOT_FOUND',
+              message: 'API key not found or cannot be re-enabled',
+            });
+          }
 
-      return { success: true };
+          // Get service instance to update vault sync
+          const service = await tx.query.serviceInstances.findFirst({
+            where: and(
+              eq(serviceInstances.customerId, ctx.user!.customerId),
+              eq(serviceInstances.serviceType, SERVICE_TYPE.SEAL)
+            ),
+          });
+
+          if (service) {
+            // Mark config change for vault sync (HAProxy needs to accept this key again)
+            const expectedVaultSeq = await markConfigChanged(tx, SERVICE_TYPE.SEAL, 'mainnet');
+
+            await tx
+              .update(serviceInstances)
+              .set({ smaConfigChangeVaultSeq: expectedVaultSeq })
+              .where(eq(serviceInstances.instanceId, service.instanceId));
+          }
+
+          return { success: true };
+        },
+        { apiKeyFp: input.apiKeyFp }
+      );
+
+      // Trigger vault regeneration (fire-and-forget)
+      void triggerVaultSync();
+
+      return result;
     }),
 
   /**
@@ -1021,28 +1220,59 @@ export const sealRouter = router({
         });
       }
 
-      // Soft delete by fingerprint (primary key) - no decryption needed
-      const result = await db
-        .update(apiKeys)
-        .set({
-          deletedAt: dbClock.now(),
-        })
-        .where(
-          and(
-            eq(apiKeys.apiKeyFp, input.apiKeyFp),
-            eq(apiKeys.customerId, ctx.user.customerId)
-          )
-        )
-        .returning();
+      // Use customer lock to ensure consistent vault sync
+      const result = await withCustomerLockForAPI(
+        ctx.user.customerId,
+        'deleteApiKey',
+        async (tx) => {
+          // Soft delete by fingerprint (primary key) - no decryption needed
+          const updated = await tx
+            .update(apiKeys)
+            .set({
+              deletedAt: dbClock.now(),
+            })
+            .where(
+              and(
+                eq(apiKeys.apiKeyFp, input.apiKeyFp),
+                eq(apiKeys.customerId, ctx.user!.customerId)
+              )
+            )
+            .returning();
 
-      if (result.length === 0) {
-        throw new TRPCError({
-          code: 'NOT_FOUND',
-          message: 'API key not found',
-        });
-      }
+          if (updated.length === 0) {
+            throw new TRPCError({
+              code: 'NOT_FOUND',
+              message: 'API key not found',
+            });
+          }
 
-      return { success: true };
+          // Get service instance to update vault sync
+          const service = await tx.query.serviceInstances.findFirst({
+            where: and(
+              eq(serviceInstances.customerId, ctx.user!.customerId),
+              eq(serviceInstances.serviceType, SERVICE_TYPE.SEAL)
+            ),
+          });
+
+          if (service) {
+            // Mark config change for vault sync (HAProxy needs to remove this key)
+            const expectedVaultSeq = await markConfigChanged(tx, SERVICE_TYPE.SEAL, 'mainnet');
+
+            await tx
+              .update(serviceInstances)
+              .set({ smaConfigChangeVaultSeq: expectedVaultSeq })
+              .where(eq(serviceInstances.instanceId, service.instanceId));
+          }
+
+          return { success: true };
+        },
+        { apiKeyFp: input.apiKeyFp }
+      );
+
+      // Trigger vault regeneration (fire-and-forget)
+      void triggerVaultSync();
+
+      return result;
     }),
 
   /**
@@ -1061,7 +1291,7 @@ export const sealRouter = router({
       }
 
       // Use customer lock to prevent lost updates on config JSON
-      return await withCustomerLockForAPI(
+      const result = await withCustomerLockForAPI(
         ctx.user.customerId,
         'toggleBurst',
         async (tx) => {
@@ -1092,15 +1322,26 @@ export const sealRouter = router({
           const config = service.config as any || {};
           config.burstEnabled = input.enabled;
 
+          // Mark config change for vault sync
+          const expectedVaultSeq = await markConfigChanged(tx, SERVICE_TYPE.SEAL, 'mainnet');
+
           await tx
             .update(serviceInstances)
-            .set({ config })
+            .set({
+              config,
+              smaConfigChangeVaultSeq: expectedVaultSeq,
+            })
             .where(eq(serviceInstances.instanceId, service.instanceId));
 
           return { success: true, burstEnabled: input.enabled };
         },
         { enabled: input.enabled }
       );
+
+      // Trigger vault regeneration (fire-and-forget)
+      void triggerVaultSync();
+
+      return result;
     }),
 
   /**
@@ -1121,7 +1362,7 @@ export const sealRouter = router({
       }
 
       // Use customer lock to prevent lost updates on config JSON
-      return await withCustomerLockForAPI(
+      const result = await withCustomerLockForAPI(
         ctx.user.customerId,
         'updateIpAllowlist',
         async (tx) => {
@@ -1185,9 +1426,16 @@ export const sealRouter = router({
           // Always update the enabled flag (independent of IP list changes)
           config.ipAllowlistEnabled = input.enabled;
 
+          // Mark config change for vault sync (same pattern as service toggle)
+          // This ensures UI shows "Updating..." until LM applies the change
+          const expectedVaultSeq = await markConfigChanged(tx, SERVICE_TYPE.SEAL, 'mainnet');
+
           await tx
             .update(serviceInstances)
-            .set({ config })
+            .set({
+              config,
+              smaConfigChangeVaultSeq: expectedVaultSeq,
+            })
             .where(eq(serviceInstances.instanceId, service.instanceId));
 
           return {
@@ -1199,6 +1447,12 @@ export const sealRouter = router({
         },
         { enabled: input.enabled }
       );
+
+      // Trigger vault regeneration (fire-and-forget, outside transaction)
+      // GM will pick up the change and generate a new vault
+      void triggerVaultSync();
+
+      return result;
     }),
 
   /**

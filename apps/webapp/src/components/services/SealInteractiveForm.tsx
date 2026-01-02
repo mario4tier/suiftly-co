@@ -162,6 +162,8 @@ export function SealInteractiveForm({
     onSuccess: () => {
       utils.seal.listApiKeys.invalidate();
       utils.seal.getUsageStats.invalidate();
+      // Trigger immediate status refetch - config change triggers vault sync
+      utils.services.getServicesStatus.invalidate();
       console.log("API key created successfully");
     },
     onError: (error) => {
@@ -173,6 +175,8 @@ export function SealInteractiveForm({
     onSuccess: () => {
       utils.seal.listApiKeys.invalidate();
       utils.seal.getUsageStats.invalidate();
+      // Trigger immediate status refetch - config change triggers vault sync
+      utils.services.getServicesStatus.invalidate();
       console.log("API key revoked successfully");
     },
     onError: (error) => {
@@ -184,6 +188,8 @@ export function SealInteractiveForm({
     onSuccess: () => {
       utils.seal.listApiKeys.invalidate();
       utils.seal.getUsageStats.invalidate();
+      // Trigger immediate status refetch - config change triggers vault sync
+      utils.services.getServicesStatus.invalidate();
       console.log("API key re-enabled successfully");
     },
     onError: (error) => {
@@ -195,6 +201,8 @@ export function SealInteractiveForm({
     onSuccess: () => {
       utils.seal.listApiKeys.invalidate();
       utils.seal.getUsageStats.invalidate();
+      // Trigger immediate status refetch - config change triggers vault sync
+      utils.services.getServicesStatus.invalidate();
       console.log("API key deleted successfully");
     },
     onError: (error) => {
@@ -243,6 +251,8 @@ export function SealInteractiveForm({
     onSuccess: () => {
       utils.seal.listKeys.invalidate();
       utils.seal.getUsageStats.invalidate();
+      // Trigger immediate status refetch - config change triggers vault sync
+      utils.services.getServicesStatus.invalidate();
       toast.success("Seal key updated");
     },
     onError: (error) => {
@@ -255,6 +265,8 @@ export function SealInteractiveForm({
     onSuccess: () => {
       utils.seal.listKeys.invalidate();
       utils.seal.getUsageStats.invalidate();
+      // Trigger immediate status refetch - config change triggers vault sync
+      utils.services.getServicesStatus.invalidate();
       toast.success("Package added successfully");
     },
     onError: (error) => {
@@ -305,6 +317,8 @@ export function SealInteractiveForm({
     onSuccess: () => {
       utils.seal.listKeys.invalidate();
       utils.seal.getUsageStats.invalidate();
+      // Trigger immediate status refetch - config change triggers vault sync
+      utils.services.getServicesStatus.invalidate();
       toast.success("Package deleted");
     },
     onError: (error) => {
@@ -315,6 +329,8 @@ export function SealInteractiveForm({
   const togglePackageMutation = trpc.seal.togglePackage.useMutation({
     onSuccess: () => {
       utils.seal.listKeys.invalidate();
+      // Trigger immediate status refetch - config change triggers vault sync
+      utils.services.getServicesStatus.invalidate();
       toast.success("Package updated");
     },
     onError: (error) => {
@@ -326,6 +342,8 @@ export function SealInteractiveForm({
     onSuccess: () => {
       utils.seal.listKeys.invalidate();
       utils.seal.getUsageStats.invalidate();
+      // Trigger immediate status refetch - new seal key needs vault sync
+      utils.services.getServicesStatus.invalidate();
       toast.success("Seal key created successfully");
     },
     onError: (error) => {
@@ -339,6 +357,8 @@ export function SealInteractiveForm({
   // Burst mutation
   const updateBurstMutation = trpc.seal.updateBurstSetting.useMutation({
     onSuccess: (data) => {
+      // Trigger immediate status refetch - config change triggers vault sync
+      utils.services.getServicesStatus.invalidate();
       toast.success(`Burst ${data.burstEnabled ? 'enabled' : 'disabled'}`);
     },
     onError: (error) => {
@@ -353,6 +373,9 @@ export function SealInteractiveForm({
     onSuccess: (data) => {
       utils.seal.getUsageStats.invalidate();
       utils.seal.getMoreSettings.invalidate();
+      // Trigger immediate status refetch to show "Updating..." indicator
+      // Config changes set smaConfigChangeVaultSeq, so status will be 'pending'
+      utils.services.getServicesStatus.invalidate();
 
       // Update saved state with server response
       setSavedIpList(data.entries);

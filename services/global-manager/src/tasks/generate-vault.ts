@@ -310,11 +310,12 @@ function encodeIpFilterField(allowlist?: string[]): string {
     return '0000000000000000';
   }
 
-  // Extract first 2 /32 IPv4 addresses
+  // Extract first 2 IPv4 addresses (with or without /32 suffix)
   const ipv4s: number[] = [];
   for (const cidr of allowlist) {
     if (ipv4s.length >= 2) break;
-    const match = cidr.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)\/32$/);
+    // Match IPv4 with optional /32 suffix
+    const match = cidr.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)(\/32)?$/);
     if (match) {
       const ip =
         (parseInt(match[1], 10) << 24) |
@@ -454,6 +455,7 @@ async function buildVaultData(
         tier: serviceInstances.tier,
         isUserEnabled: serviceInstances.isUserEnabled,
         cpEnabled: serviceInstances.cpEnabled,
+        config: serviceInstances.config,
       })
       .from(serviceInstances)
       .where(
@@ -489,9 +491,13 @@ async function buildVaultData(
       const apiKeyFps = keys.map((k) => k.apiKeyFp);
       const status = getVaultStatus(service.state);
 
-      // TODO: Get IP allowlist from database when implemented
-      // For now, ipAllowlist is undefined (no IP restrictions)
-      const ipAllowlist: string[] | undefined = undefined;
+      // Extract IP allowlist from service config if enabled
+      // Config is jsonb with: { ipAllowlistEnabled?: boolean, ipAllowlist?: string[], ... }
+      const dbConfig = service.config as { ipAllowlistEnabled?: boolean; ipAllowlist?: string[] } | null;
+      const ipAllowlist: string[] | undefined =
+        dbConfig?.ipAllowlistEnabled && dbConfig?.ipAllowlist?.length
+          ? dbConfig.ipAllowlist
+          : undefined;
 
       // Encode HAProxy map config
       const { mapConfigHex, extraApiKeyFps } = encodeCustomerMapConfig(
@@ -519,10 +525,9 @@ async function buildVaultData(
       }
 
       // Add IP allowlist if configured
-      // TODO: Enable when IP allowlist is implemented in database
-      // if (ipAllowlist && ipAllowlist.length > 0) {
-      //   serviceConfig.ipAllowlist = ipAllowlist;
-      // }
+      if (ipAllowlist && ipAllowlist.length > 0) {
+        serviceConfig.ipAllowlist = ipAllowlist;
+      }
 
       // For seal services, include seal keys with their packages
       if (serviceType === SERVICE_TYPE.SEAL) {

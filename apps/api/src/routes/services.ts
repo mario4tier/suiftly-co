@@ -27,7 +27,7 @@ import {
   getTierChangeOptions,
 } from '@suiftly/database/billing';
 import { dbClock } from '@suiftly/shared/db-clock';
-import { triggerVaultSync } from '../lib/gm-sync';
+import { triggerVaultSync, markConfigChanged } from '../lib/gm-sync';
 
 // Zod schemas for input validation
 const serviceTypeSchema = z.enum([SERVICE_TYPE.SEAL, SERVICE_TYPE.GRPC, SERVICE_TYPE.GRAPHQL]);
@@ -560,7 +560,7 @@ export const servicesRouter = router({
       }
 
       // Wrap entire operation in customer advisory lock
-      return await withCustomerLockForAPI(
+      const result = await withCustomerLockForAPI(
         ctx.user.customerId,
         'updateConfig',
         async (tx) => {
@@ -613,21 +613,8 @@ export const servicesRouter = router({
             });
           }
 
-          // Read nextVaultSeq - the seq to use for pending changes
-          const [control] = await tx
-            .select({ smaNextVaultSeq: systemControl.smaNextVaultSeq })
-            .from(systemControl)
-            .where(eq(systemControl.id, 1))
-            .limit(1);
-          const expectedVaultSeq = control?.smaNextVaultSeq ?? 1;
-
-          // Atomically update global max configChangeSeq (for GM's O(1) pending check)
-          await tx
-            .update(systemControl)
-            .set({
-              smaMaxConfigChangeSeq: sql`GREATEST(${systemControl.smaMaxConfigChangeSeq}, ${expectedVaultSeq})`,
-            })
-            .where(eq(systemControl.id, 1));
+          // Mark config change for vault sync
+          const expectedVaultSeq = await markConfigChanged(tx, input.serviceType, 'mainnet');
 
           const [updated] = await tx
             .update(serviceInstances)
@@ -642,6 +629,11 @@ export const servicesRouter = router({
         },
         { serviceType: input.serviceType }
       );
+
+      // Trigger vault regeneration (fire-and-forget)
+      void triggerVaultSync();
+
+      return result;
     }),
 
   // ==========================================================================

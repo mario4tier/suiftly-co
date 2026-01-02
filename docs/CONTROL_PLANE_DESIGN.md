@@ -1165,18 +1165,69 @@ class KeyServerConfigManager {
 
 ---
 
+### Single Vault Per Service Architecture
+
+**Design Decision:** Each service type has ONE vault that contains ALL configuration needed for that service. The Local Manager is responsible for applying changes to the appropriate components (HAProxy, key-server, etc.) and only reports "applied" when ALL components are updated.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Single Vault Per Service                      │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  SMA Vault (Seal Mainnet API):                                  │
+│    Contains: API keys, IP allowlist, burst config, rate limits,│
+│              seal keys, packages, enabled states                │
+│    Applied to: HAProxy AND Key-Server                           │
+│    Sequence: smaConfigChangeVaultSeq                            │
+│                                                                 │
+│  STA Vault (Seal Testnet API):                                  │
+│    Same structure as SMA, for testnet                           │
+│    Sequence: smaConfigChangeVaultSeq (shared - see note below)  │
+│                                                                 │
+│  Future: RMA (gRPC Mainnet), GMA (GraphQL Mainnet), etc.        │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Current Schema Limitation:** The schema only has `smaConfigChangeVaultSeq`.
+All vault types (STA, RMA, etc.) currently share this column. This works for
+now since only SMA is active. When testnet/other services are enabled, add
+per-vault columns (e.g., `staConfigChangeVaultSeq`) to track sync status
+independently.
+
+**Why Single Vault (not separate vaults per component)?**
+
+1. **Customer-centric:** Users think "Is my Seal service config applied?" - not "Is HAProxy updated? Is key-server updated?"
+2. **Atomic consistency:** Either ALL components are updated or the change is "pending" - no confusing partial states
+3. **Honest UX:** "Synced" means the service actually works with the new config
+4. **Encapsulation:** LM hides internal complexity - other components don't know about HAProxy vs key-server
+5. **Simpler tracking:** One sequence number per service type
+
+**LM Responsibility:**
+The Local Manager determines which components are affected by a vault change and updates them accordingly:
+- Parse vault delta (what changed?)
+- Apply HAProxy changes if needed (hot reload via stats socket)
+- Apply key-server changes if needed (config update + restart)
+- Report "applied" only when ALL affected components are updated
+
+---
+
 ### Which Changes Affect Which Component?
+
+This table is for LM implementation - customers don't see this detail. All changes use the same vault and sequence number.
 
 | Change Type               | HAProxy | Key-Server | Notes                               |
 |---------------------------|---------|------------|-------------------------------------|
 | API key added/revoked     | ✓       | ✗          | HAProxy validates API key           |
 | Seal key added            | ✓       | ✓          | HAProxy routes, key-server decrypts |
 | Seal key enabled/disabled | ✓       | ✗          | HAProxy blocks/allows traffic       |
-| Package changed           | ✗       | ✓          | Key-server encryption config        |
+| Package added/removed     | ✗       | ✓          | Key-server encryption config        |
+| Package enabled/disabled  | ✗       | ✓          | Key-server access control           |
 | Tier change               | ✓       | ✗          | Rate limits only (HAProxy)          |
 | Rate limit adjustment     | ✓       | ✗          | Only HAProxy enforces limits        |
 | IP allowlist change       | ✓       | ✗          | HAProxy enforces IP restrictions    |
 | Service enabled/disabled  | ✓       | ✗          | HAProxy blocks/allows traffic       |
+| Burst setting change      | ✓       | ✗          | HAProxy rate limit override         |
 
 **Key Insight:** Key-server restarts are rare - only triggered by:
 1. New Seal key added (needs decryption capability)

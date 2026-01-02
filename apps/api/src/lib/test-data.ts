@@ -100,69 +100,104 @@ export async function resetCustomerTestData(options: TestDataResetOptions = {}) 
   const customerId = customer.customerId;
 
   // Delete all related data and update customer in transaction
-  await db.transaction(async (tx) => {
-    // 1. Delete service cancellation history first (references customerId)
-    await tx
-      .delete(serviceCancellationHistory)
-      .where(eq(serviceCancellationHistory.customerId, customerId));
+  // Use retry logic to handle deadlocks (PostgreSQL error code 40P01)
+  const MAX_RETRIES = 5;
+  let lastError: Error | null = null;
 
-    // 2. Delete service instances
-    const deletedServices = await tx
-      .delete(serviceInstances)
-      .where(eq(serviceInstances.customerId, customerId))
-      .returning();
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      await db.transaction(async (tx) => {
+        // 1. Delete service cancellation history first (references customerId)
+        await tx
+          .delete(serviceCancellationHistory)
+          .where(eq(serviceCancellationHistory.customerId, customerId));
 
-    // 3. Delete API keys
-    const deletedApiKeys = await tx
-      .delete(apiKeys)
-      .where(eq(apiKeys.customerId, customerId))
-      .returning();
+        // 2. Delete service instances
+        const deletedServices = await tx
+          .delete(serviceInstances)
+          .where(eq(serviceInstances.customerId, customerId))
+          .returning();
 
-    // 4. Delete Seal keys
-    const deletedSealKeys = await tx
-      .delete(sealKeys)
-      .where(eq(sealKeys.customerId, customerId))
-      .returning();
+        // 3. Delete API keys
+        const deletedApiKeys = await tx
+          .delete(apiKeys)
+          .where(eq(apiKeys.customerId, customerId))
+          .returning();
 
-    // 5. Delete all other related data (in correct order for foreign keys)
-    // New billing tables (Phase 1A/2) - delete before billing_records
-    await tx.delete(adminNotifications).where(eq(adminNotifications.customerId, String(customerId)));
-    await tx.delete(billingIdempotency); // No customer_id column, delete all for simplicity
-    await tx.delete(invoicePayments); // References billing_records, so delete first
-    await tx.delete(customerCredits).where(eq(customerCredits.customerId, customerId));
+        // 4. Delete Seal keys
+        const deletedSealKeys = await tx
+          .delete(sealKeys)
+          .where(eq(sealKeys.customerId, customerId))
+          .returning();
 
-    // Original tables
-    await tx.delete(ledgerEntries).where(eq(ledgerEntries.customerId, customerId));
-    await tx.delete(refreshTokens).where(eq(refreshTokens.customerId, customerId));
-    await tx.delete(billingRecords).where(eq(billingRecords.customerId, customerId)); // Now safe to delete
-    await tx.delete(escrowTransactions).where(eq(escrowTransactions.customerId, customerId));
-    await tx.delete(usageRecords).where(eq(usageRecords.customerId, customerId));
-    await tx.delete(haproxyRawLogs).where(eq(haproxyRawLogs.customerId, customerId));
-    await tx.delete(userActivityLogs).where(eq(userActivityLogs.customerId, customerId));
-    await tx.delete(mockSuiTransactions).where(eq(mockSuiTransactions.customerId, customerId));
+        // 5. Delete all other related data (in correct order for foreign keys)
+        // New billing tables (Phase 1A/2) - delete before billing_records
+        await tx.delete(adminNotifications).where(eq(adminNotifications.customerId, String(customerId)));
+        await tx.delete(billingIdempotency); // No customer_id column, delete all for simplicity
+        await tx.delete(invoicePayments); // References billing_records, so delete first
+        await tx.delete(customerCredits).where(eq(customerCredits.customerId, customerId));
 
-    // 6. Clear Sui mock config (reset delays and failure injections)
-    suiMockConfig.clearConfig();
+        // Original tables
+        await tx.delete(ledgerEntries).where(eq(ledgerEntries.customerId, customerId));
+        await tx.delete(refreshTokens).where(eq(refreshTokens.customerId, customerId));
+        await tx.delete(billingRecords).where(eq(billingRecords.customerId, customerId)); // Now safe to delete
+        await tx.delete(escrowTransactions).where(eq(escrowTransactions.customerId, customerId));
+        await tx.delete(usageRecords).where(eq(usageRecords.customerId, customerId));
+        await tx.delete(haproxyRawLogs).where(eq(haproxyRawLogs.customerId, customerId));
+        await tx.delete(userActivityLogs).where(eq(userActivityLogs.customerId, customerId));
+        await tx.delete(mockSuiTransactions).where(eq(mockSuiTransactions.customerId, customerId));
 
-    // 7. Reset customer to clean state with specified balance
-    // (Keep customer to preserve wallet address association)
-    await tx.update(customers)
-      .set({
-        currentBalanceUsdCents: balanceUsdCents,
-        spendingLimitUsdCents: spendingLimitUsdCents,
-        currentPeriodChargedUsdCents: 0,
-        ...(clearEscrowAccount ? { escrowContractId: null } : {}),
-      })
-      .where(eq(customers.customerId, customerId));
+        // 6. Clear Sui mock config (reset delays and failure injections)
+        suiMockConfig.clearConfig();
 
-    console.log(`[TEST DATA] Reset customer ${customerId}:`);
-    console.log(`  - Deleted ${deletedServices.length} service instances`);
-    console.log(`  - Deleted ${deletedApiKeys.length} API keys`);
-    console.log(`  - Deleted ${deletedSealKeys.length} Seal keys`);
-    console.log(`  - Deleted all related data (ledger, tokens, billing, logs)`);
-    console.log(`  - Set balance to $${(balanceUsdCents / 100).toFixed(2)}`);
-    console.log(`  - Set spending limit to $${(spendingLimitUsdCents / 100).toFixed(2)}`);
-  });
+        // 7. Reset customer to clean state with specified balance
+        // (Keep customer to preserve wallet address association)
+        await tx.update(customers)
+          .set({
+            currentBalanceUsdCents: balanceUsdCents,
+            spendingLimitUsdCents: spendingLimitUsdCents,
+            currentPeriodChargedUsdCents: 0,
+            ...(clearEscrowAccount ? { escrowContractId: null } : {}),
+          })
+          .where(eq(customers.customerId, customerId));
+
+        console.log(`[TEST DATA] Reset customer ${customerId}:`);
+        console.log(`  - Deleted ${deletedServices.length} service instances`);
+        console.log(`  - Deleted ${deletedApiKeys.length} API keys`);
+        console.log(`  - Deleted ${deletedSealKeys.length} Seal keys`);
+        console.log(`  - Deleted all related data (ledger, tokens, billing, logs)`);
+        console.log(`  - Set balance to $${(balanceUsdCents / 100).toFixed(2)}`);
+        console.log(`  - Set spending limit to $${(spendingLimitUsdCents / 100).toFixed(2)}`);
+      });
+
+      // Success - exit retry loop
+      lastError = null;
+      break;
+    } catch (error: any) {
+      lastError = error;
+
+      // Check if this is a deadlock error (PostgreSQL error code 40P01)
+      const isDeadlock = error?.cause?.code === '40P01' ||
+                         error?.message?.includes('deadlock detected');
+
+      if (isDeadlock && attempt < MAX_RETRIES) {
+        // Exponential backoff with jitter: 50-150ms, 100-300ms, 200-600ms, 400-1200ms
+        const baseDelay = 50 * Math.pow(2, attempt - 1);
+        const jitter = Math.random() * baseDelay;
+        const delay = Math.floor(baseDelay + jitter);
+        console.log(`[TEST DATA] Deadlock detected for customer ${customerId}, retry ${attempt}/${MAX_RETRIES} after ${delay}ms`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+
+      // Not a deadlock or max retries exceeded - rethrow
+      throw error;
+    }
+  }
+
+  if (lastError) {
+    throw lastError;
+  }
 
   return {
     success: true,

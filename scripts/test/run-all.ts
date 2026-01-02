@@ -15,8 +15,159 @@
  */
 
 import { spawn, execSync, spawnSync } from 'child_process';
-import { writeFileSync, appendFileSync } from 'fs';
+import { writeFileSync, appendFileSync, existsSync, readFileSync, unlinkSync } from 'fs';
 import { waitForPortFree } from '../../playwright-test-utils';
+
+const LOCK_FILE = '/tmp/suiftly-test-runner.lock';
+
+/**
+ * Check if a process with the given PID is still running.
+ */
+function isProcessRunning(pid: number): boolean {
+  try {
+    // kill with signal 0 just checks if process exists
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Check that no other test run is already in progress.
+ * Uses a PID-based lock file that auto-cleans stale locks.
+ *
+ * This prevents:
+ * - Database deadlocks from concurrent test data resets
+ * - Port conflicts from multiple server instances
+ * - Flaky test failures from shared state corruption
+ */
+async function checkNoOtherTestsRunning(): Promise<void> {
+  const currentPid = process.pid;
+
+  // Check if lock file exists
+  if (existsSync(LOCK_FILE)) {
+    try {
+      const lockContent = readFileSync(LOCK_FILE, 'utf8').trim();
+      const lockedPid = parseInt(lockContent);
+
+      if (!isNaN(lockedPid) && lockedPid !== currentPid && isProcessRunning(lockedPid)) {
+        // Another test run is in progress
+        console.log();
+        console.log('\x1b[31m' + '═'.repeat(70) + '\x1b[0m');
+        console.log('\x1b[31m\x1b[1m  ERROR: Another test run is already in progress!\x1b[0m');
+        console.log('\x1b[31m' + '═'.repeat(70) + '\x1b[0m');
+        console.log();
+        console.log(`  Found test runner process with PID: \x1b[33m${lockedPid}\x1b[0m`);
+        console.log();
+        console.log('  Running multiple test suites concurrently causes:');
+        console.log('    • Database deadlocks');
+        console.log('    • Port conflicts');
+        console.log('    • Flaky test failures');
+        console.log();
+        console.log('  \x1b[36mOptions:\x1b[0m');
+        console.log('    1. Wait for the other test run to complete');
+        console.log(`    2. Kill the other test run: \x1b[33mkill ${lockedPid}\x1b[0m`);
+        console.log();
+        process.exit(1);
+      } else {
+        // Lock file is stale (process not running) - remove it
+        try {
+          unlinkSync(LOCK_FILE);
+          console.log('\x1b[33m⚠️  Removed stale lock file from crashed test run\x1b[0m');
+        } catch {
+          // Ignore - might have been removed by another process
+        }
+      }
+    } catch (err) {
+      // Error reading lock file - try to remove it
+      try {
+        unlinkSync(LOCK_FILE);
+      } catch {
+        // Ignore
+      }
+    }
+  }
+
+  // Create lock file with our PID
+  writeFileSync(LOCK_FILE, String(currentPid));
+
+  // Register cleanup handler to remove lock file on exit
+  const cleanup = () => {
+    try {
+      // Only remove if it's still our lock
+      if (existsSync(LOCK_FILE)) {
+        const content = readFileSync(LOCK_FILE, 'utf8').trim();
+        if (content === String(currentPid)) {
+          unlinkSync(LOCK_FILE);
+        }
+      }
+    } catch {
+      // Ignore errors during cleanup
+    }
+  };
+
+  process.on('exit', cleanup);
+  process.on('SIGINT', () => { cleanup(); process.exit(130); });
+  process.on('SIGTERM', () => { cleanup(); process.exit(143); });
+
+  // Brief sleep then re-check to handle race condition where two start simultaneously
+  await new Promise(resolve => setTimeout(resolve, 100));
+
+  // Re-read lock file to verify we still own it (handles race conditions)
+  try {
+    const lockContent = readFileSync(LOCK_FILE, 'utf8').trim();
+    const lockedPid = parseInt(lockContent);
+
+    if (lockedPid !== currentPid) {
+      // Another process won the race
+      console.log();
+      console.log('\x1b[31m' + '═'.repeat(70) + '\x1b[0m');
+      console.log('\x1b[31m\x1b[1m  ERROR: Another test run started simultaneously!\x1b[0m');
+      console.log('\x1b[31m' + '═'.repeat(70) + '\x1b[0m');
+      console.log();
+      console.log(`  The other test runner (PID ${lockedPid}) acquired the lock first.`);
+      console.log('  Please wait for it to complete or kill it.');
+      console.log();
+      process.exit(1);
+    }
+  } catch {
+    // Lock file disappeared - something strange happened, but continue
+  }
+
+  // Check for orphaned test processes from crashed runs
+  try {
+    const orphanedPlaywright = execSync(`pgrep -f "playwright test" 2>/dev/null || true`, { encoding: 'utf8' }).trim();
+    const orphanedVitest = execSync(`pgrep -f "vitest.*--run" 2>/dev/null || true`, { encoding: 'utf8' }).trim();
+
+    const playwrightPids = orphanedPlaywright.split('\n').filter(p => p);
+    const vitestPids = orphanedVitest.split('\n').filter(p => p);
+
+    if (playwrightPids.length > 0 || vitestPids.length > 0) {
+      console.log('\x1b[33m⚠️  Found orphaned test processes from a previous run:\x1b[0m');
+      if (playwrightPids.length > 0) {
+        console.log(`    playwright PID(s): ${playwrightPids.join(', ')}`);
+      }
+      if (vitestPids.length > 0) {
+        console.log(`    vitest PID(s): ${vitestPids.join(', ')}`);
+      }
+      console.log('\x1b[33m   Cleaning up orphaned processes...\x1b[0m');
+
+      // Kill orphaned processes
+      if (playwrightPids.length > 0) {
+        execSync('pkill -9 -f "playwright test" 2>/dev/null || true', { stdio: 'ignore' });
+      }
+      if (vitestPids.length > 0) {
+        execSync('pkill -9 -f "vitest.*--run" 2>/dev/null || true', { stdio: 'ignore' });
+      }
+      // Wait for processes to die
+      await new Promise(resolve => setTimeout(resolve, 500));
+      console.log('\x1b[32m   ✅ Orphaned processes cleaned up\x1b[0m');
+    }
+  } catch {
+    // Ignore errors checking for orphaned processes
+  }
+}
 
 /**
  * Run a shell script synchronously.
@@ -159,8 +310,8 @@ async function startDevServers(): Promise<void> {
     startedServers = true;
     success('Dev servers started');
     console.log('[DEBUG] startDevServers complete, returning to caller');
-  } catch (error: any) {
-    throw new Error(`Failed to start dev servers: ${error.message}`);
+  } catch (err: any) {
+    throw new Error(`Failed to start dev servers: ${err.message}`);
   }
 }
 
@@ -173,9 +324,9 @@ async function stopDevServers(): Promise<void> {
   // IMPORTANT: Run in isolated process group to prevent signals from killing test runner
   try {
     runScriptIsolated('./scripts/dev/stop-dev.sh');
-  } catch (error: any) {
+  } catch (err: any) {
     // Script might exit non-zero if processes were already stopped
-    warning(`stop-dev.sh exited with error (may be OK): ${error.message}`);
+    warning(`stop-dev.sh exited with error (may be OK): ${err.message}`);
   }
 
   // Verify ports are free with short timeout (stop-dev.sh already checks)
@@ -183,12 +334,12 @@ async function stopDevServers(): Promise<void> {
   try {
     await waitForPortFree(3000, 5000); // 5 second timeout
     await waitForPortFree(5173, 5000);
-  } catch (error: any) {
+  } catch (err: any) {
     error('Failed to verify ports are free after stop-dev.sh');
     error('This indicates stop-dev.sh failed to clean up properly');
     error('Please check /tmp/suiftly-api.log and /tmp/suiftly-webapp.log');
     error('Manual cleanup may be required: lsof -ti:3000 | xargs kill -9');
-    throw new Error(`Port cleanup verification failed: ${error.message}`);
+    throw new Error(`Port cleanup verification failed: ${err.message}`);
   }
 
   // Reset state
@@ -362,6 +513,10 @@ function printSummary(results: TestResult[]): void {
 async function main() {
   header('SUIFTLY TEST RUNNER - Running All Tests');
 
+  // FIRST: Check that no other test run is in progress
+  // This prevents database deadlocks, port conflicts, and flaky test failures
+  await checkNoOtherTestsRunning();
+
   // Initialize summary file
   writeFileSync(SUMMARY_FILE, `Test Summary File: ${SUMMARY_FILE}\n`);
   writeFileSync(SUMMARY_FILE, `Started at: ${new Date().toISOString()}\n\n`, { flag: 'a' });
@@ -382,8 +537,8 @@ async function main() {
     warning('Dev servers not running - will start them automatically');
     try {
       await startDevServers();
-    } catch (error: any) {
-      error(`Failed to start dev servers: ${error.message}`);
+    } catch (err: any) {
+      error(`Failed to start dev servers: ${err.message}`);
       process.exit(1);
     }
   }

@@ -24,7 +24,7 @@
 
 import { test, expect } from '@playwright/test';
 import { waitAfterMutation } from '../helpers/wait-utils';
-import { resetCustomer, ensureTestBalance } from '../helpers/db';
+import { resetCustomer, ensureTestBalance, getCustomerData } from '../helpers/db';
 // Note: We intentionally don't use setupCpEnabled or createApiKey shortcuts
 // to test the real user experience through the UI
 import {
@@ -105,6 +105,174 @@ async function triggerGMSync(): Promise<void> {
   await fetch(`${GM_URL}/api/queue/sync-all?source=e2e-real-seal-test`, {
     method: 'POST',
   });
+}
+
+// Sudob API URL (privileged service for root operations)
+const SUDOB_URL = 'http://127.0.0.1:22800';
+
+// HAProxy config verification result
+interface HAProxyConfigCheck {
+  ok: boolean;
+  version: number;
+  customerId: number | null;
+  controlFlags: number | null;
+  hasIpAllowlist: boolean | null;
+  inlineIps: string[] | null;
+  error?: string;
+}
+
+// Helper to verify HAProxy config.map contains expected customer config
+// Uses sudob to query HAProxy socket directly
+async function verifyHAProxyConfig(
+  customerId: number,
+  expectedConfig?: {
+    hasIpAllowlist?: boolean;
+    inlineIps?: string[];
+  }
+): Promise<HAProxyConfigCheck> {
+  const result: HAProxyConfigCheck = {
+    ok: false,
+    version: 0,
+    customerId: null,
+    controlFlags: null,
+    hasIpAllowlist: null,
+    inlineIps: null,
+  };
+
+  try {
+    // Query HAProxy config.map via sudob
+    const response = await fetch(`${SUDOB_URL}/api/haproxy/socket`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: 'show map /etc/haproxy/conf.d/204-mseal_config.map' }),
+    });
+
+    if (!response.ok) {
+      result.error = `Sudob request failed: ${response.status}`;
+      return result;
+    }
+
+    const data = await response.json();
+    if (!data.ok) {
+      result.error = `HAProxy socket error: ${data.error}`;
+      return result;
+    }
+
+    // Parse the map output
+    const lines = data.output.split('\n');
+    for (const line of lines) {
+      // Parse __version__ metadata
+      const versionMatch = line.match(/__version__\s+(\d+)/);
+      if (versionMatch) {
+        result.version = parseInt(versionMatch[1], 10);
+        continue;
+      }
+
+      // Parse customer entry: <hex_id> <customer_id> <config_csv>
+      // Format: 0x75e178e99080 1886853509 0000010060620002,ad8cf08d00000000,0a141e28323c4650,0000000000000000
+      const customerMatch = line.match(/0x[0-9a-f]+\s+(\d+)\s+([0-9a-f]{16}),([0-9a-f]{16}),([0-9a-f]{16}),([0-9a-f]{16})/i);
+      if (customerMatch && parseInt(customerMatch[1], 10) === customerId) {
+        result.customerId = customerId;
+
+        // Parse header (16 hex chars): 00000ILGLBLQCCCC
+        // Control flags are last 4 hex chars
+        const headerHex = customerMatch[2];
+        result.controlFlags = parseInt(headerHex.slice(-4), 16);
+        result.hasIpAllowlist = (result.controlFlags & 0x0002) !== 0;
+
+        // Parse IP filter (16 hex chars): IP1(8hex)IP2(8hex)
+        const ipFilterHex = customerMatch[4];
+        const ip1Hex = ipFilterHex.slice(0, 8);
+        const ip2Hex = ipFilterHex.slice(8, 16);
+
+        // Convert hex to IP address
+        const hexToIp = (hex: string): string | null => {
+          const num = parseInt(hex, 16);
+          if (num === 0) return null;
+          return [
+            (num >>> 24) & 0xff,
+            (num >>> 16) & 0xff,
+            (num >>> 8) & 0xff,
+            num & 0xff,
+          ].join('.');
+        };
+
+        const ip1 = hexToIp(ip1Hex);
+        const ip2 = hexToIp(ip2Hex);
+        result.inlineIps = [ip1, ip2].filter(Boolean) as string[];
+
+        break;
+      }
+    }
+
+    // Verify expected config if provided
+    if (expectedConfig) {
+      if (result.customerId === null) {
+        result.error = `Customer ${customerId} not found in HAProxy config.map`;
+        return result;
+      }
+
+      if (expectedConfig.hasIpAllowlist !== undefined) {
+        if (result.hasIpAllowlist !== expectedConfig.hasIpAllowlist) {
+          result.error = `IP allowlist bit mismatch: expected ${expectedConfig.hasIpAllowlist}, got ${result.hasIpAllowlist}`;
+          return result;
+        }
+      }
+
+      if (expectedConfig.inlineIps) {
+        const expectedIpsSet = new Set(expectedConfig.inlineIps);
+        const actualIpsSet = new Set(result.inlineIps || []);
+        const missing = expectedConfig.inlineIps.filter(ip => !actualIpsSet.has(ip));
+        if (missing.length > 0) {
+          result.error = `Missing inline IPs: expected ${expectedConfig.inlineIps.join(',')}, got ${result.inlineIps?.join(',') || 'none'}`;
+          return result;
+        }
+      }
+    }
+
+    result.ok = true;
+    return result;
+  } catch (error) {
+    result.error = `Exception: ${error instanceof Error ? error.message : String(error)}`;
+    return result;
+  }
+}
+
+// Helper to wait for HAProxy config to match expected state
+// This is more reliable than waiting for vault seq because it verifies actual config
+async function waitForHAProxyConfig(
+  customerId: number,
+  expectedConfig: {
+    hasIpAllowlist?: boolean;
+    inlineIps?: string[];
+  },
+  options?: { timeout?: number; pollInterval?: number }
+): Promise<HAProxyConfigCheck> {
+  const timeout = options?.timeout ?? 30000;
+  const pollInterval = options?.pollInterval ?? 500;
+  const maxAttempts = Math.ceil(timeout / pollInterval);
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const result = await verifyHAProxyConfig(customerId, expectedConfig);
+
+    if (result.ok) {
+      console.log(
+        `HAProxy config verified after ${(attempt + 1) * pollInterval}ms: ` +
+        `version=${result.version}, controlFlags=0x${result.controlFlags?.toString(16)}, ` +
+        `hasIpAllowlist=${result.hasIpAllowlist}, inlineIps=[${result.inlineIps?.join(',')}]`
+      );
+      return result;
+    }
+
+    if (attempt < maxAttempts - 1) {
+      await new Promise((resolve) => setTimeout(resolve, pollInterval));
+    }
+  }
+
+  // Return last result with error
+  const finalResult = await verifyHAProxyConfig(customerId);
+  finalResult.error = `Timeout waiting for HAProxy config: ${finalResult.error || 'config not found'}`;
+  return finalResult;
 }
 
 // API key type from listApiKeys endpoint
@@ -631,5 +799,409 @@ test.describe('Real Seal Requests - Infrastructure Checks', () => {
       console.log('GM not available');
       test.skip();
     }
+  });
+});
+
+/**
+ * IP Allowlist E2E Tests
+ *
+ * Tests that HAProxy correctly blocks/allows requests based on IP allowlist:
+ * 1. Customer configures IP allowlist via UI (PRO tier required)
+ * 2. Vault is generated with IP filter encoded in mapConfigHex
+ * 3. LM applies vault to HAProxy
+ * 4. HAProxy checks CF-Connecting-IP header against allowlist
+ * 5. Allowed IPs get 200, non-allowed IPs get 403
+ *
+ * Test Strategy:
+ * - Uses CF-Connecting-IP header to simulate different client IPs
+ * - This is the production mechanism (HAProxy trusts CF-Connecting-IP from Cloudflare)
+ * - In tests, we can set any IP since we bypass the Cloudflare firewall
+ */
+test.describe('Real Seal Requests - IP Allowlist', () => {
+  test.beforeEach(async ({ page }) => {
+    // Reset customer to clean state
+    await resetCustomer(page.request);
+
+    // Clear cookies for clean auth state
+    await page.context().clearCookies();
+
+    // Authenticate with mock wallet
+    await page.goto('/');
+    await page.click('button:has-text("Mock Wallet")');
+    await waitAfterMutation(page);
+    await page.waitForURL('/dashboard', { timeout: 10000 });
+
+    // Ensure customer has balance for subscription
+    await ensureTestBalance(page.request, 1000, { spendingLimitUsd: 250 });
+  });
+
+  test('IP allowlist blocks non-allowed IP with 403', async ({ page }) => {
+    test.setTimeout(180000); // Extended timeout for full flow with vault sync
+
+    // Check prerequisites
+    const haproxyAvailable = await isHAProxyAvailable();
+    const lmHealth = await getLMHealth();
+    const backendAvailable = await isSealBackendAvailable();
+
+    if (!haproxyAvailable || !lmHealth) {
+      console.log('Skipping: HAProxy or LM not available');
+      test.skip();
+      return;
+    }
+
+    if (!backendAvailable) {
+      console.log('Skipping: Seal backend (mseal1) not running on port 20401');
+      test.skip();
+      return;
+    }
+
+    const initialSeq = lmHealth.vaults.find((v) => v.type === 'sma')?.applied?.seq ?? 0;
+
+    // === STEP 1: Subscribe to PRO tier (IP allowlist requires PRO+) ===
+    await page.click('text=Seal');
+    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
+
+    await page.locator('label:has-text("Agree to")').click();
+    await page.getByRole('heading', { name: 'PRO' }).click();
+    await page.locator('button:has-text("Subscribe to Service")').click();
+    await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
+    await page.waitForURL(/\/services\/seal\/overview/, { timeout: 10000 });
+    console.log('✅ Subscribed to PRO tier');
+
+    // === STEP 2: Enable service and create seal key + package (for cpEnabled) ===
+    const serviceToggle = page.locator('button[role="switch"]');
+    const toggleState = await serviceToggle.getAttribute('aria-checked');
+    if (toggleState === 'false') {
+      await serviceToggle.click();
+      await waitAfterMutation(page);
+    }
+
+    // Create seal key
+    await page.goto('/services/seal/overview?tab=seal-keys');
+    await waitAfterMutation(page);
+    await page.locator('button:has-text("Add New Seal Key")').click();
+    await waitAfterMutation(page);
+    await expect(page.locator('text=/Seal key created successfully/i')).toBeVisible({ timeout: 5000 });
+
+    // Add package (triggers cpEnabled)
+    const addPackageButton = page.locator('button:has-text("Add Package to this Seal Key")').first();
+    await expect(addPackageButton).toBeVisible({ timeout: 5000 });
+    await addPackageButton.click();
+    await waitAfterMutation(page);
+    await page.locator('input#packageAddress').fill('0x' + '3'.repeat(64));
+    await page.locator('input#name').fill('IP Allowlist Test Package');
+    await page.locator('button:has-text("Add Package")').last().click();
+    await waitAfterMutation(page);
+    console.log('✅ Seal key and package created (cpEnabled=true)');
+
+    // Get API key
+    const apiKeys = await getApiKeys(page.request);
+    expect(apiKeys.length).toBeGreaterThan(0);
+    const apiKey = apiKeys[0].fullKey;
+    console.log(`API key: ${apiKey.substring(0, 10)}...`);
+
+    // === STEP 3: Configure IP allowlist via UI ===
+    // The allowed IP will be 1.2.3.4 - we'll test with this and another IP
+    const ALLOWED_IP = '1.2.3.4';
+    const BLOCKED_IP = '9.8.7.6';
+
+    await page.goto('/services/seal/overview?tab=more-settings');
+    await waitAfterMutation(page);
+
+    // Enable IP allowlist toggle
+    await page.locator('#ip-allowlist-toggle').click();
+    await page.waitForTimeout(1000);
+
+    // Enter allowed IP
+    const textarea = page.locator('#ip-allowlist');
+    await textarea.fill(ALLOWED_IP);
+    await page.waitForTimeout(300);
+
+    // Save
+    await page.locator('button:has-text("Save Changes")').click();
+    await page.waitForTimeout(1500);
+    await expect(page.locator('text=/IP Allowlist saved successfully/i')).toBeVisible({ timeout: 5000 });
+    console.log(`✅ IP allowlist configured: ${ALLOWED_IP}`);
+
+    // === STEP 4: Get customer ID and trigger vault sync ===
+    const customerData = await getCustomerData(page.request);
+    const customerId = customerData.customer?.customerId as number;
+    console.log(`Customer ID: ${customerId}`);
+
+    // Trigger GM sync to pick up the latest DB state
+    await triggerGMSync();
+    // Small delay to allow GM to process the sync
+    await page.waitForTimeout(500);
+
+    // Wait for HAProxy config to have our IP allowlist with the expected config
+    // This is more reliable than waiting for vault seq because it verifies actual config
+    const configCheck = await waitForHAProxyConfig(customerId, {
+      hasIpAllowlist: true,
+      inlineIps: [ALLOWED_IP],
+    }, { timeout: 60000 });
+
+    if (!configCheck.ok) {
+      console.error('HAProxy config verification failed:', configCheck.error);
+      console.log('Config state:', JSON.stringify(configCheck, null, 2));
+      throw new Error(`HAProxy config not applied: ${configCheck.error}`);
+    }
+    console.log('✅ HAProxy config verified: IP allowlist with inline IP');
+
+    // === STEP 5: Test with allowed IP - should get 200 ===
+    const allowedResponse = await sealHealthCheck({
+      apiKey,
+      port: SEAL_METERED_PORT,
+      clientIp: ALLOWED_IP,
+    });
+    console.log(`Response with allowed IP (${ALLOWED_IP}):`, allowedResponse.status, allowedResponse.statusText);
+
+    expect(allowedResponse.status).toBe(200);
+    console.log('✅ Allowed IP gets 200');
+
+    // === STEP 6: Test with blocked IP - should get 403 ===
+    const blockedResponse = await sealHealthCheck({
+      apiKey,
+      port: SEAL_METERED_PORT,
+      clientIp: BLOCKED_IP,
+    });
+    console.log(`Response with blocked IP (${BLOCKED_IP}):`, blockedResponse.status, blockedResponse.statusText);
+
+    expect(blockedResponse.status).toBe(403);
+    expect(blockedResponse.body).toContain('IP not allowlisted');
+    console.log('✅ Blocked IP gets 403 "IP not allowlisted"');
+  });
+
+  test('IP allowlist allows second IP in list', async ({ page }) => {
+    test.setTimeout(180000);
+
+    // Check prerequisites
+    const haproxyAvailable = await isHAProxyAvailable();
+    const lmHealth = await getLMHealth();
+    const backendAvailable = await isSealBackendAvailable();
+
+    if (!haproxyAvailable || !lmHealth || !backendAvailable) {
+      console.log('Skipping: Prerequisites not met');
+      test.skip();
+      return;
+    }
+
+    const initialSeq = lmHealth.vaults.find((v) => v.type === 'sma')?.applied?.seq ?? 0;
+
+    // Subscribe to PRO tier
+    await page.click('text=Seal');
+    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
+    await page.locator('label:has-text("Agree to")').click();
+    await page.getByRole('heading', { name: 'PRO' }).click();
+    await page.locator('button:has-text("Subscribe to Service")').click();
+    await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
+    await page.waitForURL(/\/services\/seal\/overview/, { timeout: 10000 });
+
+    // Enable service
+    const serviceToggle = page.locator('button[role="switch"]');
+    if ((await serviceToggle.getAttribute('aria-checked')) === 'false') {
+      await serviceToggle.click();
+      await waitAfterMutation(page);
+    }
+
+    // Create seal key + package
+    await page.goto('/services/seal/overview?tab=seal-keys');
+    await waitAfterMutation(page);
+    await page.locator('button:has-text("Add New Seal Key")').click();
+    await waitAfterMutation(page);
+    const addPackageButton = page.locator('button:has-text("Add Package to this Seal Key")').first();
+    await expect(addPackageButton).toBeVisible({ timeout: 5000 });
+    await addPackageButton.click();
+    await waitAfterMutation(page);
+    await page.locator('input#packageAddress').fill('0x' + '4'.repeat(64));
+    await page.locator('input#name').fill('IP Allowlist Test 2');
+    await page.locator('button:has-text("Add Package")').last().click();
+    await waitAfterMutation(page);
+
+    const apiKeys = await getApiKeys(page.request);
+    const apiKey = apiKeys[0].fullKey;
+
+    // Configure IP allowlist with TWO IPs
+    const IP_1 = '10.20.30.40';
+    const IP_2 = '50.60.70.80';
+    const BLOCKED_IP = '99.99.99.99';
+
+    await page.goto('/services/seal/overview?tab=more-settings');
+    await waitAfterMutation(page);
+    await page.locator('#ip-allowlist-toggle').click();
+    await page.waitForTimeout(1000);
+
+    const textarea = page.locator('#ip-allowlist');
+    await textarea.fill(`${IP_1}, ${IP_2}`);
+    await page.waitForTimeout(300);
+    await page.locator('button:has-text("Save Changes")').click();
+    await page.waitForTimeout(1500);
+    console.log(`✅ IP allowlist configured: ${IP_1}, ${IP_2}`);
+
+    // Get customer ID for HAProxy config verification
+    const customerData = await getCustomerData(page.request);
+    const customerId = customerData.customer?.customerId as number;
+    console.log(`Customer ID: ${customerId}`);
+
+    // Trigger vault sync
+    await triggerGMSync();
+    await page.waitForTimeout(500);
+
+    // Wait for HAProxy config to have both IPs in the inline filter
+    // This verifies the actual config is applied, not just a version number
+    const configCheck = await waitForHAProxyConfig(customerId, {
+      hasIpAllowlist: true,
+      inlineIps: [IP_1, IP_2],
+    }, { timeout: 60000 });
+
+    if (!configCheck.ok) {
+      console.error('HAProxy config verification failed:', configCheck.error);
+      console.log('Config state:', JSON.stringify(configCheck, null, 2));
+      throw new Error(`HAProxy config not applied: ${configCheck.error}`);
+    }
+    console.log(`✅ HAProxy config verified: IP allowlist with inline IPs [${configCheck.inlineIps?.join(', ')}]`);
+
+    // Test first IP - should be allowed
+    const response1 = await sealHealthCheck({
+      apiKey,
+      port: SEAL_METERED_PORT,
+      clientIp: IP_1,
+    });
+    expect(response1.status).toBe(200);
+    console.log(`✅ First IP (${IP_1}) gets 200`);
+
+    // Test second IP - should also be allowed
+    const response2 = await sealHealthCheck({
+      apiKey,
+      port: SEAL_METERED_PORT,
+      clientIp: IP_2,
+    });
+    expect(response2.status).toBe(200);
+    console.log(`✅ Second IP (${IP_2}) gets 200`);
+
+    // Test blocked IP - should get 403
+    const blockedResponse = await sealHealthCheck({
+      apiKey,
+      port: SEAL_METERED_PORT,
+      clientIp: BLOCKED_IP,
+    });
+    expect(blockedResponse.status).toBe(403);
+    console.log(`✅ Blocked IP (${BLOCKED_IP}) gets 403`);
+  });
+
+  test('disabling IP allowlist allows all IPs again', async ({ page }) => {
+    test.setTimeout(180000);
+
+    // Check prerequisites
+    const haproxyAvailable = await isHAProxyAvailable();
+    const lmHealth = await getLMHealth();
+    const backendAvailable = await isSealBackendAvailable();
+
+    if (!haproxyAvailable || !lmHealth || !backendAvailable) {
+      console.log('Skipping: Prerequisites not met');
+      test.skip();
+      return;
+    }
+
+    const initialSeq = lmHealth.vaults.find((v) => v.type === 'sma')?.applied?.seq ?? 0;
+
+    // Subscribe to PRO tier
+    await page.click('text=Seal');
+    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
+    await page.locator('label:has-text("Agree to")').click();
+    await page.getByRole('heading', { name: 'PRO' }).click();
+    await page.locator('button:has-text("Subscribe to Service")').click();
+    await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
+    await page.waitForURL(/\/services\/seal\/overview/, { timeout: 10000 });
+
+    // Enable service + create seal key/package
+    const serviceToggle = page.locator('button[role="switch"]');
+    if ((await serviceToggle.getAttribute('aria-checked')) === 'false') {
+      await serviceToggle.click();
+      await waitAfterMutation(page);
+    }
+
+    await page.goto('/services/seal/overview?tab=seal-keys');
+    await waitAfterMutation(page);
+    await page.locator('button:has-text("Add New Seal Key")').click();
+    await waitAfterMutation(page);
+    const addPackageButton = page.locator('button:has-text("Add Package to this Seal Key")').first();
+    await expect(addPackageButton).toBeVisible({ timeout: 5000 });
+    await addPackageButton.click();
+    await waitAfterMutation(page);
+    await page.locator('input#packageAddress').fill('0x' + '5'.repeat(64));
+    await page.locator('input#name').fill('IP Allowlist Toggle Test');
+    await page.locator('button:has-text("Add Package")').last().click();
+    await waitAfterMutation(page);
+
+    const apiKeys = await getApiKeys(page.request);
+    const apiKey = apiKeys[0].fullKey;
+
+    const ALLOWED_IP = '11.22.33.44';
+    const OTHER_IP = '55.66.77.88';
+
+    // === STEP 1: Enable IP allowlist with specific IP ===
+    await page.goto('/services/seal/overview?tab=more-settings');
+    await waitAfterMutation(page);
+    await page.locator('#ip-allowlist-toggle').click();
+    await page.waitForTimeout(1000);
+
+    const textarea = page.locator('#ip-allowlist');
+    await textarea.fill(ALLOWED_IP);
+    await page.locator('button:has-text("Save Changes")').click();
+    await page.waitForTimeout(1500);
+
+    // Get customer ID for HAProxy config verification
+    const customerData = await getCustomerData(page.request);
+    const customerId = customerData.customer?.customerId as number;
+    console.log(`Customer ID: ${customerId}`);
+
+    // Trigger vault sync and wait for HAProxy config with IP allowlist
+    await triggerGMSync();
+    await page.waitForTimeout(500);
+
+    let configCheck = await waitForHAProxyConfig(customerId, {
+      hasIpAllowlist: true,
+      inlineIps: [ALLOWED_IP],
+    }, { timeout: 60000 });
+
+    if (!configCheck.ok) {
+      throw new Error(`HAProxy config not applied: ${configCheck.error}`);
+    }
+    console.log(`✅ HAProxy config verified: IP allowlist enabled`);
+
+    // Verify OTHER_IP is blocked
+    let otherResponse = await sealHealthCheck({
+      apiKey,
+      port: SEAL_METERED_PORT,
+      clientIp: OTHER_IP,
+    });
+    expect(otherResponse.status).toBe(403);
+    console.log(`✅ With allowlist ON: ${OTHER_IP} is blocked (403)`);
+
+    // === STEP 2: Disable IP allowlist ===
+    await page.locator('#ip-allowlist-toggle').click();
+    await page.waitForTimeout(1500);
+
+    // Trigger vault sync and wait for HAProxy config WITHOUT IP allowlist
+    await triggerGMSync();
+    await page.waitForTimeout(500);
+
+    configCheck = await waitForHAProxyConfig(customerId, {
+      hasIpAllowlist: false,
+    }, { timeout: 60000 });
+
+    if (!configCheck.ok) {
+      throw new Error(`HAProxy config not applied after disable: ${configCheck.error}`);
+    }
+    console.log('✅ HAProxy config verified: IP allowlist disabled');
+
+    // === STEP 3: Verify OTHER_IP is now allowed ===
+    otherResponse = await sealHealthCheck({
+      apiKey,
+      port: SEAL_METERED_PORT,
+      clientIp: OTHER_IP,
+    });
+    expect(otherResponse.status).toBe(200);
+    console.log(`✅ With allowlist OFF: ${OTHER_IP} is allowed (200)`);
   });
 });
