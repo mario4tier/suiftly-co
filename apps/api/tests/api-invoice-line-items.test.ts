@@ -37,6 +37,8 @@ async function insertMockLogs(options: {
   statusCode?: number;
   trafficType?: number;
   refreshAggregate?: boolean;
+  /** Pre-aggregated repeat count - each row represents this many requests */
+  repeat?: number;
 }): Promise<{ success: boolean; inserted?: number; error?: string }> {
   const response = await fetch(`${API_BASE}/test/stats/mock-logs`, {
     method: 'POST',
@@ -196,12 +198,15 @@ describe('API: Invoice Line Items', () => {
       // ---- Setup: Subscribe and enable ----
       await subscribeAndEnable('seal', 'starter', accessToken);
 
-      // ---- Insert 50,000 billable requests ----
+      // ---- Insert 50,000 billable requests using pre-aggregation ----
+      // Uses repeat field (production HAProxy feature) instead of 50k individual rows.
+      // The continuous aggregate uses SUM(repeat) so behavior is identical.
       // Note: Insert at 11:00 and clock is at 12:00, so bucket (11:00) < now (12:00)
       const insertResult = await insertMockLogs({
         customerId,
         serviceType: 1,
-        count: 50000,
+        count: 1,
+        repeat: 50000, // Pre-aggregated: 1 row representing 50,000 requests
         timestamp: '2024-01-15T11:00:00Z', // 1 hour before clock time
         trafficType: 1,
         refreshAggregate: true,
@@ -226,7 +231,7 @@ describe('API: Invoice Line Items', () => {
       expect(usageItem.quantity).toBe(50000);
       // 50,000 * $0.0001 = $5.00
       expect(usageItem.amountUsd).toBeCloseTo(5.00, 2);
-    }, 15000);
+    });
   });
 
   describe('Subscription Line Items', () => {

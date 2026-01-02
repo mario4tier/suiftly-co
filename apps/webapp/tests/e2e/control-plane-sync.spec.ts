@@ -165,16 +165,20 @@ test.describe('Control Plane Sync Flow', () => {
     // Subscribe to PRO tier
     const subscribeButton = page.locator('button:has-text("Subscribe to Service")');
     if (await subscribeButton.isVisible()) {
-      await page.locator('label:has-text("Agree to")').click();
+      // Click checkbox using role selector - most robust for Radix UI components
+      await page.getByRole('checkbox').click();
       await waitAfterMutation(page);
+      // Verify checkbox is checked before clicking subscribe
+      await expect(page.getByRole('checkbox')).toBeChecked({ timeout: 2000 });
       await subscribeButton.click();
       await waitAfterMutation(page);
       // Wait for navigation to overview (subscription worked even if toast was missed)
       await page.waitForURL(/\/services\/seal\/overview/, { timeout: 10000 });
     }
 
-    // Enable the service
+    // Wait for the interactive form to render (shows when service is subscribed)
     const serviceToggle = page.locator('button[role="switch"]');
+    await expect(serviceToggle).toBeVisible({ timeout: 10000 });
     const toggleState = await serviceToggle.getAttribute('aria-checked');
     if (toggleState === 'false') {
       await serviceToggle.click();
@@ -225,15 +229,20 @@ test.describe('Control Plane Sync Flow', () => {
 
     const subscribeButton = page.locator('button:has-text("Subscribe to Service")');
     if (await subscribeButton.isVisible()) {
-      await page.locator('label:has-text("Agree to")').click();
+      // Click checkbox using role selector - most robust for Radix UI components
+      await page.getByRole('checkbox').click();
       await waitAfterMutation(page);
+      // Verify checkbox is checked before clicking subscribe
+      await expect(page.getByRole('checkbox')).toBeChecked({ timeout: 2000 });
       await subscribeButton.click();
       await waitAfterMutation(page);
       // Wait for navigation to overview (subscription worked even if toast was missed)
       await page.waitForURL(/\/services\/seal\/overview/, { timeout: 10000 });
     }
 
+    // Wait for the interactive form to render (shows when service is subscribed)
     const serviceToggle = page.locator('button[role="switch"]');
+    await expect(serviceToggle).toBeVisible({ timeout: 10000 });
     const toggleState = await serviceToggle.getAttribute('aria-checked');
     if (toggleState === 'false') {
       await serviceToggle.click();
@@ -285,15 +294,20 @@ test.describe('Control Plane Sync Flow', () => {
 
     const subscribeButton = page.locator('button:has-text("Subscribe to Service")');
     if (await subscribeButton.isVisible()) {
-      await page.locator('label:has-text("Agree to")').click();
+      // Click checkbox using role selector - most robust for Radix UI components
+      await page.getByRole('checkbox').click();
       await waitAfterMutation(page);
+      // Verify checkbox is checked before clicking subscribe
+      await expect(page.getByRole('checkbox')).toBeChecked({ timeout: 2000 });
       await subscribeButton.click();
       await waitAfterMutation(page);
       // Wait for navigation to overview (subscription worked even if toast was missed)
       await page.waitForURL(/\/services\/seal\/overview/, { timeout: 10000 });
     }
 
+    // Wait for the interactive form to render (shows when service is subscribed)
     const serviceToggle = page.locator('button[role="switch"]');
+    await expect(serviceToggle).toBeVisible({ timeout: 10000 });
     const toggleState = await serviceToggle.getAttribute('aria-checked');
     if (toggleState === 'false') {
       await serviceToggle.click();

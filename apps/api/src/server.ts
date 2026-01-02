@@ -897,6 +897,7 @@ if (config.NODE_ENV !== 'production') {
         responseTimeMs: body.responseTimeMs ?? 50,
         bytesSent: body.bytesSent ?? 1024,
         spreadAcrossHours: body.spreadAcrossHours,
+        repeat: body.repeat, // Pre-aggregation support (production HAProxy feature)
       });
 
       // Optionally refresh the aggregate (default: true for tests)

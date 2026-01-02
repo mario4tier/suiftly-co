@@ -36,6 +36,8 @@ async function insertMockLogs(options: {
   trafficType?: number;
   spreadAcrossHours?: number;
   refreshAggregate?: boolean;
+  /** Pre-aggregated repeat count - each row represents this many requests */
+  repeat?: number;
 }): Promise<{ success: boolean; inserted?: number; error?: string }> {
   const response = await fetch(`${API_BASE}/test/stats/mock-logs`, {
     method: 'POST',
@@ -320,11 +322,12 @@ describe('API: Stats Endpoints', () => {
 
   describe('Usage billing integration', () => {
     it('should add usage charges to invoice on billing day', async () => {
-      // Insert usage logs in January
+      // Insert usage logs in January using pre-aggregation (production HAProxy feature)
       await insertMockLogs({
         customerId,
         serviceType: 1,
-        count: 10000,
+        count: 1,
+        repeat: 10000, // Pre-aggregated: 1 row representing 10,000 requests
         timestamp: '2024-01-15T12:00:00Z',
       });
 
