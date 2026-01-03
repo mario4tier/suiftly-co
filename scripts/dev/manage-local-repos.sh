@@ -7,25 +7,21 @@ echo "🛠️  Starting manage-local-repos.sh..."
 
 set -euo pipefail
 
-# Repository configurations - simplified hardcoded approach
+# Repository configurations - only seal reference needed
 declare -A REPO_URLS=(
     ["seal"]="https://github.com/MystenLabs/seal.git"
-    ["walrus"]="https://github.com/mario4tier/walrus.git"
 )
 
 declare -A REPO_DIRS=(
     ["seal"]="seal-reference-main"
-    ["walrus"]="walrus-reference-main"
 )
 
 declare -A REPO_ENV_VARS=(
     ["seal"]="SEAL_REFERENCE_PATH"
-    ["walrus"]="WALRUS_REFERENCE_PATH"
 )
 
 declare -A REPO_SPARSE_PATHS=(
     ["seal"]="crates/,contracts/,*.md,*.toml,*.lock,*.proto"
-    ["walrus"]="scripts/,configs/,*.md,*.sh,*.yml,*.yaml,*.toml"
 )
 
 readonly CLONE_DEPTH=100
@@ -88,7 +84,7 @@ write_status_success() {
         cat > "$STATUS_FILE" << EOF
 ✅ Repository sync successful
 Last sync: $(date '+%Y-%m-%d %H:%M:%S')
-Repositories: seal, walrus
+Repositories: seal
 Status: All repositories up-to-date and healthy
 EOF
     fi
@@ -405,8 +401,7 @@ DESCRIPTION:
   By default, ensures all repositories are ready (init/update as needed) and shows status.
 
 REPOSITORIES MANAGED:
-  - seal: Seal RPC and services repository
-  - walrus: Walrus infrastructure repository (reference copy)
+  - seal: Mysten Labs Seal SDK (MystenLabs/seal)
 
 COMMANDS:
   (default)             Ensure all repositories are ready, then show status
@@ -415,7 +410,6 @@ COMMANDS:
 
 ENVIRONMENT VARIABLES:
   SEAL_REFERENCE_PATH   Override seal repository path (default: ~/repos/seal-reference-main)
-  WALRUS_REFERENCE_PATH Override walrus repository path (default: ~/repos/walrus-reference-main)
 
 OPTIMIZATION:
   - Shallow clone with depth=$CLONE_DEPTH for faster operations
