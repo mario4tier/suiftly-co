@@ -127,6 +127,108 @@ export async function setupCpEnabled(
 }
 
 /**
+ * Query recent HAProxy raw logs from the database
+ * Used to verify that requests through HAProxy are being logged
+ *
+ * @param options.since - Only return logs after this timestamp (ISO string or Date)
+ * @param options.limit - Maximum number of logs to return (default 10)
+ * @param options.statusCode - Filter by status code
+ * @param options.pathPrefix - Filter by path prefix (e.g., 'v1/health')
+ */
+export interface HaproxyLogEntry {
+  timestamp: string;
+  customerId: number | null;
+  pathPrefix: string | null;
+  network: number;
+  serverId: number;
+  serviceType: number;
+  apiKeyFp: number;
+  feType: number;
+  trafficType: number;
+  eventType: number;
+  statusCode: number;
+  bytesSent: number;
+  timeTotal: number;
+  clientIp: string;
+  repeat: number;
+}
+
+export async function getRecentHaproxyLogs(
+  request: APIRequestContext,
+  options?: {
+    since?: string | Date;
+    limit?: number;
+    statusCode?: number;
+    pathPrefix?: string;
+  }
+): Promise<HaproxyLogEntry[]> {
+  const params = new URLSearchParams();
+  if (options?.since) {
+    const sinceStr = options.since instanceof Date ? options.since.toISOString() : options.since;
+    params.set('since', sinceStr);
+  }
+  if (options?.limit) params.set('limit', String(options.limit));
+  if (options?.statusCode) params.set('statusCode', String(options.statusCode));
+  if (options?.pathPrefix) params.set('pathPrefix', options.pathPrefix);
+
+  const url = `${API_BASE}/test/data/haproxy-logs?${params.toString()}`;
+  const response = await request.get(url);
+
+  if (!response.ok()) {
+    throw new Error(`Failed to get HAProxy logs: ${await response.text()}`);
+  }
+
+  const data = await response.json();
+  return data.logs || [];
+}
+
+/**
+ * Wait for HAProxy logs to appear in the database
+ * Useful for E2E tests that need to verify log ingestion through fluentd pipeline
+ *
+ * @param options.since - Only look for logs after this timestamp
+ * @param options.minCount - Minimum number of logs expected (default 1)
+ * @param options.timeout - Max time to wait in ms (default 15000)
+ * @param options.pollInterval - Poll interval in ms (default 1000)
+ */
+export async function waitForHaproxyLogs(
+  request: APIRequestContext,
+  options: {
+    since: string | Date;
+    minCount?: number;
+    timeout?: number;
+    pollInterval?: number;
+    statusCode?: number;
+    pathPrefix?: string;
+  }
+): Promise<HaproxyLogEntry[]> {
+  const minCount = options.minCount ?? 1;
+  const timeout = options.timeout ?? 15000;
+  const pollInterval = options.pollInterval ?? 1000;
+  const maxAttempts = Math.ceil(timeout / pollInterval);
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const logs = await getRecentHaproxyLogs(request, {
+      since: options.since,
+      statusCode: options.statusCode,
+      pathPrefix: options.pathPrefix,
+      limit: 100,
+    });
+
+    if (logs.length >= minCount) {
+      console.log(`Found ${logs.length} HAProxy log(s) after ${(attempt + 1) * pollInterval}ms`);
+      return logs;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, pollInterval));
+  }
+
+  throw new Error(
+    `Timeout waiting for HAProxy logs: expected >= ${minCount}, found 0 after ${timeout}ms`
+  );
+}
+
+/**
  * Ensure the test wallet has a specific balance
  * - Deposits or withdraws as needed to reach the target balance
  * - Creates escrow account if it doesn't exist

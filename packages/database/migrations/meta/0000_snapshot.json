@@ -2261,7 +2261,7 @@
         },
         "customer_id": {
           "name": "customer_id",
-          "type": "integer",
+          "type": "bigint",
           "primaryKey": false,
           "notNull": false
         },
@@ -2297,7 +2297,7 @@
         },
         "api_key_fp": {
           "name": "api_key_fp",
-          "type": "integer",
+          "type": "bigint",
           "primaryKey": false,
           "notNull": true
         },
@@ -2553,21 +2553,7 @@
           "with": {}
         }
       },
-      "foreignKeys": {
-        "haproxy_raw_logs_customer_id_customers_customer_id_fk": {
-          "name": "haproxy_raw_logs_customer_id_customers_customer_id_fk",
-          "tableFrom": "haproxy_raw_logs",
-          "tableTo": "customers",
-          "columnsFrom": [
-            "customer_id"
-          ],
-          "columnsTo": [
-            "customer_id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
+      "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},

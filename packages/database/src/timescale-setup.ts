@@ -8,7 +8,7 @@ import { db } from './db';
  * Based on walrus HAPROXY_LOGS.md specification:
  * - 1-hour chunks for faster pruning
  * - 6-hour compression policy
- * - 2-day retention (raw logs)
+ * - 7-day retention (raw logs)
  * - Continuous aggregates preserve long-term data
  */
 export async function setupTimescaleDB() {
@@ -39,11 +39,46 @@ export async function setupTimescaleDB() {
   `);
   console.log('✓ Added compression policy (6 hours)');
 
-  // Add retention policy (auto-delete raw data older than 2 days)
+  // Add retention policy (auto-delete raw data older than 7 days)
   await db.execute(sql`
-    SELECT add_retention_policy('haproxy_raw_logs', INTERVAL '2 days', if_not_exists => TRUE);
+    SELECT add_retention_policy('haproxy_raw_logs', INTERVAL '7 days', if_not_exists => TRUE);
   `);
-  console.log('✓ Added retention policy (2 days)');
+  console.log('✓ Added retention policy (7 days)');
+
+  // =========================================================================
+  // HAProxy System Logs (ALERT, WARNING, etc.)
+  // =========================================================================
+
+  // Create table if it doesn't exist (schema may not have migrated yet)
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS haproxy_system_logs (
+      timestamp TIMESTAMPTZ NOT NULL,
+      server_id SMALLINT NOT NULL,
+      msg TEXT NOT NULL,
+      cnt SMALLINT NOT NULL DEFAULT 1
+    );
+  `);
+
+  // Create index if it doesn't exist
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS idx_system_server_time
+    ON haproxy_system_logs (server_id, timestamp DESC);
+  `);
+
+  // Convert haproxy_system_logs to hypertable
+  await db.execute(sql`
+    SELECT create_hypertable('haproxy_system_logs', 'timestamp',
+      chunk_time_interval => INTERVAL '1 day',
+      if_not_exists => TRUE
+    );
+  `);
+  console.log('✓ Created haproxy_system_logs hypertable');
+
+  // Add retention policy (7 days - same as request logs)
+  await db.execute(sql`
+    SELECT add_retention_policy('haproxy_system_logs', INTERVAL '7 days', if_not_exists => TRUE);
+  `);
+  console.log('✓ Added haproxy_system_logs retention policy (7 days)');
 
   // =========================================================================
   // Stats Continuous Aggregate (STATS_DESIGN.md D2)

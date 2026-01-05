@@ -320,6 +320,68 @@ if (config.NODE_ENV !== 'production') {
     }
   });
 
+  // Get HAProxy raw logs for E2E test verification
+  // Used to verify that requests through HAProxy are being logged via fluentd pipeline
+  server.get('/test/data/haproxy-logs', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    const { db, haproxyRawLogs } = await import('@suiftly/database');
+    const { desc, gte, eq, and, sql } = await import('drizzle-orm');
+
+    const query = request.query as any;
+    const since = query.since ? new Date(query.since) : new Date(Date.now() - 60000); // Default: last minute
+    const limit = Math.min(parseInt(query.limit) || 10, 100);
+    const statusCode = query.statusCode ? parseInt(query.statusCode) : undefined;
+    const pathPrefix = query.pathPrefix || undefined;
+
+    try {
+      // Build conditions
+      const conditions = [gte(haproxyRawLogs.timestamp, since)];
+      if (statusCode !== undefined) {
+        conditions.push(eq(haproxyRawLogs.statusCode, statusCode));
+      }
+      if (pathPrefix) {
+        conditions.push(sql`${haproxyRawLogs.pathPrefix} LIKE ${pathPrefix + '%'}`);
+      }
+
+      const logs = await db
+        .select()
+        .from(haproxyRawLogs)
+        .where(and(...conditions))
+        .orderBy(desc(haproxyRawLogs.timestamp))
+        .limit(limit);
+
+      reply.send({
+        success: true,
+        count: logs.length,
+        since: since.toISOString(),
+        logs: logs.map((log) => ({
+          timestamp: log.timestamp.toISOString(),
+          customerId: log.customerId,
+          pathPrefix: log.pathPrefix,
+          network: log.network,
+          serverId: log.serverId,
+          serviceType: log.serviceType,
+          apiKeyFp: log.apiKeyFp,
+          feType: log.feType,
+          trafficType: log.trafficType,
+          eventType: log.eventType,
+          statusCode: log.statusCode,
+          bytesSent: log.bytesSent,
+          timeTotal: log.timeTotal,
+          clientIp: log.clientIp,
+          repeat: log.repeat,
+        })),
+      });
+    } catch (error: any) {
+      console.error('[HAPROXY-LOGS ERROR]', error);
+      reply.code(500).send({
+        success: false,
+        error: error.message || String(error),
+      });
+    }
+  });
+
   // Mock wallet control endpoints
   const { getSuiService } = await import('@suiftly/database/sui-mock');
   const suiService = getSuiService();

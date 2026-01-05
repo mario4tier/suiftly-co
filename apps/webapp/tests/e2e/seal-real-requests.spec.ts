@@ -24,7 +24,7 @@
 
 import { test, expect } from '@playwright/test';
 import { waitAfterMutation } from '../helpers/wait-utils';
-import { resetCustomer, ensureTestBalance, getCustomerData } from '../helpers/db';
+import { resetCustomer, ensureTestBalance, getCustomerData, waitForHaproxyLogs } from '../helpers/db';
 // Note: We intentionally don't use setupCpEnabled or createApiKey shortcuts
 // to test the real user experience through the UI
 import {
@@ -1203,5 +1203,152 @@ test.describe('Real Seal Requests - IP Allowlist', () => {
     });
     expect(otherResponse.status).toBe(200);
     console.log(`✅ With allowlist OFF: ${OTHER_IP} is allowed (200)`);
+  });
+});
+
+/**
+ * HAProxy Log Ingestion E2E Tests
+ *
+ * Tests the full fluentd log pipeline:
+ * 1. Request goes through HAProxy
+ * 2. HAProxy logs to rsyslog
+ * 3. rsyslog forwards to lm-fluentd (port 22500)
+ * 4. lm-fluentd aggregates and forwards to gm-fluentd (port 24224)
+ * 5. gm-fluentd inserts to PostgreSQL haproxy_raw_logs table
+ * 6. Test queries the database to verify the log arrived
+ *
+ * Prerequisites:
+ * - lm-fluentd and gm-fluentd services running
+ * - rsyslog configured to forward HAProxy logs
+ * - PostgreSQL with haproxy_raw_logs table
+ */
+test.describe('Real Seal Requests - Log Ingestion', () => {
+  test.beforeEach(async ({ page }) => {
+    // Reset customer to clean state
+    await resetCustomer(page.request);
+
+    // Clear cookies for clean auth state
+    await page.context().clearCookies();
+
+    // Authenticate with mock wallet
+    await page.goto('/');
+    await page.click('button:has-text("Mock Wallet")');
+    await waitAfterMutation(page);
+    await page.waitForURL('/dashboard', { timeout: 10000 });
+
+    // Ensure customer has balance for subscription
+    await ensureTestBalance(page.request, 1000, { spendingLimitUsd: 250 });
+  });
+
+  test('HAProxy request is logged to database via fluentd pipeline', async ({ page }) => {
+    test.setTimeout(180000); // Extended timeout for full flow with log ingestion
+
+    // Check prerequisites
+    const haproxyAvailable = await isHAProxyAvailable();
+    const lmHealth = await getLMHealth();
+    const backendAvailable = await isSealBackendAvailable();
+
+    if (!haproxyAvailable || !lmHealth) {
+      console.log('Skipping: HAProxy or LM not available');
+      test.skip();
+      return;
+    }
+
+    if (!backendAvailable) {
+      console.log('Skipping: Seal backend (mseal1) not running on port 20401');
+      test.skip();
+      return;
+    }
+
+    const initialSeq = lmHealth.vaults.find((v) => v.type === 'sma')?.applied?.seq ?? 0;
+
+    // === STEP 1: Subscribe and configure through UI ===
+    await page.click('text=Seal');
+    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
+    await page.locator('label:has-text("Agree to")').click();
+    await page.getByRole('heading', { name: 'STARTER' }).click();
+    await page.locator('button:has-text("Subscribe to Service")').click();
+    await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
+    await page.waitForURL(/\/services\/seal\/overview/, { timeout: 10000 });
+    console.log('✅ Subscribed to STARTER tier');
+
+    // Enable service
+    const serviceToggle = page.locator('button[role="switch"]');
+    if ((await serviceToggle.getAttribute('aria-checked')) === 'false') {
+      await serviceToggle.click();
+      await waitAfterMutation(page);
+    }
+
+    // Create seal key + package
+    await page.goto('/services/seal/overview?tab=seal-keys');
+    await waitAfterMutation(page);
+    await page.locator('button:has-text("Add New Seal Key")').click();
+    await waitAfterMutation(page);
+    const addPackageButton = page.locator('button:has-text("Add Package to this Seal Key")').first();
+    await expect(addPackageButton).toBeVisible({ timeout: 5000 });
+    await addPackageButton.click();
+    await waitAfterMutation(page);
+    await page.locator('input#packageAddress').fill('0x' + '6'.repeat(64));
+    await page.locator('input#name').fill('Log Ingestion Test Package');
+    await page.locator('button:has-text("Add Package")').last().click();
+    await waitAfterMutation(page);
+    console.log('✅ Seal key and package created');
+
+    // Get API key
+    const apiKeys = await getApiKeys(page.request);
+    const apiKey = apiKeys[0].fullKey;
+    console.log(`API key: ${apiKey.substring(0, 10)}...`);
+
+    // Trigger vault sync
+    await triggerGMSync();
+    await waitForVaultSync(initialSeq + 1, { requireCustomers: true });
+    console.log('✅ Vault sync complete');
+
+    // === STEP 2: Record timestamp before making request ===
+    // Subtract 1 second because HAProxy logs only have second precision,
+    // so a request made at :33.870 might be logged as :33.000
+    const beforeRequest = new Date(Date.now() - 1000);
+
+    // === STEP 3: Make health check request through HAProxy ===
+    const response = await sealHealthCheck({
+      apiKey,
+      port: SEAL_METERED_PORT,
+    });
+    console.log(`Health check response: ${response.status}`);
+    expect(response.status).toBe(200);
+    console.log('✅ Health check succeeded');
+
+    // === STEP 4: Wait for log to appear in database ===
+    // The fluentd pipeline has some latency:
+    // - lm-fluentd aggregates for 1 second window
+    // - Buffer flushes every 0.5 seconds
+    // - gm-fluentd processes and inserts to PostgreSQL
+    console.log('Waiting for log to appear in database...');
+
+    const logs = await waitForHaproxyLogs(page.request, {
+      since: beforeRequest,
+      minCount: 1,
+      timeout: 30000, // 30 seconds for fluentd pipeline (1s aggregation + buffer flushes)
+      pollInterval: 2000,
+      statusCode: 200,
+    });
+
+    // === STEP 5: Verify the log entry ===
+    expect(logs.length).toBeGreaterThanOrEqual(1);
+    const logEntry = logs[0];
+
+    console.log('Log entry found:', JSON.stringify(logEntry, null, 2));
+
+    // Verify key fields
+    expect(logEntry.statusCode).toBe(200);
+    expect(logEntry.serviceType).toBeGreaterThan(0); // Seal service type
+    expect(logEntry.repeat).toBeGreaterThanOrEqual(1);
+
+    console.log('✅ HAProxy log successfully ingested to database via fluentd pipeline!');
+    console.log(`   - Timestamp: ${logEntry.timestamp}`);
+    console.log(`   - Status: ${logEntry.statusCode}`);
+    console.log(`   - Service Type: ${logEntry.serviceType}`);
+    console.log(`   - Path Prefix: ${logEntry.pathPrefix}`);
+    console.log(`   - Repeat: ${logEntry.repeat}`);
   });
 });

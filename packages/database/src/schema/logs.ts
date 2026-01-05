@@ -1,6 +1,6 @@
 import { pgTable, timestamp, integer, text, bigint, smallint, index, serial, inet } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
-import { customers } from './customers';
+import { customers } from './customers'; // Used by userActivityLogs
 
 // User activity logs - tracks user-level actions (login, config changes, subscriptions)
 // Auto-purges to keep ~100 entries per customer
@@ -19,7 +19,8 @@ export const haproxyRawLogs = pgTable('haproxy_raw_logs', {
   timestamp: timestamp('timestamp', { withTimezone: true }).notNull(),
 
   // Customer context (NULL if unauthenticated)
-  customerId: integer('customer_id').references(() => customers.customerId),
+  // Note: bigint for unsigned 32-bit values, no FK since logs may contain invalid/test IDs
+  customerId: bigint('customer_id', { mode: 'number' }),
   pathPrefix: text('path_prefix'),
   configHex: bigint('config_hex', { mode: 'number' }),
 
@@ -27,7 +28,7 @@ export const haproxyRawLogs = pgTable('haproxy_raw_logs', {
   network: smallint('network').notNull(),
   serverId: smallint('server_id').notNull(),
   serviceType: smallint('service_type').notNull(),
-  apiKeyFp: integer('api_key_fp').notNull(),
+  apiKeyFp: bigint('api_key_fp', { mode: 'number' }).notNull(),
   feType: smallint('fe_type').notNull(),
   trafficType: smallint('traffic_type').notNull(),
   eventType: smallint('event_type').notNull(),
@@ -63,4 +64,25 @@ export const haproxyRawLogs = pgTable('haproxy_raw_logs', {
   idxLogsEventType: index('idx_logs_event_type').on(table.eventType, table.timestamp.desc()).where(sql`${table.eventType} != 0`),
   idxLogsStatusCode: index('idx_logs_status_code').on(table.statusCode, table.timestamp.desc()),
   idxLogsApiKeyFp: index('idx_logs_api_key_fp').on(table.apiKeyFp, table.timestamp.desc()).where(sql`${table.apiKeyFp} != 0`),
+}));
+
+// HAProxy system logs - ALERT, WARNING, and other non-request logs
+// These are packaged by lm-fluentd with hdr (server_id + log_type), msg, and cnt
+// Much simpler schema than request logs - just for debugging/monitoring
+export const haproxySystemLogs = pgTable('haproxy_system_logs', {
+  // Timestamp (TimescaleDB partition key)
+  timestamp: timestamp('timestamp', { withTimezone: true }).notNull(),
+
+  // Server identification (from hdr field bits 63-56)
+  serverId: smallint('server_id').notNull(),
+
+  // Raw message content (ALERT, WARNING, etc.)
+  msg: text('msg').notNull(),
+
+  // Repeat count from rsyslog deduplication
+  // When rsyslog collapses "message repeated N times", cnt = N
+  // Default 1 = single occurrence (no deduplication)
+  cnt: smallint('cnt').notNull().default(1),
+}, (table) => ({
+  idxSystemServerTime: index('idx_system_server_time').on(table.serverId, table.timestamp.desc()),
 }));

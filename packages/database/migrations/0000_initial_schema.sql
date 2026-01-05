@@ -240,13 +240,13 @@ CREATE TABLE "usage_records" (
 --> statement-breakpoint
 CREATE TABLE "haproxy_raw_logs" (
 	"timestamp" timestamp with time zone NOT NULL,
-	"customer_id" integer,
+	"customer_id" bigint,
 	"path_prefix" text,
 	"config_hex" bigint,
 	"network" smallint NOT NULL,
 	"server_id" smallint NOT NULL,
 	"service_type" smallint NOT NULL,
-	"api_key_fp" integer NOT NULL,
+	"api_key_fp" bigint NOT NULL,
 	"fe_type" smallint NOT NULL,
 	"traffic_type" smallint NOT NULL,
 	"event_type" smallint NOT NULL,
@@ -380,7 +380,6 @@ ALTER TABLE "seal_keys" ADD CONSTRAINT "seal_keys_customer_id_customers_customer
 ALTER TABLE "seal_keys" ADD CONSTRAINT "seal_keys_instance_id_service_instances_instance_id_fk" FOREIGN KEY ("instance_id") REFERENCES "public"."service_instances"("instance_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "seal_packages" ADD CONSTRAINT "seal_packages_seal_key_id_seal_keys_seal_key_id_fk" FOREIGN KEY ("seal_key_id") REFERENCES "public"."seal_keys"("seal_key_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "usage_records" ADD CONSTRAINT "usage_records_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "haproxy_raw_logs" ADD CONSTRAINT "haproxy_raw_logs_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "user_activity_logs" ADD CONSTRAINT "user_activity_logs_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "mock_sui_transactions" ADD CONSTRAINT "mock_sui_transactions_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "idx_admin_notif_severity" ON "admin_notifications" USING btree ("severity");--> statement-breakpoint

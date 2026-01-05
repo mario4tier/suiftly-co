@@ -13,9 +13,12 @@ COOKIE_SECRET=<32-byte-base64>
 # X_API_KEY_SECRET: 64 hex chars - MUST be identical on API server AND all HAProxy nodes
 X_API_KEY_SECRET=<64-hex-chars>
 DATABASE_URL=postgresql://deploy:PROD_PASSWORD@localhost/suiftly_prod
+# FLUENTD_DB_PASSWORD: For HAProxy log ingestion (gm-fluentd → PostgreSQL)
+FLUENTD_DB_PASSWORD=<random-password>
 
 # Generate base64 secrets: openssl rand -base64 32
 # Generate X_API_KEY_SECRET: python3 -c "import secrets; print(secrets.token_hex(32))"
+# Generate FLUENTD_DB_PASSWORD: python3 -c "import secrets; print(secrets.token_urlsafe(24))"
 # Backup to password manager BEFORE using in production
 # CRITICAL: X_API_KEY_SECRET must be copied to all HAProxy nodes
 ```
@@ -30,6 +33,8 @@ COOKIE_SECRET=ZGV2LWNvb2tpZS1zZWNyZXQtdGVzdGluZy1vbmx5ISE=
 # X_API_KEY_SECRET: 64 hex chars (shared with HAProxy test infrastructure)
 X_API_KEY_SECRET=8776c4c0e84428c6e86fca4647abe16459649aa78fe4c72e7643dc3a14343337
 DATABASE_URL=postgresql://deploy:deploy_password_change_me@localhost/suiftly_dev
+# FLUENTD_DB_PASSWORD: For HAProxy log ingestion (auto-set by setup-user.py)
+FLUENTD_DB_PASSWORD=fluentd_dev_password
 ```
 
 ---
@@ -54,6 +59,7 @@ DATABASE_URL=postgresql://deploy:deploy_password_change_me@localhost/suiftly_dev
 | `COOKIE_SECRET` | Secure cookie signing | 32+ bytes base64 | Fastify cookie plugin |
 | `X_API_KEY_SECRET` | Encrypt API keys for HAProxy validation | 64 hex chars (32 bytes) | Shared with HAProxy |
 | `DATABASE_URL` | PostgreSQL connection (contains password) | URI | Production only |
+| `FLUENTD_DB_PASSWORD` | gm-fluentd PostgreSQL user password | URL-safe string | Copied to /etc/fluentd/fluentd.env |
 
 ### X_API_KEY_SECRET (Special Case)
 
@@ -69,6 +75,7 @@ DATABASE_URL=postgresql://deploy:deploy_password_change_me@localhost/suiftly_dev
 |---------|----------|-------------|-----|
 | API Server | `~/.suiftly.env` | 600 (user only) | Loaded by config.ts at startup |
 | HAProxy | `/etc/default/haproxy` | 600 (root only) | Sourced by systemd as root |
+| gm-fluentd | `/etc/fluentd/fluentd.env` | 640 (root:fluentd) | Sourced by systemd for fluentd user |
 
 **API Server** reads from user's home directory because it runs as a regular user.
 
@@ -83,7 +90,17 @@ DATABASE_URL=postgresql://deploy:deploy_password_change_me@localhost/suiftly_dev
 X_API_KEY_SECRET="8776c4c0e84428c6e86fca4647abe16459649aa78fe4c72e7643dc3a14343337"
 ```
 
-**Setup script** (`setup-user.py`) configures both locations automatically in dev/test.
+**gm-fluentd** uses `/etc/fluentd/fluentd.env`:
+- Systemd's `EnvironmentFile=/etc/fluentd/fluentd.env` sources this file
+- 640 permissions (root:fluentd) allows fluentd group to read
+- Contains `FLUENTD_DB_PASSWORD` for PostgreSQL connection
+
+```bash
+# /etc/fluentd/fluentd.env (file contents)
+FLUENTD_DB_PASSWORD=fluentd_dev_password
+```
+
+**Setup script** (`setup-user.py`) configures all locations automatically in dev/test.
 
 **CRITICAL - Must be identical on:**
 - API Server (`~/.suiftly.env`)
@@ -226,6 +243,7 @@ echo "DB_APP_FIELDS_ENCRYPTION_KEY=..." >> ~/.suiftly.env
 echo "COOKIE_SECRET=..." >> ~/.suiftly.env
 echo "X_API_KEY_SECRET=..." >> ~/.suiftly.env  # MUST match HAProxy nodes!
 echo "DATABASE_URL=..." >> ~/.suiftly.env
+echo "FLUENTD_DB_PASSWORD=..." >> ~/.suiftly.env
 chmod 600 ~/.suiftly.env
 
 # 2. Copy X_API_KEY_SECRET to all HAProxy nodes
@@ -233,10 +251,16 @@ chmod 600 ~/.suiftly.env
 ssh haproxy-node 'echo "X_API_KEY_SECRET=\"...\"" | sudo tee -a /etc/default/haproxy'
 ssh haproxy-node 'sudo systemctl restart haproxy'
 
-# 3. Restore database from backup
+# 3. Copy FLUENTD_DB_PASSWORD to gm-fluentd nodes
+# gm-fluentd uses /etc/fluentd/fluentd.env
+ssh db-node 'echo "FLUENTD_DB_PASSWORD=..." | sudo tee /etc/fluentd/fluentd.env'
+ssh db-node 'sudo chown root:fluentd /etc/fluentd/fluentd.env && sudo chmod 640 /etc/fluentd/fluentd.env'
+ssh db-node 'sudo systemctl restart gm-fluentd'
+
+# 4. Restore database from backup
 psql suiftly_prod < backup.sql
 
-# 4. Verify encryption works
+# 5. Verify encryption works
 curl https://api.suiftly.io/health
 ```
 

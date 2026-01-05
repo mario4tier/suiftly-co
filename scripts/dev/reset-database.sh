@@ -259,6 +259,30 @@ ON CONFLICT (id) DO NOTHING;
 EOF
 echo "   ✅ System control initialized"
 
+# Step 9: Setup fluentd user for HAProxy log ingestion
+echo "9️⃣  Setting up fluentd database user..."
+
+# Check if fluentd user exists (avoid unnecessary SQL)
+if sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='fluentd'" | grep -q 1; then
+  echo "   ℹ️  fluentd user already exists"
+else
+  sudo -u postgres psql -c "CREATE USER fluentd WITH PASSWORD 'fluentd_dev_password';"
+  echo "   ✅ Created fluentd user (password: fluentd_dev_password)"
+fi
+
+# Grants must run every time since database was just recreated
+sudo -u postgres psql -d "$DB_NAME" <<EOF
+GRANT CONNECT ON DATABASE $DB_NAME TO fluentd;
+GRANT USAGE ON SCHEMA public TO fluentd;
+-- Request logs table (aggregated HAProxy request logs)
+GRANT INSERT ON haproxy_raw_logs TO fluentd;
+GRANT SELECT ON haproxy_raw_logs TO fluentd;
+-- System logs table (HAProxy ALERT, WARNING, etc.)
+GRANT INSERT ON haproxy_system_logs TO fluentd;
+GRANT SELECT ON haproxy_system_logs TO fluentd;
+EOF
+echo "   ✅ fluentd permissions granted"
+
 echo ""
 echo "🎉 Database reset complete!"
 echo ""

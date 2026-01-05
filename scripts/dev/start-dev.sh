@@ -64,6 +64,44 @@ if [ "$SYNC_TIMER_ACTIVE" != "active" ] && [ "$SYNC_SERVICE_ACTIVE" != "active" 
 fi
 
 # ============================================================================
+# Check optional services (warnings only - not required for basic dev)
+# ============================================================================
+
+# Track warnings to display summary at the end
+WARNINGS=""
+
+# Check HAProxy (required for Seal service E2E tests)
+HAPROXY_ACTIVE=$(systemctl is-active haproxy 2>/dev/null || echo "inactive")
+if [ "$HAPROXY_ACTIVE" != "active" ]; then
+  WARNINGS="${WARNINGS}  - haproxy: sudo systemctl start haproxy\n"
+fi
+
+# Check mseal1 backend (required for Seal service E2E tests)
+MSEAL_ACTIVE=$(systemctl is-active mseal1-node 2>/dev/null || echo "inactive")
+if [ "$MSEAL_ACTIVE" != "active" ]; then
+  WARNINGS="${WARNINGS}  - mseal1-node: sudo systemctl start mseal1-node\n"
+fi
+
+# Check fluentd services (required for HAProxy log ingestion E2E tests)
+LM_FLUENTD_ACTIVE=$(systemctl is-active lm-fluentd 2>/dev/null || echo "inactive")
+GM_FLUENTD_ACTIVE=$(systemctl is-active gm-fluentd 2>/dev/null || echo "inactive")
+if [ "$LM_FLUENTD_ACTIVE" != "active" ]; then
+  WARNINGS="${WARNINGS}  - lm-fluentd: sudo systemctl start lm-fluentd\n"
+fi
+if [ "$GM_FLUENTD_ACTIVE" != "active" ]; then
+  WARNINGS="${WARNINGS}  - gm-fluentd: sudo systemctl start gm-fluentd\n"
+fi
+
+if [ -n "$WARNINGS" ]; then
+  echo ""
+  echo "WARNING: Some optional services are not running."
+  echo "  These are needed for E2E tests but not for basic development."
+  echo ""
+  echo "  To start missing services:"
+  echo -e "$WARNINGS"
+fi
+
+# ============================================================================
 # Helper functions
 # ============================================================================
 
