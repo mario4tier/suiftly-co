@@ -13,6 +13,7 @@ import { eq, and, desc, sql } from 'drizzle-orm';
 import { SPENDING_LIMIT, INVOICE_LINE_ITEM_TYPE } from '@suiftly/shared/constants';
 import { config } from '../lib/config';
 import { buildDraftLineItems } from '../lib/invoice-formatter';
+import { dbClock } from '@suiftly/shared/db-clock';
 
 /**
  * Format a semantic line item into a human-readable description
@@ -418,7 +419,7 @@ export const billingRouter = router({
         const escrowResult = await findOrCreateCustomerWithEscrow({
           walletAddress: ctx.user.walletAddress,
           escrowContractId: result.createdObjects.escrowAddress,
-        });
+        }, dbClock);
         customer = escrowResult.customer;
       }
 
@@ -534,7 +535,7 @@ export const billingRouter = router({
         const escrowResult = await findOrCreateCustomerWithEscrow({
           walletAddress: ctx.user.walletAddress,
           escrowContractId: result.createdObjects.escrowAddress,
-        });
+        }, dbClock);
         customer = escrowResult.customer;
       }
 
@@ -612,7 +613,7 @@ export const billingRouter = router({
         const result = await findOrCreateCustomerWithEscrow({
           walletAddress: ctx.user.walletAddress,
           escrowContractId: input.escrowAddress,
-        });
+        }, dbClock);
         customer = result.customer;
       } catch (error: any) {
         if (error.code === 'ESCROW_CONFLICT') {
@@ -702,7 +703,7 @@ export const billingRouter = router({
         const escrowResult = await findOrCreateCustomerWithEscrow({
           walletAddress: ctx.user.walletAddress,
           escrowContractId: result.createdObjects.escrowAddress,
-        });
+        }, dbClock);
         customer = escrowResult.customer;
       }
 

@@ -40,13 +40,17 @@ export interface UsageDataPoint {
 }
 
 /**
- * Response time data point for time-series graphs
+ * Response time data point for time-series graphs (whisker chart)
  */
 export interface ResponseTimeDataPoint {
   /** Time bucket (hour or day start) */
   bucket: Date;
   /** Average response time in milliseconds */
   avgResponseTimeMs: number;
+  /** Minimum response time in milliseconds */
+  minResponseTimeMs: number;
+  /** Maximum response time in milliseconds */
+  maxResponseTimeMs: number;
 }
 
 /**
@@ -169,6 +173,7 @@ export async function getUsageStats(
 
   // For daily aggregation, we need to re-bucket the hourly data
   if (bucketSize === '1 day') {
+    const startTime = new Date(now.getTime() - parseInterval(interval));
     const result = await db.execute(sql.raw(`
       SELECT
         date_trunc('day', bucket) AS bucket,
@@ -176,7 +181,7 @@ export async function getUsageStats(
       FROM stats_per_hour
       WHERE customer_id = ${customerId}
         AND service_type = ${serviceType}
-        AND bucket >= NOW() - INTERVAL '${interval}'
+        AND bucket >= '${startTime.toISOString()}'::timestamptz
         AND bucket < '${now.toISOString()}'::timestamptz
       GROUP BY date_trunc('day', bucket)
       ORDER BY bucket ASC
@@ -229,43 +234,57 @@ export async function getResponseTimeStats(
   const now = clock.now();
   const { interval, bucketSize } = getTimeRangeParams(range);
 
-  // For daily aggregation, compute weighted average
+  // For daily aggregation, compute weighted average (by request count) and min/max
+  // Weight the hourly averages by billable_requests to get proper daily average
+  // HAVING clause excludes days with no billable traffic (prevents NULL → 0 coercion for whiskers)
   if (bucketSize === '1 day') {
+    const startTime = new Date(now.getTime() - parseInterval(interval));
     const result = await db.execute(sql.raw(`
       SELECT
         date_trunc('day', bucket) AS bucket,
-        AVG(avg_response_time_ms)::double precision AS avg_response_time_ms
+        SUM(avg_response_time_ms * COALESCE(billable_requests, 0))::double precision / SUM(COALESCE(billable_requests, 0)) AS avg_response_time_ms,
+        MIN(min_response_time_ms)::integer AS min_response_time_ms,
+        MAX(max_response_time_ms)::integer AS max_response_time_ms
       FROM stats_per_hour
       WHERE customer_id = ${customerId}
         AND service_type = ${serviceType}
-        AND bucket >= NOW() - INTERVAL '${interval}'
+        AND bucket >= '${startTime.toISOString()}'::timestamptz
         AND bucket < '${now.toISOString()}'::timestamptz
       GROUP BY date_trunc('day', bucket)
+      HAVING SUM(COALESCE(billable_requests, 0)) > 0
       ORDER BY bucket ASC
     `));
 
     return result.rows.map((row: any) => ({
       bucket: new Date(row.bucket),
-      avgResponseTimeMs: Number(row.avg_response_time_ms ?? 0),
+      avgResponseTimeMs: Number(row.avg_response_time_ms),
+      minResponseTimeMs: Number(row.min_response_time_ms),
+      maxResponseTimeMs: Number(row.max_response_time_ms),
     }));
   }
 
   // Hourly data - use directly from continuous aggregate
+  // Filter out buckets with no billable traffic (prevents NULL → 0 coercion for whiskers)
   const result = await db.execute(sql`
     SELECT
       bucket,
-      avg_response_time_ms
+      avg_response_time_ms,
+      min_response_time_ms,
+      max_response_time_ms
     FROM stats_per_hour
     WHERE customer_id = ${customerId}
       AND service_type = ${serviceType}
       AND bucket >= ${new Date(now.getTime() - parseInterval(interval))}
       AND bucket < ${now}
+      AND billable_requests > 0
     ORDER BY bucket ASC
   `);
 
   return result.rows.map((row: any) => ({
     bucket: new Date(row.bucket),
-    avgResponseTimeMs: Number(row.avg_response_time_ms ?? 0),
+    avgResponseTimeMs: Number(row.avg_response_time_ms),
+    minResponseTimeMs: Number(row.min_response_time_ms),
+    maxResponseTimeMs: Number(row.max_response_time_ms),
   }));
 }
 
@@ -294,6 +313,7 @@ export async function getTrafficStats(
 
   // For daily aggregation, we need to re-bucket the hourly data
   if (bucketSize === '1 day') {
+    const startTime = new Date(now.getTime() - parseInterval(interval));
     const result = await db.execute(sql.raw(`
       SELECT
         date_trunc('day', bucket) AS bucket,
@@ -305,7 +325,7 @@ export async function getTrafficStats(
       FROM stats_per_hour
       WHERE customer_id = ${customerId}
         AND service_type = ${serviceType}
-        AND bucket >= NOW() - INTERVAL '${interval}'
+        AND bucket >= '${startTime.toISOString()}'::timestamptz
         AND bucket < '${now.toISOString()}'::timestamptz
       GROUP BY date_trunc('day', bucket)
       ORDER BY bucket ASC

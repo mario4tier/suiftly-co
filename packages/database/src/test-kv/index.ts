@@ -13,6 +13,7 @@
 import { db } from '../db';
 import { testKv, TEST_KV_KEYS } from '../schema/test-kv';
 import { eq } from 'drizzle-orm';
+import { dbClock } from '@suiftly/shared/db-clock';
 
 export { TEST_KV_KEYS };
 
@@ -33,18 +34,19 @@ export async function getTestKvValue(key: string): Promise<string | null> {
  * Set a value in test_kv (upsert)
  */
 export async function setTestKvValue(key: string, value: string): Promise<void> {
+  const now = dbClock.now();
   await db
     .insert(testKv)
     .values({
       key,
       value,
-      updatedAt: new Date(),
+      updatedAt: now,
     })
     .onConflictDoUpdate({
       target: testKv.key,
       set: {
         value,
-        updatedAt: new Date(),
+        updatedAt: now,
       },
     });
 }

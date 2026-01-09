@@ -175,8 +175,8 @@ export async function runPeriodicBillingJob(
     const idempotencyAgeHours = 90 * 24; // 90 days in hours
     result.phases.housekeeping.idempotencyRecordsDeleted = await cleanupIdempotencyRecords(
       db,
-      idempotencyAgeHours,
-      config.clock.now() // Use clock for consistent time in tests
+      config.clock,
+      idempotencyAgeHours
     );
 
     // Clean up cancellation history older than 30 days (cooldown is 7 days, keep some buffer)

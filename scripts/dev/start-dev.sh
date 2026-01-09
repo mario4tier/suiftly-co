@@ -82,16 +82,6 @@ if [ "$MSEAL_ACTIVE" != "active" ]; then
   WARNINGS="${WARNINGS}  - mseal1-node: sudo systemctl start mseal1-node\n"
 fi
 
-# Check fluentd services (required for HAProxy log ingestion E2E tests)
-LM_FLUENTD_ACTIVE=$(systemctl is-active lm-fluentd 2>/dev/null || echo "inactive")
-GM_FLUENTD_ACTIVE=$(systemctl is-active gm-fluentd 2>/dev/null || echo "inactive")
-if [ "$LM_FLUENTD_ACTIVE" != "active" ]; then
-  WARNINGS="${WARNINGS}  - lm-fluentd: sudo systemctl start lm-fluentd\n"
-fi
-if [ "$GM_FLUENTD_ACTIVE" != "active" ]; then
-  WARNINGS="${WARNINGS}  - gm-fluentd: sudo systemctl start gm-fluentd\n"
-fi
-
 if [ -n "$WARNINGS" ]; then
   echo ""
   echo "WARNING: Some optional services are not running."
@@ -121,7 +111,8 @@ is_service_running() {
   local service=$1
   local result
   result=$(curl -sf "$SUDOB_URL/api/service/status?service=$service" 2>&1)
-  echo "$result" | grep -q '"status":"running"'
+  # sudob returns "active":true for running services
+  echo "$result" | grep -q '"active":true'
 }
 
 # ============================================================================
@@ -218,6 +209,37 @@ fi
 echo "  Local Manager started"
 
 # ============================================================================
+# Start Fluentd services (systemd via sudob) - for HAProxy log ingestion
+# ============================================================================
+echo "Starting Fluentd services..."
+
+# Start gm-fluentd (aggregates logs from LM and writes to DB)
+if is_service_running "gm-fluentd"; then
+  echo "  gm-fluentd already running"
+else
+  sudob_service start gm-fluentd >/dev/null 2>&1 || true
+  sleep 1
+  if is_service_running "gm-fluentd"; then
+    echo "  gm-fluentd started"
+  else
+    echo "  WARNING: gm-fluentd failed to start (may not be configured)"
+  fi
+fi
+
+# Start lm-fluentd (forwards HAProxy logs to GM)
+if is_service_running "lm-fluentd"; then
+  echo "  lm-fluentd already running"
+else
+  sudob_service start lm-fluentd >/dev/null 2>&1 || true
+  sleep 1
+  if is_service_running "lm-fluentd"; then
+    echo "  lm-fluentd started"
+  else
+    echo "  WARNING: lm-fluentd failed to start (may not be configured)"
+  fi
+fi
+
+# ============================================================================
 # Start API server (direct npm - not systemd)
 # ============================================================================
 echo "Starting API server (MOCK_AUTH=true)..."
@@ -267,22 +289,32 @@ echo "  Webapp started (PID: $WEBAPP_PID)"
 # ============================================================================
 # Summary
 # ============================================================================
+# Check fluentd status for summary
+GM_FLUENTD_STATUS="stopped"
+LM_FLUENTD_STATUS="stopped"
+is_service_running "gm-fluentd" && GM_FLUENTD_STATUS="running"
+is_service_running "lm-fluentd" && LM_FLUENTD_STATUS="running"
+
 echo ""
 echo "========================================"
 echo "Dev servers running!"
 echo "========================================"
-echo "GM:     http://localhost:22600 (systemd)"
-echo "Admin:  http://localhost:22601 (PID: $ADMIN_PID)"
-echo "LM:     http://localhost:22610 (systemd)"
-echo "API:    http://localhost:22700 (PID: $API_PID)"
-echo "Webapp: http://localhost:22710 (PID: $WEBAPP_PID)"
+echo "GM:         http://localhost:22600 (systemd)"
+echo "Admin:      http://localhost:22601 (PID: $ADMIN_PID)"
+echo "LM:         http://localhost:22610 (systemd)"
+echo "gm-fluentd: $GM_FLUENTD_STATUS (systemd)"
+echo "lm-fluentd: $LM_FLUENTD_STATUS (systemd)"
+echo "API:        http://localhost:22700 (PID: $API_PID)"
+echo "Webapp:     http://localhost:22710 (PID: $WEBAPP_PID)"
 echo ""
 echo "Logs:"
-echo "  GM:     sudo journalctl -u suiftly-gm -f"
-echo "  LM:     sudo journalctl -u suiftly-lm -f"
-echo "  Admin:  /tmp/suiftly-admin.log"
-echo "  API:    /tmp/suiftly-api.log"
-echo "  Webapp: /tmp/suiftly-webapp.log"
+echo "  GM:         sudo journalctl -u suiftly-gm -f"
+echo "  LM:         sudo journalctl -u suiftly-lm -f"
+echo "  gm-fluentd: sudo journalctl -u gm-fluentd -f"
+echo "  lm-fluentd: sudo journalctl -u lm-fluentd -f"
+echo "  Admin:      /tmp/suiftly-admin.log"
+echo "  API:        /tmp/suiftly-api.log"
+echo "  Webapp:     /tmp/suiftly-webapp.log"
 echo ""
 echo "To stop: ./scripts/dev/stop-dev.sh"
 echo "========================================"

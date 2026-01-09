@@ -1,6 +1,6 @@
 #!/bin/bash
 # Stop all dev servers cleanly
-# Uses sudob for systemd services (GM, LM), direct kill for others
+# Uses sudob for systemd services (GM, LM, fluentd), direct kill for others
 
 SUDOB_URL="http://localhost:22800"
 SYSTEM_CONF="/etc/walrus/system.conf"
@@ -18,6 +18,24 @@ if [ ! -f "$SYSTEM_CONF" ]; then
   echo "    sudo ~/walrus/scripts/configure-deployment.py"
   echo ""
   exit 1
+fi
+
+# ============================================================================
+# Check sudob is running (required for managing systemd services)
+# ============================================================================
+if ! curl -sf "$SUDOB_URL/api/health" >/dev/null 2>&1; then
+  echo ""
+  echo "ERROR: sudob service is NOT running!"
+  echo "  sudob is required to manage systemd services (GM, LM, fluentd)."
+  echo ""
+  echo "  To start sudob:"
+  echo "    sudo systemctl start sudob"
+  echo ""
+  echo "  Continuing with non-systemd cleanup only..."
+  echo ""
+  SUDOB_AVAILABLE=false
+else
+  SUDOB_AVAILABLE=true
 fi
 
 echo "Stopping dev servers..."
@@ -53,15 +71,19 @@ sudob_service() {
 # ============================================================================
 # Stop systemd services via sudob (if sudob is running)
 # ============================================================================
-if curl -sf "$SUDOB_URL/api/health" >/dev/null 2>&1; then
+if [ "$SUDOB_AVAILABLE" = true ]; then
+  echo "  Stopping fluentd services via sudob..."
+  sudob_service stop lm-fluentd >/dev/null 2>&1 || true
+  sudob_service stop gm-fluentd >/dev/null 2>&1 || true
+
   echo "  Stopping GM via sudob..."
   sudob_service stop suiftly-gm >/dev/null || true
 
   echo "  Stopping LM via sudob..."
   sudob_service stop suiftly-lm >/dev/null || true
 else
-  echo "  sudob not running - GM/LM must be stopped manually:"
-  echo "    sudo systemctl stop suiftly-gm suiftly-lm"
+  echo "  sudob not running - systemd services must be stopped manually:"
+  echo "    sudo systemctl stop lm-fluentd gm-fluentd suiftly-gm suiftly-lm"
 fi
 
 # ============================================================================

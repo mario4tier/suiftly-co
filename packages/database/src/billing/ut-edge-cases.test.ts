@@ -141,7 +141,7 @@ describe('Billing Edge Cases', () => {
 
       // Clean up records older than 24 hours (using mock clock time)
       const deletedCount = await db.transaction(async (tx) => {
-        return await cleanupIdempotencyRecords(tx, 24, clock.now());
+        return await cleanupIdempotencyRecords(tx, clock, 24);
       });
 
       // Verify only the old record was deleted

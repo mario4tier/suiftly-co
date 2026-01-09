@@ -107,6 +107,8 @@ export const statsRouter = router({
       return stats.map(point => ({
         bucket: point.bucket.toISOString(),
         avgResponseTimeMs: point.avgResponseTimeMs,
+        minResponseTimeMs: point.minResponseTimeMs,
+        maxResponseTimeMs: point.maxResponseTimeMs,
       }));
     }),
 
@@ -293,41 +295,42 @@ export const statsRouter = router({
       // Guaranteed cap: 45 req/s × 3600 = 162,000 requests/hour
       // Burst only appears when traffic exceeds 45 req/s
       //
-      // Using repeat field for efficient insertion: 1 row per category per hour
-      // Each row's repeat value represents the actual request count (no scaling needed)
+      // For whisker chart visualization, we insert 5 logs per hour with varying response times
+      // to create realistic min/avg/max spread. Each log uses repeat to represent the request count.
       const GUARANTEED_CAP = 45 * 60 * 60; // 162,000 req/hour
 
       // Define traffic as req/s for each hour, then calculate guaranteed vs burst
+      // responseTimeMs is the BASE (average), we'll create spread around it
       const trafficPattern = [
-        // Night hours (0-7) - low traffic, all fits in guaranteed
-        { hour: 0, reqPerSec: 30, clientError: 0, responseTimeMs: 85 },
-        { hour: 1, reqPerSec: 25, clientError: 0, responseTimeMs: 65 },
-        { hour: 2, reqPerSec: 20, clientError: 0, responseTimeMs: 55 },
-        { hour: 3, reqPerSec: 15, clientError: 0, responseTimeMs: 50 },
-        { hour: 4, reqPerSec: 18, clientError: 0, responseTimeMs: 52 },
-        { hour: 5, reqPerSec: 25, clientError: 0, responseTimeMs: 68 },
-        { hour: 6, reqPerSec: 35, clientError: 0, responseTimeMs: 95 },
-        { hour: 7, reqPerSec: 42, clientError: 1, responseTimeMs: 120 },
-        // Morning ramp-up (8-11) - traffic starts exceeding 45 req/s
-        { hour: 8, reqPerSec: 48, clientError: 0, responseTimeMs: 145 },
-        { hour: 9, reqPerSec: 52, clientError: 0, responseTimeMs: 165 },
-        { hour: 10, reqPerSec: 55, clientError: 1, responseTimeMs: 180 },
-        { hour: 11, reqPerSec: 53, clientError: 0, responseTimeMs: 175 },
-        // Peak hours (12-16) - consistently above 45 req/s, burst active
-        { hour: 12, reqPerSec: 58, clientError: 0, responseTimeMs: 195 },
-        { hour: 13, reqPerSec: 56, clientError: 0, responseTimeMs: 200 },
-        { hour: 14, reqPerSec: 60, clientError: 1, responseTimeMs: 190 },
-        { hour: 15, reqPerSec: 55, clientError: 0, responseTimeMs: 175 },
-        { hour: 16, reqPerSec: 50, clientError: 0, responseTimeMs: 155 },
+        // Night hours (0-7) - low traffic, all fits in guaranteed, tight response times
+        { hour: 0, reqPerSec: 30, clientError: 0, responseTimeMs: 85, spread: 30 },
+        { hour: 1, reqPerSec: 25, clientError: 0, responseTimeMs: 65, spread: 25 },
+        { hour: 2, reqPerSec: 20, clientError: 0, responseTimeMs: 55, spread: 20 },
+        { hour: 3, reqPerSec: 15, clientError: 0, responseTimeMs: 50, spread: 15 },
+        { hour: 4, reqPerSec: 18, clientError: 0, responseTimeMs: 52, spread: 18 },
+        { hour: 5, reqPerSec: 25, clientError: 0, responseTimeMs: 68, spread: 25 },
+        { hour: 6, reqPerSec: 35, clientError: 0, responseTimeMs: 95, spread: 40 },
+        { hour: 7, reqPerSec: 42, clientError: 1, responseTimeMs: 120, spread: 60 },
+        // Morning ramp-up (8-11) - traffic starts exceeding 45 req/s, wider spread
+        { hour: 8, reqPerSec: 48, clientError: 0, responseTimeMs: 145, spread: 80 },
+        { hour: 9, reqPerSec: 52, clientError: 0, responseTimeMs: 165, spread: 100 },
+        { hour: 10, reqPerSec: 55, clientError: 1, responseTimeMs: 180, spread: 120 },
+        { hour: 11, reqPerSec: 53, clientError: 0, responseTimeMs: 175, spread: 110 },
+        // Peak hours (12-16) - consistently above 45 req/s, burst active, high variance
+        { hour: 12, reqPerSec: 58, clientError: 0, responseTimeMs: 195, spread: 150 },
+        { hour: 13, reqPerSec: 56, clientError: 0, responseTimeMs: 200, spread: 180 },
+        { hour: 14, reqPerSec: 60, clientError: 1, responseTimeMs: 350, spread: 700 }, // Spike hour: max ~1050ms
+        { hour: 15, reqPerSec: 55, clientError: 0, responseTimeMs: 175, spread: 140 },
+        { hour: 16, reqPerSec: 50, clientError: 0, responseTimeMs: 155, spread: 100 },
         // Evening decline (17-20)
-        { hour: 17, reqPerSec: 47, clientError: 0, responseTimeMs: 140 },
-        { hour: 18, reqPerSec: 44, clientError: 0, responseTimeMs: 125 },
-        { hour: 19, reqPerSec: 40, clientError: 0, responseTimeMs: 110 },
-        { hour: 20, reqPerSec: 35, clientError: 0, responseTimeMs: 95 },
+        { hour: 17, reqPerSec: 47, clientError: 0, responseTimeMs: 140, spread: 80 },
+        { hour: 18, reqPerSec: 44, clientError: 0, responseTimeMs: 125, spread: 60 },
+        { hour: 19, reqPerSec: 40, clientError: 0, responseTimeMs: 110, spread: 50 },
+        { hour: 20, reqPerSec: 35, clientError: 0, responseTimeMs: 95, spread: 40 },
         // Late night (21-23)
-        { hour: 21, reqPerSec: 32, clientError: 0, responseTimeMs: 80 },
-        { hour: 22, reqPerSec: 28, clientError: 0, responseTimeMs: 72 },
-        { hour: 23, reqPerSec: 30, clientError: 0, responseTimeMs: 78 },
+        { hour: 21, reqPerSec: 32, clientError: 0, responseTimeMs: 80, spread: 30 },
+        { hour: 22, reqPerSec: 28, clientError: 0, responseTimeMs: 72, spread: 25 },
+        { hour: 23, reqPerSec: 30, clientError: 0, responseTimeMs: 78, spread: 28 },
       ];
 
       // Add small random jitter (±4%) to make values look realistic
@@ -347,41 +350,70 @@ export const statsRouter = router({
           burst,
           clientError: p.clientError,
           responseTimeMs: p.responseTimeMs,
+          spread: p.spread,
         };
       });
 
       let totalRequests = 0;
 
-      // Use repeat field for efficient insertion: 1 row per category per hour
-      // Each row's repeat value represents the actual request count
+      // Insert 5 logs per hour with varying response times for whisker chart visualization
+      // This creates realistic min/avg/max spread within each hour
       for (const data of demoData) {
         const hourTimestamp = new Date(now.getTime() - ((24 - data.hour) * 60 * 60 * 1000));
 
-        // Insert guaranteed traffic (1 row with repeat=count)
+        // Calculate response time distribution: min, below-avg, avg, above-avg, max
+        const baseRt = data.responseTimeMs;
+        const spread = data.spread;
+        const responseTimes = [
+          Math.max(20, baseRt - spread),           // min
+          Math.max(25, baseRt - spread * 0.4),     // below avg
+          baseRt,                                   // avg
+          baseRt + spread * 0.4,                   // above avg
+          baseRt + spread,                         // max
+        ];
+
+        // Distribute guaranteed traffic across 5 logs with different response times
         if (data.guaranteed > 0) {
-          await insertMockHAProxyLogs(db, ctx.user.customerId, {
-            ...baseOptions,
-            count: 1,
-            repeat: data.guaranteed, // Pre-aggregated: 1 row represents many requests
-            trafficType: 1,
-            statusCode: 200,
-            responseTimeMs: data.responseTimeMs,
-            timestamp: hourTimestamp,
-          });
+          const perLog = Math.floor(data.guaranteed / 5);
+          const remainder = data.guaranteed - perLog * 5;
+
+          for (let i = 0; i < 5; i++) {
+            const count = perLog + (i === 2 ? remainder : 0); // Give remainder to middle (avg) log
+            if (count > 0) {
+              await insertMockHAProxyLogs(db, ctx.user.customerId, {
+                ...baseOptions,
+                count: 1,
+                repeat: count,
+                trafficType: 1,
+                statusCode: 200,
+                responseTimeMs: Math.round(responseTimes[i]),
+                timestamp: new Date(hourTimestamp.getTime() + i),
+              });
+            }
+          }
           totalRequests += data.guaranteed;
         }
 
-        // Insert burst traffic (1 row with repeat=count)
+        // Insert burst traffic (distribute across 3 logs for variety)
         if (data.burst > 0) {
-          await insertMockHAProxyLogs(db, ctx.user.customerId, {
-            ...baseOptions,
-            count: 1,
-            repeat: data.burst,
-            trafficType: 2,
-            statusCode: 200,
-            responseTimeMs: data.responseTimeMs + 50, // Burst slightly slower
-            timestamp: new Date(hourTimestamp.getTime() + 1),
-          });
+          const burstRts = [baseRt + 30, baseRt + 50, baseRt + 80]; // Burst is slightly slower
+          const perLog = Math.floor(data.burst / 3);
+          const remainder = data.burst - perLog * 3;
+
+          for (let i = 0; i < 3; i++) {
+            const count = perLog + (i === 1 ? remainder : 0);
+            if (count > 0) {
+              await insertMockHAProxyLogs(db, ctx.user.customerId, {
+                ...baseOptions,
+                count: 1,
+                repeat: count,
+                trafficType: 2,
+                statusCode: 200,
+                responseTimeMs: burstRts[i],
+                timestamp: new Date(hourTimestamp.getTime() + 10 + i),
+              });
+            }
+          }
           totalRequests += data.burst;
         }
 
@@ -394,7 +426,7 @@ export const statsRouter = router({
             trafficType: 1,
             statusCode: 400,
             responseTimeMs: 50, // Errors are fast
-            timestamp: new Date(hourTimestamp.getTime() + 2),
+            timestamp: new Date(hourTimestamp.getTime() + 20),
           });
           totalRequests += data.clientError;
         }

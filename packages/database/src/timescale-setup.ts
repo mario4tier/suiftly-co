@@ -3,7 +3,14 @@ import { db } from './db';
 
 /**
  * Configure TimescaleDB hypertable for haproxy_raw_logs.
- * Run this AFTER creating the schema with drizzle-kit push.
+ *
+ * DEPENDENCIES (checked at runtime):
+ * 1. Database must exist with TimescaleDB extension
+ * 2. Schema must be created (haproxy_raw_logs table from migrations)
+ * 3. deploy user must exist (for ownership transfer)
+ *
+ * This script is called by reset-database.sh - don't run directly.
+ * If you need to reset the database, use: sudo ./scripts/dev/reset-database.sh
  *
  * Based on walrus HAPROXY_LOGS.md specification:
  * - 1-hour chunks for faster pruning
@@ -11,7 +18,73 @@ import { db } from './db';
  * - 7-day retention (raw logs)
  * - Continuous aggregates preserve long-term data
  */
+
+async function checkDependencies(): Promise<void> {
+  console.log('Checking dependencies...');
+
+  // Check 1: TimescaleDB extension installed
+  try {
+    const result = await db.execute(sql`SELECT extname FROM pg_extension WHERE extname = 'timescaledb'`);
+    if (result.rows.length === 0) {
+      console.error('❌ ERROR: TimescaleDB extension not installed');
+      console.error('');
+      console.error('   This script requires TimescaleDB to be installed first.');
+      console.error('   Run: sudo ./scripts/dev/reset-database.sh');
+      process.exit(1);
+    }
+    console.log('  ✓ TimescaleDB extension installed');
+  } catch (err) {
+    console.error('❌ ERROR: Cannot connect to database');
+    console.error('');
+    console.error('   Make sure the database exists and DATABASE_URL is set correctly.');
+    console.error('   Run: sudo ./scripts/dev/reset-database.sh');
+    process.exit(1);
+  }
+
+  // Check 2: haproxy_raw_logs table exists (created by migrations)
+  try {
+    const result = await db.execute(sql`
+      SELECT table_name FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_name = 'haproxy_raw_logs'
+    `);
+    if (result.rows.length === 0) {
+      console.error('❌ ERROR: haproxy_raw_logs table does not exist');
+      console.error('');
+      console.error('   Migrations must be applied before running TimescaleDB setup.');
+      console.error('   Run: sudo ./scripts/dev/reset-database.sh');
+      process.exit(1);
+    }
+    console.log('  ✓ haproxy_raw_logs table exists');
+  } catch (err) {
+    console.error('❌ ERROR: Failed to check for haproxy_raw_logs table');
+    console.error('   ' + (err as Error).message);
+    process.exit(1);
+  }
+
+  // Check 3: deploy user exists
+  try {
+    const result = await db.execute(sql`SELECT 1 FROM pg_roles WHERE rolname = 'deploy'`);
+    if (result.rows.length === 0) {
+      console.error('❌ ERROR: deploy user does not exist');
+      console.error('');
+      console.error('   The deploy user must be created before running TimescaleDB setup.');
+      console.error('   Run: sudo ./scripts/dev/reset-database.sh');
+      process.exit(1);
+    }
+    console.log('  ✓ deploy user exists');
+  } catch (err) {
+    console.error('❌ ERROR: Failed to check for deploy user');
+    console.error('   ' + (err as Error).message);
+    process.exit(1);
+  }
+
+  console.log('  All dependencies satisfied');
+  console.log('');
+}
+
 export async function setupTimescaleDB() {
+  await checkDependencies();
+
   console.log('Setting up TimescaleDB for haproxy_raw_logs...');
 
   // Convert haproxy_raw_logs to hypertable (run AFTER schema creation)
@@ -88,8 +161,13 @@ export async function setupTimescaleDB() {
   // Uses SUM(repeat) instead of COUNT(*) to support pre-aggregated logs from HAProxy
   // When repeat=1 (default), SUM(repeat) equals COUNT(*). When repeat>1, it properly counts
   // all the requests that a single aggregated log entry represents.
+  //
+  // DROP and recreate to ensure schema changes are applied (IF NOT EXISTS won't update columns)
+  // Using RESTRICT (default) instead of CASCADE - will fail if dependent objects exist,
+  // forcing explicit handling rather than silent data loss.
+  await db.execute(sql`DROP MATERIALIZED VIEW IF EXISTS stats_per_hour`);
   await db.execute(sql`
-    CREATE MATERIALIZED VIEW IF NOT EXISTS stats_per_hour
+    CREATE MATERIALIZED VIEW stats_per_hour
     WITH (timescaledb.continuous) AS
     SELECT
       time_bucket('1 hour', timestamp) AS bucket,
@@ -108,14 +186,16 @@ export async function setupTimescaleDB() {
       SUM(repeat) FILTER (WHERE traffic_type IN (1, 2)) AS billable_requests,
       -- Legacy/summary (all 2xx)
       SUM(repeat) FILTER (WHERE status_code >= 200 AND status_code < 300) AS success_count,
-      -- Performance (weighted average for pre-aggregated logs)
-      SUM(time_total::bigint * repeat)::double precision / NULLIF(SUM(repeat), 0) AS avg_response_time_ms,
+      -- Performance (billable traffic only - excludes rate-limited 429s which skew averages)
+      SUM(time_total::bigint * repeat) FILTER (WHERE traffic_type IN (1, 2))::double precision / NULLIF(SUM(repeat) FILTER (WHERE traffic_type IN (1, 2)), 0) AS avg_response_time_ms,
+      MIN(time_total) FILTER (WHERE traffic_type IN (1, 2)) AS min_response_time_ms,
+      MAX(time_total) FILTER (WHERE traffic_type IN (1, 2)) AS max_response_time_ms,
       SUM(bytes_sent * repeat) AS total_bytes
     FROM haproxy_raw_logs
     WHERE customer_id IS NOT NULL
     GROUP BY bucket, customer_id, service_type, network;
   `);
-  console.log('✓ Created stats_per_hour continuous aggregate');
+  console.log('✓ Created stats_per_hour continuous aggregate (dropped & recreated)');
 
   // Add refresh policy: refresh every 5 minutes, with 10 minute lag
   await db.execute(sql`

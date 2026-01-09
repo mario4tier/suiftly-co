@@ -191,8 +191,10 @@ done
 
 echo "   ✅ Vault directories cleaned"
 
-# Step 2: Drop database
+# Step 2: Drop database (terminate existing connections first)
 echo "2️⃣  Dropping database $DB_NAME..."
+# Terminate all connections to the database (required for DROP)
+sudo -u postgres psql -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$DB_NAME' AND pid <> pg_backend_pid();" > /dev/null 2>&1 || true
 sudo -u postgres psql -c "DROP DATABASE IF EXISTS $DB_NAME;"
 echo "   ✅ Database dropped"
 

@@ -11,6 +11,7 @@ import { eq, lt } from 'drizzle-orm';
 import { billingIdempotency } from '../schema';
 import type { Database, DatabaseOrTransaction } from '../db';
 import type { IdempotencyResult } from './types';
+import type { DBClock } from '@suiftly/shared/db-clock';
 
 /**
  * Execute an operation with idempotency protection
@@ -114,16 +115,16 @@ export function generateUsageBillingKey(
  * Should be run periodically to prevent table bloat.
  *
  * @param tx Transaction handle
+ * @param clock DBClock for time reference (required for testability)
  * @param maxAgeHours Maximum age in hours (default 24)
- * @param currentTime Optional current time (for testing), defaults to Date.now()
  * @returns Number of records deleted
  */
 export async function cleanupIdempotencyRecords(
   tx: DatabaseOrTransaction,
-  maxAgeHours: number = 24,
-  currentTime?: Date
+  clock: DBClock,
+  maxAgeHours: number = 24
 ): Promise<number> {
-  const now = currentTime || new Date();
+  const now = clock.now();
   const cutoffTime = new Date(now.getTime() - maxAgeHours * 60 * 60 * 1000);
 
   const deleted = await tx

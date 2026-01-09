@@ -11,7 +11,6 @@ export {
   refreshStatsAggregate,
   clearCustomerLogs,
   clearAllLogs,
-  syncCustomerDraftInvoice,
   type MockHAProxyLogOptions,
   type TrafficDistribution,
 } from './test-helpers';

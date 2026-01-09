@@ -5,12 +5,9 @@
  * These helpers are used by unit tests and the /test/stats/* API endpoints.
  */
 
-import { sql, eq } from 'drizzle-orm';
+import { sql } from 'drizzle-orm';
 import type { Database, DatabaseOrTransaction } from '../db';
 import { haproxyRawLogs } from '../schema/logs';
-import { billingRecords } from '../schema/escrow';
-import { syncUsageToDraft, unsafeAsLockedTransaction } from '../billing';
-import { dbClock } from '@suiftly/shared/db-clock';
 
 /**
  * Options for inserting mock HAProxy logs
@@ -468,58 +465,3 @@ export async function clearAllLogs(db: Database): Promise<void> {
   await db.execute(sql`TRUNCATE TABLE haproxy_raw_logs`);
 }
 
-/**
- * Sync usage charges to DRAFT invoice for a customer
- *
- * @deprecated Use `forceSyncUsageToDraft` from `@suiftly/database/billing` instead.
- * This function bypasses production locking (unsafeAsLockedTransaction).
- * The billing version uses proper customer locking and the same production code path.
- *
- * @param db Database instance
- * @param customerId Customer ID
- * @returns Result of the sync operation
- */
-export async function syncCustomerDraftInvoice(
-  db: Database,
-  customerId: number
-): Promise<{
-  success: boolean;
-  invoiceId?: number;
-  totalUsageChargesCents?: number;
-  lineItemsCount?: number;
-  error?: string;
-}> {
-  // Find the DRAFT invoice for this customer
-  const draftInvoice = await db.query.billingRecords.findFirst({
-    where: eq(billingRecords.customerId, customerId),
-  });
-
-  // Filter to find the draft status invoice
-  const drafts = await db
-    .select()
-    .from(billingRecords)
-    .where(eq(billingRecords.customerId, customerId));
-
-  const draft = drafts.find(d => d.status === 'draft');
-
-  if (!draft) {
-    return {
-      success: false,
-      error: 'No DRAFT invoice found for customer',
-    };
-  }
-
-  // Use transaction with unsafeAsLockedTransaction for test context
-  const result = await db.transaction(async (tx) => {
-    const lockedTx = unsafeAsLockedTransaction(tx);
-    return syncUsageToDraft(lockedTx, customerId, draft.id, dbClock);
-  });
-
-  return {
-    success: result.success,
-    invoiceId: draft.id,
-    totalUsageChargesCents: result.totalUsageChargesCents,
-    lineItemsCount: result.lineItemsCount,
-    error: result.error,
-  };
-}

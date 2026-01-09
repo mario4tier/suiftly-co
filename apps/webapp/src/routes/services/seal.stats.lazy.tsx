@@ -14,6 +14,16 @@ import { toast } from 'sonner';
 import { useServicesStatus } from '../../hooks/useServicesStatus';
 import { ServiceStatusIndicator } from '../../components/ui/service-status-indicator';
 import {
+  ComposedChart,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  ReferenceLine,
+  Cell,
+  Bar,
+} from 'recharts';
+import {
   BarChart3,
   Clock,
   CheckCircle2,
@@ -96,67 +106,6 @@ function formatTickLabel(isoDate: string, range: TimeRange): string {
 function isMidnight(isoDate: string): boolean {
   const date = new Date(isoDate);
   return date.getUTCHours() === 0;
-}
-
-// Simple bar chart component
-function SimpleBarChart({
-  data,
-  range,
-  valueKey,
-  formatValue,
-  color = 'blue',
-  emptyMessage = 'No data',
-}: {
-  data: Array<{ bucket: string; [key: string]: number | string }>;
-  range: TimeRange;
-  valueKey: string;
-  formatValue: (v: number) => string;
-  color?: 'blue' | 'green' | 'purple';
-  emptyMessage?: string;
-}) {
-  if (!data || data.length === 0) {
-    return (
-      <div className="flex items-center justify-center h-48 text-gray-400">
-        {emptyMessage}
-      </div>
-    );
-  }
-
-  // Find max value for scaling
-  const maxValue = Math.max(...data.map(d => Number(d[valueKey]) || 0), 1);
-
-  const colorClasses = {
-    blue: 'bg-blue-500 dark:bg-blue-600',
-    green: 'bg-green-500 dark:bg-green-600',
-    purple: 'bg-purple-500 dark:bg-purple-600',
-  };
-
-  return (
-    <div className="h-48 flex items-end gap-1">
-      {data.map((point, i) => {
-        const value = Number(point[valueKey]) || 0;
-        const height = (value / maxValue) * 100;
-        return (
-          <div
-            key={i}
-            className="flex-1 flex flex-col items-center justify-end group relative"
-          >
-            {/* Bar */}
-            <div
-              className={`w-full rounded-t transition-all ${colorClasses[color]} opacity-80 hover:opacity-100`}
-              style={{ height: `${Math.max(height, 2)}%` }}
-            />
-            {/* Tooltip */}
-            <div className="absolute bottom-full mb-2 hidden group-hover:block z-10">
-              <div className="bg-gray-900 dark:bg-gray-700 text-white text-xs px-2 py-1 rounded whitespace-nowrap">
-                {formatBucketLabel(point.bucket, range)}: {formatValue(value)}
-              </div>
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
 }
 
 // Traffic data point type
@@ -419,14 +368,112 @@ function TrafficLegend() {
   );
 }
 
-// Response time data point type
+// Response time data point type (whisker chart)
 interface ResponseTimeDataPoint {
   bucket: string;
   avgResponseTimeMs: number;
+  minResponseTimeMs: number;
+  maxResponseTimeMs: number;
 }
 
-// Response time chart with 1-second threshold visualization
+// Response time whisker chart with Recharts
 const THRESHOLD_MS = 1000; // 1 second threshold
+
+// Custom whisker shape for the bar chart (includes average marker)
+const WhiskerShape = (props: any) => {
+  const { x, y, width, height, payload } = props;
+  if (!payload) return null;
+
+  const centerX = x + width / 2;
+  const whiskerWidth = Math.min(width * 0.6, 12);
+  const isAboveThreshold = payload.maxResponseTimeMs >= THRESHOLD_MS;
+  const strokeColor = isAboveThreshold ? '#ef4444' : '#8b5cf6';
+
+  // Calculate average marker position
+  // The bar goes from base (min) to base+range (max)
+  // y is the TOP of the bar (max value position), y+height is the BOTTOM (min value position)
+  // We need to find where avg falls in this range
+  const minY = y + height; // Bottom of bar (min value)
+  const range = payload.maxResponseTimeMs - payload.minResponseTimeMs;
+  const avgOffset = range > 0
+    ? ((payload.avgResponseTimeMs - payload.minResponseTimeMs) / range) * height
+    : height / 2;
+  const avgY = minY - avgOffset; // Y coordinate for average
+
+  return (
+    <g>
+      {/* Vertical line (whisker stem) */}
+      <line
+        x1={centerX}
+        y1={y}
+        x2={centerX}
+        y2={y + height}
+        stroke={strokeColor}
+        strokeWidth={2}
+      />
+      {/* Top cap (max) */}
+      <line
+        x1={centerX - whiskerWidth / 2}
+        y1={y}
+        x2={centerX + whiskerWidth / 2}
+        y2={y}
+        stroke={strokeColor}
+        strokeWidth={2}
+      />
+      {/* Bottom cap (min) */}
+      <line
+        x1={centerX - whiskerWidth / 2}
+        y1={y + height}
+        x2={centerX + whiskerWidth / 2}
+        y2={y + height}
+        stroke={strokeColor}
+        strokeWidth={2}
+      />
+      {/* Average marker (diamond) */}
+      <polygon
+        points={`${centerX},${avgY - 5} ${centerX + 5},${avgY} ${centerX},${avgY + 5} ${centerX - 5},${avgY}`}
+        fill={strokeColor}
+        stroke="white"
+        strokeWidth={1.5}
+      />
+    </g>
+  );
+};
+
+// Custom tooltip for whisker chart
+const WhiskerTooltip = ({ active, payload, label, formatValue, range }: any) => {
+  if (!active || !payload || !payload[0]) return null;
+
+  const data = payload[0].payload;
+  const isAboveThreshold = data.maxResponseTimeMs >= THRESHOLD_MS;
+
+  return (
+    <div className={`text-white text-xs px-3 py-2 rounded shadow-lg ${
+      isAboveThreshold ? 'bg-red-600' : 'bg-gray-900 dark:bg-gray-700'
+    }`}>
+      <div className="font-medium mb-1">{formatBucketLabel(data.bucket, range)}</div>
+      <div className="space-y-0.5">
+        <div className="flex justify-between gap-3">
+          <span className="text-gray-300">Max:</span>
+          <span className="font-medium">{formatValue(data.maxResponseTimeMs)}</span>
+        </div>
+        <div className="flex justify-between gap-3">
+          <span className="text-gray-300">Avg:</span>
+          <span className="font-bold">{formatValue(data.avgResponseTimeMs)}</span>
+        </div>
+        <div className="flex justify-between gap-3">
+          <span className="text-gray-300">Min:</span>
+          <span className="font-medium">{formatValue(data.minResponseTimeMs)}</span>
+        </div>
+      </div>
+      {isAboveThreshold && (
+        <div className="mt-1 pt-1 border-t border-red-400 text-yellow-200 text-[10px]">
+          Exceeds 1s threshold
+        </div>
+      )}
+    </div>
+  );
+};
 
 function ResponseTimeChart({
   data,
@@ -439,8 +486,6 @@ function ResponseTimeChart({
   formatValue: (v: number) => string;
   emptyMessage?: string;
 }) {
-  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
-
   if (!data || data.length === 0) {
     return (
       <div className="flex items-center justify-center h-48 text-gray-400">
@@ -449,266 +494,138 @@ function ResponseTimeChart({
     );
   }
 
-  const width = 800;
-  const height = 192;
-  const padding = { top: 20, right: 10, bottom: 10, left: 10 };
-  const chartWidth = width - padding.left - padding.right;
-  const chartHeight = height - padding.top - padding.bottom;
+  // Transform data for whisker chart - need range for the bar
+  const chartData = data.map((d, index) => ({
+    ...d,
+    index,
+    // Bar will span from min to max
+    range: d.maxResponseTimeMs - d.minResponseTimeMs,
+    // For stacking: bar starts at min
+    base: d.minResponseTimeMs,
+  }));
 
-  // Find max value for scaling
-  // If any data exceeds threshold, show threshold context (1200ms min)
-  // Otherwise, scale to 1.3x the max data value for better visualization
-  const dataMax = Math.max(...data.map(d => d.avgResponseTimeMs));
-  const maxValue = dataMax >= THRESHOLD_MS
-    ? Math.max(dataMax, THRESHOLD_MS * 1.2)
-    : Math.max(dataMax * 1.3, 100); // At least 100ms for small values
+  // Calculate max for Y axis
+  const dataMax = Math.max(...data.map(d => d.maxResponseTimeMs));
+  const yMax = dataMax >= THRESHOLD_MS
+    ? Math.max(dataMax * 1.1, THRESHOLD_MS * 1.2)
+    : Math.max(dataMax * 1.3, 100);
 
-  // Calculate Y position for a value
-  const getY = (value: number) => {
-    return height - padding.bottom - (value / maxValue) * chartHeight;
-  };
-
-  // Calculate X position for an index
-  const getX = (index: number) => {
-    return padding.left + (index / (data.length - 1 || 1)) * chartWidth;
-  };
-
-  // Threshold line Y position
-  const thresholdY = getY(THRESHOLD_MS);
-
-  // Build the line path
-  const linePath = data
-    .map((point, i) => `${i === 0 ? 'M' : 'L'} ${getX(i)} ${getY(point.avgResponseTimeMs)}`)
-    .join(' ');
-
-  // Build area path (fill under the line)
-  const areaPath = `${linePath} L ${getX(data.length - 1)} ${height - padding.bottom} L ${getX(0)} ${height - padding.bottom} Z`;
-
-  // Check if any point exceeds threshold
-  const hasExceededThreshold = data.some(d => d.avgResponseTimeMs >= THRESHOLD_MS);
-
-  // Calculate 24-hour average
+  // Calculate period average
   const avgResponseTime = data.reduce((sum, d) => sum + d.avgResponseTimeMs, 0) / data.length;
-  const avgY = getY(avgResponseTime);
 
-  // Hover detection zones
-  const sliceWidth = chartWidth / data.length;
+  // Check if any max exceeds threshold
+  const hasExceededThreshold = data.some(d => d.maxResponseTimeMs >= THRESHOLD_MS);
 
-  // Calculate tick interval - for 24h show every 4 hours, for 7d/30d show fewer
-  const tickInterval = range === '24h' ? 4 : Math.ceil(data.length / 7);
+  // Custom tick formatter for X axis
+  const tickFormatter = (value: string) => formatTickLabel(value, range);
+
+  // Determine tick interval
+  const tickInterval = range === '24h' ? 3 : Math.max(1, Math.floor(data.length / 7));
 
   return (
-    <div className="relative">
-      <svg
-        viewBox={`0 0 ${width} ${height}`}
-        className="w-full h-48"
-        preserveAspectRatio="none"
-      >
-        {/* Vertical gridlines (behind chart data) */}
-        {data.map((point, i) => {
-          const x = getX(i);
-          const midnight = isMidnight(point.bucket);
-          return (
-            <line
-              key={`grid-${i}`}
-              x1={x}
-              y1={padding.top}
-              x2={x}
-              y2={height - padding.bottom}
-              stroke={midnight ? 'rgba(156,163,175,0.5)' : 'rgba(156,163,175,0.2)'}
-              strokeWidth={midnight ? 2 : 0.5}
-            />
-          );
-        })}
-
-        {/* Danger zone background (above threshold) - only show if threshold is visible */}
-        {dataMax >= THRESHOLD_MS * 0.5 && (
-          <rect
-            x={padding.left}
-            y={padding.top}
-            width={chartWidth}
-            height={Math.max(0, thresholdY - padding.top)}
-            fill="rgba(239, 68, 68, 0.1)"
+    <div className="h-56">
+      <ResponsiveContainer width="100%" height="100%">
+        <ComposedChart data={chartData} margin={{ top: 20, right: 20, bottom: 20, left: 50 }}>
+          {/* Y Axis */}
+          <YAxis
+            domain={[0, yMax]}
+            tickFormatter={(v) => formatValue(v)}
+            tick={{ fill: '#9ca3af', fontSize: 11 }}
+            axisLine={{ stroke: '#374151' }}
+            tickLine={{ stroke: '#374151' }}
+            width={45}
           />
-        )}
 
-        {/* Area under the line with gradient based on threshold */}
-        <defs>
-          <linearGradient id="responseTimeGradient" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={hasExceededThreshold ? '#ef4444' : '#8b5cf6'} stopOpacity="0.4" />
-            <stop offset="100%" stopColor={hasExceededThreshold ? '#ef4444' : '#8b5cf6'} stopOpacity="0.1" />
-          </linearGradient>
-        </defs>
-        <path
-          d={areaPath}
-          fill="url(#responseTimeGradient)"
-        />
+          {/* X Axis */}
+          <XAxis
+            dataKey="bucket"
+            tickFormatter={tickFormatter}
+            tick={{ fill: '#9ca3af', fontSize: 10 }}
+            axisLine={{ stroke: '#374151' }}
+            tickLine={{ stroke: '#374151' }}
+            interval={tickInterval}
+            angle={-45}
+            textAnchor="end"
+            height={50}
+          />
 
-        {/* Line segments - colored based on threshold */}
-        {data.slice(0, -1).map((point, i) => {
-          const nextPoint = data[i + 1];
-          const isAboveThreshold = point.avgResponseTimeMs >= THRESHOLD_MS || nextPoint.avgResponseTimeMs >= THRESHOLD_MS;
-          return (
-            <line
-              key={i}
-              x1={getX(i)}
-              y1={getY(point.avgResponseTimeMs)}
-              x2={getX(i + 1)}
-              y2={getY(nextPoint.avgResponseTimeMs)}
-              stroke={isAboveThreshold ? '#ef4444' : '#8b5cf6'}
-              strokeWidth="2.5"
-              strokeLinecap="round"
-            />
-          );
-        })}
-
-        {/* Data points */}
-        {data.map((point, i) => {
-          const isAboveThreshold = point.avgResponseTimeMs >= THRESHOLD_MS;
-          return (
-            <circle
-              key={i}
-              cx={getX(i)}
-              cy={getY(point.avgResponseTimeMs)}
-              r={hoveredIndex === i ? 5 : 3}
-              fill={isAboveThreshold ? '#ef4444' : '#8b5cf6'}
-              stroke="white"
-              strokeWidth="1.5"
-              className="transition-all duration-150"
-            />
-          );
-        })}
-
-        {/* 24-hour average line */}
-        <line
-          x1={padding.left}
-          y1={avgY}
-          x2={width - padding.right}
-          y2={avgY}
-          stroke="#10b981"
-          strokeWidth="1.5"
-          strokeDasharray="4 3"
-          opacity="0.8"
-        />
-
-        {/* Average label */}
-        <text
-          x={padding.left + 5}
-          y={avgY - 5}
-          fill="#10b981"
-          fontSize="10"
-          fontWeight="500"
-        >
-          avg {formatValue(avgResponseTime)}
-        </text>
-
-        {/* Threshold line - only show if data approaches threshold */}
-        {dataMax >= THRESHOLD_MS * 0.5 && (
-          <>
-            <line
-              x1={padding.left}
-              y1={thresholdY}
-              x2={width - padding.right}
-              y2={thresholdY}
+          {/* Threshold reference line - only show if data approaches it */}
+          {dataMax >= THRESHOLD_MS * 0.5 && (
+            <ReferenceLine
+              y={THRESHOLD_MS}
               stroke="#ef4444"
-              strokeWidth="1.5"
               strokeDasharray="6 4"
-              opacity="0.7"
+              strokeWidth={1.5}
+              label={{
+                value: '1s threshold',
+                position: 'right',
+                fill: '#ef4444',
+                fontSize: 10,
+              }}
             />
+          )}
 
-            {/* Threshold label */}
-            <text
-              x={width - padding.right - 5}
-              y={thresholdY - 5}
-              fill="#ef4444"
-              fontSize="10"
-              textAnchor="end"
-              fontWeight="500"
-            >
-              1s threshold
-            </text>
-          </>
-        )}
-
-        {/* Hover detection zones */}
-        {data.map((_, i) => (
-          <rect
-            key={i}
-            x={padding.left + i * sliceWidth}
-            y={padding.top}
-            width={sliceWidth}
-            height={chartHeight}
-            fill="transparent"
-            onMouseEnter={() => setHoveredIndex(i)}
-            onMouseLeave={() => setHoveredIndex(null)}
+          {/* Average reference line */}
+          <ReferenceLine
+            y={avgResponseTime}
+            stroke="#10b981"
+            strokeDasharray="4 3"
+            strokeWidth={1.5}
+            label={{
+              value: `avg ${formatValue(avgResponseTime)}`,
+              position: 'left',
+              fill: '#10b981',
+              fontSize: 10,
+            }}
           />
-        ))}
 
-        {/* Hover line */}
-        {hoveredIndex !== null && (
-          <line
-            x1={getX(hoveredIndex)}
-            y1={padding.top}
-            x2={getX(hoveredIndex)}
-            y2={height - padding.bottom}
-            stroke="rgba(255,255,255,0.7)"
-            strokeWidth="1.5"
-            strokeDasharray="4 2"
+          {/* Custom tooltip */}
+          <Tooltip
+            content={<WhiskerTooltip formatValue={formatValue} range={range} />}
+            cursor={{ fill: 'rgba(255,255,255,0.1)' }}
           />
-        )}
-      </svg>
 
-      {/* X-axis tick labels */}
-      <div className="relative h-5 mt-1">
-        {data.map((point, i) => {
-          // Show tick at interval OR at midnight (for date context)
-          const showTick = i === 0 || i === data.length - 1 || i % tickInterval === 0 || isMidnight(point.bucket);
-          if (!showTick) return null;
-          const x = (i / (data.length - 1 || 1)) * 100;
-          const midnight = isMidnight(point.bucket);
-          return (
-            <span
-              key={`tick-${i}`}
-              className={`absolute text-xs transform -translate-x-1/2 ${
-                midnight ? 'text-gray-300 font-medium' : 'text-gray-400'
-              }`}
-              style={{ left: `${x}%` }}
-            >
-              {formatTickLabel(point.bucket, range)}
-            </span>
-          );
-        })}
-        <span className="absolute left-1/2 transform -translate-x-1/2 text-xs text-gray-500">
-          UTC
-        </span>
-      </div>
+          {/* Whisker bars - using stacked bars for base + range */}
+          {/* Invisible base bar */}
+          <Bar dataKey="base" stackId="whisker" fill="transparent" />
+          {/* Range bar with custom shape */}
+          <Bar
+            dataKey="range"
+            stackId="whisker"
+            shape={<WhiskerShape />}
+            isAnimationActive={false}
+          >
+            {chartData.map((entry, index) => (
+              <Cell
+                key={`cell-${index}`}
+                fill={entry.maxResponseTimeMs >= THRESHOLD_MS ? '#ef4444' : '#8b5cf6'}
+              />
+            ))}
+          </Bar>
+        </ComposedChart>
+      </ResponsiveContainer>
 
-      {/* Tooltip */}
-      {hoveredIndex !== null && data[hoveredIndex] && (
-        <div
-          className="absolute z-10 pointer-events-none"
-          style={{
-            left: `${((hoveredIndex / (data.length - 1 || 1)) * 100)}%`,
-            top: 0,
-            transform: 'translateX(-50%)',
-          }}
-        >
-          <div className={`text-white text-xs px-3 py-2 rounded shadow-lg whitespace-nowrap ${
-            data[hoveredIndex].avgResponseTimeMs >= THRESHOLD_MS
-              ? 'bg-red-600'
-              : 'bg-gray-900 dark:bg-gray-700'
-          }`}>
-            <div className="font-medium">{formatBucketLabel(data[hoveredIndex].bucket, range)}</div>
-            <div className="flex items-center gap-1">
-              <span>Avg:</span>
-              <span className="font-bold">{formatValue(data[hoveredIndex].avgResponseTimeMs)}</span>
-              {data[hoveredIndex].avgResponseTimeMs >= THRESHOLD_MS && (
-                <span className="text-yellow-300">⚠</span>
-              )}
-            </div>
-          </div>
+      {/* Legend */}
+      <div className="flex items-center justify-center gap-6 mt-2 text-xs text-gray-500">
+        <div className="flex items-center gap-1.5">
+          <svg width="16" height="16" viewBox="0 0 16 16">
+            <line x1="8" y1="2" x2="8" y2="14" stroke="#8b5cf6" strokeWidth="2" />
+            <line x1="4" y1="2" x2="12" y2="2" stroke="#8b5cf6" strokeWidth="2" />
+            <line x1="4" y1="14" x2="12" y2="14" stroke="#8b5cf6" strokeWidth="2" />
+          </svg>
+          <span>Min-Max range</span>
         </div>
-      )}
+        <div className="flex items-center gap-1.5">
+          <svg width="16" height="16" viewBox="0 0 16 16">
+            <polygon points="8,3 13,8 8,13 3,8" fill="#8b5cf6" stroke="white" strokeWidth="1" />
+          </svg>
+          <span>Average</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <div className="w-4 h-0.5 bg-emerald-500" style={{ background: 'repeating-linear-gradient(90deg, #10b981, #10b981 4px, transparent 4px, transparent 7px)' }} />
+          <span>Period avg</span>
+        </div>
+      </div>
     </div>
   );
 }
@@ -827,16 +744,14 @@ function SealStatsPage() {
     setTestMenuOpen(false);
     switch (action) {
       case 'inject1h':
+        // Quick test data (1 hour, random distribution, no whisker spread)
         injectTestData.mutate({ serviceType: 'seal', hoursOfData: 1, requestsPerHour: 100 });
-        break;
-      case 'inject1hDemo':
-        // Single hour of nice demo data (just guaranteed + a few burst)
-        injectTestData.mutate({ serviceType: 'seal', hoursOfData: 1, requestsPerHour: 80 });
         break;
       case 'clear':
         clearStats.mutate({ serviceType: 'seal' });
         break;
       case 'injectDemo':
+        // Full 24h demo with realistic patterns and whisker spread
         injectDemoData.mutate({ serviceType: 'seal' });
         break;
     }
@@ -875,22 +790,14 @@ function SealStatsPage() {
                         onClick={() => handleTestAction('inject1h')}
                         className="w-full text-left px-3 py-1.5 text-xs text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
                       >
-                        Inject 1H Test
+                        Inject 1H (random)
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => handleTestAction('inject1hDemo')}
-                        className="w-full text-left px-3 py-1.5 text-xs text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
-                      >
-                        Inject 1H Demo
-                      </button>
-                      <div className="border-t border-gray-200 dark:border-gray-700 my-1" />
                       <button
                         type="button"
                         onClick={() => handleTestAction('injectDemo')}
                         className="w-full text-left px-3 py-1.5 text-xs text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
                       >
-                        Inject 24H Demo
+                        Inject Demo (24H)
                       </button>
                       <div className="border-t border-gray-200 dark:border-gray-700 my-1" />
                       <button

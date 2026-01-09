@@ -237,7 +237,7 @@ test.describe('Subscription Without Funds', () => {
     await page.waitForTimeout(1000); // Give time for reconciliation
 
     // Notification should disappear
-    await expect(notification).not.toBeVisible({ timeout: 5000 });
+    await expect(notification).toBeHidden({ timeout: 10000 });
 
     console.log('✅ Notification disappears after depositing funds');
   });

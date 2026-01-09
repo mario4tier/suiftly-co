@@ -10,6 +10,7 @@ import { randomInt } from 'crypto';
 import { db as defaultDb } from './db';
 import { customers } from './schema';
 import { eq, type InferSelectModel } from 'drizzle-orm';
+import type { DBClock } from '@suiftly/shared/db-clock';
 
 // Type for the database instance (allows passing transaction or db)
 type DbInstance = typeof defaultDb;
@@ -52,12 +53,14 @@ async function customerIdExists(customerId: number, dbInstance: DbInstance = def
  * 4. If insert fails due to duplicate key, retries with a new ID (up to MAX_RETRIES)
  *
  * @param input - Customer data (walletAddress required, escrowContractId optional)
+ * @param clock - DBClock for time reference (required for testability)
  * @param dbInstance - Database instance (allows passing transaction for atomic operations)
  * @returns The created customer record
  * @throws Error if unable to create customer after MAX_RETRIES attempts
  */
 export async function createCustomer(
   input: CreateCustomerInput,
+  clock: DBClock,
   dbInstance: DbInstance = defaultDb
 ): Promise<Customer> {
   const MAX_RETRIES = 3;
@@ -74,7 +77,7 @@ export async function createCustomer(
 
     try {
       // Set currentPeriodStart to first day of current month (UTC)
-      const now = new Date();
+      const now = clock.now();
       const periodStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
         .toISOString()
         .split('T')[0];
@@ -120,11 +123,13 @@ export async function createCustomer(
  * This is the most common pattern - use this instead of manual find-or-create logic.
  *
  * @param input - Customer data (walletAddress required, escrowContractId optional)
+ * @param clock - DBClock for time reference (required for testability)
  * @param dbInstance - Database instance (allows passing transaction)
  * @returns Object containing the customer and whether it was newly created
  */
 export async function findOrCreateCustomer(
   input: CreateCustomerInput,
+  clock: DBClock,
   dbInstance: DbInstance = defaultDb
 ): Promise<{ customer: Customer; created: boolean }> {
   // First, try to find existing customer
@@ -137,7 +142,7 @@ export async function findOrCreateCustomer(
   }
 
   // Not found - create new customer
-  const customer = await createCustomer(input, dbInstance);
+  const customer = await createCustomer(input, clock, dbInstance);
   return { customer, created: true };
 }
 
@@ -151,12 +156,14 @@ export async function findOrCreateCustomer(
  * - If customer exists with same escrow: return as-is
  *
  * @param input - Customer data (walletAddress required, escrowContractId required)
+ * @param clock - DBClock for time reference (required for testability)
  * @param dbInstance - Database instance
  * @returns The customer (created, updated, or existing)
  * @throws Error with code 'ESCROW_CONFLICT' if customer has different escrow address
  */
 export async function findOrCreateCustomerWithEscrow(
   input: CreateCustomerInput & { escrowContractId: string },
+  clock: DBClock,
   dbInstance: DbInstance = defaultDb
 ): Promise<{ customer: Customer; action: 'created' | 'updated' | 'unchanged' }> {
   // First, try to find existing customer
@@ -166,7 +173,7 @@ export async function findOrCreateCustomerWithEscrow(
 
   if (!existing) {
     // Create new customer with escrow
-    const customer = await createCustomer(input, dbInstance);
+    const customer = await createCustomer(input, clock, dbInstance);
     return { customer, action: 'created' };
   }
 
@@ -176,7 +183,7 @@ export async function findOrCreateCustomerWithEscrow(
       .update(customers)
       .set({
         escrowContractId: input.escrowContractId,
-        updatedAt: new Date(),
+        updatedAt: clock.now(),
       })
       .where(eq(customers.customerId, existing.customerId))
       .returning();

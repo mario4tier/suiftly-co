@@ -537,7 +537,7 @@ export class MockSuiService implements ISuiService {
     const updateData: Record<string, unknown> = {
       currentBalanceUsdCents: newBalance,
       currentPeriodChargedUsdCents: newPeriodCharged,
-      updatedAt: new Date(),
+      updatedAt: dbClock.now(),
     };
 
     if (needsPeriodReset) {

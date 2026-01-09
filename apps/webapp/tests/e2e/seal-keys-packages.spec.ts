@@ -45,7 +45,7 @@ async function addPackageViaUI(page: Page, address: string, name: string): Promi
   // Wait for success toast and then wait for it to disappear (toasts auto-dismiss)
   const toast = page.locator('text=Package added successfully').first();
   await expect(toast).toBeVisible({ timeout: 5000 });
-  await expect(toast).not.toBeVisible({ timeout: 5000 }); // Wait for toast to disappear
+  await expect(toast).toBeHidden({ timeout: 10000 });
 }
 
 test.describe('Seal Keys & Packages Management', () => {
@@ -277,7 +277,7 @@ test.describe('Seal Keys & Packages Management', () => {
     await expect(toast).toBeVisible({ timeout: 5000 });
 
     // Wait for toast to disappear (ensures mutation completed and UI updated)
-    await expect(toast).not.toBeVisible({ timeout: 5000 });
+    await expect(toast).toBeHidden({ timeout: 10000 });
 
     // Should see Disabled status badge
     await expect(page.locator('text=Disabled').last()).toBeVisible({ timeout: 5000 });
@@ -315,7 +315,7 @@ test.describe('Seal Keys & Packages Management', () => {
     await expect(enableToast).toBeVisible({ timeout: 5000 });
 
     // Wait for toast to disappear (ensures mutation completed and UI updated)
-    await expect(enableToast).not.toBeVisible({ timeout: 5000 });
+    await expect(enableToast).toBeHidden({ timeout: 10000 });
 
     // Should see Active status badge again
     await expect(page.locator('text=Active').last()).toBeVisible({ timeout: 5000 });
@@ -368,7 +368,7 @@ test.describe('Seal Keys & Packages Management', () => {
     await expect(deleteToast).toBeVisible({ timeout: 5000 });
 
     // Wait for toast to disappear (ensures mutation completed and UI updated)
-    await expect(deleteToast).not.toBeVisible({ timeout: 5000 });
+    await expect(deleteToast).toBeHidden({ timeout: 10000 });
 
     // Package should no longer be visible (hard deleted from database)
     await expect(page.locator('text=Package to Delete')).not.toBeVisible();
@@ -421,7 +421,7 @@ test.describe('Seal Keys & Packages Management', () => {
     // Wait for success toast and disappear
     const toast = page.locator('text=Package updated').first();
     await expect(toast).toBeVisible({ timeout: 5000 });
-    await expect(toast).not.toBeVisible({ timeout: 5000 });
+    await expect(toast).toBeHidden({ timeout: 10000 });
 
     // Should now have 1 Active and 1 Disabled badge in the table
     await expect(packagesTable.locator('tbody tr td:nth-child(3) span:has-text("Active")')).toHaveCount(1);

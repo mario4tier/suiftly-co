@@ -148,7 +148,7 @@ export const authRouter = router({
       await db.delete(authNonces).where(eq(authNonces.address, walletAddress));
 
       // Find or create customer (uses centralized robust ID generation with collision handling)
-      const { customer } = await findOrCreateCustomer({ walletAddress });
+      const { customer } = await findOrCreateCustomer({ walletAddress }, dbClock);
       const customerId = customer.customerId;
 
       // Generate JWT tokens
