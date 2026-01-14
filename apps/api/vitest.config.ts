@@ -2,6 +2,8 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
+    // CRITICAL: Production environment guard - runs before any tests
+    globalSetup: ['../../scripts/test/vitest-global-setup.ts'],
     globals: true,
     environment: 'node',
     include: ['tests/**/*.test.ts', 'src/**/*.test.ts'],

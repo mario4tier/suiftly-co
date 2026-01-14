@@ -8,6 +8,9 @@
  * - E2E tests (Playwright - normal expiry)
  * - E2E tests (Playwright - short expiry)
  *
+ * PRODUCTION GUARD: Tests MUST only run in development environments.
+ * This is enforced at startup before any tests run.
+ *
  * Usage:
  *   npm run test:all
  *   ./scripts/test/run-all.ts
@@ -16,7 +19,83 @@
 
 import { spawn, execSync, spawnSync } from 'child_process';
 import { writeFileSync, appendFileSync, existsSync, readFileSync, unlinkSync } from 'fs';
+import { homedir } from 'os';
+import { join } from 'path';
 import { waitForPortFree } from '../../playwright-test-utils';
+
+
+/**
+ * Check if this is a production environment by reading system.conf files.
+ * CRITICAL: Must run before any tests to prevent production data corruption.
+ *
+ * Checks two locations:
+ * 1. ~/walrus/system.conf - ENVIRONMENT variable (development/staging/production)
+ * 2. /etc/walrus/system.conf - DEPLOYMENT_TYPE variable (production/test)
+ */
+function checkNotProductionEnvironment(): void {
+  const home = homedir();
+  const walrusConfig = join(home, 'walrus', 'system.conf');
+  const etcConfig = '/etc/walrus/system.conf';
+
+  // Check ~/walrus/system.conf (primary)
+  if (existsSync(walrusConfig)) {
+    try {
+      const content = readFileSync(walrusConfig, 'utf8');
+      for (const line of content.split('\n')) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('#') || !trimmed) continue;
+        if (trimmed.startsWith('ENVIRONMENT=')) {
+          const value = trimmed.split('=')[1]?.replace(/["']/g, '').toLowerCase();
+          if (value === 'production') {
+            console.log('\n' + '='.repeat(70));
+            console.log('\x1b[31m\x1b[1mFATAL: CANNOT RUN TESTS IN PRODUCTION ENVIRONMENT!\x1b[0m');
+            console.log('='.repeat(70));
+            console.log(`\nDetected: ENVIRONMENT=production in ${walrusConfig}`);
+            console.log('\nTests are ONLY allowed in development environments.');
+            console.log('This prevents accidental data corruption or service disruption.');
+            console.log('\nTo run tests, ensure your system.conf has:');
+            console.log('  ENVIRONMENT=development  (in ~/walrus/system.conf)');
+            console.log('='.repeat(70) + '\n');
+            process.exit(1);
+          }
+        }
+      }
+    } catch (err) {
+      // Log but don't fail - default to allowing tests if we can't read config
+      console.warn(`Warning: Could not read ${walrusConfig}:`, err);
+    }
+  }
+
+  // Check /etc/walrus/system.conf (secondary - production servers)
+  if (existsSync(etcConfig)) {
+    try {
+      const content = readFileSync(etcConfig, 'utf8');
+      for (const line of content.split('\n')) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('#') || !trimmed) continue;
+        if (trimmed.startsWith('DEPLOYMENT_TYPE=')) {
+          const value = trimmed.split('=')[1]?.replace(/["']/g, '').toLowerCase();
+          if (value === 'production') {
+            console.log('\n' + '='.repeat(70));
+            console.log('\x1b[31m\x1b[1mFATAL: CANNOT RUN TESTS IN PRODUCTION ENVIRONMENT!\x1b[0m');
+            console.log('='.repeat(70));
+            console.log(`\nDetected: DEPLOYMENT_TYPE=production in ${etcConfig}`);
+            console.log('\nTests are ONLY allowed in development/test environments.');
+            console.log('This prevents accidental data corruption or service disruption.');
+            console.log('='.repeat(70) + '\n');
+            process.exit(1);
+          }
+        }
+      }
+    } catch (err) {
+      // Log but don't fail - default to allowing tests if we can't read config
+      console.warn(`Warning: Could not read ${etcConfig}:`, err);
+    }
+  }
+
+  // No production markers found - safe to proceed
+  console.log('\x1b[32m✅ Environment check passed: Not a production environment\x1b[0m');
+}
 
 const LOCK_FILE = '/tmp/suiftly-test-runner.lock';
 
@@ -513,7 +592,11 @@ function printSummary(results: TestResult[]): void {
 async function main() {
   header('SUIFTLY TEST RUNNER - Running All Tests');
 
-  // FIRST: Check that no other test run is in progress
+  // CRITICAL: Check that we're not in a production environment
+  // This must run FIRST before any other operations
+  checkNotProductionEnvironment();
+
+  // Check that no other test run is in progress
   // This prevents database deadlocks, port conflicts, and flaky test failures
   await checkNoOtherTestsRunning();
 
