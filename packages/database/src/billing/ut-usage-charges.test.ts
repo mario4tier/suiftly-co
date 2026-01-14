@@ -25,7 +25,7 @@ const TEST_CUSTOMER_ID = 99902;
 const TEST_WALLET = '0x' + 'b'.repeat(64);
 
 describe('Usage Charges', () => {
-  let testInvoiceId: string;
+  let testInvoiceId: number;
 
   beforeAll(async () => {
     // Create test customer
@@ -452,7 +452,7 @@ describe('Usage Charges', () => {
       const result = await updateUsageChargesToDraft(
         unsafeAsLockedTransaction(db),
         TEST_CUSTOMER_ID,
-        '00000000-0000-0000-0000-000000000000' // Non-existent
+        999999999 // Non-existent invoice ID (bigint)
       );
 
       expect(result.success).toBe(false);

@@ -2321,7 +2321,7 @@
         },
         "client_ip": {
           "name": "client_ip",
-          "type": "text",
+          "type": "inet",
           "primaryKey": false,
           "notNull": true
         },

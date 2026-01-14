@@ -32,7 +32,7 @@ import { ensureInvoiceValid } from './validation';
 import { ValidationError } from './errors';
 import { applyScheduledTierChanges, processScheduledCancellations } from './tier-changes';
 import { recalculateDraftInvoice } from './service-billing';
-import { updateUsageChargesToDraft, syncUsageToDraft } from './usage-charges';
+import { finalizeUsageChargesForBilling, syncUsageToDraft } from './usage-charges';
 import type { BillingProcessorConfig, CustomerBillingResult, BillingOperation } from './types';
 import type { DBClock } from '@suiftly/shared/db-clock';
 import type { ISuiService } from '@suiftly/shared/sui-service';
@@ -196,10 +196,10 @@ async function processMonthlyBilling(
       }
 
       // Phase: ADD USAGE CHARGES (STATS_DESIGN.md D3)
-      // Update usage charges on each DRAFT invoice based on stats_per_hour data
-      // Uses invoice's billingPeriodStart/billingPeriodEnd as the authoritative window
+      // Finalize usage charges for the PREVIOUS month (the month that just ended)
+      // This is different from preview - we bill for completed usage, not future
       for (const invoice of draftInvoices) {
-        const usageResult = await updateUsageChargesToDraft(tx, customerId, invoice.id);
+        const usageResult = await finalizeUsageChargesForBilling(tx, customerId, invoice.id, config.clock);
         if (usageResult.success && usageResult.lineItemsAdded > 0) {
           result.operations.push({
             type: 'reconciliation',

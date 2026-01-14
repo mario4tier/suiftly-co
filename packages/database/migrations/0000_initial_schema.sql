@@ -250,7 +250,7 @@ CREATE TABLE "haproxy_raw_logs" (
 	"fe_type" smallint NOT NULL,
 	"traffic_type" smallint NOT NULL,
 	"event_type" smallint NOT NULL,
-	"client_ip" text NOT NULL,
+	"client_ip" "inet" NOT NULL,
 	"key_metadata" smallint,
 	"status_code" smallint NOT NULL,
 	"bytes_sent" bigint DEFAULT 0 NOT NULL,

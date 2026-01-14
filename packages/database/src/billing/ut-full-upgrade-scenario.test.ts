@@ -308,7 +308,7 @@ describe('Full Upgrade Scenario: Deposit → Pro → Schedule Downgrade → Ente
       .orderBy(desc(billingRecords.createdAt));
 
     for (const record of allRecords) {
-      console.log(`  ID: ${record.id.substring(0, 8)}...`);
+      console.log(`  ID: ${record.id}`);
       console.log(`    Status: ${record.status}`);
       console.log(`    Type: ${record.type}`);
       console.log(`    Amount: $${(record.amountUsdCents/100).toFixed(2)} (${record.amountUsdCents} cents)`);

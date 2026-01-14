@@ -32,7 +32,7 @@ export const haproxyRawLogs = pgTable('haproxy_raw_logs', {
   feType: smallint('fe_type').notNull(),
   trafficType: smallint('traffic_type').notNull(),
   eventType: smallint('event_type').notNull(),
-  clientIp: text('client_ip').notNull(), // INET type in PostgreSQL
+  clientIp: inet('client_ip').notNull(),
 
   // API key context (decoded from merge_fields_2)
   keyMetadata: smallint('key_metadata'),

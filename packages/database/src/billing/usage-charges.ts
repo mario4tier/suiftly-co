@@ -306,6 +306,201 @@ export async function getUsageChargePreview(
 }
 
 // ============================================================================
+// Month-End Usage Finalization
+// ============================================================================
+
+/**
+ * Finalize usage charges for billing (DRAFT → PENDING transition)
+ *
+ * This function is called during monthly billing to add usage charges for the
+ * month that the invoice is designated for. Unlike updateUsageChargesToDraft()
+ * which uses the invoice's billing period, this function calculates the usage
+ * period as the month BEFORE the invoice's billing period.
+ *
+ * Design rationale:
+ * - The invoice's billingPeriodStart/End is for SUBSCRIPTION prepay (next month)
+ * - Usage charges are for the month that just ended (month before billing period)
+ * - By deriving the usage period from the invoice (not the clock), we ensure
+ *   correct billing even if processing is delayed (e.g., January DRAFT processed
+ *   in March will still bill January's usage, not February's)
+ *
+ * Example: Invoice has billingPeriodStart = March 1 (for March subscription).
+ * This function:
+ * - Derives usagePeriodEnd = March 1 (the invoice's billing period start)
+ * - Derives usagePeriodStart = February 1 (month before)
+ * - Queries February's usage
+ *
+ * IMPORTANT: This function performs multiple writes that must be atomic.
+ * The caller MUST wrap this in a transaction.
+ *
+ * @param tx Database or transaction instance (caller should provide transaction context)
+ * @param customerId Customer ID
+ * @param invoiceId DRAFT invoice ID to add usage charges to
+ * @param _clock DBClock (unused, kept for API consistency - usage period derived from invoice)
+ * @returns Result with total usage charges and line items count
+ */
+export async function finalizeUsageChargesForBilling(
+  tx: LockedTransaction,
+  customerId: number,
+  invoiceId: number,
+  _clock: DBClock
+): Promise<UsageChargeResult> {
+  // 1. Verify invoice exists and is in DRAFT status
+  const [invoice] = await tx
+    .select()
+    .from(billingRecords)
+    .where(eq(billingRecords.id, invoiceId))
+    .limit(1);
+
+  if (!invoice) {
+    return {
+      success: false,
+      totalUsageChargesCents: 0,
+      lineItemsAdded: 0,
+      error: 'Invoice not found',
+    };
+  }
+
+  if (invoice.status !== 'draft') {
+    return {
+      success: false,
+      totalUsageChargesCents: 0,
+      lineItemsAdded: 0,
+      error: `Invoice is not in draft status (current: ${invoice.status})`,
+    };
+  }
+
+  // 2. Get the current usage total (to calculate delta)
+  const existingUsageResult = await tx.execute(sql`
+    SELECT COALESCE(SUM(amount_usd_cents), 0) as total
+    FROM invoice_line_items
+    WHERE billing_record_id = ${invoiceId}
+      AND item_type = 'requests'
+  `);
+  const existingUsageTotal = Number(existingUsageResult.rows[0]?.total ?? 0);
+
+  // 3. Delete existing usage line items for idempotency
+  await tx.execute(sql`
+    DELETE FROM invoice_line_items
+    WHERE billing_record_id = ${invoiceId}
+      AND item_type = 'requests'
+  `);
+
+  // 4. Get all service instances for this customer
+  const services = await tx
+    .select()
+    .from(serviceInstances)
+    .where(eq(serviceInstances.customerId, customerId));
+
+  if (services.length === 0) {
+    // Update invoice total (subtract old usage, no new usage)
+    if (existingUsageTotal > 0) {
+      await updateInvoiceTotal(tx, invoiceId, -existingUsageTotal);
+    }
+    return {
+      success: true,
+      totalUsageChargesCents: 0,
+      lineItemsAdded: 0,
+    };
+  }
+
+  // 5. Derive the USAGE PERIOD from the invoice's billing period
+  //
+  // The invoice's billingPeriodStart is for subscription prepay (next month).
+  // Usage charges are for the month BEFORE that period.
+  //
+  // Example: Invoice billingPeriodStart = March 1
+  //   - usagePeriodEnd = March 1 (exclusive)
+  //   - usagePeriodStart = February 1
+  //
+  // This ensures correct billing even if processing is delayed:
+  //   - January invoice (billingPeriodStart = Feb 1) processed in March
+  //     will bill January usage, not February usage
+  //
+  // Note: JavaScript Date.UTC() handles month underflow correctly:
+  // - Date.UTC(2025, -1, 1) = December 1, 2024 (auto year rollback)
+  // - This is documented JS behavior: out-of-range values are normalized
+  const invoiceBillingStart = new Date(invoice.billingPeriodStart);
+
+  // Usage period ends at the invoice's billing period start (exclusive boundary)
+  const usagePeriodEnd = new Date(Date.UTC(
+    invoiceBillingStart.getUTCFullYear(),
+    invoiceBillingStart.getUTCMonth(),
+    1, 0, 0, 0, 0
+  ));
+
+  // Usage period starts at the first day of the previous month
+  const usagePeriodStart = new Date(Date.UTC(
+    invoiceBillingStart.getUTCFullYear(),
+    invoiceBillingStart.getUTCMonth() - 1,
+    1, 0, 0, 0, 0
+  ));
+
+  const requestCounts: Record<string, number> = {};
+  let totalUsageChargesCents = 0;
+  let lineItemsAdded = 0;
+
+  // 6. Process each service
+  for (const service of services) {
+    const serviceTypeName = service.serviceType as ServiceType;
+    const serviceTypeNum = SERVICE_TYPE_NUMBER[serviceTypeName];
+
+    if (!serviceTypeNum) continue;
+
+    // 7. Query stats for billable requests within the PREVIOUS month
+    const requestCount = await getBillableRequestCount(
+      tx,
+      customerId,
+      serviceTypeNum,
+      usagePeriodStart,
+      usagePeriodEnd
+    );
+
+    if (requestCount === 0) {
+      continue;
+    }
+
+    requestCounts[serviceTypeName] = requestCount;
+
+    // 8. Calculate charge (conservative: round down to avoid overcharging)
+    const pricePer1000 = USAGE_PRICING_CENTS_PER_1000[serviceTypeName];
+    const chargeCents = Math.floor((requestCount * pricePer1000) / 1000);
+
+    if (chargeCents === 0) {
+      continue;
+    }
+
+    // 9. Add line item with semantic data
+    const unitPriceCents = pricePer1000;
+
+    await tx.insert(invoiceLineItems).values({
+      billingRecordId: invoiceId,
+      itemType: INVOICE_LINE_ITEM_TYPE.REQUESTS,
+      serviceType: serviceTypeName,
+      quantity: requestCount,
+      unitPriceUsdCents: unitPriceCents,
+      amountUsdCents: chargeCents,
+    });
+
+    totalUsageChargesCents += chargeCents;
+    lineItemsAdded++;
+  }
+
+  // 10. Update invoice total with usage delta (new usage - old usage)
+  const usageDelta = totalUsageChargesCents - existingUsageTotal;
+  if (usageDelta !== 0) {
+    await updateInvoiceTotal(tx, invoiceId, usageDelta);
+  }
+
+  return {
+    success: true,
+    totalUsageChargesCents,
+    lineItemsAdded,
+    requestCounts: Object.keys(requestCounts).length > 0 ? requestCounts : undefined,
+  };
+}
+
+// ============================================================================
 // Periodic Usage Sync
 // ============================================================================
 
