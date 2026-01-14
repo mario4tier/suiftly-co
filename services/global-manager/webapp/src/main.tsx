@@ -4,6 +4,7 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { AdminPollingProvider } from './contexts/AdminPollingContext';
 import { Layout } from './components/Layout';
 import { Dashboard } from './pages/Dashboard';
+import { InfraStats } from './pages/InfraStats';
 import { KVCryptDebug } from './pages/KVCryptDebug';
 
 function App() {
@@ -13,6 +14,7 @@ function App() {
         <Layout>
           <Routes>
             <Route path="/" element={<Dashboard />} />
+            <Route path="/infra" element={<InfraStats />} />
             <Route path="/kvcrypt" element={<KVCryptDebug />} />
           </Routes>
         </Layout>

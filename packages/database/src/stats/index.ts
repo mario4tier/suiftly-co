@@ -11,8 +11,11 @@ export {
   refreshStatsAggregate,
   clearCustomerLogs,
   clearAllLogs,
+  insertInfraLogs,
+  refreshInfraAggregates,
   type MockHAProxyLogOptions,
   type TrafficDistribution,
+  type InfraLogOptions,
 } from './test-helpers';
 
 // Query functions (STATS_DESIGN.md D4)

@@ -2,24 +2,28 @@
 /**
  * Inject demo traffic data for UI testing
  *
- * Creates ~48 hours of realistic HAProxy log data with:
- * - Day/night traffic variation
- * - Occasional burst periods (exceeding guaranteed limit)
- * - Response times 50-200ms (correlating with load)
- * - Response time spread for whisker chart visualization (min/avg/max per hour)
- * - Server errors (5xx) and client errors (4xx)
+ * Creates two types of data:
  *
- * For whisker chart support, each hour inserts 5 logs for guaranteed traffic
- * and 3 logs for burst traffic, each with different response times to create
- * realistic min/max spread while maintaining correct weighted averages.
+ * 1. Customer Traffic (configurable hours, default 48h):
+ *    - Day/night traffic variation
+ *    - Occasional burst periods (exceeding guaranteed limit)
+ *    - Response times 50-200ms (correlating with load)
+ *    - Response time spread for whisker chart visualization
+ *    - Server errors (5xx) and client errors (4xx)
+ *
+ * 2. Infrastructure Stats (100 days, all services):
+ *    - Days 1-30:   RED zone (server errors present)
+ *    - Days 31-60:  YELLOW zone (slow >150ms, no server errors)
+ *    - Days 61-100: GREEN zone (healthy, fast responses)
+ *    Uses repeat field for efficient bulk inserts.
  *
  * Usage:
  *   tsx scripts/dev/inject-demo.ts [wallet-address] [--service seal|grpc|graphql] [--hours N]
  *
  * Examples:
  *   tsx scripts/dev/inject-demo.ts                     # Default: mock wallet, seal, 48 hours
- *   tsx scripts/dev/inject-demo.ts --hours 24          # 24 hours of data
- *   tsx scripts/dev/inject-demo.ts --service grpc      # gRPC service
+ *   tsx scripts/dev/inject-demo.ts --hours 24          # 24 hours of customer data
+ *   tsx scripts/dev/inject-demo.ts --service grpc      # gRPC service for customer data
  *   tsx scripts/dev/inject-demo.ts 0x1234...           # Specific wallet
  */
 
@@ -29,6 +33,8 @@ import {
   insertMockHAProxyLogs,
   refreshStatsAggregate,
   clearCustomerLogs,
+  insertInfraLogs,
+  refreshInfraAggregates,
 } from '@suiftly/database/stats';
 import { forceSyncUsageToDraft } from '@suiftly/database/billing';
 import { dbClock } from '@suiftly/shared/db-clock';
@@ -53,7 +59,7 @@ const SERVICE_TYPES = {
 // Limits
 const DEFAULT_HOURS = 48;
 const MIN_HOURS = 1;
-const MAX_HOURS = 168; // 1 week max
+const MAX_HOURS = 2400; // 100 days max
 
 // Parse command line arguments
 function parseArgs(): {
@@ -81,7 +87,7 @@ function parseArgs(): {
         process.exit(1);
       }
       if (parsed > MAX_HOURS) {
-        console.error(`Error: --hours cannot exceed ${MAX_HOURS} (1 week)`);
+        console.error(`Error: --hours cannot exceed ${MAX_HOURS} (100 days)`);
         process.exit(1);
       }
       hours = parsed;
@@ -419,16 +425,240 @@ async function injectDemoData() {
     }
   }
 
+  // =========================================================================
+  // Infrastructure Stats Data (for InfraStats page)
+  // 100 days of data with color pattern:
+  // - Days 1-30 (recent): errors → red status bars
+  // - Days 31-60: slow (>150ms) but no server errors → yellow status bars
+  // - Days 61-100: healthy and fast → green status bars
+  // =========================================================================
+  console.log('');
+  console.log('Injecting infrastructure stats data (100 days)...');
+
+  // Event type definitions for various error categories
+  const infraEventTypes = {
+    // Auth/Protocol errors (10-17) - client errors
+    authMissingKey: 10,
+    authFailed: 11,
+    malformedRequest: 12,
+    // IP/Access errors (20-21) - client errors
+    ipBlocked: 20,
+    ipRateLimited: 21,
+    // Backend errors (50-54) - server errors (user-affecting)
+    backend500: 50,
+    backend502: 51,
+    backend503: 52,
+    backend504: 53,
+    // Infrastructure errors (60-63) - server errors (user-affecting)
+    connectionRefused: 60,
+    connectionTimeout: 61,
+    noBackendAvailable: 62,
+    queueTimeout: 63,
+  };
+
+  let totalInfraLogs = 0;
+  let totalInfraErrors = 0;
+  const INFRA_DAYS = 100;
+  const MS_PER_DAY = 24 * MS_PER_HOUR;
+
+  // Inject data for all 3 services
+  const allServiceTypes = [1, 2, 3] as const;
+
+  for (const svcType of allServiceTypes) {
+    const svcName = svcType === 1 ? 'Seal' : svcType === 2 ? 'RPC' : 'GraphQL';
+    console.log(`  Injecting ${svcName} service data...`);
+
+    for (let daysAgo = INFRA_DAYS; daysAgo >= 1; daysAgo--) {
+      // Inject one entry per day (at noon) for efficiency
+      const timestamp = new Date(now.getTime() - daysAgo * MS_PER_DAY + 12 * MS_PER_HOUR);
+      const serverId = ((daysAgo % 3) + 1) as 1 | 2 | 3;
+      const backendId = (((daysAgo + 5) % 3) + 1) as 1 | 2 | 3;
+
+      // Determine which zone this day falls into
+      // Days 1-30: RED zone (errors)
+      // Days 31-60: YELLOW zone (slow but no server errors)
+      // Days 61-100: GREEN zone (healthy and fast)
+
+      if (daysAgo <= 30) {
+        // RED ZONE: Server errors + current variation pattern
+        // Base successful traffic with normal latency
+        await insertInfraLogs(db, {
+          serviceType: svcType,
+          network: 1,
+          timestamp,
+          eventType: 0, // success
+          serverId,
+          backendId,
+          timeTotal: 80 + Math.floor(Math.random() * 40), // 80-120ms
+          repeat: 10000, // 10k requests per day
+          customerId: customer.customerId,
+        });
+        totalInfraLogs += 10000;
+
+        // Add server errors (backend + infra) - these cause RED
+        const serverErrors = [
+          // Backend errors (50-54)
+          infraEventTypes.backend502,
+          infraEventTypes.backend503,
+          infraEventTypes.backend504,
+          // Infrastructure errors (60-63)
+          infraEventTypes.connectionRefused,
+          infraEventTypes.connectionTimeout,
+          infraEventTypes.noBackendAvailable,
+          infraEventTypes.queueTimeout,
+        ];
+        const serverError = serverErrors[daysAgo % serverErrors.length];
+        await insertInfraLogs(db, {
+          serviceType: svcType,
+          network: 1,
+          timestamp: new Date(timestamp.getTime() + 1000),
+          eventType: serverError,
+          serverId,
+          backendId: serverError >= 60 ? 0 : backendId,
+          timeTotal: serverError === infraEventTypes.connectionTimeout ? 30000 : 5000,
+          repeat: 1 + (daysAgo % 5), // 1-5 errors per day
+          customerId: customer.customerId,
+        });
+        totalInfraErrors += 1 + (daysAgo % 5);
+        totalInfraLogs += 1 + (daysAgo % 5);
+
+        // Also add some client errors (these don't cause RED, but show in client bar)
+        if (daysAgo % 3 === 0) {
+          await insertInfraLogs(db, {
+            serviceType: svcType,
+            network: 1,
+            timestamp: new Date(timestamp.getTime() + 2000),
+            eventType: infraEventTypes.authMissingKey,
+            serverId,
+            backendId: 0,
+            timeTotal: 15,
+            repeat: 5 + (daysAgo % 10),
+            customerId: null,
+          });
+          totalInfraLogs += 5 + (daysAgo % 10);
+        }
+
+      } else if (daysAgo <= 60) {
+        // YELLOW ZONE: Slow responses (>150ms) but NO server errors
+        // Degraded traffic with high latency
+        await insertInfraLogs(db, {
+          serviceType: svcType,
+          network: 1,
+          timestamp,
+          eventType: 0, // success
+          serverId,
+          backendId,
+          timeTotal: 180 + Math.floor(Math.random() * 100), // 180-280ms (above 150ms threshold)
+          repeat: 10000,
+          customerId: customer.customerId,
+        });
+        totalInfraLogs += 10000;
+
+        // Add some client errors (these don't affect server status bar)
+        if (daysAgo % 4 === 0) {
+          await insertInfraLogs(db, {
+            serviceType: svcType,
+            network: 1,
+            timestamp: new Date(timestamp.getTime() + 1000),
+            eventType: infraEventTypes.ipRateLimited,
+            serverId,
+            backendId: 0,
+            timeTotal: 10,
+            repeat: 3 + (daysAgo % 7),
+            customerId: null,
+          });
+          totalInfraLogs += 3 + (daysAgo % 7);
+        }
+
+      } else {
+        // GREEN ZONE: Healthy and fast (no errors, <150ms)
+        await insertInfraLogs(db, {
+          serviceType: svcType,
+          network: 1,
+          timestamp,
+          eventType: 0, // success
+          serverId,
+          backendId,
+          timeTotal: 50 + Math.floor(Math.random() * 50), // 50-100ms (well under 150ms)
+          repeat: 10000,
+          customerId: customer.customerId,
+        });
+        totalInfraLogs += 10000;
+      }
+    }
+  }
+
+  // Add guaranteed recent errors for demo visibility (in the RED zone)
+  // These are added to ALL services (not just the one from command line)
+  console.log('  Adding guaranteed errors for demo visibility...');
+  const guaranteedErrors = [
+    // Backend errors (server errors)
+    { eventType: infraEventTypes.backend502, count: 5, label: 'Backend 502' },
+    { eventType: infraEventTypes.backend504, count: 3, label: 'Backend 504' },
+    // Infrastructure errors (server errors)
+    { eventType: infraEventTypes.connectionRefused, count: 2, label: 'Connection Refused' },
+    { eventType: infraEventTypes.connectionTimeout, count: 2, label: 'Connection Timeout' },
+    { eventType: infraEventTypes.noBackendAvailable, count: 3, label: 'No Backend Available' },
+    { eventType: infraEventTypes.queueTimeout, count: 2, label: 'Queue Timeout' },
+    // Client errors
+    { eventType: infraEventTypes.authMissingKey, count: 8, label: 'Missing API Key' },
+    { eventType: infraEventTypes.ipRateLimited, count: 10, label: 'IP Rate Limited' },
+  ];
+
+  for (const error of guaranteedErrors) {
+    for (const svcType of allServiceTypes) {
+      for (let i = 0; i < error.count; i++) {
+        // First instance of each error type goes in the last 24h for demo visibility
+        // Rest are distributed in the RED zone (last 30 days)
+        let timestamp: Date;
+        if (i === 0) {
+          // Place in last 24 hours (1-23 hours ago)
+          const hoursAgo = 1 + Math.floor(Math.random() * 22);
+          timestamp = new Date(now.getTime() - hoursAgo * MS_PER_HOUR);
+        } else {
+          // Place in the rest of the RED zone (1-29 days ago)
+          const daysAgo = 1 + Math.floor(Math.random() * 28);
+          timestamp = new Date(now.getTime() - daysAgo * MS_PER_DAY);
+        }
+        await insertInfraLogs(db, {
+          serviceType: svcType,
+          network: 1,
+          timestamp,
+          eventType: error.eventType,
+          serverId: ((i % 3) + 1) as 1 | 2 | 3,
+          backendId: error.eventType >= 50 ? ((i % 3) + 1) as 1 | 2 | 3 : 0,
+          timeTotal: error.eventType === infraEventTypes.connectionTimeout ? 30000 : 100,
+          customerId: error.eventType >= 50 ? customer.customerId : null,
+        });
+      }
+    }
+    if (error.eventType >= 50) {
+      totalInfraErrors += error.count * 3; // 3 services
+    }
+    totalInfraLogs += error.count * 3; // 3 services
+    console.log(`    Added ${error.count} ${error.label} errors (per service)`);
+  }
+
+  // Refresh infrastructure aggregates
+  console.log('Refreshing infrastructure aggregates...');
+  await refreshInfraAggregates(db);
+
   console.log('');
   console.log('='.repeat(60));
   console.log('  Demo Data Injected Successfully');
   console.log('='.repeat(60));
-  console.log(`  Total requests:   ${totalRequests.toLocaleString()}`);
-  console.log(`  - Guaranteed:     ${totalGuaranteed.toLocaleString()}`);
-  console.log(`  - Burst:          ${totalBurst.toLocaleString()}`);
-  console.log(`  - Client errors:  ${totalClientErrors}`);
-  console.log(`  - Server errors:  ${totalServerErrors}`);
-  console.log(`  Hours of data:    ${hours}`);
+  console.log(`  Customer traffic (${hours}h):`);
+  console.log(`    Total requests:   ${totalRequests.toLocaleString()}`);
+  console.log(`    - Guaranteed:     ${totalGuaranteed.toLocaleString()}`);
+  console.log(`    - Burst:          ${totalBurst.toLocaleString()}`);
+  console.log(`    - Client errors:  ${totalClientErrors}`);
+  console.log(`    - Server errors:  ${totalServerErrors}`);
+  console.log(`  Infrastructure (100 days, all services):`);
+  console.log(`    Total logs:       ${totalInfraLogs.toLocaleString()}`);
+  console.log(`    Server errors:    ${totalInfraErrors}`);
+  console.log(`    Days 1-30:        RED (errors)`);
+  console.log(`    Days 31-60:       YELLOW (slow >150ms)`);
+  console.log(`    Days 61-100:      GREEN (healthy)`);
   console.log('='.repeat(60));
   console.log('');
 

@@ -6,7 +6,7 @@
  */
 
 import { sql } from 'drizzle-orm';
-import type { Database, DatabaseOrTransaction } from '../db';
+import type { Database } from '../db';
 import { haproxyRawLogs } from '../schema/logs';
 
 /**
@@ -463,5 +463,178 @@ export async function clearCustomerLogs(
  */
 export async function clearAllLogs(db: Database): Promise<void> {
   await db.execute(sql`TRUNCATE TABLE haproxy_raw_logs`);
+}
+
+/**
+ * Options for inserting infrastructure log entries (for InfraStats page testing)
+ */
+export interface InfraLogOptions {
+  /** Service type: 1=Seal, 2=gRPC, 3=GraphQL */
+  serviceType: 1 | 2 | 3;
+  /** Network: 0=testnet, 1=mainnet */
+  network: 0 | 1;
+  /** Base timestamp for the logs */
+  timestamp: Date;
+  /** Event type (0=success, 10-17=auth, 20-21=ip, 30-39=authz, 50-54=backend, 60-63=infra) */
+  eventType: number;
+  /** HTTP status code (default: derived from event type) */
+  statusCode?: number;
+  /** Server ID (default: 1) */
+  serverId?: number;
+  /** Backend ID (default: 1) */
+  backendId?: number;
+  /** Total response time in ms */
+  timeTotal?: number;
+  /** Queue time in ms */
+  timeQueue?: number;
+  /** Connect time in ms */
+  timeConnect?: number;
+  /** Backend response time in ms */
+  timeResponse?: number;
+  /** Number of identical entries to insert as separate rows (default: 1) */
+  count?: number;
+  /**
+   * Repeat count for a single row (default: 1)
+   * Use this for efficiency when inserting many identical requests.
+   * Creates a single row with repeat=N instead of N rows.
+   */
+  repeat?: number;
+  /** Optional customer ID (null for anonymous/infra-only logs) */
+  customerId?: number | null;
+}
+
+/**
+ * Insert infrastructure log entries for InfraStats testing
+ *
+ * Unlike insertMockHAProxyLogs which focuses on customer traffic,
+ * this function is designed for infra stats testing with:
+ * - Various event types (errors)
+ * - Fine-grained timing control
+ * - Multi-server/backend support
+ * - Optional customer association
+ *
+ * @param db Database instance
+ * @param options Configuration for the logs
+ * @returns Number of records inserted
+ */
+export async function insertInfraLogs(
+  db: Database,
+  options: InfraLogOptions
+): Promise<number> {
+  const {
+    serviceType,
+    network,
+    timestamp,
+    eventType,
+    serverId = 1,
+    backendId = 1,
+    count = 1,
+    repeat = 1,
+    customerId = null,
+  } = options;
+
+  // Derive status code from event type if not provided
+  let statusCode = options.statusCode;
+  if (statusCode === undefined) {
+    if (eventType === 0) {
+      statusCode = 200;
+    } else if (eventType >= 10 && eventType <= 17) {
+      statusCode = 400; // Auth/protocol errors
+    } else if (eventType >= 20 && eventType <= 21) {
+      statusCode = 403; // IP access errors
+    } else if (eventType >= 30 && eventType <= 39) {
+      statusCode = 403; // Authorization errors
+    } else if (eventType >= 50 && eventType <= 54) {
+      // Backend errors
+      const backendStatusMap: Record<number, number> = {
+        50: 500, 51: 502, 52: 503, 53: 504, 54: 500,
+      };
+      statusCode = backendStatusMap[eventType] ?? 500;
+    } else if (eventType >= 60 && eventType <= 63) {
+      statusCode = 503; // Infrastructure errors
+    } else {
+      statusCode = 500;
+    }
+  }
+
+  // Derive timing values if not provided
+  const timeTotal = options.timeTotal ?? 100;
+  const timeQueue = options.timeQueue ?? Math.floor(timeTotal * 0.05);
+  const timeConnect = options.timeConnect ?? Math.floor(timeTotal * 0.1);
+  const timeResponse = options.timeResponse ?? Math.floor(timeTotal * 0.85);
+
+  const entries = [];
+  const baseTime = timestamp.getTime();
+
+  for (let i = 0; i < count; i++) {
+    entries.push({
+      timestamp: new Date(baseTime + i),
+      customerId: customerId,
+      pathPrefix: customerId ? '/v1/test' : null,
+      configHex: null,
+      network,
+      serverId,
+      serviceType,
+      apiKeyFp: customerId ? 12345 : 0,
+      feType: 1 as const,
+      trafficType: 1, // guaranteed
+      eventType,
+      clientIp: '127.0.0.1',
+      keyMetadata: null,
+      statusCode,
+      bytesSent: eventType === 0 ? 1024 : 0,
+      timeTotal,
+      timeRequest: Math.floor(timeTotal * 0.05),
+      timeQueue,
+      timeConnect,
+      timeResponse,
+      backendId: backendId as 0 | 1 | 2 | 3 | 4 | 5,
+      terminationState: eventType === 0 ? '--' : 'sH',
+      repeat,
+    });
+  }
+
+  // Batch insert
+  const BATCH_SIZE = 1000;
+  for (let i = 0; i < entries.length; i += BATCH_SIZE) {
+    const batch = entries.slice(i, i + BATCH_SIZE);
+    await db.insert(haproxyRawLogs).values(batch);
+  }
+
+  return count * repeat;
+}
+
+/**
+ * Refresh the infrastructure continuous aggregates
+ *
+ * Forces an immediate refresh of infra_per_min, infra_per_hour, and infra_per_day.
+ * Use this in tests after inserting mock data to make it available for queries.
+ *
+ * @param db Database instance
+ * @param startTime Optional start time for refresh window (default: 5 years ago)
+ * @param endTime Optional end time for refresh window (default: 1 hour from now)
+ */
+export async function refreshInfraAggregates(
+  db: Database,
+  startTime?: Date,
+  endTime?: Date
+): Promise<void> {
+  const start = startTime
+    ? `'${startTime.toISOString()}'::timestamptz`
+    : `NOW() - INTERVAL '5 years'`;
+  const end = endTime
+    ? `'${endTime.toISOString()}'::timestamptz`
+    : `NOW() + INTERVAL '1 hour'`;
+
+  // Refresh in order due to cascade dependencies: min -> hour -> day
+  await db.execute(
+    sql.raw(`CALL refresh_continuous_aggregate('infra_per_min', ${start}, ${end})`)
+  );
+  await db.execute(
+    sql.raw(`CALL refresh_continuous_aggregate('infra_per_hour', ${start}, ${end})`)
+  );
+  await db.execute(
+    sql.raw(`CALL refresh_continuous_aggregate('infra_per_day', ${start}, ${end})`)
+  );
 }
 

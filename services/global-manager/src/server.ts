@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { db, adminNotifications } from '@suiftly/database';
 import { getMockClockState, setMockClockState } from '@suiftly/database/test-kv';
 import { desc, eq } from 'drizzle-orm';
+import { dbClock } from '@suiftly/shared/db-clock';
 import { isTestDeployment } from './config/lm-config.js';
 import {
   queueSyncCustomer,
@@ -666,6 +667,511 @@ server.get('/api/sync/overview', async () => {
     },
     syncStatus: allSynced ? 'synced' : 'pending',
   };
+});
+
+// ============================================================================
+// Infrastructure Stats API (for Admin Dashboard InfraStats page)
+// ============================================================================
+
+// Zod schema for infra range query
+const infraRangeQuerySchema = z.object({
+  range: z.enum(['24h', '7d', '2y']).optional().default('24h'),
+});
+
+// Service type names for display
+const SERVICE_TYPE_NAMES: Record<number, string> = {
+  1: 'Seal',
+  2: 'RPC',
+  3: 'GraphQL',
+};
+
+// Event type names for display
+const EVENT_TYPE_NAMES: Record<number, string> = {
+  0: 'Success',
+  // Auth/Protocol (10-17)
+  10: 'Missing API Key', 11: 'Auth Failed', 12: 'Malformed Request',
+  13: 'Header Too Large', 14: 'Request Timeout', 15: 'TLS Handshake Failed',
+  16: 'Invalid Route', 17: 'Missing CF Header',
+  // IP/Access (20-21)
+  20: 'IP Blocked', 21: 'IP Rate Limit',
+  // Authorization (30-39)
+  30: 'Customer Not Authorized', 31: 'API Key Revoked', 32: 'Customer Not In Map',
+  // Backend (50-54)
+  50: 'Backend Error 500', 51: 'Backend Error 502', 52: 'Backend Error 503',
+  53: 'Backend Error 504', 54: 'Backend Error Other',
+  // Infrastructure (60-63)
+  60: 'Connection Refused', 61: 'Connection Timeout',
+  62: 'No Backend Available', 63: 'Queue Timeout',
+};
+
+const ERROR_CATEGORIES = [
+  { name: 'Auth/Protocol', range: [10, 17] as const },
+  { name: 'IP/Access', range: [20, 21] as const },
+  { name: 'Authorization', range: [30, 39] as const },
+  { name: 'Backend', range: [50, 54] as const },
+  { name: 'Infrastructure', range: [60, 63] as const },
+];
+
+// GET /api/infra/summary - Returns counts for ALL time ranges, per service
+// Distinguishes between server errors (user-affecting) and client errors (client's fault)
+server.get('/api/infra/summary', async () => {
+  const { sql } = await import('drizzle-orm');
+
+  // Use dbClock for testable time
+  const now = dbClock.now();
+  const MS_PER_HOUR = 60 * 60 * 1000;
+  const MS_PER_DAY = 24 * MS_PER_HOUR;
+
+  // Calculate start times from dbClock
+  const start24h = new Date(now.getTime() - 24 * MS_PER_HOUR);
+  const start7d = new Date(now.getTime() - 7 * MS_PER_DAY);
+  const start2y = new Date(now.getTime() - 2 * 365 * MS_PER_DAY);
+
+  type RangeData = {
+    total: number;
+    serverErrors: number;  // Backend 50-54, Infrastructure 60-63
+    clientErrors: number;  // Auth 10-17, IP 20-21, Authz 30-39
+    avgTotalMs: number | null;  // For degradation detection
+  };
+  type ServiceData = { name: string; ranges: Record<string, RangeData> };
+
+  // Helper to process query results by service
+  const processServiceResults = (rows: Array<{
+    service_type: number;
+    total: string;
+    server_errors: string;
+    client_errors: string;
+    avg_total_ms: string | null;
+  }>) => {
+    const byService: Record<number, RangeData> = {};
+    for (const row of rows) {
+      byService[row.service_type] = {
+        total: Number(row.total),
+        serverErrors: Number(row.server_errors),
+        clientErrors: Number(row.client_errors),
+        avgTotalMs: row.avg_total_ms ? Number(row.avg_total_ms) : null,
+      };
+    }
+    return byService;
+  };
+
+  // Query with error categorization
+  // 24h from infra_per_hour
+  const h24Result = await db.execute(sql`
+    SELECT
+      service_type,
+      COALESCE(SUM(request_count), 0)::bigint as total,
+      COALESCE(SUM(CASE WHEN event_type BETWEEN 50 AND 54 OR event_type BETWEEN 60 AND 63
+          THEN request_count ELSE 0 END), 0)::bigint as server_errors,
+      COALESCE(SUM(CASE WHEN event_type BETWEEN 10 AND 39
+          THEN request_count ELSE 0 END), 0)::bigint as client_errors,
+      SUM(avg_total_ms * request_count) / NULLIF(SUM(request_count), 0) as avg_total_ms
+    FROM infra_per_hour
+    WHERE bucket >= ${start24h}
+    GROUP BY service_type
+  `);
+  const h24ByService = processServiceResults(h24Result.rows as any);
+
+  // 7d from infra_per_hour
+  const d7Result = await db.execute(sql`
+    SELECT
+      service_type,
+      COALESCE(SUM(request_count), 0)::bigint as total,
+      COALESCE(SUM(CASE WHEN event_type BETWEEN 50 AND 54 OR event_type BETWEEN 60 AND 63
+          THEN request_count ELSE 0 END), 0)::bigint as server_errors,
+      COALESCE(SUM(CASE WHEN event_type BETWEEN 10 AND 39
+          THEN request_count ELSE 0 END), 0)::bigint as client_errors,
+      SUM(avg_total_ms * request_count) / NULLIF(SUM(request_count), 0) as avg_total_ms
+    FROM infra_per_hour
+    WHERE bucket >= ${start7d}
+    GROUP BY service_type
+  `);
+  const d7ByService = processServiceResults(d7Result.rows as any);
+
+  // 2y from infra_per_day
+  const y2Result = await db.execute(sql`
+    SELECT
+      service_type,
+      COALESCE(SUM(request_count), 0)::bigint as total,
+      COALESCE(SUM(CASE WHEN event_type BETWEEN 50 AND 54 OR event_type BETWEEN 60 AND 63
+          THEN request_count ELSE 0 END), 0)::bigint as server_errors,
+      COALESCE(SUM(CASE WHEN event_type BETWEEN 10 AND 39
+          THEN request_count ELSE 0 END), 0)::bigint as client_errors,
+      SUM(avg_total_ms * request_count) / NULLIF(SUM(request_count), 0) as avg_total_ms
+    FROM infra_per_day
+    WHERE bucket >= ${start2y}
+    GROUP BY service_type
+  `);
+  const y2ByService = processServiceResults(y2Result.rows as any);
+
+  // Build response per service
+  const emptyRange: RangeData = { total: 0, serverErrors: 0, clientErrors: 0, avgTotalMs: null };
+  const services: Record<string, ServiceData> = {};
+
+  for (const [serviceType, name] of Object.entries(SERVICE_TYPE_NAMES)) {
+    const st = Number(serviceType);
+    services[serviceType] = {
+      name,
+      ranges: {
+        '24h': h24ByService[st] || emptyRange,
+        '7d': d7ByService[st] || emptyRange,
+        '2y': y2ByService[st] || emptyRange,
+      },
+    };
+  }
+
+  return { services };
+});
+
+// Helper to convert bucket to ISO string (handles both Date and string from time_bucket)
+const toBucketISO = (bucket: Date | string): string => {
+  if (bucket instanceof Date) {
+    return bucket.toISOString();
+  }
+  return new Date(bucket).toISOString();
+};
+
+// GET /api/infra/status-bar?range=24h|7d|2y - Returns per-bucket data for status bars, per service
+// Two status bars:
+// 1. Server status: Green (no errors, fast), Yellow (slow >150ms), Red (server errors affecting users)
+// 2. Client status: Shows client-side errors (auth, IP, authz) for attack/abuse monitoring
+server.get('/api/infra/status-bar', async (request, reply) => {
+  const query = validate(infraRangeQuerySchema, request.query, reply);
+  if (!query) return;
+
+  const { sql } = await import('drizzle-orm');
+
+  // Use dbClock for testable time
+  const now = dbClock.now();
+  const MS_PER_HOUR = 60 * 60 * 1000;
+  const MS_PER_DAY = 24 * MS_PER_HOUR;
+
+  // Error categories:
+  // - Server errors (affect users): Backend 50-54, Infrastructure 60-63
+  // - Client errors (client's fault): Auth/Protocol 10-17, IP/Access 20-21, Authorization 30-39
+  type BucketData = {
+    bucket: string;
+    total: number;
+    serverErrors: number;  // Backend + Infrastructure errors (user-affecting)
+    clientErrors: number;  // Auth + IP + Authz errors (client's fault)
+    avgTotalMs: number | null;  // For latency-based degradation detection
+  };
+
+  // Helper to process rows by service
+  const processRows = (rows: Array<{
+    service_type: number;
+    bucket: Date | string;
+    total: string;
+    server_errors: string;
+    client_errors: string;
+    avg_total_ms: string | null;
+  }>) => {
+    const byService: Record<number, BucketData[]> = {};
+    for (const row of rows) {
+      const st = row.service_type;
+      if (!byService[st]) byService[st] = [];
+      byService[st].push({
+        bucket: toBucketISO(row.bucket),
+        total: Number(row.total),
+        serverErrors: Number(row.server_errors),
+        clientErrors: Number(row.client_errors),
+        avgTotalMs: row.avg_total_ms ? Number(row.avg_total_ms) : null,
+      });
+    }
+    return byService;
+  };
+
+  let granularity: 'hour' | 'day' | 'week';
+  let byService: Record<number, BucketData[]>;
+
+  // Query with error categorization:
+  // - Server errors: event_type 50-54 (Backend) OR 60-63 (Infrastructure)
+  // - Client errors: event_type 10-17 (Auth) OR 20-21 (IP) OR 30-39 (Authz)
+  if (query.range === '24h') {
+    granularity = 'hour';
+    const start = new Date(now.getTime() - 24 * MS_PER_HOUR);
+    const result = await db.execute(sql`
+      SELECT
+        service_type,
+        bucket,
+        SUM(request_count)::bigint as total,
+        SUM(CASE WHEN event_type BETWEEN 50 AND 54 OR event_type BETWEEN 60 AND 63
+            THEN request_count ELSE 0 END)::bigint as server_errors,
+        SUM(CASE WHEN event_type BETWEEN 10 AND 39
+            THEN request_count ELSE 0 END)::bigint as client_errors,
+        SUM(avg_total_ms * request_count) / NULLIF(SUM(request_count), 0) as avg_total_ms
+      FROM infra_per_hour
+      WHERE bucket >= ${start}
+      GROUP BY service_type, bucket
+      ORDER BY service_type, bucket
+    `);
+    byService = processRows(result.rows as any);
+  } else if (query.range === '7d') {
+    granularity = 'day';
+    const start = new Date(now.getTime() - 7 * MS_PER_DAY);
+    const result = await db.execute(sql`
+      SELECT
+        service_type,
+        time_bucket('1 day', bucket) as bucket,
+        SUM(request_count)::bigint as total,
+        SUM(CASE WHEN event_type BETWEEN 50 AND 54 OR event_type BETWEEN 60 AND 63
+            THEN request_count ELSE 0 END)::bigint as server_errors,
+        SUM(CASE WHEN event_type BETWEEN 10 AND 39
+            THEN request_count ELSE 0 END)::bigint as client_errors,
+        SUM(avg_total_ms * request_count) / NULLIF(SUM(request_count), 0) as avg_total_ms
+      FROM infra_per_hour
+      WHERE bucket >= ${start}
+      GROUP BY service_type, time_bucket('1 day', bucket)
+      ORDER BY service_type, 2
+    `);
+    byService = processRows(result.rows as any);
+  } else {
+    granularity = 'week';
+    const start = new Date(now.getTime() - 2 * 365 * MS_PER_DAY);
+    const result = await db.execute(sql`
+      SELECT
+        service_type,
+        time_bucket('1 week', bucket) as bucket,
+        SUM(request_count)::bigint as total,
+        SUM(CASE WHEN event_type BETWEEN 50 AND 54 OR event_type BETWEEN 60 AND 63
+            THEN request_count ELSE 0 END)::bigint as server_errors,
+        SUM(CASE WHEN event_type BETWEEN 10 AND 39
+            THEN request_count ELSE 0 END)::bigint as client_errors,
+        SUM(avg_total_ms * request_count) / NULLIF(SUM(request_count), 0) as avg_total_ms
+      FROM infra_per_day
+      WHERE bucket >= ${start}
+      GROUP BY service_type, time_bucket('1 week', bucket)
+      ORDER BY service_type, 2
+    `);
+    byService = processRows(result.rows as any);
+  }
+
+  // Build response per service
+  const services: Record<string, { name: string; buckets: BucketData[] }> = {};
+  for (const [serviceType, name] of Object.entries(SERVICE_TYPE_NAMES)) {
+    const st = Number(serviceType);
+    services[serviceType] = {
+      name,
+      buckets: byService[st] || [],
+    };
+  }
+
+  return { services, granularity };
+});
+
+// GET /api/infra/graphs?range=24h|7d|2y - Returns time series data for graphs, per service
+server.get('/api/infra/graphs', async (request, reply) => {
+  const query = validate(infraRangeQuerySchema, request.query, reply);
+  if (!query) return;
+
+  const { sql } = await import('drizzle-orm');
+
+  // Use dbClock for testable time
+  const now = dbClock.now();
+  const MS_PER_HOUR = 60 * 60 * 1000;
+  const MS_PER_DAY = 24 * MS_PER_HOUR;
+
+  interface GraphBucket {
+    bucket: string;
+    requests: number;
+    avgTotalMs: number | null;
+    avgQueueMs: number | null;
+    avgConnectMs: number | null;
+    avgRtMs: number | null;
+  }
+
+  // Helper to process rows by service
+  const processRows = (rows: Array<{
+    service_type: number;
+    bucket: Date | string;
+    requests: string;
+    avg_total_ms: string | null;
+    avg_queue_ms: string | null;
+    avg_connect_ms: string | null;
+    avg_rt_ms: string | null;
+  }>) => {
+    const byService: Record<number, GraphBucket[]> = {};
+    for (const r of rows) {
+      const st = r.service_type;
+      if (!byService[st]) byService[st] = [];
+      byService[st].push({
+        bucket: toBucketISO(r.bucket),
+        requests: Number(r.requests),
+        avgTotalMs: r.avg_total_ms ? Number(r.avg_total_ms) : null,
+        avgQueueMs: r.avg_queue_ms ? Number(r.avg_queue_ms) : null,
+        avgConnectMs: r.avg_connect_ms ? Number(r.avg_connect_ms) : null,
+        avgRtMs: r.avg_rt_ms ? Number(r.avg_rt_ms) : null,
+      });
+    }
+    return byService;
+  };
+
+  let granularity: 'hour' | 'day' | 'week';
+  let byService: Record<number, GraphBucket[]>;
+
+  if (query.range === '24h') {
+    granularity = 'hour';
+    const start = new Date(now.getTime() - 24 * MS_PER_HOUR);
+    const result = await db.execute(sql`
+      SELECT
+        service_type,
+        bucket,
+        SUM(request_count)::bigint as requests,
+        SUM(avg_total_ms * request_count) / NULLIF(SUM(request_count), 0) as avg_total_ms,
+        SUM(avg_queue_ms * request_count) / NULLIF(SUM(request_count), 0) as avg_queue_ms,
+        SUM(avg_connect_ms * request_count) / NULLIF(SUM(request_count), 0) as avg_connect_ms,
+        SUM(avg_rt_ms * request_count) / NULLIF(SUM(request_count), 0) as avg_rt_ms
+      FROM infra_per_hour
+      WHERE bucket >= ${start}
+      GROUP BY service_type, bucket
+      ORDER BY service_type, bucket
+    `);
+    byService = processRows(result.rows as any);
+  } else if (query.range === '7d') {
+    granularity = 'day';
+    const start = new Date(now.getTime() - 7 * MS_PER_DAY);
+    const result = await db.execute(sql`
+      SELECT
+        service_type,
+        time_bucket('1 day', bucket) as bucket,
+        SUM(request_count)::bigint as requests,
+        SUM(avg_total_ms * request_count) / NULLIF(SUM(request_count), 0) as avg_total_ms,
+        SUM(avg_queue_ms * request_count) / NULLIF(SUM(request_count), 0) as avg_queue_ms,
+        SUM(avg_connect_ms * request_count) / NULLIF(SUM(request_count), 0) as avg_connect_ms,
+        SUM(avg_rt_ms * request_count) / NULLIF(SUM(request_count), 0) as avg_rt_ms
+      FROM infra_per_hour
+      WHERE bucket >= ${start}
+      GROUP BY service_type, time_bucket('1 day', bucket)
+      ORDER BY service_type, 2
+    `);
+    byService = processRows(result.rows as any);
+  } else {
+    granularity = 'week';
+    const start = new Date(now.getTime() - 2 * 365 * MS_PER_DAY);
+    const result = await db.execute(sql`
+      SELECT
+        service_type,
+        time_bucket('1 week', bucket) as bucket,
+        SUM(request_count)::bigint as requests,
+        SUM(avg_total_ms * request_count) / NULLIF(SUM(request_count), 0) as avg_total_ms,
+        SUM(avg_queue_ms * request_count) / NULLIF(SUM(request_count), 0) as avg_queue_ms,
+        SUM(avg_connect_ms * request_count) / NULLIF(SUM(request_count), 0) as avg_connect_ms,
+        SUM(avg_rt_ms * request_count) / NULLIF(SUM(request_count), 0) as avg_rt_ms
+      FROM infra_per_day
+      WHERE bucket >= ${start}
+      GROUP BY service_type, time_bucket('1 week', bucket)
+      ORDER BY service_type, 2
+    `);
+    byService = processRows(result.rows as any);
+  }
+
+  // Build response per service
+  const services: Record<string, { name: string; buckets: GraphBucket[] }> = {};
+  for (const [serviceType, name] of Object.entries(SERVICE_TYPE_NAMES)) {
+    const st = Number(serviceType);
+    services[serviceType] = {
+      name,
+      buckets: byService[st] || [],
+    };
+  }
+
+  return { services, granularity };
+});
+
+// GET /api/infra/errors?range=24h|7d|2y - Returns error breakdown by category and event_type, per service
+server.get('/api/infra/errors', async (request, reply) => {
+  const query = validate(infraRangeQuerySchema, request.query, reply);
+  if (!query) return;
+
+  const { sql } = await import('drizzle-orm');
+
+  // Use dbClock for testable time
+  const now = dbClock.now();
+  const MS_PER_HOUR = 60 * 60 * 1000;
+  const MS_PER_DAY = 24 * MS_PER_HOUR;
+
+  // Get error counts by event_type for the selected range
+  let start: Date;
+  let table: string;
+  if (query.range === '24h') {
+    start = new Date(now.getTime() - 24 * MS_PER_HOUR);
+    table = 'infra_per_hour';
+  } else if (query.range === '7d') {
+    start = new Date(now.getTime() - 7 * MS_PER_DAY);
+    table = 'infra_per_hour';
+  } else {
+    start = new Date(now.getTime() - 2 * 365 * MS_PER_DAY);
+    table = 'infra_per_day';
+  }
+
+  const result = await db.execute(sql.raw(`
+    SELECT
+      service_type,
+      event_type,
+      SUM(request_count)::bigint as count
+    FROM ${table}
+    WHERE bucket >= '${start.toISOString()}'::timestamptz
+      AND event_type != 0
+    GROUP BY service_type, event_type
+    ORDER BY service_type, count DESC
+  `));
+
+  // Group by service, then by event_type
+  const errorsByServiceAndType = new Map<number, Map<number, number>>();
+  for (const row of result.rows as Array<{ service_type: number; event_type: number; count: string }>) {
+    if (!errorsByServiceAndType.has(row.service_type)) {
+      errorsByServiceAndType.set(row.service_type, new Map());
+    }
+    errorsByServiceAndType.get(row.service_type)!.set(row.event_type, Number(row.count));
+  }
+
+  // Build response per service
+  type ErrorCategory = {
+    name: string;
+    range: readonly [number, number];
+    total: number;
+    types: Array<{ code: number; name: string; count: number }>;
+  };
+
+  const buildCategories = (errorsByType: Map<number, number>): ErrorCategory[] => {
+    return ERROR_CATEGORIES.map(cat => {
+      const types: Array<{ code: number; name: string; count: number }> = [];
+      let categoryTotal = 0;
+
+      for (let code = cat.range[0]; code <= cat.range[1]; code++) {
+        const count = errorsByType.get(code) || 0;
+        if (count > 0) {
+          types.push({
+            code,
+            name: EVENT_TYPE_NAMES[code] || `Unknown (${code})`,
+            count,
+          });
+          categoryTotal += count;
+        }
+      }
+
+      types.sort((a, b) => b.count - a.count);
+
+      return {
+        name: cat.name,
+        range: cat.range,
+        total: categoryTotal,
+        types,
+      };
+    }).filter(cat => cat.total > 0);
+  };
+
+  const services: Record<string, { name: string; categories: ErrorCategory[] }> = {};
+  for (const [serviceType, name] of Object.entries(SERVICE_TYPE_NAMES)) {
+    const st = Number(serviceType);
+    const errorsByType = errorsByServiceAndType.get(st) || new Map();
+    services[serviceType] = {
+      name,
+      categories: buildCategories(errorsByType),
+    };
+  }
+
+  return { services };
 });
 
 // ============================================================================

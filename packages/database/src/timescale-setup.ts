@@ -231,6 +231,230 @@ export async function setupTimescaleDB() {
   await db.execute(sql`ALTER MATERIALIZED VIEW stats_per_hour OWNER TO deploy`);
   console.log('✓ Transferred stats_per_hour ownership to deploy');
 
+  // =========================================================================
+  // stats_per_min - Customer Debugging (24h retention)
+  // =========================================================================
+  // Per-minute stats for fine-grained customer debugging.
+  // Includes status_code breakdown for detailed error analysis.
+
+  await db.execute(sql`DROP MATERIALIZED VIEW IF EXISTS stats_per_min`);
+  await db.execute(sql`
+    CREATE MATERIALIZED VIEW stats_per_min
+    WITH (timescaledb.continuous) AS
+    SELECT
+      time_bucket('1 minute', timestamp) AS bucket,
+      customer_id,
+      service_type,
+      network,
+      traffic_type,
+      status_code,
+      -- Request count (supports pre-aggregated logs)
+      SUM(repeat) AS request_count,
+      -- Bytes
+      SUM(bytes_sent * repeat) AS total_bytes,
+      -- Response time (weighted average)
+      SUM(time_total::bigint * repeat)::double precision / NULLIF(SUM(repeat), 0) AS avg_rt_ms,
+      MAX(time_total) AS max_rt_ms
+    FROM haproxy_raw_logs
+    WHERE customer_id IS NOT NULL
+    GROUP BY bucket, customer_id, service_type, network, traffic_type, status_code;
+  `);
+  console.log('✓ Created stats_per_min continuous aggregate');
+
+  await db.execute(sql`
+    SELECT add_continuous_aggregate_policy('stats_per_min',
+      start_offset => INTERVAL '5 minutes',
+      end_offset => INTERVAL '1 minute',
+      schedule_interval => INTERVAL '1 minute',
+      if_not_exists => TRUE
+    );
+  `);
+  console.log('✓ Added stats_per_min refresh policy (every 1 minute)');
+
+  await db.execute(sql`
+    SELECT add_retention_policy('stats_per_min', INTERVAL '24 hours', if_not_exists => TRUE);
+  `);
+  console.log('✓ Added stats_per_min retention policy (24 hours)');
+
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS idx_stats_per_min_customer_bucket
+    ON stats_per_min (customer_id, bucket DESC);
+  `);
+  console.log('✓ Created stats_per_min index');
+
+  await db.execute(sql`ALTER MATERIALIZED VIEW stats_per_min OWNER TO deploy`);
+  console.log('✓ Transferred stats_per_min ownership to deploy');
+
+  // =========================================================================
+  // infra_per_min - Ops Debugging (24h retention)
+  // =========================================================================
+  // Per-minute infrastructure stats for debugging ongoing issues.
+  // Groups by server_id, backend_id, event_type for ops monitoring.
+
+  // CASCADE required because infra_per_hour depends on infra_per_min
+  await db.execute(sql`DROP MATERIALIZED VIEW IF EXISTS infra_per_min CASCADE`);
+  await db.execute(sql`
+    CREATE MATERIALIZED VIEW infra_per_min
+    WITH (timescaledb.continuous) AS
+    SELECT
+      time_bucket('1 minute', timestamp) AS bucket,
+      server_id,
+      service_type,
+      network,
+      backend_id,
+      event_type,
+      status_code,
+      -- Request count (supports pre-aggregated logs)
+      SUM(repeat) AS request_count,
+      -- Timing metrics (weighted averages)
+      SUM(time_total::bigint * repeat)::double precision / NULLIF(SUM(repeat), 0) AS avg_total_ms,
+      SUM(time_queue::bigint * repeat)::double precision / NULLIF(SUM(repeat), 0) AS avg_queue_ms,
+      SUM(time_connect::bigint * repeat)::double precision / NULLIF(SUM(repeat), 0) AS avg_connect_ms,
+      SUM(time_response::bigint * repeat)::double precision / NULLIF(SUM(repeat), 0) AS avg_rt_ms
+    FROM haproxy_raw_logs
+    GROUP BY bucket, server_id, service_type, network, backend_id, event_type, status_code;
+  `);
+  console.log('✓ Created infra_per_min continuous aggregate');
+
+  await db.execute(sql`
+    SELECT add_continuous_aggregate_policy('infra_per_min',
+      start_offset => INTERVAL '5 minutes',
+      end_offset => INTERVAL '1 minute',
+      schedule_interval => INTERVAL '1 minute',
+      if_not_exists => TRUE
+    );
+  `);
+  console.log('✓ Added infra_per_min refresh policy (every 1 minute)');
+
+  await db.execute(sql`
+    SELECT add_retention_policy('infra_per_min', INTERVAL '24 hours', if_not_exists => TRUE);
+  `);
+  console.log('✓ Added infra_per_min retention policy (24 hours)');
+
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS idx_infra_per_min_server_bucket
+    ON infra_per_min (server_id, bucket DESC);
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS idx_infra_per_min_event_bucket
+    ON infra_per_min (event_type, bucket DESC) WHERE event_type != 0;
+  `);
+  console.log('✓ Created infra_per_min indexes');
+
+  await db.execute(sql`ALTER MATERIALIZED VIEW infra_per_min OWNER TO deploy`);
+  console.log('✓ Transferred infra_per_min ownership to deploy');
+
+  // =========================================================================
+  // infra_per_hour - Ops Short-Term Trends (30d retention)
+  // =========================================================================
+  // Hourly infrastructure stats cascading from infra_per_min.
+  // Requires TimescaleDB 2.9+ for continuous aggregates on continuous aggregates.
+
+  // CASCADE required because infra_per_day depends on infra_per_hour
+  await db.execute(sql`DROP MATERIALIZED VIEW IF EXISTS infra_per_hour CASCADE`);
+  await db.execute(sql`
+    CREATE MATERIALIZED VIEW infra_per_hour
+    WITH (timescaledb.continuous) AS
+    SELECT
+      time_bucket('1 hour', bucket) AS bucket,
+      server_id,
+      service_type,
+      network,
+      backend_id,
+      event_type,
+      status_code,
+      -- Aggregated request count
+      SUM(request_count) AS request_count,
+      -- Weighted averages: SUM(avg * count) / SUM(count)
+      SUM(avg_total_ms * request_count) / NULLIF(SUM(request_count), 0) AS avg_total_ms,
+      SUM(avg_queue_ms * request_count) / NULLIF(SUM(request_count), 0) AS avg_queue_ms,
+      SUM(avg_connect_ms * request_count) / NULLIF(SUM(request_count), 0) AS avg_connect_ms,
+      SUM(avg_rt_ms * request_count) / NULLIF(SUM(request_count), 0) AS avg_rt_ms
+    FROM infra_per_min
+    GROUP BY time_bucket('1 hour', bucket), server_id, service_type, network, backend_id, event_type, status_code;
+  `);
+  console.log('✓ Created infra_per_hour continuous aggregate (cascades from infra_per_min)');
+
+  // Note: Window must cover at least 2 buckets (3h - 1h = 2h = 2 buckets)
+  await db.execute(sql`
+    SELECT add_continuous_aggregate_policy('infra_per_hour',
+      start_offset => INTERVAL '3 hours',
+      end_offset => INTERVAL '1 hour',
+      schedule_interval => INTERVAL '1 hour',
+      if_not_exists => TRUE
+    );
+  `);
+  console.log('✓ Added infra_per_hour refresh policy (every 1 hour)');
+
+  await db.execute(sql`
+    SELECT add_retention_policy('infra_per_hour', INTERVAL '30 days', if_not_exists => TRUE);
+  `);
+  console.log('✓ Added infra_per_hour retention policy (30 days)');
+
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS idx_infra_per_hour_server_bucket
+    ON infra_per_hour (server_id, bucket DESC);
+  `);
+  console.log('✓ Created infra_per_hour index');
+
+  await db.execute(sql`ALTER MATERIALIZED VIEW infra_per_hour OWNER TO deploy`);
+  console.log('✓ Transferred infra_per_hour ownership to deploy');
+
+  // =========================================================================
+  // infra_per_day - Ops Long-Term Trends (2y retention)
+  // =========================================================================
+  // Daily infrastructure stats cascading from infra_per_hour.
+  // Requires TimescaleDB 2.9+ for continuous aggregates on continuous aggregates.
+
+  await db.execute(sql`DROP MATERIALIZED VIEW IF EXISTS infra_per_day`);
+  await db.execute(sql`
+    CREATE MATERIALIZED VIEW infra_per_day
+    WITH (timescaledb.continuous) AS
+    SELECT
+      time_bucket('1 day', bucket) AS bucket,
+      server_id,
+      service_type,
+      network,
+      backend_id,
+      event_type,
+      status_code,
+      -- Aggregated request count
+      SUM(request_count) AS request_count,
+      -- Weighted averages: SUM(avg * count) / SUM(count)
+      SUM(avg_total_ms * request_count) / NULLIF(SUM(request_count), 0) AS avg_total_ms,
+      SUM(avg_queue_ms * request_count) / NULLIF(SUM(request_count), 0) AS avg_queue_ms,
+      SUM(avg_connect_ms * request_count) / NULLIF(SUM(request_count), 0) AS avg_connect_ms,
+      SUM(avg_rt_ms * request_count) / NULLIF(SUM(request_count), 0) AS avg_rt_ms
+    FROM infra_per_hour
+    GROUP BY time_bucket('1 day', bucket), server_id, service_type, network, backend_id, event_type, status_code;
+  `);
+  console.log('✓ Created infra_per_day continuous aggregate (cascades from infra_per_hour)');
+
+  // Note: Window must cover at least 2 buckets (3d - 1d = 2d = 2 buckets)
+  await db.execute(sql`
+    SELECT add_continuous_aggregate_policy('infra_per_day',
+      start_offset => INTERVAL '3 days',
+      end_offset => INTERVAL '1 day',
+      schedule_interval => INTERVAL '1 day',
+      if_not_exists => TRUE
+    );
+  `);
+  console.log('✓ Added infra_per_day refresh policy (every 1 day)');
+
+  await db.execute(sql`
+    SELECT add_retention_policy('infra_per_day', INTERVAL '2 years', if_not_exists => TRUE);
+  `);
+  console.log('✓ Added infra_per_day retention policy (2 years)');
+
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS idx_infra_per_day_server_bucket
+    ON infra_per_day (server_id, bucket DESC);
+  `);
+  console.log('✓ Created infra_per_day index');
+
+  await db.execute(sql`ALTER MATERIALIZED VIEW infra_per_day OWNER TO deploy`);
+  console.log('✓ Transferred infra_per_day ownership to deploy');
+
   console.log('✅ TimescaleDB setup complete');
 }
 
