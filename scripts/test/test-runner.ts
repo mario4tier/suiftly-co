@@ -626,8 +626,28 @@ async function main() {
     }
   }
 
-  // 1. API Unit Tests (Vitest)
+  // 1. Database Unit Tests (Vitest) - billing/stats pure unit tests
   let result = await runCommand(
+    'Database Unit Tests',
+    'npm',
+    ['run', 'test', '--workspace=@suiftly/database', '--', '--run'],
+    undefined,
+    {
+      DATABASE_URL: 'postgresql://deploy:deploy_password_change_me@localhost/suiftly_dev',
+    }
+  );
+  results.push(result);
+
+  // Stop on first failure
+  if (!result.passed) {
+    await stopDevServers();
+    printSummary(results);
+    error('Tests stopped on first failure');
+    process.exit(1);
+  }
+
+  // 2. API Unit Tests (Vitest)
+  result = await runCommand(
     'API Unit Tests',
     'npm',
     ['run', 'test', '--workspace=@suiftly/api', '--', '--run'],
@@ -647,7 +667,7 @@ async function main() {
     process.exit(1);
   }
 
-  // 2. Playwright E2E - Normal Expiry (15m/30d)
+  // 3. Playwright E2E - Normal Expiry (15m/30d)
   // Uses dev servers (already running or just started)
   result = await runCommand(
     'E2E Tests - Normal Expiry (15m/30d)',
@@ -664,7 +684,7 @@ async function main() {
     process.exit(1);
   }
 
-  // 3. Playwright E2E - Short Expiry (2s/10s)
+  // 4. Playwright E2E - Short Expiry (2s/10s)
   // These tests need clean server state to avoid JWT pollution from previous tests
   section('Preparing for short-expiry tests (clean server state)...');
 
@@ -710,7 +730,7 @@ async function main() {
     process.exit(1);
   }
 
-  // 4. Other Playwright tests (chromium project)
+  // 5. Other Playwright tests (chromium project)
   // Servers are still running from short-expiry tests
 
   result = await runCommand(
