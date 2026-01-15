@@ -5,6 +5,7 @@
 
 import { test, expect, Page } from '@playwright/test';
 import { waitAfterMutation } from '../helpers/wait-utils';
+import { waitForToastsToDisappear } from '../helpers/locators';
 import { db } from '@suiftly/database';
 import { sealKeys } from '@suiftly/database/schema';
 import { eq } from 'drizzle-orm';
@@ -497,39 +498,36 @@ test.describe('Seal Keys & Packages Management', () => {
   });
 
   test('copy object ID to clipboard', async ({ page }) => {
-    // Setup: Create a seal key with object ID
+    // Setup: Create a seal key via UI first (ensures proper cache invalidation)
+    await createSealKeyViaUI(page);
+    await waitForToastsToDisappear(page);
+
+    // Get customer ID to find the key we just created
     const response = await page.request.get('http://localhost:22700/test/data/customer');
     const userData = await response.json();
     const customerId = userData.customer.customerId;
 
-    const serviceResponse = await db.query.serviceInstances.findFirst({
-      where: (instances, { eq, and }) =>
-        and(
-          eq(instances.customerId, customerId),
-          eq(instances.serviceType, 'seal')
-        ),
+    // Find the key we just created (most recent one)
+    const existingKey = await db.query.sealKeys.findFirst({
+      where: eq(sealKeys.customerId, customerId),
+      orderBy: (keys, { desc }) => [desc(keys.createdAt)],
     });
 
-    if (!serviceResponse) {
-      throw new Error('Service instance not found');
+    if (!existingKey) {
+      throw new Error('Seal key not found after creation');
     }
 
-    const [testKey] = await db.insert(sealKeys).values({
-      customerId,
-      instanceId: serviceResponse.instanceId,
-      name: 'Key with Object ID',
-      derivationIndex: 999, // Test key with objectId
-      publicKey: Buffer.from('a'.repeat(96), 'hex'),
-      objectId: Buffer.from('f'.repeat(64), 'hex'),
-      isUserEnabled: true,
-    }).returning();
+    // Update the key to add an objectId (simulating on-chain registration)
+    await db.update(sealKeys)
+      .set({ objectId: Buffer.from('f'.repeat(64), 'hex') })
+      .where(eq(sealKeys.sealKeyId, existingKey.sealKeyId));
 
-    // Reload page
+    // Reload page to fetch updated data
     await page.reload();
     await waitAfterMutation(page);
 
     // Object ID should be visible (keys are always expanded)
-    await expect(page.locator('text=Object ID:')).toBeVisible();
+    await expect(page.locator('text=Object ID:')).toBeVisible({ timeout: 5000 });
 
     // Find the Object ID row and click the copy button
     const objectIdRow = page.locator('div:has-text("Object ID:")');
