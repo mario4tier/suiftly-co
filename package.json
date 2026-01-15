@@ -14,7 +14,7 @@
     "dev": "turbo dev",
     "lint": "turbo lint",
     "test": "turbo test",
-    "test:all": "tsx scripts/test/run-all.ts",
+    "test:all": "tsx scripts/test/run-tsx-tests.ts",
     "clean": "turbo clean && rm -rf node_modules"
   },
   "devDependencies": {
