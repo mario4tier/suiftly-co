@@ -47,6 +47,7 @@
 import { db, systemControl, serviceInstances, apiKeys, sealKeys, sealPackages } from '@suiftly/database';
 import { SERVICE_TYPE, SERVICE_STATE, type ServiceType } from '@suiftly/shared/constants';
 import { createVaultWriter, createVaultReader, computeContentHash, type VaultInstance } from '@walrus/vault-codec';
+import { getSealProcessGroup } from '@walrus/system-config';
 import { eq, and, isNull } from 'drizzle-orm';
 
 // ============================================================================
@@ -716,7 +717,7 @@ export async function generateVault(
 
   const result = await writer.write(vaultType, vaultData, {
     seq: newSeq,
-    pg: 1, // Process group 1 (single GM for MVP)
+    pg: getSealProcessGroup(),
     source: 'gm-primary',
     enableEmergencyBackup: false, // TODO: Enable when emergency keys are configured
   });

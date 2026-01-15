@@ -6,6 +6,7 @@ CREATE TYPE "public"."service_state" AS ENUM('not_provisioned', 'provisioning', 
 CREATE TYPE "public"."service_tier" AS ENUM('starter', 'pro', 'enterprise');--> statement-breakpoint
 CREATE TYPE "public"."service_type" AS ENUM('seal', 'grpc', 'graphql');--> statement-breakpoint
 CREATE TYPE "public"."transaction_type" AS ENUM('deposit', 'withdraw', 'charge', 'credit');--> statement-breakpoint
+CREATE TYPE "public"."seal_registration_status" AS ENUM('registering', 'registered', 'updating');--> statement-breakpoint
 CREATE SEQUENCE IF NOT EXISTS invoice_number_seq START WITH 148372;--> statement-breakpoint
 CREATE TABLE "admin_notifications" (
 	"notification_id" serial PRIMARY KEY NOT NULL,
@@ -114,9 +115,9 @@ CREATE TABLE "customers" (
 	"wallet_address" varchar(66) NOT NULL,
 	"escrow_contract_id" varchar(66),
 	"status" "customer_status" DEFAULT 'active' NOT NULL,
-	"spending_limit_usd_cents" bigint,
-	"current_balance_usd_cents" bigint,
-	"current_period_charged_usd_cents" bigint,
+	"spending_limit_usd_cents" bigint DEFAULT 25000,
+	"current_balance_usd_cents" bigint DEFAULT 0,
+	"current_period_charged_usd_cents" bigint DEFAULT 0,
 	"current_period_start" date,
 	"paid_once" boolean DEFAULT false NOT NULL,
 	"grace_period_start" date,
@@ -191,7 +192,7 @@ CREATE TABLE "service_instances" (
 	"cancellation_scheduled_for" date,
 	"cancellation_effective_at" timestamp with time zone,
 	"last_billed_timestamp" timestamp,
-	"config_change_vault_seq" integer DEFAULT 0,
+	"sma_config_change_vault_seq" integer DEFAULT 0,
 	"cp_enabled" boolean DEFAULT false NOT NULL,
 	CONSTRAINT "service_instances_customer_id_service_type_unique" UNIQUE("customer_id","service_type")
 );
@@ -206,8 +207,17 @@ CREATE TABLE "seal_keys" (
 	"public_key" "bytea" NOT NULL,
 	"object_id" "bytea",
 	"register_txn_digest" "bytea",
+	"process_group" integer DEFAULT 1 NOT NULL,
+	"registration_status" "seal_registration_status" DEFAULT 'registering' NOT NULL,
+	"registration_error" text,
+	"registration_attempts" integer DEFAULT 0 NOT NULL,
+	"last_registration_attempt_at" timestamp,
+	"next_retry_at" timestamp,
+	"packages_version" integer DEFAULT 0 NOT NULL,
+	"registered_packages_version" integer,
 	"is_user_enabled" boolean DEFAULT true NOT NULL,
 	"created_at" timestamp DEFAULT now() NOT NULL,
+	"deleted_at" timestamp,
 	CONSTRAINT "check_name_length" CHECK ("seal_keys"."name" IS NULL OR LENGTH("seal_keys"."name") <= 64),
 	CONSTRAINT "check_public_key_length" CHECK (LENGTH("seal_keys"."public_key") IN (48, 96)),
 	CONSTRAINT "check_object_id_length" CHECK ("seal_keys"."object_id" IS NULL OR LENGTH("seal_keys"."object_id") = 32),
@@ -225,6 +235,26 @@ CREATE TABLE "seal_packages" (
 	"created_at" timestamp DEFAULT now() NOT NULL,
 	CONSTRAINT "check_package_address_length" CHECK (LENGTH("seal_packages"."package_address") = 32),
 	CONSTRAINT "check_name_length" CHECK ("seal_packages"."name" IS NULL OR LENGTH("seal_packages"."name") <= 64)
+);
+--> statement-breakpoint
+CREATE TABLE "seal_registration_ops" (
+	"op_id" serial PRIMARY KEY NOT NULL,
+	"seal_key_id" integer NOT NULL,
+	"customer_id" integer NOT NULL,
+	"network" text NOT NULL,
+	"op_type" text NOT NULL,
+	"status" text NOT NULL,
+	"packages_version_at_op" integer NOT NULL,
+	"attempt_count" integer DEFAULT 0 NOT NULL,
+	"next_retry_at" timestamp,
+	"tx_digest" "bytea",
+	"object_id" "bytea",
+	"error_message" text,
+	"created_at" timestamp DEFAULT now() NOT NULL,
+	"started_at" timestamp,
+	"completed_at" timestamp,
+	CONSTRAINT "check_tx_digest_length" CHECK ("seal_registration_ops"."tx_digest" IS NULL OR LENGTH("seal_registration_ops"."tx_digest") = 32),
+	CONSTRAINT "check_op_object_id_length" CHECK ("seal_registration_ops"."object_id" IS NULL OR LENGTH("seal_registration_ops"."object_id") = 32)
 );
 --> statement-breakpoint
 CREATE TABLE "usage_records" (
@@ -264,6 +294,13 @@ CREATE TABLE "haproxy_raw_logs" (
 	"repeat" integer DEFAULT 1 NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE "haproxy_system_logs" (
+	"timestamp" timestamp with time zone NOT NULL,
+	"server_id" smallint NOT NULL,
+	"msg" text NOT NULL,
+	"cnt" smallint DEFAULT 1 NOT NULL
+);
+--> statement-breakpoint
 CREATE TABLE "user_activity_logs" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"customer_id" integer NOT NULL,
@@ -284,9 +321,8 @@ CREATE TABLE "lm_status" (
 	"host" varchar(256) NOT NULL,
 	"region" varchar(64),
 	"vault_type" varchar(8),
-	"vault_seq" integer DEFAULT 0,
-	"in_sync" boolean DEFAULT false,
-	"full_sync" boolean DEFAULT false,
+	"applied_seq" integer DEFAULT 0,
+	"processing_seq" integer,
 	"customer_count" integer DEFAULT 0,
 	"last_seen_at" timestamp,
 	"last_error_at" timestamp,
@@ -312,6 +348,17 @@ CREATE TABLE "system_control" (
 	"sts_vault_seq" integer DEFAULT 0,
 	"sto_vault_seq" integer DEFAULT 0,
 	"skk_vault_seq" integer DEFAULT 0,
+	"sma_next_vault_seq" integer DEFAULT 1,
+	"smm_next_vault_seq" integer DEFAULT 1,
+	"sms_next_vault_seq" integer DEFAULT 1,
+	"smo_next_vault_seq" integer DEFAULT 1,
+	"sta_next_vault_seq" integer DEFAULT 1,
+	"stm_next_vault_seq" integer DEFAULT 1,
+	"sts_next_vault_seq" integer DEFAULT 1,
+	"sto_next_vault_seq" integer DEFAULT 1,
+	"skk_next_vault_seq" integer DEFAULT 1,
+	"sma_max_config_change_seq" integer DEFAULT 0,
+	"sta_max_config_change_seq" integer DEFAULT 0,
 	"sma_vault_content_hash" varchar(16),
 	"smm_vault_content_hash" varchar(16),
 	"sms_vault_content_hash" varchar(16),
@@ -321,6 +368,8 @@ CREATE TABLE "system_control" (
 	"sts_vault_content_hash" varchar(16),
 	"sto_vault_content_hash" varchar(16),
 	"skk_vault_content_hash" varchar(16),
+	"next_seal_derivation_index_pg1" integer DEFAULT 0 NOT NULL,
+	"next_seal_derivation_index_pg2" integer DEFAULT 0 NOT NULL,
 	"last_monthly_reset" date,
 	"maintenance_mode" boolean DEFAULT false,
 	"updated_at" timestamp DEFAULT now() NOT NULL,
@@ -379,6 +428,7 @@ ALTER TABLE "service_instances" ADD CONSTRAINT "service_instances_sub_pending_in
 ALTER TABLE "seal_keys" ADD CONSTRAINT "seal_keys_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "seal_keys" ADD CONSTRAINT "seal_keys_instance_id_service_instances_instance_id_fk" FOREIGN KEY ("instance_id") REFERENCES "public"."service_instances"("instance_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "seal_packages" ADD CONSTRAINT "seal_packages_seal_key_id_seal_keys_seal_key_id_fk" FOREIGN KEY ("seal_key_id") REFERENCES "public"."seal_keys"("seal_key_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "seal_registration_ops" ADD CONSTRAINT "seal_registration_ops_seal_key_id_seal_keys_seal_key_id_fk" FOREIGN KEY ("seal_key_id") REFERENCES "public"."seal_keys"("seal_key_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "usage_records" ADD CONSTRAINT "usage_records_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "user_activity_logs" ADD CONSTRAINT "user_activity_logs_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "mock_sui_transactions" ADD CONSTRAINT "mock_sui_transactions_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
@@ -419,6 +469,8 @@ CREATE INDEX "idx_seal_public_key" ON "seal_keys" USING btree ("public_key");-->
 CREATE INDEX "idx_seal_object_id" ON "seal_keys" USING btree ("object_id");--> statement-breakpoint
 CREATE INDEX "idx_package_seal_key" ON "seal_packages" USING btree ("seal_key_id");--> statement-breakpoint
 CREATE INDEX "idx_package_address" ON "seal_packages" USING btree ("package_address");--> statement-breakpoint
+CREATE INDEX "idx_seal_reg_ops_queued" ON "seal_registration_ops" USING btree ("status","next_retry_at","created_at");--> statement-breakpoint
+CREATE INDEX "idx_seal_reg_ops_seal_key" ON "seal_registration_ops" USING btree ("seal_key_id");--> statement-breakpoint
 CREATE INDEX "idx_customer_time" ON "usage_records" USING btree ("customer_id","window_start");--> statement-breakpoint
 CREATE INDEX "idx_billing" ON "usage_records" USING btree ("customer_id","service_type","window_start");--> statement-breakpoint
 CREATE INDEX "idx_logs_customer_time" ON "haproxy_raw_logs" USING btree ("customer_id","timestamp" DESC NULLS LAST) WHERE "haproxy_raw_logs"."customer_id" IS NOT NULL;--> statement-breakpoint
@@ -428,4 +480,5 @@ CREATE INDEX "idx_logs_traffic_type" ON "haproxy_raw_logs" USING btree ("traffic
 CREATE INDEX "idx_logs_event_type" ON "haproxy_raw_logs" USING btree ("event_type","timestamp" DESC NULLS LAST) WHERE "haproxy_raw_logs"."event_type" != 0;--> statement-breakpoint
 CREATE INDEX "idx_logs_status_code" ON "haproxy_raw_logs" USING btree ("status_code","timestamp" DESC NULLS LAST);--> statement-breakpoint
 CREATE INDEX "idx_logs_api_key_fp" ON "haproxy_raw_logs" USING btree ("api_key_fp","timestamp" DESC NULLS LAST) WHERE "haproxy_raw_logs"."api_key_fp" != 0;--> statement-breakpoint
+CREATE INDEX "idx_system_server_time" ON "haproxy_system_logs" USING btree ("server_id","timestamp" DESC NULLS LAST);--> statement-breakpoint
 CREATE INDEX "idx_activity_customer_time" ON "user_activity_logs" USING btree ("customer_id","timestamp" DESC NULLS LAST);

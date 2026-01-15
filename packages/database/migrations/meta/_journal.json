@@ -5,22 +5,8 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1765651469764,
-      "tag": "0000_initial_schema",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1734222000000,
-      "tag": "0001_lm_status_sequence_tracking",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1734483600000,
-      "tag": "0002_customer_field_defaults",
+      "when": 1768453921159,
+      "tag": "0000_keen_zarda",
       "breakpoints": true
     }
   ]

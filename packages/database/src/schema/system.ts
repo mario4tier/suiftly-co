@@ -74,6 +74,13 @@ export const systemControl = pgTable('system_control', {
   stoVaultContentHash: varchar('sto_vault_content_hash', { length: 16 }),
   skkVaultContentHash: varchar('skk_vault_content_hash', { length: 16 }),
 
+  // Seal key derivation index counters (per process group)
+  // Each PG has its own master seed, so derivation indices are independent namespaces.
+  // Atomic increment ensures globally unique indices within each PG.
+  // PG 1 = Production, PG 2 = Development
+  nextSealDerivationIndexPg1: integer('next_seal_derivation_index_pg1').notNull().default(0),
+  nextSealDerivationIndexPg2: integer('next_seal_derivation_index_pg2').notNull().default(0),
+
   lastMonthlyReset: date('last_monthly_reset'),
   maintenanceMode: boolean('maintenance_mode').default(false),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),

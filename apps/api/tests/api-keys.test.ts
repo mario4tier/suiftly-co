@@ -3,13 +3,14 @@
  * Tests the production implementation of API_KEY_DESIGN.md
  */
 
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { randomBytes } from 'crypto';
 
 // Set up test SECRET_KEY before importing api-keys module
 process.env.API_SECRET_KEY = randomBytes(32).toString('hex');
 
 import { generateApiKey, decodeApiKey, createApiKeyFingerprint, type SealType } from '../src/lib/api-keys';
+import { getSealProcessGroup } from '@walrus/system-config';
 
 describe('API Key Generation and Decoding', () => {
   describe('Basic Generation', () => {
@@ -83,7 +84,7 @@ describe('API Key Generation and Decoding', () => {
       expect(decoded.metadata.version).toBe(0);
       expect(decoded.metadata.sealType.network).toBe('testnet');
       expect(decoded.metadata.sealType.access).toBe('open');
-      expect(decoded.metadata.procGroup).toBe(1);
+      expect(decoded.metadata.procGroup).toBe(getSealProcessGroup());
     });
 
     it('should encode mainnet open seal type', () => {

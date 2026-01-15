@@ -17,6 +17,7 @@ import { generateSealKey } from '../lib/seal-key-generation';
 import { getTierPriceUsdCents } from '../lib/config-cache';
 import { dbClock } from '@suiftly/shared/db-clock';
 import { triggerVaultSync, markConfigChanged } from '../lib/gm-sync';
+import { getSealProcessGroup, isProduction } from '@walrus/system-config';
 
 export const sealRouter = router({
   /**
@@ -42,9 +43,12 @@ export const sealRouter = router({
       return [];
     }
 
-    // Get all seal keys with their packages
+    // Get all seal keys with their packages (excluding soft-deleted)
     const keys = await db.query.sealKeys.findMany({
-      where: eq(sealKeys.instanceId, service.instanceId),
+      where: and(
+        eq(sealKeys.instanceId, service.instanceId),
+        isNull(sealKeys.deletedAt) // Exclude soft-deleted keys
+      ),
       with: {
         packages: true,
       },
@@ -736,24 +740,56 @@ export const sealRouter = router({
             });
           }
 
-          // Find next available derivation index
-          // NOTE: We assign indices sequentially to make key management easier
-          // Even if a key is deleted, its index is never reused
-          const allKeys = await tx.query.sealKeys.findMany({
-            where: eq(sealKeys.instanceId, service.instanceId),
-          });
+          // ====================================================================
+          // ATOMIC DERIVATION INDEX ALLOCATION (Per Process Group)
+          // ====================================================================
+          // CRITICAL: Derivation indices must be globally unique within each PG.
+          // Each PG has its own master seed, so indices are independent namespaces.
+          // We use atomic UPDATE...RETURNING to prevent race conditions.
 
-          const usedIndices = allKeys
-            .map((k: typeof allKeys[number]) => k.derivationIndex)
-            .filter((idx): idx is number => idx !== null);
+          const processGroup = getSealProcessGroup();
 
-          const nextIndex = usedIndices.length === 0 ? 0 : Math.max(...usedIndices) + 1;
+          // Atomically increment the correct PG counter and return allocated index
+          // The counter stores the NEXT index to allocate, so we return (new_value - 1)
+          let nextIndex: number;
+          if (processGroup === 1) {
+            const [result] = await tx
+              .update(systemControl)
+              .set({
+                nextSealDerivationIndexPg1: sql`${systemControl.nextSealDerivationIndexPg1} + 1`,
+                updatedAt: dbClock.now(),
+              })
+              .where(eq(systemControl.id, 1))
+              .returning({
+                // Return the value BEFORE increment (allocated index)
+                allocatedIndex: sql<number>`${systemControl.nextSealDerivationIndexPg1} - 1`,
+              });
+            nextIndex = result.allocatedIndex;
+          } else {
+            const [result] = await tx
+              .update(systemControl)
+              .set({
+                nextSealDerivationIndexPg2: sql`${systemControl.nextSealDerivationIndexPg2} + 1`,
+                updatedAt: dbClock.now(),
+              })
+              .where(eq(systemControl.id, 1))
+              .returning({
+                // Return the value BEFORE increment (allocated index)
+                allocatedIndex: sql<number>`${systemControl.nextSealDerivationIndexPg2} - 1`,
+              });
+            nextIndex = result.allocatedIndex;
+          }
 
           // Auto-generate name as "seal-key-N"
-          // Find highest N from existing "seal-key-N" names
+          // Find highest N from existing "seal-key-N" names for this service
+          const allKeys = await tx.query.sealKeys.findMany({
+            where: eq(sealKeys.instanceId, service.instanceId),
+            columns: { name: true },
+          });
+
           const sealKeyPattern = /^seal-key-(\d+)$/;
           const existingNumbers = allKeys
-            .map((k: typeof allKeys[number]) => k.name?.match(sealKeyPattern)?.[1])
+            .map((k) => k.name?.match(sealKeyPattern)?.[1])
             .filter((n): n is string => n !== undefined)
             .map((n: string) => parseInt(n, 10));
 
@@ -766,9 +802,11 @@ export const sealRouter = router({
 
           // Generate seal key using seal-cli utility (or mock in development)
           // This is the expensive operation - all validation is complete at this point
+          // processGroup was already obtained during index allocation above
           const { publicKey, encryptedPrivateKey } = await generateSealKey({
             derivationIndex: nextIndex,
             customerId: ctx.user!.customerId, // For mock deterministic generation
+            processGroup,
           });
 
           // ====================================================================
@@ -785,6 +823,7 @@ export const sealRouter = router({
               derivationIndex: nextIndex,
               publicKey,
               encryptedPrivateKey: encryptedPrivateKey || null,
+              processGroup,
               isUserEnabled: true,
             })
             .returning();
@@ -1489,4 +1528,75 @@ export const sealRouter = router({
       ipAllowlist: config.ipAllowlist || [],
     };
   }),
+
+  /**
+   * Delete a seal key (soft delete)
+   *
+   * IMPORTANT: This is BLOCKED in production environments.
+   * - Derivation indices are a precious, non-renewable resource
+   * - Once allocated, an index is permanently bound to that customer
+   * - Indices must NEVER be recycled - even if key is "deleted"
+   *
+   * In development, soft delete sets deletedAt timestamp but retains the record.
+   * This prevents index reuse while allowing cleanup during testing.
+   */
+  deleteKey: protectedProcedure
+    .input(z.object({
+      sealKeyId: z.number(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.user) {
+        throw new TRPCError({
+          code: 'UNAUTHORIZED',
+          message: 'Not authenticated',
+        });
+      }
+
+      // CRITICAL: Block deletion in production
+      // Derivation indices are non-renewable - deletion would waste them
+      if (isProduction()) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Seal key deletion is disabled in production. Keys can be disabled but not deleted. Contact support if you need to export a key.',
+        });
+      }
+
+      return await withCustomerLockForAPI(ctx.user.customerId, 'deleteKey', async (tx) => {
+        // Verify ownership - key must belong to this customer
+        const key = await tx.query.sealKeys.findFirst({
+          where: and(
+            eq(sealKeys.sealKeyId, input.sealKeyId),
+            eq(sealKeys.customerId, ctx.user!.customerId),
+            isNull(sealKeys.deletedAt) // Can't delete already-deleted keys
+          ),
+        });
+
+        if (!key) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'Seal key not found or already deleted',
+          });
+        }
+
+        // Soft delete - derivation index remains consumed forever
+        // This ensures the index is never reused even after "deletion"
+        await tx
+          .update(sealKeys)
+          .set({ deletedAt: dbClock.now() })
+          .where(eq(sealKeys.sealKeyId, input.sealKeyId));
+
+        // Mark config changed for vault sync (key removed from HAProxy routing)
+        const expectedVaultSeq = await markConfigChanged(tx, SERVICE_TYPE.SEAL, 'mainnet');
+
+        // Update service's configChangeVaultSeq if key was associated with a service
+        if (key.instanceId) {
+          await tx
+            .update(serviceInstances)
+            .set({ smaConfigChangeVaultSeq: expectedVaultSeq })
+            .where(eq(serviceInstances.instanceId, key.instanceId));
+        }
+
+        return { success: true, sealKeyId: input.sealKeyId };
+      });
+    }),
 });

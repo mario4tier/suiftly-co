@@ -17,6 +17,7 @@ import { apiKeys } from '@suiftly/database/schema';
 import { eq, and, isNull } from 'drizzle-orm';
 import { encryptSecret, decryptSecret } from './encryption';
 import { dbClock } from '@suiftly/shared/db-clock';
+import { getSealProcessGroup } from '@walrus/system-config';
 
 /**
  * API_SECRET_KEY - 32-byte key for AES-128-CTR encryption and HMAC-SHA256
@@ -278,7 +279,7 @@ export function generateApiKey(
   const metadata = encodeMetadata({
     version: 0,
     sealType: options.sealType ?? { network: 'testnet', access: 'open' },
-    procGroup: options.procGroup ?? 1,
+    procGroup: options.procGroup ?? getSealProcessGroup(),
   });
 
   plaintext.writeUInt16BE(metadata, 0);  // offset 0-1: metadata (2 bytes)

@@ -1,5 +1,5 @@
 {
-  "id": "b004f831-c8bb-4614-8923-b3c3a92b2dab",
+  "id": "5a8847ae-3f76-4a47-a9b8-8268c593ec08",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -1031,19 +1031,22 @@
           "name": "spending_limit_usd_cents",
           "type": "bigint",
           "primaryKey": false,
-          "notNull": false
+          "notNull": false,
+          "default": 25000
         },
         "current_balance_usd_cents": {
           "name": "current_balance_usd_cents",
           "type": "bigint",
           "primaryKey": false,
-          "notNull": false
+          "notNull": false,
+          "default": 0
         },
         "current_period_charged_usd_cents": {
           "name": "current_period_charged_usd_cents",
           "type": "bigint",
           "primaryKey": false,
-          "notNull": false
+          "notNull": false,
+          "default": 0
         },
         "current_period_start": {
           "name": "current_period_start",
@@ -1694,8 +1697,8 @@
           "primaryKey": false,
           "notNull": false
         },
-        "config_change_vault_seq": {
-          "name": "config_change_vault_seq",
+        "sma_config_change_vault_seq": {
+          "name": "sma_config_change_vault_seq",
           "type": "integer",
           "primaryKey": false,
           "notNull": false,
@@ -1887,6 +1890,59 @@
           "primaryKey": false,
           "notNull": false
         },
+        "process_group": {
+          "name": "process_group",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "registration_status": {
+          "name": "registration_status",
+          "type": "seal_registration_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'registering'"
+        },
+        "registration_error": {
+          "name": "registration_error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "registration_attempts": {
+          "name": "registration_attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "last_registration_attempt_at": {
+          "name": "last_registration_attempt_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "next_retry_at": {
+          "name": "next_retry_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "packages_version": {
+          "name": "packages_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "registered_packages_version": {
+          "name": "registered_packages_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
         "is_user_enabled": {
           "name": "is_user_enabled",
           "type": "boolean",
@@ -1900,6 +1956,12 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
+        },
+        "deleted_at": {
+          "name": "deleted_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -2120,6 +2182,177 @@
         "check_name_length": {
           "name": "check_name_length",
           "value": "\"seal_packages\".\"name\" IS NULL OR LENGTH(\"seal_packages\".\"name\") <= 64"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.seal_registration_ops": {
+      "name": "seal_registration_ops",
+      "schema": "",
+      "columns": {
+        "op_id": {
+          "name": "op_id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "seal_key_id": {
+          "name": "seal_key_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "customer_id": {
+          "name": "customer_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "network": {
+          "name": "network",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "op_type": {
+          "name": "op_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "packages_version_at_op": {
+          "name": "packages_version_at_op",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "attempt_count": {
+          "name": "attempt_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "next_retry_at": {
+          "name": "next_retry_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "tx_digest": {
+          "name": "tx_digest",
+          "type": "bytea",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "object_id": {
+          "name": "object_id",
+          "type": "bytea",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "error_message": {
+          "name": "error_message",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "idx_seal_reg_ops_queued": {
+          "name": "idx_seal_reg_ops_queued",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "next_retry_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_seal_reg_ops_seal_key": {
+          "name": "idx_seal_reg_ops_seal_key",
+          "columns": [
+            {
+              "expression": "seal_key_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "seal_registration_ops_seal_key_id_seal_keys_seal_key_id_fk": {
+          "name": "seal_registration_ops_seal_key_id_seal_keys_seal_key_id_fk",
+          "tableFrom": "seal_registration_ops",
+          "tableTo": "seal_keys",
+          "columnsFrom": [
+            "seal_key_id"
+          ],
+          "columnsTo": [
+            "seal_key_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "check_tx_digest_length": {
+          "name": "check_tx_digest_length",
+          "value": "\"seal_registration_ops\".\"tx_digest\" IS NULL OR LENGTH(\"seal_registration_ops\".\"tx_digest\") = 32"
+        },
+        "check_op_object_id_length": {
+          "name": "check_op_object_id_length",
+          "value": "\"seal_registration_ops\".\"object_id\" IS NULL OR LENGTH(\"seal_registration_ops\".\"object_id\") = 32"
         }
       },
       "isRLSEnabled": false
@@ -2560,6 +2793,66 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.haproxy_system_logs": {
+      "name": "haproxy_system_logs",
+      "schema": "",
+      "columns": {
+        "timestamp": {
+          "name": "timestamp",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "server_id": {
+          "name": "server_id",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "msg": {
+          "name": "msg",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "cnt": {
+          "name": "cnt",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        }
+      },
+      "indexes": {
+        "idx_system_server_time": {
+          "name": "idx_system_server_time",
+          "columns": [
+            {
+              "expression": "server_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "timestamp",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.user_activity_logs": {
       "name": "user_activity_logs",
       "schema": "",
@@ -2706,26 +2999,18 @@
           "primaryKey": false,
           "notNull": false
         },
-        "vault_seq": {
-          "name": "vault_seq",
+        "applied_seq": {
+          "name": "applied_seq",
           "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "default": 0
         },
-        "in_sync": {
-          "name": "in_sync",
-          "type": "boolean",
+        "processing_seq": {
+          "name": "processing_seq",
+          "type": "integer",
           "primaryKey": false,
-          "notNull": false,
-          "default": false
-        },
-        "full_sync": {
-          "name": "full_sync",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": false,
-          "default": false
+          "notNull": false
         },
         "customer_count": {
           "name": "customer_count",
@@ -2880,6 +3165,83 @@
           "notNull": false,
           "default": 0
         },
+        "sma_next_vault_seq": {
+          "name": "sma_next_vault_seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 1
+        },
+        "smm_next_vault_seq": {
+          "name": "smm_next_vault_seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 1
+        },
+        "sms_next_vault_seq": {
+          "name": "sms_next_vault_seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 1
+        },
+        "smo_next_vault_seq": {
+          "name": "smo_next_vault_seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 1
+        },
+        "sta_next_vault_seq": {
+          "name": "sta_next_vault_seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 1
+        },
+        "stm_next_vault_seq": {
+          "name": "stm_next_vault_seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 1
+        },
+        "sts_next_vault_seq": {
+          "name": "sts_next_vault_seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 1
+        },
+        "sto_next_vault_seq": {
+          "name": "sto_next_vault_seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 1
+        },
+        "skk_next_vault_seq": {
+          "name": "skk_next_vault_seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 1
+        },
+        "sma_max_config_change_seq": {
+          "name": "sma_max_config_change_seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 0
+        },
+        "sta_max_config_change_seq": {
+          "name": "sta_max_config_change_seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 0
+        },
         "sma_vault_content_hash": {
           "name": "sma_vault_content_hash",
           "type": "varchar(16)",
@@ -2933,6 +3295,20 @@
           "type": "varchar(16)",
           "primaryKey": false,
           "notNull": false
+        },
+        "next_seal_derivation_index_pg1": {
+          "name": "next_seal_derivation_index_pg1",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "next_seal_derivation_index_pg2": {
+          "name": "next_seal_derivation_index_pg2",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
         },
         "last_monthly_reset": {
           "name": "last_monthly_reset",
@@ -3270,6 +3646,15 @@
         "withdraw",
         "charge",
         "credit"
+      ]
+    },
+    "public.seal_registration_status": {
+      "name": "seal_registration_status",
+      "schema": "public",
+      "values": [
+        "registering",
+        "registered",
+        "updating"
       ]
     }
   },

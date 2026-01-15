@@ -14,6 +14,7 @@
 export interface GenerateSealKeyParams {
   derivationIndex: number;
   customerId: number; // For mock deterministic generation
+  processGroup: number; // 1=production, 2=development (different master seeds)
 }
 
 /**
@@ -94,13 +95,16 @@ export async function generateSealKey(
   // =========================================================================
 
   // Generate deterministic mock public key
-  // This ensures consistent keys for the same customer/derivation index
+  // This ensures consistent keys for the same customer/derivation index/processGroup
   const mockPublicKey = Buffer.alloc(48); // BLS12-381 G1 point (compressed)
 
-  // Fill with deterministic data based on customer ID and derivation index
+  // Fill with deterministic data based on customer ID, derivation index, and process group
   // In production, this will be replaced with actual BLS12-381 curve point
+  // Process group is multiplied by a large prime to ensure PG 1 and PG 2 produce
+  // completely different keys even with the same derivation index
+  const pgOffset = params.processGroup * 65537; // Large prime for separation
   for (let i = 0; i < 48; i++) {
-    mockPublicKey[i] = (params.customerId + params.derivationIndex + i) % 256;
+    mockPublicKey[i] = (params.customerId + params.derivationIndex + pgOffset + i) % 256;
   }
 
   return {

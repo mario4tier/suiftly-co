@@ -181,9 +181,18 @@ if (config.NODE_ENV !== 'production') {
   server.post('/test/data/reset', {
     config: { rateLimit: false },
   }, async (request, reply) => {
-    const body = request.body as any;
-    const result = await resetCustomerTestData(body);
-    reply.send(result);
+    try {
+      const body = request.body as any;
+      const result = await resetCustomerTestData(body);
+      reply.send(result);
+    } catch (error: any) {
+      console.error('[TEST DATA RESET ERROR]', error);
+      reply.code(500).send({
+        success: false,
+        error: error.message || 'Internal Server Error',
+        stack: error.stack,
+      });
+    }
   });
 
   // Get customer test data - returns current state for debugging
@@ -273,6 +282,7 @@ if (config.NODE_ENV !== 'production') {
             service_instances,
             service_cancellation_history,
             seal_keys,
+            seal_registration_ops,
             auth_nonces,
             refresh_tokens,
             billing_records,
@@ -280,7 +290,7 @@ if (config.NODE_ENV !== 'production') {
           CASCADE
         `);
 
-        // Reset vault sequence numbers in system_control
+        // Reset vault sequence numbers and derivation indices in system_control
         // This ensures next vault generation starts fresh at seq=1
         await tx.execute(sql`
           UPDATE system_control SET
@@ -301,7 +311,9 @@ if (config.NODE_ENV !== 'production') {
             sto_vault_seq = 0,
             sto_vault_content_hash = NULL,
             skk_vault_seq = 0,
-            skk_vault_content_hash = NULL
+            skk_vault_content_hash = NULL,
+            next_seal_derivation_index_pg1 = 0,
+            next_seal_derivation_index_pg2 = 0
           WHERE id = 1
         `);
       });
