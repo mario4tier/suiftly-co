@@ -7,9 +7,9 @@ import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import { router, protectedProcedure } from '../lib/trpc';
 import { db, withCustomerLockForAPI } from '@suiftly/database';
-import { sealKeys, sealPackages, serviceInstances, apiKeys, configGlobal, customers, systemControl } from '@suiftly/database/schema';
+import { sealKeys, sealPackages, sealRegistrationOps, serviceInstances, apiKeys, configGlobal, customers, systemControl, adminNotifications } from '@suiftly/database/schema';
 import { eq, and, sql, isNull } from 'drizzle-orm';
-import { SERVICE_TYPE } from '@suiftly/shared/constants';
+import { SERVICE_TYPE, SEAL_LIMITS } from '@suiftly/shared/constants';
 import { storeApiKey, getApiKeys, revokeApiKey, deleteApiKey, reEnableApiKey, type SealType } from '../lib/api-keys';
 import { parseIpAddressList, ipAllowlistUpdateSchema } from '@suiftly/shared/schemas';
 import { decryptSecret } from '../lib/encryption';
@@ -79,6 +79,11 @@ export const sealRouter = router({
         objectIdPreview,
         isUserEnabled: key.isUserEnabled,
         createdAt: key.createdAt,
+        // Registration status fields for UI
+        registrationStatus: key.registrationStatus,
+        registrationError: key.registrationError,
+        registrationAttempts: key.registrationAttempts,
+        nextRetryAt: key.nextRetryAt,
         packages: key.packages.map(pkg => ({
           id: pkg.packageId.toString(),
           packageId: pkg.packageId,
@@ -90,6 +95,51 @@ export const sealRouter = router({
         })),
       };
     });
+  }),
+
+  /**
+   * Get registration status for all seal keys
+   *
+   * Returns registration status, error info, and retry timing for UI polling.
+   * Used to show "Registering...", "Updating...", or "Registered" status badges.
+   */
+  getRegistrationStatus: protectedProcedure.query(async ({ ctx }) => {
+    if (!ctx.user) {
+      throw new TRPCError({
+        code: 'UNAUTHORIZED',
+        message: 'Not authenticated',
+      });
+    }
+
+    // Get all seal keys for this customer with registration status fields
+    const keys = await db.query.sealKeys.findMany({
+      where: and(
+        eq(sealKeys.customerId, ctx.user.customerId),
+        isNull(sealKeys.deletedAt) // Exclude soft-deleted keys
+      ),
+      columns: {
+        sealKeyId: true,
+        registrationStatus: true,
+        registrationError: true,
+        registrationAttempts: true,
+        nextRetryAt: true,
+        objectId: true,
+        packagesVersion: true,
+        registeredPackagesVersion: true,
+      },
+    });
+
+    return keys.map(key => ({
+      sealKeyId: key.sealKeyId,
+      status: key.registrationStatus,
+      error: key.registrationError,
+      attempts: key.registrationAttempts,
+      nextRetryAt: key.nextRetryAt,
+      objectId: key.objectId ? `0x${key.objectId.toString('hex')}` : null,
+      // UI can use these to show if an update is pending
+      packagesVersion: key.packagesVersion,
+      registeredPackagesVersion: key.registeredPackagesVersion,
+    }));
   }),
 
   /**
@@ -187,13 +237,19 @@ export const sealRouter = router({
           // Auto-generate name if not provided (package-1, package-2, etc.)
           let packageName = input.name;
           if (!packageName) {
-            // Find all existing package names for this seal key that match "package-X" pattern
+            // Find all existing package names ending with -N suffix (e.g., "package-2", "mypackage-5")
             const existingNames = existingPackages
               .map((p: typeof existingPackages[number]) => p.name)
-              .filter((n): n is string => !!n && /^package-\d+$/.test(n));
+              .filter((n): n is string => !!n);
 
-            // Extract numbers and find the highest
-            const numbers = existingNames.map((n: string) => parseInt(n.replace('package-', ''), 10));
+            // Extract numbers from names ending with -N and find the highest
+            const numbers: number[] = [];
+            for (const name of existingNames) {
+              const match = name.match(/-(\d+)$/);
+              if (match) {
+                numbers.push(parseInt(match[1], 10));
+              }
+            }
             const nextNumber = numbers.length > 0 ? Math.max(...numbers) + 1 : 1;
             packageName = `package-${nextNumber}`;
           }
@@ -207,6 +263,40 @@ export const sealRouter = router({
               name: packageName,
             })
             .returning();
+
+          // ================================================================
+          // AUTO-QUEUE UPDATE IF KEY IS REGISTERED
+          // ================================================================
+          // Increment packagesVersion and check if we need to queue an update
+          const [updatedKey] = await tx
+            .update(sealKeys)
+            .set({
+              packagesVersion: sql`${sealKeys.packagesVersion} + 1`,
+            })
+            .where(eq(sealKeys.sealKeyId, input.sealKeyId))
+            .returning({
+              packagesVersion: sealKeys.packagesVersion,
+              registrationStatus: sealKeys.registrationStatus,
+            });
+
+          // If key is already registered, queue update for on-chain re-registration
+          if (updatedKey.registrationStatus === 'registered') {
+            // Mark as updating
+            await tx
+              .update(sealKeys)
+              .set({ registrationStatus: 'updating' })
+              .where(eq(sealKeys.sealKeyId, input.sealKeyId));
+
+            // Queue re-registration operation
+            await tx.insert(sealRegistrationOps).values({
+              sealKeyId: input.sealKeyId,
+              customerId: ctx.user!.customerId,
+              network: 'mainnet',
+              opType: 'update',
+              status: 'queued',
+              packagesVersionAtOp: updatedKey.packagesVersion,
+            });
+          }
 
           // Check if this makes the service cpEnabled (provisioned to control plane)
           // cpEnabled becomes true when: isUserEnabled=true AND has seal key with package
@@ -315,6 +405,40 @@ export const sealRouter = router({
               .where(eq(sealPackages.packageId, input.packageId))
               .returning();
 
+            // ================================================================
+            // AUTO-QUEUE UPDATE IF KEY IS REGISTERED
+            // ================================================================
+            // Increment packagesVersion and check if we need to queue an update
+            const [updatedKey] = await tx
+              .update(sealKeys)
+              .set({
+                packagesVersion: sql`${sealKeys.packagesVersion} + 1`,
+              })
+              .where(eq(sealKeys.sealKeyId, pkg.sealKey.sealKeyId))
+              .returning({
+                packagesVersion: sealKeys.packagesVersion,
+                registrationStatus: sealKeys.registrationStatus,
+              });
+
+            // If key is already registered, queue update for on-chain re-registration
+            if (updatedKey.registrationStatus === 'registered') {
+              // Mark as updating
+              await tx
+                .update(sealKeys)
+                .set({ registrationStatus: 'updating' })
+                .where(eq(sealKeys.sealKeyId, pkg.sealKey.sealKeyId));
+
+              // Queue re-registration operation
+              await tx.insert(sealRegistrationOps).values({
+                sealKeyId: pkg.sealKey.sealKeyId,
+                customerId: ctx.user!.customerId,
+                network: 'mainnet',
+                opType: 'update',
+                status: 'queued',
+                packagesVersionAtOp: updatedKey.packagesVersion,
+              });
+            }
+
             // Mark config change for vault sync (Key-Server needs new address)
             if (pkg.sealKey.instanceId) {
               const expectedVaultSeq = await markConfigChanged(tx, SERVICE_TYPE.SEAL, 'mainnet');
@@ -416,6 +540,40 @@ export const sealRouter = router({
           await tx
             .delete(sealPackages)
             .where(eq(sealPackages.packageId, input.packageId));
+
+          // ================================================================
+          // AUTO-QUEUE UPDATE IF KEY IS REGISTERED
+          // ================================================================
+          // Increment packagesVersion and check if we need to queue an update
+          const [updatedKey] = await tx
+            .update(sealKeys)
+            .set({
+              packagesVersion: sql`${sealKeys.packagesVersion} + 1`,
+            })
+            .where(eq(sealKeys.sealKeyId, pkg.sealKey.sealKeyId))
+            .returning({
+              packagesVersion: sealKeys.packagesVersion,
+              registrationStatus: sealKeys.registrationStatus,
+            });
+
+          // If key is already registered, queue update for on-chain re-registration
+          if (updatedKey.registrationStatus === 'registered') {
+            // Mark as updating
+            await tx
+              .update(sealKeys)
+              .set({ registrationStatus: 'updating' })
+              .where(eq(sealKeys.sealKeyId, pkg.sealKey.sealKeyId));
+
+            // Queue re-registration operation
+            await tx.insert(sealRegistrationOps).values({
+              sealKeyId: pkg.sealKey.sealKeyId,
+              customerId: ctx.user!.customerId,
+              network: 'mainnet',
+              opType: 'update',
+              status: 'queued',
+              packagesVersionAtOp: updatedKey.packagesVersion,
+            });
+          }
 
           // Get service instance to update vault sync
           if (pkg.sealKey.instanceId) {
@@ -598,6 +756,40 @@ export const sealRouter = router({
             })
             .where(eq(sealPackages.packageId, input.packageId));
 
+          // ================================================================
+          // AUTO-QUEUE UPDATE IF KEY IS REGISTERED
+          // ================================================================
+          // Increment packagesVersion and check if we need to queue an update
+          const [updatedKey] = await tx
+            .update(sealKeys)
+            .set({
+              packagesVersion: sql`${sealKeys.packagesVersion} + 1`,
+            })
+            .where(eq(sealKeys.sealKeyId, pkg.sealKey.sealKeyId))
+            .returning({
+              packagesVersion: sealKeys.packagesVersion,
+              registrationStatus: sealKeys.registrationStatus,
+            });
+
+          // If key is already registered, queue update for on-chain re-registration
+          if (updatedKey.registrationStatus === 'registered') {
+            // Mark as updating
+            await tx
+              .update(sealKeys)
+              .set({ registrationStatus: 'updating' })
+              .where(eq(sealKeys.sealKeyId, pkg.sealKey.sealKeyId));
+
+            // Queue re-registration operation
+            await tx.insert(sealRegistrationOps).values({
+              sealKeyId: pkg.sealKey.sealKeyId,
+              customerId: ctx.user!.customerId,
+              network: 'mainnet',
+              opType: 'update',
+              status: 'queued',
+              packagesVersionAtOp: updatedKey.packagesVersion,
+            });
+          }
+
           // Update vault sync for the service
           if (pkg.sealKey.instanceId) {
             // Mark config change for vault sync (Key-server needs to know package state)
@@ -724,19 +916,69 @@ export const sealRouter = router({
           const config = service.config as any || {};
           const maxSealKeys = config.totalSealKeys || 1;
 
-          // Count active seal keys (excludes disabled keys)
-          const activeKeys = await tx.query.sealKeys.findMany({
+          // ====================================================================
+          // HARD LIMIT CHECK - Prevent derivation index exhaustion
+          // ====================================================================
+          // Count ALL keys ever created for this customer (including soft-deleted)
+          // This is an absolute safety limit to prevent abuse even after deletion
+          // is enabled for pro/enterprise tiers.
+          const allKeysEver = await tx.query.sealKeys.findMany({
+            where: eq(sealKeys.customerId, ctx.user!.customerId),
+            columns: { sealKeyId: true },
+          });
+
+          if (allKeysEver.length >= SEAL_LIMITS.HARD_LIMIT_KEYS_PER_CUSTOMER) {
+            // Check if we already have an unacknowledged notification for this customer
+            const existingNotification = await tx.query.adminNotifications.findFirst({
+              where: and(
+                eq(adminNotifications.customerId, String(ctx.user!.customerId)),
+                eq(adminNotifications.code, 'SEAL_KEY_HARD_LIMIT_REACHED'),
+                eq(adminNotifications.acknowledged, false)
+              ),
+            });
+
+            // Create admin notification if not already present
+            if (!existingNotification) {
+              await tx.insert(adminNotifications).values({
+                severity: 'warning',
+                category: 'security',
+                code: 'SEAL_KEY_HARD_LIMIT_REACHED',
+                message: `Customer ${ctx.user!.customerId} has reached the hard limit of ${SEAL_LIMITS.HARD_LIMIT_KEYS_PER_CUSTOMER} seal keys. This may indicate abuse or require limit increase.`,
+                details: JSON.stringify({
+                  customerId: ctx.user!.customerId,
+                  totalKeysCreated: allKeysEver.length,
+                  hardLimit: SEAL_LIMITS.HARD_LIMIT_KEYS_PER_CUSTOMER,
+                  timestamp: new Date().toISOString(),
+                }),
+                customerId: String(ctx.user!.customerId),
+              });
+            }
+
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: `Maximum lifetime seal key limit reached (${SEAL_LIMITS.HARD_LIMIT_KEYS_PER_CUSTOMER}). Contact support if you need more keys.`,
+            });
+          }
+
+          // ====================================================================
+          // TIER LIMIT CHECK - Count enabled + disabled (excludes soft-deleted)
+          // ====================================================================
+          // This is the normal business limit based on subscription tier.
+          // Soft-deleted keys don't count because deletion is blocked in production.
+          // When deletion is enabled for pro/enterprise, the hard limit above catches abuse.
+          const nonDeletedKeys = await tx.query.sealKeys.findMany({
             where: and(
               eq(sealKeys.instanceId, service.instanceId),
-              eq(sealKeys.isUserEnabled, true)
+              isNull(sealKeys.deletedAt) // Exclude soft-deleted keys
             ),
+            columns: { sealKeyId: true },
           });
 
           // Enforce seal key limit based on subscription tier
-          if (activeKeys.length >= maxSealKeys) {
+          if (nonDeletedKeys.length >= maxSealKeys) {
             throw new TRPCError({
               code: 'BAD_REQUEST',
-              message: `Maximum seal key limit reached (${maxSealKeys}). Disable an existing key or upgrade your subscription to create more keys.`,
+              message: `Maximum seal key limit reached (${maxSealKeys}). Delete an existing key or upgrade your subscription to create more keys.`,
             });
           }
 
@@ -827,6 +1069,21 @@ export const sealRouter = router({
               isUserEnabled: true,
             })
             .returning();
+
+          // ====================================================================
+          // AUTO-QUEUE REGISTRATION OPERATION
+          // ====================================================================
+          // Queue Sui blockchain registration for this key.
+          // GM will pick this up and create the KeyServer object on-chain.
+          // Network is currently hardcoded to 'mainnet' - can be made configurable.
+          await tx.insert(sealRegistrationOps).values({
+            sealKeyId: newKey.sealKeyId,
+            customerId: ctx.user!.customerId,
+            network: 'mainnet',
+            opType: 'register',
+            status: 'queued',
+            packagesVersionAtOp: 0,
+          });
 
           // ====================================================================
           // VAULT SYNC PHASE - Mark config changed for propagation

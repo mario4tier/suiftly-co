@@ -155,7 +155,18 @@ export function SealInteractiveForm({
   const { data: apiKeys, isLoading: apiKeysLoading } = trpc.seal.listApiKeys.useQuery();
 
   // Fetch seal keys with packages
-  const { data: sealKeys, isLoading: sealKeysLoading } = trpc.seal.listKeys.useQuery();
+  // Poll every 3 seconds when any key is registering or updating to show status changes
+  const { data: sealKeys, isLoading: sealKeysLoading } = trpc.seal.listKeys.useQuery(undefined, {
+    refetchInterval: (query) => {
+      const keys = query.state.data;
+      if (!keys) return false;
+      // Poll if any key is in a pending state
+      const hasPendingKey = keys.some(
+        (key) => key.registrationStatus === 'registering' || key.registrationStatus === 'updating'
+      );
+      return hasPendingKey ? 3000 : false; // 3 seconds when pending, no polling otherwise
+    },
+  });
 
   // API Key mutations
   const createApiKeyMutation = trpc.seal.createApiKey.useMutation({
@@ -967,6 +978,11 @@ export function SealInteractiveForm({
                 name: key.name,
                 objectId: key.objectIdPreview,
                 isDisabled: !key.isUserEnabled,
+                // Registration status fields for UI
+                registrationStatus: key.registrationStatus as 'registering' | 'registered' | 'updating' | undefined,
+                registrationError: key.registrationError,
+                registrationAttempts: key.registrationAttempts,
+                nextRetryAt: key.nextRetryAt,
                 packages: key.packages.map(pkg => ({
                   id: pkg.id,
                   address: pkg.packageAddressPreview,

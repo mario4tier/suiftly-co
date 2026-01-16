@@ -4,11 +4,18 @@
  */
 
 import { useState } from "react";
-import { Download, Ban, Trash2, Plus, Check, X, Pencil } from "lucide-react";
+import { Download, Ban, Trash2, Plus, Check, X, Pencil, Loader2, CheckCircle, AlertCircle, Info } from "lucide-react";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { CopyableValue } from "@/components/ui/copyable-value";
 import { InlineButton } from "@/components/ui/inline-button";
+
+type RegistrationStatus = 'registering' | 'registered' | 'updating';
 
 interface SealKey {
   id: string;
@@ -17,6 +24,11 @@ interface SealKey {
   objectId?: string; // Sui object ID (truncated)
   isDisabled: boolean;
   packages: Package[];
+  // Registration status fields
+  registrationStatus?: RegistrationStatus;
+  registrationError?: string | null;
+  registrationAttempts?: number;
+  nextRetryAt?: Date | string | null;
 }
 
 interface Package {
@@ -25,6 +37,123 @@ interface Package {
   fullAddress?: string; // Full address for copying
   name?: string;
   isDisabled: boolean; // Package enable/disable status
+}
+
+/**
+ * Registration Status Badge
+ * Shows the current Sui blockchain registration state of a seal key
+ */
+function RegistrationStatusBadge({
+  status,
+  error,
+  attempts,
+  nextRetryAt,
+}: {
+  status?: RegistrationStatus;
+  error?: string | null;
+  attempts?: number;
+  nextRetryAt?: Date | string | null;
+}) {
+  if (!status) return null;
+
+  // Format next retry time for display
+  const formatNextRetry = (nextRetry: Date | string | null | undefined): string => {
+    if (!nextRetry) return '';
+    const date = new Date(nextRetry);
+    const now = new Date();
+    const diffMs = date.getTime() - now.getTime();
+
+    if (diffMs <= 0) return 'retrying soon';
+
+    const diffSecs = Math.floor(diffMs / 1000);
+    const diffMins = Math.floor(diffSecs / 60);
+
+    if (diffMins > 0) {
+      return `retry in ${diffMins}m ${diffSecs % 60}s`;
+    }
+    return `retry in ${diffSecs}s`;
+  };
+
+  // Determine badge content based on status
+  const getBadgeContent = () => {
+    switch (status) {
+      case 'registering':
+        return {
+          icon: <Loader2 className="h-3 w-3 animate-spin" />,
+          text: 'On-chain Registering...',
+          bgColor: 'bg-blue-100 dark:bg-blue-900/30',
+          textColor: 'text-blue-700 dark:text-blue-400',
+          tooltip: 'Registering KeyServer object on Sui blockchain',
+        };
+      case 'registered':
+        return {
+          icon: <CheckCircle className="h-3 w-3" />,
+          text: 'On-chain Registered',
+          bgColor: 'bg-green-100 dark:bg-green-900/30',
+          textColor: 'text-green-700 dark:text-green-400',
+          tooltip: 'KeyServer object registered on Sui blockchain',
+        };
+      case 'updating':
+        return {
+          icon: <Loader2 className="h-3 w-3 animate-spin" />,
+          text: 'On-chain Updating...',
+          bgColor: 'bg-amber-100 dark:bg-amber-900/30',
+          textColor: 'text-amber-700 dark:text-amber-400',
+          tooltip: 'Updating KeyServer object on Sui blockchain',
+        };
+      default:
+        return null;
+    }
+  };
+
+  const badge = getBadgeContent();
+  if (!badge) return null;
+
+  // Show error indicator if there's an error during registration/updating
+  const hasError = error && (status === 'registering' || status === 'updating');
+
+  // If there's an error, show a popover with details
+  if (hasError) {
+    return (
+      <Popover>
+        <PopoverTrigger asChild>
+          <span
+            className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs font-semibold rounded ${badge.bgColor} ${badge.textColor} cursor-help`}
+          >
+            <AlertCircle className="h-3 w-3" />
+            {badge.text}
+            <Info className="h-3 w-3" />
+          </span>
+        </PopoverTrigger>
+        <PopoverContent className="w-80">
+          <div className="space-y-2">
+            <p className="text-sm font-medium text-red-600 dark:text-red-400">
+              Registration Error
+            </p>
+            <p className="text-sm text-gray-600 dark:text-gray-300">
+              {error}
+            </p>
+            {attempts && attempts > 0 && (
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                Attempt {attempts}{nextRetryAt ? ` • ${formatNextRetry(nextRetryAt)}` : ''}
+              </p>
+            )}
+          </div>
+        </PopoverContent>
+      </Popover>
+    );
+  }
+
+  // Simple badge with title tooltip for non-error states
+  return (
+    <span
+      className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs font-semibold rounded ${badge.bgColor} ${badge.textColor}`}
+      title={badge.tooltip}
+    >
+      {badge.icon}
+      {badge.text}
+    </span>
+  );
 }
 
 interface SealKeysSectionProps {
@@ -111,7 +240,12 @@ export function SealKeysSection({
 
       {/* Seal Keys List */}
       <div className="space-y-3">
-        {sealKeys.map((sealKey) => (
+        {sealKeys.map((sealKey) => {
+          // Disable most actions during registration or update operations
+          const isRegistrationInProgress = sealKey.registrationStatus === 'registering' || sealKey.registrationStatus === 'updating';
+          const isActionsDisabled = isReadOnly || isRegistrationInProgress;
+
+          return (
           <div
             key={sealKey.id}
             className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden"
@@ -179,6 +313,13 @@ export function SealKeysSection({
                     DISABLED
                   </span>
                 )}
+                {/* Registration Status Badge */}
+                <RegistrationStatusBadge
+                  status={sealKey.registrationStatus}
+                  error={sealKey.registrationError}
+                  attempts={sealKey.registrationAttempts}
+                  nextRetryAt={sealKey.nextRetryAt}
+                />
               </div>
 
               {/* Seal Key Actions */}
@@ -193,7 +334,7 @@ export function SealKeysSection({
                 {!sealKey.isDisabled && (
                   <InlineButton
                     onClick={() => onToggleKey?.(sealKey.id, sealKey.isDisabled, sealKey.key, sealKey.name ?? undefined)}
-                    disabled={isReadOnly}
+                    disabled={isActionsDisabled}
                   >
                     <Ban className="h-3 w-3" />
                     Disable
@@ -254,7 +395,20 @@ export function SealKeysSection({
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                      {sealKey.packages.map((pkg) => (
+                      {[...sealKey.packages]
+                        .sort((a, b) => {
+                          // Sort by name alphabetically (nulls/empty last), address as tiebreaker
+                          const nameA = a.name || '';
+                          const nameB = b.name || '';
+                          // Push empty names to the end
+                          if (!nameA && nameB) return 1;
+                          if (nameA && !nameB) return -1;
+                          const nameCompare = nameA.localeCompare(nameB);
+                          if (nameCompare !== 0) return nameCompare;
+                          // Use address as tiebreaker
+                          return a.address.localeCompare(b.address);
+                        })
+                        .map((pkg) => (
                         <tr key={pkg.id} data-testid={`sp-${pkg.id}`}>
                           <td className="px-3 py-3">
                             <CopyableValue
@@ -317,23 +471,20 @@ export function SealKeysSection({
                             )}
                           </td>
                           <td className="px-3 py-3">
-                            {/* Status Badge */}
-                            {pkg.isDisabled ? (
-                              <span className="inline-flex items-center rounded-full px-2 py-1 text-xs font-medium bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-400">
-                                Disabled
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center rounded-full px-2 py-1 text-xs font-medium bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400">
-                                Active
-                              </span>
-                            )}
+                            <span className={`text-sm ${
+                              pkg.isDisabled
+                                ? 'text-red-600 dark:text-red-400'
+                                : 'text-green-600 dark:text-green-400'
+                            }`}>
+                              {pkg.isDisabled ? 'Disabled' : 'Enabled'}
+                            </span>
                           </td>
                           <td className="px-3 py-3">
                             <div className="flex items-center justify-end gap-1.5">
                               {!pkg.isDisabled && (
                                 <InlineButton
                                   onClick={() => onDisablePackage?.(sealKey.id, pkg.id, pkg.address, pkg.name)}
-                                  disabled={isReadOnly}
+                                  disabled={isActionsDisabled}
                                 >
                                   <Ban className="h-3 w-3" />
                                   Disable
@@ -343,14 +494,14 @@ export function SealKeysSection({
                                 <>
                                   <InlineButton
                                     onClick={() => onEnablePackage?.(sealKey.id, pkg.id)}
-                                    disabled={isReadOnly}
+                                    disabled={isActionsDisabled}
                                   >
                                     Enable
                                   </InlineButton>
                                   <InlineButton
                                     variant="danger"
                                     onClick={() => onDeletePackage?.(sealKey.id, pkg.id, pkg.address, pkg.name)}
-                                    disabled={isReadOnly}
+                                    disabled={isActionsDisabled}
                                   >
                                     <Trash2 className="h-3 w-3" />
                                     Delete
@@ -371,7 +522,7 @@ export function SealKeysSection({
                     variant="outline"
                     size="sm"
                     onClick={() => onAddPackage?.(sealKey.id)}
-                    disabled={isReadOnly}
+                    disabled={isActionsDisabled}
                     className="w-full"
                   >
                     <Plus className="h-3 w-3 mr-1" />
@@ -381,7 +532,8 @@ export function SealKeysSection({
               </div>
             </div>
           </div>
-        ))}
+        );
+        })}
       </div>
 
       {/* Add New Seal Key Button */}
