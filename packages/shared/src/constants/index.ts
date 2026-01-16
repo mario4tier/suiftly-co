@@ -240,3 +240,12 @@ export const SEAL_BACKEND_PORT = {
 // Convenience URLs for tests
 export const API_URL = `http://localhost:${PORT.API}`;
 export const WEB_URL = `http://localhost:${PORT.WEB}`;
+
+// Seal Key Limits - Prevent derivation index exhaustion
+// Derivation indices are a precious, non-renewable resource.
+// Once allocated, an index is permanently bound to that customer forever.
+export const SEAL_LIMITS = {
+  // Absolute maximum keys per customer (includes soft-deleted)
+  // This is a safety valve against abuse when deletion is enabled for pro/enterprise
+  HARD_LIMIT_KEYS_PER_CUSTOMER: 20,
+} as const;

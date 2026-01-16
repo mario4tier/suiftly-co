@@ -32,6 +32,11 @@ import { dbClockProvider } from '@suiftly/shared/db-clock';
 import { reconcilePayments } from './reconcile-payments.js';
 import { generateAllVaults } from './tasks/generate-vault.js';
 import { pollLMStatus } from './tasks/poll-lm-status.js';
+import {
+  processSealRegistrations,
+  recoverStaleOps,
+  createSealRegistrationFailureNotification,
+} from './tasks/process-seal-registrations.js';
 import { isTestDeployment } from './config/lm-config.js';
 
 // Configure test_kv sync if not in production
@@ -553,7 +558,30 @@ async function executeSyncAll(): Promise<void> {
     `[SYNC] sync-all billing: ${result.phases.billing.customersProcessed} customers processed in ${result.durationMs}ms`
   );
 
-  // Generate vaults after billing (captures any subscription changes)
+  // Process seal registrations before vault generation
+  // This ensures newly registered keys are included in the vault
+  try {
+    // First, recover any stale ops stuck in 'processing' state
+    const recoveredOps = await recoverStaleOps();
+    if (recoveredOps > 0) {
+      console.log(`[SYNC] sync-all recovered ${recoveredOps} stale seal registration ops`);
+    }
+
+    // Then process queued registrations
+    const sealResults = await processSealRegistrations();
+    if (sealResults.queued > 0) {
+      console.log(
+        `[SYNC] sync-all seal registrations: ${sealResults.completed} completed, ` +
+          `${sealResults.failed} failed, ${sealResults.queued - sealResults.completed - sealResults.failed} remaining`
+      );
+    }
+  } catch (sealError) {
+    console.error('[SYNC] sync-all seal registration processing failed:', sealError);
+    await createSealRegistrationFailureNotification(sealError);
+    // Don't fail the entire sync-all for seal registration errors
+  }
+
+  // Generate vaults after billing and seal registration (captures any changes)
   // Vault generation handles two scenarios:
   // - Scenario 1 (Reactive): Customer has configChangeVaultSeq > currentVaultSeq
   // - Scenario 2 (Drift): DB content differs from data_tx content

@@ -21,6 +21,7 @@
  */
 
 import { createHash } from 'crypto';
+import { isProduction } from '@walrus/system-config';
 
 // ============================================================================
 // Types
@@ -209,9 +210,10 @@ export class SuiTransactionService {
   private readonly isMockMode: boolean;
 
   constructor() {
-    // Use mock in development/test
-    const env = process.env.NODE_ENV || 'development';
-    this.isMockMode = env !== 'production';
+    // Use mock in non-production (development/test)
+    // Environment is determined by /etc/walrus/system.conf, NOT NODE_ENV
+    this.isMockMode = !isProduction();
+    console.log(`[SUI TX SERVICE] Mock mode: ${this.isMockMode} (isProduction: ${isProduction()})`);
   }
 
   /**

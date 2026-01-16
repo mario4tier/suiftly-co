@@ -9,6 +9,7 @@
     "./billing": "./src/billing/index.ts",
     "./stats": "./src/stats/index.ts",
     "./sui-mock": "./src/sui-mock/index.ts",
+    "./sui-seal": "./src/sui-seal/index.ts",
     "./test-kv": "./src/test-kv/index.ts"
   },
   "scripts": {
@@ -23,6 +24,7 @@
   },
   "dependencies": {
     "@trpc/server": "^11.1.1",
+    "@walrus/system-config": "*",
     "drizzle-orm": "^0.44.7",
     "pg": "^8.13.1",
     "@suiftly/shared": "*"

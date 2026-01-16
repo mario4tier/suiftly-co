@@ -1207,6 +1207,18 @@ async function start() {
       server.log.warn(`Vault reconciliation failed (non-fatal): ${err instanceof Error ? err.message : err}`);
     }
 
+    // Recover any stale seal registration ops on startup
+    // This handles scenarios where GM crashed while processing a registration
+    try {
+      const { recoverStaleOps } = await import('./tasks/process-seal-registrations.js');
+      const recoveredOps = await recoverStaleOps();
+      if (recoveredOps > 0) {
+        server.log.info(`Seal registration ops recovered: ${recoveredOps} stale ops moved back to queue`);
+      }
+    } catch (err) {
+      server.log.warn(`Seal registration recovery failed (non-fatal): ${err instanceof Error ? err.message : err}`);
+    }
+
     // Start periodic tasks:
     // - sync-all (billing, drift): 30s in dev, 5 min in production
     // - sync-lm-status: 5s in both (for fast "Updating..." feedback)
