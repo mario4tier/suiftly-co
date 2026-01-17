@@ -7,9 +7,11 @@
 
 import Fastify from 'fastify';
 import { z } from 'zod';
+import type { VaultType } from '@walrus/vault-codec';
+import { getGlobalVaultTypes } from '@walrus/server-configs';
 import { db, adminNotifications } from '@suiftly/database';
 import { getMockClockState, setMockClockState } from '@suiftly/database/test-kv';
-import { desc, eq } from 'drizzle-orm';
+import { desc, eq, and } from 'drizzle-orm';
 import { dbClock } from '@suiftly/shared/db-clock';
 import { isTestDeployment } from './config/lm-config.js';
 import {
@@ -481,8 +483,98 @@ if (isTestDeployment()) {
 }
 
 // ============================================================================
+// Admin Notification Helpers
+// ============================================================================
+
+/**
+ * Log an admin notification with deduplication.
+ *
+ * Deduplication behavior:
+ * - If no existing unacknowledged notification with same code+category → create new
+ * - If existing notification with identical message → skip (true duplicate)
+ * - If existing notification with different message → update it with new message/details
+ *
+ * This ensures admins see the latest error state without notification spam.
+ *
+ * @returns The notification ID if created/updated, null if skipped (identical)
+ */
+async function logAdminNotificationDedup(params: {
+  severity: 'info' | 'warning' | 'error';
+  category: string;
+  code: string;
+  message: string;
+  details?: any;
+}): Promise<number | null> {
+  // Check for existing unacknowledged notification with same code and category
+  const existing = await db
+    .select({
+      notificationId: adminNotifications.notificationId,
+      message: adminNotifications.message,
+    })
+    .from(adminNotifications)
+    .where(
+      and(
+        eq(adminNotifications.code, params.code),
+        eq(adminNotifications.category, params.category),
+        eq(adminNotifications.acknowledged, false)
+      )
+    )
+    .limit(1);
+
+  if (existing.length > 0) {
+    const existingNotif = existing[0];
+
+    // If message is identical, skip (true duplicate)
+    if (existingNotif.message === params.message) {
+      return null;
+    }
+
+    // Message changed - update the existing notification with new state
+    await db
+      .update(adminNotifications)
+      .set({
+        severity: params.severity,
+        message: params.message,
+        details: params.details ? JSON.stringify(params.details) : null,
+        createdAt: new Date(), // Update timestamp to reflect new state
+      })
+      .where(eq(adminNotifications.notificationId, existingNotif.notificationId));
+
+    // Log to console for immediate visibility
+    const logLevel = params.severity === 'error' ? console.error : console.warn;
+    logLevel(`[ADMIN NOTIFICATION] ${params.severity.toUpperCase()} (updated): ${params.code} - ${params.message}`);
+
+    return existingNotif.notificationId;
+  }
+
+  // Create new notification
+  const [notification] = await db
+    .insert(adminNotifications)
+    .values({
+      severity: params.severity,
+      category: params.category,
+      code: params.code,
+      message: params.message,
+      details: params.details ? JSON.stringify(params.details) : null,
+    })
+    .returning({ notificationId: adminNotifications.notificationId });
+
+  // Log to console for immediate visibility
+  const logLevel = params.severity === 'error' ? console.error : console.warn;
+  logLevel(`[ADMIN NOTIFICATION] ${params.severity.toUpperCase()}: ${params.code} - ${params.message}`);
+
+  return notification.notificationId;
+}
+
+// ============================================================================
 // Vault Status API (for Admin Dashboard KVCrypt Debug)
 // ============================================================================
+
+/**
+ * Vault types this GM instance manages.
+ * Loaded from server_configs.py via @walrus/server-configs (data_tx field).
+ */
+const configuredVaultTypes = getGlobalVaultTypes() as VaultType[];
 
 // Get vault status from data_tx
 server.get('/api/vault/status', async () => {
@@ -492,8 +584,7 @@ server.get('/api/vault/status', async () => {
     storageDir: '/opt/syncf/data_tx',
   });
 
-  // Get status for known vault types
-  const vaultTypes = ['sma'] as const; // Add more as implemented: 'smm', 'sms', etc.
+  // Get status for known vault types (sma=Seal Mainnet API, smm=Seal Mainnet Master)
   const vaults: Record<string, {
     vaultType: string;
     latest: { seq: number; pg: number; filename: string } | null;
@@ -501,7 +592,7 @@ server.get('/api/vault/status', async () => {
     allVersions: Array<{ seq: number; pg: number; filename: string }>;
   }> = {};
 
-  for (const vaultType of vaultTypes) {
+  for (const vaultType of configuredVaultTypes) {
     try {
       const versions = await reader.listVersions(vaultType);
       const latest = versions[0] || null;
@@ -529,17 +620,19 @@ server.get('/api/vault/status', async () => {
 // Get Local Manager statuses (live polling)
 server.get('/api/lm/status', async () => {
   // Poll LM directly for live status
+  // LM reports all its expected vault types in the health response
+  interface LMVaultStatus {
+    type: string;
+    appliedSeq: number;
+    processingSeq: number | null;
+    processingError: string | null;
+    customerCount: number;
+  }
   interface LMStatus {
     name: string;
     host: string;
     reachable: boolean;
-    vaults: Array<{
-      type: string;
-      appliedSeq: number;
-      processingSeq: number | null;
-      customerCount: number;
-      error?: string;
-    }>;
+    vaults: LMVaultStatus[];
     error?: string;
     rawData?: any;
   }
@@ -575,26 +668,50 @@ server.get('/api/lm/status', async () => {
 
       localLm.reachable = true;
 
-      localLm.vaults = data.vaults.map((v) => {
-        const hasError = v.processing && v.processing.error !== null;
-
-        return {
-          type: v.type,
-          appliedSeq: v.applied?.seq ?? 0,
-          processingSeq: v.processing?.seq ?? null,
-          customerCount: v.customerCount,
-          error: hasError ? v.processing!.error! : undefined,
-        };
-      });
-
-      // Propagate vault errors to LM level
-      const vaultErrors = localLm.vaults.filter(v => v.error).map(v => v.error);
-      if (vaultErrors.length > 0) {
-        localLm.error = vaultErrors.join('; ');
-      }
+      // Map LM vault status (LM reports ALL its expected vault types)
+      localLm.vaults = data.vaults.map((v) => ({
+        type: v.type,
+        appliedSeq: v.applied?.seq ?? 0,
+        processingSeq: v.processing?.seq ?? null,
+        processingError: v.processing?.error ?? null,
+        customerCount: v.customerCount,
+      }));
 
       // Store raw LM data for debugging
       localLm.rawData = data;
+
+      // Derive LM error from vault status (LM already reports all expected types)
+      const errors: string[] = [];
+
+      for (const vault of localLm.vaults) {
+        // Check for processing error
+        if (vault.processingError) {
+          errors.push(`${vault.type}: ${vault.processingError}`);
+        }
+        // Check for vault not applied (no data loaded yet)
+        else if (vault.appliedSeq === 0 && vault.processingSeq === null) {
+          errors.push(`${vault.type}: not loaded`);
+        }
+      }
+
+      // Set LM error if any vault has issues
+      if (errors.length > 0) {
+        localLm.error = errors.join('; ');
+
+        // Log admin notification (deduplicated by code)
+        await logAdminNotificationDedup({
+          severity: 'error',
+          category: 'lm-sync',
+          code: `LM_VAULT_ERROR_${localLm.name.replace(/\s+/g, '_').toUpperCase()}`,
+          message: `LM "${localLm.name}" has vault sync errors: ${errors.join('; ')}`,
+          details: {
+            lmName: localLm.name,
+            lmHost: localLm.host,
+            errors,
+            lmVaults: localLm.vaults,
+          },
+        });
+      }
     } else {
       localLm.error = `HTTP ${res.status}`;
     }

@@ -244,17 +244,42 @@ function getVaultStatus(state: string): 'active' | 'suspended' | 'disabled' {
 }
 
 /**
- * Seal key with packages for vault
+ * Seal key with packages for vault (keyserver config)
+ *
+ * Field names are kept short to minimize network/storage costs.
+ *
+ * Only keys that are ready for keyserver are included in the vault:
+ * - Must have completed initial registration (have objectId)
+ * - Must not be deleted (deletedAt is null)
+ *
+ * Note: isUserEnabled is NOT included - that's HAProxy control, not keyserver.
  */
 interface SealKeyVaultConfig {
   /** Seal key ID */
-  sealKeyId: number;
-  /** Public key (hex-encoded BLS12-381 G1 point) */
-  publicKey: string;
+  id: number;
+  /** Public key (hex-encoded BLS12-381 G1 point, 96 chars for 48 bytes) */
+  pk: string;
+  /** Sui blockchain object ID (hex-encoded 32 bytes, 64 chars) - always present */
+  oid: string;
   /** Package addresses (hex-encoded 32-byte addresses) */
-  packages: string[];
-  /** Is user-enabled flag */
-  isUserEnabled: boolean;
+  pkgs: string[];
+  /**
+   * Derivation index for derived keys (null for imported keys)
+   * Used by keyserver to regenerate private key from master seed
+   */
+  di: number | null;
+  /**
+   * Encrypted private key for imported keys (null for derived keys)
+   * BLS12-381 scalar, encrypted with DB_APP_FIELDS_ENCRYPTION_KEY
+   * LM decrypts this to set as environment variable for keyserver
+   */
+  epk: string | null;
+  /**
+   * Bit flags for key state (extensible)
+   * Bit 0 (0x01): deprecated - key is deprecated, should not be served
+   * Bits 1-31: reserved for future use
+   */
+  flags: number;
 }
 
 /**
@@ -531,20 +556,37 @@ async function buildVaultData(
       }
 
       // For seal services, include seal keys with their packages
+      // Include keys that:
+      // 1. Have completed registration (have objectId - not 'registering' status)
+      // 2. Are not hard-deleted (deletedAt is null)
+      // Note: Deprecated keys ARE included (keyserver needs them to prevent derivation index reuse)
       if (serviceType === SERVICE_TYPE.SEAL) {
         const sealKeysData = await db
           .select({
             sealKeyId: sealKeys.sealKeyId,
             publicKey: sealKeys.publicKey,
-            isUserEnabled: sealKeys.isUserEnabled,
+            objectId: sealKeys.objectId,
+            derivationIndex: sealKeys.derivationIndex,
+            encryptedPrivateKey: sealKeys.encryptedPrivateKey,
           })
           .from(sealKeys)
-          .where(eq(sealKeys.instanceId, service.instanceId));
+          .where(
+            and(
+              eq(sealKeys.instanceId, service.instanceId),
+              isNull(sealKeys.deletedAt)  // Not hard-deleted
+              // objectId NOT NULL check done below (skip registering keys)
+            )
+          );
 
         const sealKeysConfig: SealKeyVaultConfig[] = [];
 
         for (const sk of sealKeysData) {
-          // Get packages for this seal key
+          // Skip keys without objectId (still registering)
+          if (!sk.objectId) {
+            continue;
+          }
+
+          // Get packages for this seal key (only user-enabled packages)
           const packages = await db
             .select({
               packageAddress: sealPackages.packageAddress,
@@ -554,11 +596,19 @@ async function buildVaultData(
               and(eq(sealPackages.sealKeyId, sk.sealKeyId), eq(sealPackages.isUserEnabled, true))
             );
 
+          // Build flags
+          // Bit 0 (0x01): deprecated - reserved for future use
+          // For now, no keys are deprecated (soft-delete = hard-delete for now)
+          const flags = 0;
+
           sealKeysConfig.push({
-            sealKeyId: sk.sealKeyId,
-            publicKey: Buffer.from(sk.publicKey).toString('hex'),
-            packages: packages.map((p) => Buffer.from(p.packageAddress).toString('hex')),
-            isUserEnabled: sk.isUserEnabled,
+            id: sk.sealKeyId,
+            pk: Buffer.from(sk.publicKey).toString('hex'),
+            oid: Buffer.from(sk.objectId).toString('hex'),
+            pkgs: packages.map((p) => Buffer.from(p.packageAddress).toString('hex')),
+            di: sk.derivationIndex,  // null for imported keys
+            epk: sk.encryptedPrivateKey,  // null for derived keys
+            flags,
           });
         }
 
