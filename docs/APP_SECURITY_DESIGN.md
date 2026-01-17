@@ -13,7 +13,7 @@ COOKIE_SECRET=<32-byte-base64>
 # X_API_KEY_SECRET: 64 hex chars - MUST be identical on API server AND all HAProxy nodes
 X_API_KEY_SECRET=<64-hex-chars>
 DATABASE_URL=postgresql://deploy:PROD_PASSWORD@localhost/suiftly_prod
-# FLUENTD_DB_PASSWORD: For HAProxy log ingestion (gm-fluentd → PostgreSQL)
+# FLUENTD_DB_PASSWORD: For HAProxy log ingestion (fluentd-gm → PostgreSQL)
 FLUENTD_DB_PASSWORD=<random-password>
 
 # Generate base64 secrets: openssl rand -base64 32
@@ -59,7 +59,7 @@ FLUENTD_DB_PASSWORD=fluentd_dev_password
 | `COOKIE_SECRET` | Secure cookie signing | 32+ bytes base64 | Fastify cookie plugin |
 | `X_API_KEY_SECRET` | Encrypt API keys for HAProxy validation | 64 hex chars (32 bytes) | Shared with HAProxy |
 | `DATABASE_URL` | PostgreSQL connection (contains password) | URI | Production only |
-| `FLUENTD_DB_PASSWORD` | gm-fluentd PostgreSQL user password | URL-safe string | Copied to /etc/fluentd/fluentd.env |
+| `FLUENTD_DB_PASSWORD` | fluentd-gm PostgreSQL user password | URL-safe string | Copied to /etc/fluentd/fluentd.env |
 
 ### X_API_KEY_SECRET (Special Case)
 
@@ -75,7 +75,7 @@ FLUENTD_DB_PASSWORD=fluentd_dev_password
 |---------|----------|-------------|-----|
 | API Server | `~/.suiftly.env` | 600 (user only) | Loaded by config.ts at startup |
 | HAProxy | `/etc/default/haproxy` | 600 (root only) | Sourced by systemd as root |
-| gm-fluentd | `/etc/fluentd/fluentd.env` | 640 (root:fluentd) | Sourced by systemd for fluentd user |
+| fluentd-gm | `/etc/fluentd/fluentd.env` | 640 (root:fluentd) | Sourced by systemd for fluentd user |
 
 **API Server** reads from user's home directory because it runs as a regular user.
 
@@ -90,7 +90,7 @@ FLUENTD_DB_PASSWORD=fluentd_dev_password
 X_API_KEY_SECRET="8776c4c0e84428c6e86fca4647abe16459649aa78fe4c72e7643dc3a14343337"
 ```
 
-**gm-fluentd** uses `/etc/fluentd/fluentd.env`:
+**fluentd-gm** uses `/etc/fluentd/fluentd.env`:
 - Systemd's `EnvironmentFile=/etc/fluentd/fluentd.env` sources this file
 - 640 permissions (root:fluentd) allows fluentd group to read
 - Contains `FLUENTD_DB_PASSWORD` for PostgreSQL connection
@@ -251,11 +251,11 @@ chmod 600 ~/.suiftly.env
 ssh haproxy-node 'echo "X_API_KEY_SECRET=\"...\"" | sudo tee -a /etc/default/haproxy'
 ssh haproxy-node 'sudo systemctl restart haproxy'
 
-# 3. Copy FLUENTD_DB_PASSWORD to gm-fluentd nodes
-# gm-fluentd uses /etc/fluentd/fluentd.env
+# 3. Copy FLUENTD_DB_PASSWORD to fluentd-gm nodes
+# fluentd-gm uses /etc/fluentd/fluentd.env
 ssh db-node 'echo "FLUENTD_DB_PASSWORD=..." | sudo tee /etc/fluentd/fluentd.env'
 ssh db-node 'sudo chown root:fluentd /etc/fluentd/fluentd.env && sudo chmod 640 /etc/fluentd/fluentd.env'
-ssh db-node 'sudo systemctl restart gm-fluentd'
+ssh db-node 'sudo systemctl restart fluentd-gm'
 
 # 4. Restore database from backup
 psql suiftly_prod < backup.sql

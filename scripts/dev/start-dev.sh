@@ -213,29 +213,29 @@ echo "  Local Manager started"
 # ============================================================================
 echo "Starting Fluentd services..."
 
-# Start gm-fluentd (aggregates logs from LM and writes to DB)
-if is_service_running "gm-fluentd"; then
-  echo "  gm-fluentd already running"
+# Start fluentd-gm (aggregates logs from LM and writes to DB)
+if is_service_running "fluentd-gm"; then
+  echo "  fluentd-gm already running"
 else
-  sudob_service start gm-fluentd >/dev/null 2>&1 || true
+  sudob_service start fluentd-gm >/dev/null 2>&1 || true
   sleep 1
-  if is_service_running "gm-fluentd"; then
-    echo "  gm-fluentd started"
+  if is_service_running "fluentd-gm"; then
+    echo "  fluentd-gm started"
   else
-    echo "  WARNING: gm-fluentd failed to start (may not be configured)"
+    echo "  WARNING: fluentd-gm failed to start (may not be configured)"
   fi
 fi
 
-# Start lm-fluentd (forwards HAProxy logs to GM)
-if is_service_running "lm-fluentd"; then
-  echo "  lm-fluentd already running"
+# Start fluentd-lm (forwards HAProxy logs to GM)
+if is_service_running "fluentd-lm"; then
+  echo "  fluentd-lm already running"
 else
-  sudob_service start lm-fluentd >/dev/null 2>&1 || true
+  sudob_service start fluentd-lm >/dev/null 2>&1 || true
   sleep 1
-  if is_service_running "lm-fluentd"; then
-    echo "  lm-fluentd started"
+  if is_service_running "fluentd-lm"; then
+    echo "  fluentd-lm started"
   else
-    echo "  WARNING: lm-fluentd failed to start (may not be configured)"
+    echo "  WARNING: fluentd-lm failed to start (may not be configured)"
   fi
 fi
 
@@ -290,10 +290,10 @@ echo "  Webapp started (PID: $WEBAPP_PID)"
 # Summary
 # ============================================================================
 # Check fluentd status for summary
-GM_FLUENTD_STATUS="stopped"
-LM_FLUENTD_STATUS="stopped"
-is_service_running "gm-fluentd" && GM_FLUENTD_STATUS="running"
-is_service_running "lm-fluentd" && LM_FLUENTD_STATUS="running"
+FLUENTD_GM_STATUS="stopped"
+FLUENTD_LM_STATUS="stopped"
+is_service_running "fluentd-gm" && FLUENTD_GM_STATUS="running"
+is_service_running "fluentd-lm" && FLUENTD_LM_STATUS="running"
 
 echo ""
 echo "========================================"
@@ -302,16 +302,16 @@ echo "========================================"
 echo "GM:         http://localhost:22600 (systemd)"
 echo "Admin:      http://localhost:22601 (PID: $ADMIN_PID)"
 echo "LM:         http://localhost:22610 (systemd)"
-echo "gm-fluentd: $GM_FLUENTD_STATUS (systemd)"
-echo "lm-fluentd: $LM_FLUENTD_STATUS (systemd)"
+echo "fluentd-gm: $FLUENTD_GM_STATUS (systemd)"
+echo "fluentd-lm: $FLUENTD_LM_STATUS (systemd)"
 echo "API:        http://localhost:22700 (PID: $API_PID)"
 echo "Webapp:     http://localhost:22710 (PID: $WEBAPP_PID)"
 echo ""
 echo "Logs:"
 echo "  GM:         sudo journalctl -u suiftly-gm -f"
 echo "  LM:         sudo journalctl -u suiftly-lm -f"
-echo "  gm-fluentd: sudo journalctl -u gm-fluentd -f"
-echo "  lm-fluentd: sudo journalctl -u lm-fluentd -f"
+echo "  fluentd-gm: sudo journalctl -u fluentd-gm -f"
+echo "  fluentd-lm: sudo journalctl -u fluentd-lm -f"
 echo "  Admin:      /tmp/suiftly-admin.log"
 echo "  API:        /tmp/suiftly-api.log"
 echo "  Webapp:     /tmp/suiftly-webapp.log"

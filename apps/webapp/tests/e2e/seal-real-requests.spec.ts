@@ -1212,13 +1212,13 @@ test.describe('Real Seal Requests - IP Allowlist', () => {
  * Tests the full fluentd log pipeline:
  * 1. Request goes through HAProxy
  * 2. HAProxy logs to rsyslog
- * 3. rsyslog forwards to lm-fluentd (port 22500)
- * 4. lm-fluentd aggregates and forwards to gm-fluentd (port 24224)
- * 5. gm-fluentd inserts to PostgreSQL haproxy_raw_logs table
+ * 3. rsyslog forwards to fluentd-lm (port 22500)
+ * 4. fluentd-lm aggregates and forwards to fluentd-gm (port 24224)
+ * 5. fluentd-gm inserts to PostgreSQL haproxy_raw_logs table
  * 6. Test queries the database to verify the log arrived
  *
  * Prerequisites:
- * - lm-fluentd and gm-fluentd services running
+ * - fluentd-lm and fluentd-gm services running
  * - rsyslog configured to forward HAProxy logs
  * - PostgreSQL with haproxy_raw_logs table
  */
@@ -1320,9 +1320,9 @@ test.describe('Real Seal Requests - Log Ingestion', () => {
 
     // === STEP 4: Wait for log to appear in database ===
     // The fluentd pipeline has some latency:
-    // - lm-fluentd aggregates for 1 second window
+    // - fluentd-lm aggregates for 1 second window
     // - Buffer flushes every 0.5 seconds
-    // - gm-fluentd processes and inserts to PostgreSQL
+    // - fluentd-gm processes and inserts to PostgreSQL
     console.log('Waiting for log to appear in database...');
 
     const logs = await waitForHaproxyLogs(page.request, {

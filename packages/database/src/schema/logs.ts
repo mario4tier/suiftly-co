@@ -67,7 +67,7 @@ export const haproxyRawLogs = pgTable('haproxy_raw_logs', {
 }));
 
 // HAProxy system logs - ALERT, WARNING, and other non-request logs
-// These are packaged by lm-fluentd with hdr (server_id + log_type), msg, and cnt
+// These are packaged by fluentd-lm with hdr (server_id + log_type), msg, and cnt
 // Much simpler schema than request logs - just for debugging/monitoring
 export const haproxySystemLogs = pgTable('haproxy_system_logs', {
   // Timestamp (TimescaleDB partition key)

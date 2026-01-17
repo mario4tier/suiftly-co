@@ -73,8 +73,8 @@ sudob_service() {
 # ============================================================================
 if [ "$SUDOB_AVAILABLE" = true ]; then
   echo "  Stopping fluentd services via sudob..."
-  sudob_service stop lm-fluentd >/dev/null 2>&1 || true
-  sudob_service stop gm-fluentd >/dev/null 2>&1 || true
+  sudob_service stop fluentd-lm >/dev/null 2>&1 || true
+  sudob_service stop fluentd-gm >/dev/null 2>&1 || true
 
   echo "  Stopping GM via sudob..."
   sudob_service stop suiftly-gm >/dev/null || true
@@ -83,7 +83,7 @@ if [ "$SUDOB_AVAILABLE" = true ]; then
   sudob_service stop suiftly-lm >/dev/null || true
 else
   echo "  sudob not running - systemd services must be stopped manually:"
-  echo "    sudo systemctl stop lm-fluentd gm-fluentd suiftly-gm suiftly-lm"
+  echo "    sudo systemctl stop fluentd-lm fluentd-gm suiftly-gm suiftly-lm"
 fi
 
 # ============================================================================
