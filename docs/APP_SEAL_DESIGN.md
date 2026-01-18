@@ -10,21 +10,19 @@ This document designs the control plane for Seal key registration on the Sui blo
 
 ## Document Status
 
-> ⚠️ **This is a DESIGN DOCUMENT for NEW functionality, not documentation of existing code.**
+> ⚠️ **This is a DESIGN DOCUMENT** - some parts are implemented, others are pending.
 >
-> The infrastructure described here (process groups, Sui registration pipeline, registration state machine)
-> **does not exist yet**. This document specifies what WILL be built across the implementation phases.
->
-> **What exists today:**
-> - Mock key generation (`seal-key-generation.ts`) that uses `customerId` in derivation
-> - Basic `seal_keys` table without registration status fields
+> **What exists today (implemented):**
+> - Process group support (`getSealProcessGroup()` in `@walrus/system-config`)
+> - Master seed storage in `~/.suiftly.env` (see APP_SECURITY_DESIGN.md)
+> - Vault generation with process group (`generate-vault.ts` uses `getSealProcessGroup()`)
+> - Basic `seal_keys` table with derivation index tracking
 > - Vault sync infrastructure for HAProxy config (`markConfigChanged` pattern)
 >
-> **What this document designs:**
-> - Production key derivation from master seeds (replacing mock)
+> **What this document designs (pending implementation):**
 > - Sui blockchain registration with KeyServer objects
 > - Registration state machine with auto-retry
-> - Process group isolation between dev/prod environments
+> - Per-PG derivation index counters (Phase 0 bug fix)
 > - GM registration processor task
 > - LM seal-server config generation
 
@@ -43,15 +41,15 @@ This document designs the control plane for Seal key registration on the Sui blo
 ### Overview
 
 Process groups (PG) enable environment isolation with separate master keys. Each process group has:
-- Its own BLS12-381 master seed key
+- Its own BLS12-381 master seed key (stored in `~/.suiftly.env`)
 - Independent key derivation namespace
-- Separate vault files (different `pg` in filename)
+- Separate customer vault files (different `pg` in filename)
 
 **Environment Mapping:**
-| Environment | Process Group | Master Key Vault |
-|-------------|---------------|------------------|
-| Production | PG 1 | `smm-01-*` (mainnet), `stm-01-*` (testnet) |
-| Development | PG 2 | `smm-02-*` (mainnet), `stm-02-*` (testnet) |
+| Environment | Process Group | Master Seeds |
+|-------------|---------------|--------------|
+| Production | PG 1 | `SEAL_MASTER_SEED_MAINNET`, `SEAL_MASTER_SEED_TESTNET` in `~/.suiftly.env` |
+| Development | PG 2 | Different seeds in `~/.suiftly.env` (see APP_SECURITY_DESIGN.md) |
 
 ### Why This Matters for Seal Keys
 
@@ -72,25 +70,17 @@ If development and production share the same master seed (PG 1), then:
 
 ### Current State Analysis
 
-**Hardcoded to PG 1:**
+**Implemented:**
+- `getSealProcessGroup()` in `@walrus/system-config` reads from `system.conf`
+- `generate-vault.ts` uses `getSealProcessGroup()` for vault writer
+- Master seeds stored in `~/.suiftly.env` on keyserver nodes
+- Vault filename format includes PG: `{vault:3}-{pg:02d}-{seq:09d}-...`
+
+**Still hardcoded (needs fix):**
 ```typescript
 // File: apps/api/src/lib/api-keys.ts (line 281)
-procGroup: options.procGroup ?? 1  // Always 1!
-
-// File: services/global-manager/src/tasks/generate-vault.ts
-pg: 1  // Hardcoded in vault writer options
+procGroup: options.procGroup ?? 1  // Should use getSealProcessGroup()
 ```
-
-**Vault Infrastructure Ready:**
-- Vault types defined: `smm` (Seal mainnet master), `stm` (Seal testnet master)
-- Filename format includes PG: `{vault:3}-{pg:02d}-{seq:09d}-...`
-- Database has tracking columns for all vault types
-- kvcrypt supports arbitrary vault types
-
-**Missing Implementation:**
-1. Master key vault generation (`smm`/`stm`) - not yet implemented
-2. Dynamic PG selection based on environment
-3. Key derivation using PG-specific master seed
 
 ### Implementation Design
 
@@ -132,117 +122,45 @@ export function getSealProcessGroup(): number {
 
 > **Future consideration:** Multiple PGs per server may be supported later, but is not actively implemented now. The infrastructure (per-PG counters, PG in vault filenames) already supports this.
 
-#### 2. Master Key Vault Structure
+#### 2. Master Seed Storage
 
-**Vault Types:**
-- `smm` - Seal mainnet master keys (per process group)
-- `stm` - Seal testnet master keys (per process group)
+**Master seeds are stored in `~/.suiftly.env`** (see APP_SECURITY_DESIGN.md):
+- `SEAL_MASTER_SEED_MAINNET` - For mainnet keyservers
+- `SEAL_MASTER_SEED_TESTNET` - For testnet keyservers
 
-**Storage Pattern:**
-```
-/opt/coord/.sys/vaults/smm/
-  smm-01-000000001-*.enc  # PG 1 (Production) master key
-  smm-02-000000001-*.enc  # PG 2 (Development) master key
-```
-
-**Master Key Vault Data:**
-```typescript
-interface MasterKeyVaultData {
-  // Key: `master:${pg}`
-  // Value: JSON string of:
-  masterSeed: string;     // 32 bytes, hex-encoded BLS12-381 seed
-  createdAt: string;      // ISO timestamp
-  createdBy: string;      // 'bootstrap' | 'rotation'
-}
-
-interface MasterKeyVaultMetadata {
-  seq: number;
-  pg: number;             // Process group this master key belongs to
-  createdAt: string;
-  contentHash: string;
-}
-```
-
-**`getMasterSeed` Implementation:**
-
-**File:** `apps/api/src/lib/master-keys.ts`
-
-```typescript
-import { VaultReader } from '@walrus/vault-codec';
-import { getSealProcessGroup } from '@walrus/system-config';
-
-// Cache master seeds in memory (loaded once on startup)
-const masterSeedCache = new Map<string, Buffer>();
-
-export async function getMasterSeed(
-  network: 'mainnet' | 'testnet',
-  pg?: number
-): Promise<Buffer> {
-  const processGroup = pg ?? getSealProcessGroup();
-  const vaultType = network === 'mainnet' ? 'smm' : 'stm';
-  const cacheKey = `${vaultType}-${processGroup}`;
-
-  // Return cached if available
-  if (masterSeedCache.has(cacheKey)) {
-    return masterSeedCache.get(cacheKey)!;
-  }
-
-  // Load from vault (uses KMS-encrypted storage)
-  const reader = new VaultReader({ vaultDir: '/opt/coord/.sys/vaults' });
-  const vault = await reader.loadLatest(vaultType, { pg: processGroup });
-
-  if (!vault) {
-    throw new Error(`Master key vault not found: ${vaultType} pg=${processGroup}`);
-  }
-
-  const masterData = vault.data.get(`master:${processGroup}`);
-  if (!masterData) {
-    throw new Error(`Master seed not found in vault: ${cacheKey}`);
-  }
-
-  const parsed = JSON.parse(masterData);
-  const seed = Buffer.from(parsed.masterSeed, 'hex');
-
-  // Cache for future use (master keys don't change at runtime)
-  masterSeedCache.set(cacheKey, seed);
-
-  return seed;
-}
-```
+**Format:** `0x` prefix + 64 hex characters (32 bytes)
 
 **Security notes:**
-- Master seeds are KMS-encrypted at rest (via kvcrypt/vault-codec)
-- Cached in memory after first load (no repeated disk/decrypt operations)
-- Process group from `system.conf` ensures correct vault is loaded
-- No HSM required - KMS certificates provide the encryption layer
+- File permissions: `chmod 600 ~/.suiftly.env`
+- Keyserver nodes load seeds at startup via `seal-wrapper.sh`
+- API servers don't need master seeds (they store derivation indices only)
 
-#### 3. Key Derivation with Process Group
+#### 3. Key Derivation Flow
 
-**Current (Bug - Ignores PG):**
-```typescript
-// apps/api/src/routes/seal.ts
-const keyResult = await generateSealKey({
-  derivationIndex,
-  customerId: ctx.user!.customerId,
-});
-```
-
-**Fixed (Uses PG-specific master seed):**
+**API Server** (stores derivation index only):
 ```typescript
 import { getSealProcessGroup } from '@walrus/system-config';
-import { getMasterSeed } from '../lib/master-keys';
 
 // apps/api/src/routes/seal.ts
 const pg = getSealProcessGroup();  // From system.conf (fixed per server)
-const masterSeed = await getMasterSeed(network, pg);  // From smm/stm vault
 
-const keyResult = await generateSealKey({
+// Allocate next derivation index (atomic, per-PG)
+const derivationIndex = await allocateDerivationIndex(pg);
+
+// Store in DB - API never touches master seed
+await db.insert(sealKeys).values({
   derivationIndex,
-  masterSeed,           // PG-specific master seed
-  customerId: ctx.user!.customerId,
-  processGroup: pg,     // Stored for audit trail
+  processGroup: pg,
+  // ... other fields
 });
 ```
+
+**Keyserver** (derives private key at runtime):
+- Loads `SEAL_MASTER_SEED_*` from `~/.suiftly.env` at startup
+- Receives derivation index from vault (`di` field)
+- Derives BLS12-381 private key: `master_seed + derivation_index → private_key`
+
+This separation means API servers never handle master seeds.
 
 #### 4. Database Schema Update
 
@@ -367,30 +285,20 @@ const result = await writer.write(vaultType, vaultData, {
    echo "SEAL_PROCESS_GROUP=1" >> ~/walrus/system.conf
    ```
 
-2. **Generate Master Seeds (run on each server for its PG):**
+2. **Configure master seeds in `~/.suiftly.env`:**
    ```bash
-   # On dev box (PG 2):
-   ./scripts/bootstrap-master-key.ts --network mainnet
-   ./scripts/bootstrap-master-key.ts --network testnet
-   # Script reads SEAL_PROCESS_GROUP from system.conf
+   # Generate master seeds (backup to password manager first!)
+   python3 -c "import secrets; print('0x' + secrets.token_hex(32))"
 
-   # On production (PG 1):
-   ./scripts/bootstrap-master-key.ts --network mainnet
-   ./scripts/bootstrap-master-key.ts --network testnet
+   # Add to ~/.suiftly.env on keyserver nodes:
+   SEAL_MASTER_SEED_MAINNET=0x<generated-seed>
+   SEAL_MASTER_SEED_TESTNET=0x<generated-seed>
+   chmod 600 ~/.suiftly.env
    ```
 
-3. **Verify:**
-   ```bash
-   # On dev: should see PG 2 vault
-   ls /opt/coord/.sys/vaults/smm/
-   # smm-02-*.enc
+3. **Database counters** are initialized per-PG automatically (both start at 0).
 
-   # On prod: should see PG 1 vault
-   ls /opt/coord/.sys/vaults/smm/
-   # smm-01-*.enc
-   ```
-
-4. **Database counters** are initialized per-PG automatically (both start at 0).
+See APP_SECURITY_DESIGN.md for complete secret management details.
 
 ### Validation Checklist
 
@@ -398,7 +306,7 @@ Before implementing Seal key registration, verify:
 
 - [ ] `system.conf` has `SEAL_PROCESS_GROUP` set correctly (2 for dev, 1 for prod)
 - [ ] `getSealProcessGroup()` returns expected value
-- [ ] Master key vaults exist for the current PG (`smm-0X-*`, `stm-0X-*`)
+- [ ] Master seeds configured in `~/.suiftly.env` on keyserver nodes
 - [ ] API key generation uses `getSealProcessGroup()`
 - [ ] Derivation index counter uses correct PG column
 - [ ] Vault writer uses `getSealProcessGroup()`
@@ -519,7 +427,6 @@ export const systemControl = pgTable('system_control', {
 
 ```typescript
 import { getSealProcessGroup } from '@walrus/system-config';
-import { getMasterSeed } from '../lib/master-keys';
 
 // In createKey mutation - FIXED
 createKey: protectedProcedure.mutation(async ({ ctx, input }) => {
@@ -527,10 +434,6 @@ createKey: protectedProcedure.mutation(async ({ ctx, input }) => {
 
   // Get process group from system.conf (fixed per server)
   const pg = getSealProcessGroup();
-  const network = service.network; // 'mainnet' | 'testnet'
-
-  // Load master seed OUTSIDE transaction (I/O should not hold tx locks)
-  const masterSeed = await getMasterSeed(network, pg);
 
   return await withCustomerLockForAPI(customerId, 'createKey', async (tx) => {
     // ATOMIC INDEX ALLOCATION (per-PG, not per-service!)
@@ -545,11 +448,12 @@ createKey: protectedProcedure.mutation(async ({ ctx, input }) => {
 
     const derivationIndex = control.allocatedIndex;
 
-    // Generate key with PG-unique index and pre-loaded master seed
+    // Generate key using seal-cli (reads SEAL_MASTER_SEED_* from ~/.suiftly.env)
+    // See seal-key-generation.ts for implementation details
     const keyResult = await generateSealKey({
       derivationIndex,
-      masterSeed,         // PG-specific, loaded outside tx!
       customerId: ctx.user!.customerId,
+      processGroup: pg,
     });
 
     // Create seal key record
@@ -1438,7 +1342,7 @@ This is separate from HAProxy sync status which is tracked per-service.
 > - `@walrus/vault-codec` for encrypted vault storage
 >
 > **New Infrastructure (built by this plan):**
-> - Process group config and master seed vaults (Phase -1)
+> - Process group config (Phase -1)
 > - Per-PG derivation index counters (Phase 0)
 > - Registration state machine in `seal_keys` schema (Phase 1)
 > - Mock Sui transaction service (Phase 2)
@@ -1454,14 +1358,11 @@ This is separate from HAProxy sync status which is tracked per-service.
    - Dev box: `SEAL_PROCESS_GROUP=2`
    - Production: `SEAL_PROCESS_GROUP=1`
 2. Add `getSealProcessGroup()` to `@walrus/system-config` package
-3. Create master key vault generation script (`scripts/bootstrap-master-key.ts`)
-4. Add `getMasterSeed(network, pg)` function to load PG-specific master seed
-5. Update `generateSealKey()` to accept master seed and process group params
-6. Add `processGroup` column to `seal_keys` table schema
-7. Replace all hardcoded `pg: 1` with `getSealProcessGroup()`:
+3. Add master seeds to `~/.suiftly.env` on keyserver nodes (see APP_SECURITY_DESIGN.md)
+4. Add `processGroup` column to `seal_keys` table schema
+5. Replace all hardcoded `pg: 1` with `getSealProcessGroup()`:
    - `apps/api/src/lib/api-keys.ts` (line ~281)
    - `services/global-manager/src/tasks/generate-vault.ts`
-8. Bootstrap master keys for dev environment (PG 2)
 
 ### Phase 0: CRITICAL BUG FIX - Per-PG Derivation Index
 **Must be done after Phase -1 - blocks all other work**
@@ -1564,11 +1465,10 @@ This is separate from HAProxy sync status which is tracked per-service.
 |------|---------|
 | `system.conf` | Add `SEAL_PROCESS_GROUP=2` (dev) or `=1` (prod) |
 | `packages/system-config/src/index.ts` | Add `getSealProcessGroup()` export |
-| `apps/api/src/lib/master-keys.ts` | **NEW:** `getMasterSeed(network, pg)` to load from smm/stm vault |
+| `~/.suiftly.env` | Add `SEAL_MASTER_SEED_MAINNET` and `SEAL_MASTER_SEED_TESTNET` on keyserver nodes |
 | `apps/api/src/lib/api-keys.ts` | Replace hardcoded `pg: 1` with `getSealProcessGroup()` |
 | `services/global-manager/src/tasks/generate-vault.ts` | Replace hardcoded `pg: 1` with `getSealProcessGroup()` |
 | `packages/database/src/schema/seal.ts` | Add `processGroup` column |
-| `scripts/bootstrap-master-key.ts` | **NEW:** One-time master key generation script |
 
 ### Phase 0+: Registration State Machine
 | File | Changes |

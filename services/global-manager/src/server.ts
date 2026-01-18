@@ -584,7 +584,7 @@ server.get('/api/vault/status', async () => {
     storageDir: '/opt/syncf/data_tx',
   });
 
-  // Get status for known vault types (sma=Seal Mainnet API, smm=Seal Mainnet Master)
+  // Get status for configured vault types (from server_configs.py data_tx field)
   const vaults: Record<string, {
     vaultType: string;
     latest: { seq: number; pg: number; filename: string } | null;

@@ -42,11 +42,15 @@ interface GMVaultStatus {
 }
 
 // Vault type labels (short names for display)
+// Note: Master seeds are stored in ~/.suiftly.env, not in vaults (see APP_SECURITY_DESIGN.md)
 const VAULT_LABELS: Record<string, string> = {
-  sma: 'SMA',  // Seal Mainnet API
-  smm: 'SMM',  // Seal Mainnet Master
-  sta: 'STA',  // Seal Testnet API
-  stm: 'STM',  // Seal Testnet Master
+  sma: 'SMA',  // Seal Mainnet API (HAProxy config)
+  smk: 'SMK',  // Seal Mainnet Keyserver
+  smo: 'SMO',  // Seal Mainnet Open
+  sta: 'STA',  // Seal Testnet API (HAProxy config)
+  stk: 'STK',  // Seal Testnet Keyserver
+  sto: 'STO',  // Seal Testnet Open
+  skk: 'SKK',  // Seal Test/Dev
 };
 
 export function KVCryptDebug() {
