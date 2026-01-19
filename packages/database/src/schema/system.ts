@@ -27,16 +27,15 @@ export const systemControl = pgTable('system_control', {
   id: integer('id').primaryKey(),
 
   // Vault sequential versions (DB-authoritative, used in vault filenames)
-  // 3-letter codes: {service}{network}{purpose} (e.g., sma = seal mainnet api)
+  // 3-letter codes: {service}{network}{purpose}
+  //   a = api (HAProxy config), k = keyserver, o = open mode
   // Seal mainnet vaults
-  smaVaultSeq: integer('sma_vault_seq').default(0),  // Seal mainnet API
-  smmVaultSeq: integer('smm_vault_seq').default(0),  // Seal mainnet master
-  smsVaultSeq: integer('sms_vault_seq').default(0),  // Seal mainnet seed
+  smaVaultSeq: integer('sma_vault_seq').default(0),  // Seal mainnet API (HAProxy config)
+  smkVaultSeq: integer('smk_vault_seq').default(0),  // Seal mainnet keyserver
   smoVaultSeq: integer('smo_vault_seq').default(0),  // Seal mainnet open
   // Seal testnet vaults
-  staVaultSeq: integer('sta_vault_seq').default(0),  // Seal testnet API
-  stmVaultSeq: integer('stm_vault_seq').default(0),  // Seal testnet master
-  stsVaultSeq: integer('sts_vault_seq').default(0),  // Seal testnet seed
+  staVaultSeq: integer('sta_vault_seq').default(0),  // Seal testnet API (HAProxy config)
+  stkVaultSeq: integer('stk_vault_seq').default(0),  // Seal testnet keyserver
   stoVaultSeq: integer('sto_vault_seq').default(0),  // Seal testnet open
   // Seal test/dev vault
   skkVaultSeq: integer('skk_vault_seq').default(0),  // Seal test/dev
@@ -46,13 +45,11 @@ export const systemControl = pgTable('system_control', {
   // This avoids expensive MAX queries and prevents race conditions
   // Seal mainnet vaults
   smaNextVaultSeq: integer('sma_next_vault_seq').default(1),  // Seal mainnet API
-  smmNextVaultSeq: integer('smm_next_vault_seq').default(1),  // Seal mainnet master
-  smsNextVaultSeq: integer('sms_next_vault_seq').default(1),  // Seal mainnet seed
+  smkNextVaultSeq: integer('smk_next_vault_seq').default(1),  // Seal mainnet keyserver
   smoNextVaultSeq: integer('smo_next_vault_seq').default(1),  // Seal mainnet open
   // Seal testnet vaults
   staNextVaultSeq: integer('sta_next_vault_seq').default(1),  // Seal testnet API
-  stmNextVaultSeq: integer('stm_next_vault_seq').default(1),  // Seal testnet master
-  stsNextVaultSeq: integer('sts_next_vault_seq').default(1),  // Seal testnet seed
+  stkNextVaultSeq: integer('stk_next_vault_seq').default(1),  // Seal testnet keyserver
   stoNextVaultSeq: integer('sto_next_vault_seq').default(1),  // Seal testnet open
   // Seal test/dev vault
   skkNextVaultSeq: integer('skk_next_vault_seq').default(1),  // Seal test/dev
@@ -65,12 +62,10 @@ export const systemControl = pgTable('system_control', {
 
   // Content hashes for change detection (first 16 chars of SHA-256)
   smaVaultContentHash: varchar('sma_vault_content_hash', { length: 16 }),
-  smmVaultContentHash: varchar('smm_vault_content_hash', { length: 16 }),
-  smsVaultContentHash: varchar('sms_vault_content_hash', { length: 16 }),
+  smkVaultContentHash: varchar('smk_vault_content_hash', { length: 16 }),
   smoVaultContentHash: varchar('smo_vault_content_hash', { length: 16 }),
   staVaultContentHash: varchar('sta_vault_content_hash', { length: 16 }),
-  stmVaultContentHash: varchar('stm_vault_content_hash', { length: 16 }),
-  stsVaultContentHash: varchar('sts_vault_content_hash', { length: 16 }),
+  stkVaultContentHash: varchar('stk_vault_content_hash', { length: 16 }),
   stoVaultContentHash: varchar('sto_vault_content_hash', { length: 16 }),
   skkVaultContentHash: varchar('skk_vault_content_hash', { length: 16 }),
 

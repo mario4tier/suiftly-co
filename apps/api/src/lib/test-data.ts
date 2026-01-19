@@ -8,7 +8,7 @@
 import { randomInt } from 'node:crypto';
 import { db } from '@suiftly/database';
 import {
-  customers, serviceInstances, serviceCancellationHistory, ledgerEntries, apiKeys, sealKeys,
+  customers, serviceInstances, serviceCancellationHistory, ledgerEntries, apiKeys, sealKeys, sealPackages,
   refreshTokens, billingRecords, escrowTransactions, usageRecords,
   haproxyRawLogs, userActivityLogs, mockSuiTransactions,
   invoicePayments, customerCredits, billingIdempotency, adminNotifications
@@ -124,13 +124,29 @@ export async function resetCustomerTestData(options: TestDataResetOptions = {}) 
           .where(eq(apiKeys.customerId, customerId))
           .returning();
 
-        // 4. Delete Seal keys
+        // 4. Delete Seal packages first (FK constraint: seal_packages -> seal_keys)
+        // Get seal key IDs for this customer, then delete their packages
+        const customerSealKeys = await tx
+          .select({ sealKeyId: sealKeys.sealKeyId })
+          .from(sealKeys)
+          .where(eq(sealKeys.customerId, customerId));
+
+        let deletedPackagesCount = 0;
+        for (const key of customerSealKeys) {
+          const deleted = await tx
+            .delete(sealPackages)
+            .where(eq(sealPackages.sealKeyId, key.sealKeyId))
+            .returning();
+          deletedPackagesCount += deleted.length;
+        }
+
+        // 5. Delete Seal keys (now safe - packages deleted first)
         const deletedSealKeys = await tx
           .delete(sealKeys)
           .where(eq(sealKeys.customerId, customerId))
           .returning();
 
-        // 5. Delete all other related data (in correct order for foreign keys)
+        // 6. Delete all other related data (in correct order for foreign keys)
         // New billing tables (Phase 1A/2) - delete before billing_records
         await tx.delete(adminNotifications).where(eq(adminNotifications.customerId, String(customerId)));
         await tx.delete(billingIdempotency); // No customer_id column, delete all for simplicity
@@ -147,10 +163,10 @@ export async function resetCustomerTestData(options: TestDataResetOptions = {}) 
         await tx.delete(userActivityLogs).where(eq(userActivityLogs.customerId, customerId));
         await tx.delete(mockSuiTransactions).where(eq(mockSuiTransactions.customerId, customerId));
 
-        // 6. Clear Sui mock config (reset delays and failure injections)
+        // 7. Clear Sui mock config (reset delays and failure injections)
         suiMockConfig.clearConfig();
 
-        // 7. Reset customer to clean state with specified balance
+        // 8. Reset customer to clean state with specified balance
         // (Keep customer to preserve wallet address association)
         await tx.update(customers)
           .set({
@@ -164,6 +180,7 @@ export async function resetCustomerTestData(options: TestDataResetOptions = {}) 
         console.log(`[TEST DATA] Reset customer ${customerId}:`);
         console.log(`  - Deleted ${deletedServices.length} service instances`);
         console.log(`  - Deleted ${deletedApiKeys.length} API keys`);
+        console.log(`  - Deleted ${deletedPackagesCount} Seal packages`);
         console.log(`  - Deleted ${deletedSealKeys.length} Seal keys`);
         console.log(`  - Deleted all related data (ledger, tokens, billing, logs)`);
         console.log(`  - Set balance to $${(balanceUsdCents / 100).toFixed(2)}`);
@@ -421,9 +438,6 @@ export async function setupSealWithCpEnabled(walletAddress: string = MOCK_WALLET
   }
 
   // Step 3: Create package for the seal key
-  // Import schema dynamically to avoid circular dependency
-  const { sealPackages } = await import('@suiftly/database/schema');
-
   const existingPackages = await db.query.sealPackages.findMany({
     where: eq(sealPackages.sealKeyId, sealKeyId),
   });

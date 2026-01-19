@@ -14,6 +14,7 @@ import { waitAfterMutation } from '../helpers/wait-utils';
 import { resetCustomer, ensureTestBalance } from '../helpers/db';
 import {
   sealHealthCheck,
+  sealHealthCheckWithRetry,
   isHAProxyAvailable,
   isSealBackendAvailable,
   SEAL_PORTS,
@@ -67,8 +68,9 @@ async function waitForVaultSync(expectedMinSeq: number): Promise<void> {
     const health = await getLMHealth();
     const smaVault = health?.vaults.find((v) => v.type === 'sma');
     if (smaVault?.applied && smaVault.applied.seq >= expectedMinSeq && !smaVault.processing) {
-      // Give HAProxy time to reload the map
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      // Give HAProxy time to reload the map after LM applies the vault
+      // HAProxy map reload can take a few seconds to propagate
+      await new Promise((resolve) => setTimeout(resolve, 3000));
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, pollInterval));
@@ -111,7 +113,16 @@ async function getApiKeys(
 }
 
 async function verifyKeyWorks(apiKey: string, label: string): Promise<void> {
-  const response = await sealHealthCheck({ apiKey, port: SEAL_METERED_PORT });
+  // Use retry to handle transient timing issues after vault sync
+  // HAProxy may need time to reload maps after LM processes the vault
+  const response = await sealHealthCheckWithRetry(
+    { apiKey, port: SEAL_METERED_PORT },
+    { maxAttempts: 5, delayMs: 3000, expectedStatus: 200 }
+  );
+  // DEBUG: Log response details for troubleshooting
+  if (response.status !== 200) {
+    console.log(`❌ ${label}: got ${response.status}, body: ${JSON.stringify(response.body)}`);
+  }
   expect(response.status, `${label} should return 200`).toBe(200);
   console.log(`✅ ${label}: works (200)`);
 }

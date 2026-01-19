@@ -216,15 +216,15 @@ export const sealRouter = router({
             });
           }
 
-          // Check package count limit (max 10 per key)
-          const existingPackages = await tx.query.sealPackages.findMany({
+          // Check package count limit (max 10 enabled per key)
+          const enabledPackages = await tx.query.sealPackages.findMany({
             where: and(
               eq(sealPackages.sealKeyId, input.sealKeyId),
               eq(sealPackages.isUserEnabled, true)
             ),
           });
 
-          if (existingPackages.length >= 10) {
+          if (enabledPackages.length >= 10) {
             throw new TRPCError({
               code: 'BAD_REQUEST',
               message: 'Maximum package limit reached (10 per seal key)',
@@ -237,9 +237,15 @@ export const sealRouter = router({
           // Auto-generate name if not provided (package-1, package-2, etc.)
           let packageName = input.name;
           if (!packageName) {
+            // Get all packages (including disabled) to avoid name collisions
+            const allPackages = await tx.query.sealPackages.findMany({
+              where: eq(sealPackages.sealKeyId, input.sealKeyId),
+              columns: { name: true },
+            });
+
             // Find all existing package names ending with -N suffix (e.g., "package-2", "mypackage-5")
-            const existingNames = existingPackages
-              .map((p: typeof existingPackages[number]) => p.name)
+            const existingNames = allPackages
+              .map((p: typeof allPackages[number]) => p.name)
               .filter((n): n is string => !!n);
 
             // Extract numbers from names ending with -N and find the highest

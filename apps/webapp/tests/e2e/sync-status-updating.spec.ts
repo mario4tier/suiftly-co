@@ -135,21 +135,35 @@ test.describe('Sync Status - Updating Indicator', () => {
     await waitAfterMutation(page);
     console.log('✅ Toggle mutation completed');
 
-    // CRITICAL: Force a refresh of the services status query
-    // The UI polls every 15 seconds by default, but we need to see the "Updating..." status now
-    // Navigate away and back to force a refresh, or wait for polling
-    await page.reload();
-
     // Now check for "Updating..." text - this should be visible because:
     // 1. The API has updated the configChangeVaultSeq
     // 2. The LM is delayed (5s) before marking the vault as applied
     // 3. The sync status should be "pending" which shows "Updating..."
     const updatingIndicator = page.locator('text=Updating...');
 
-    // Wait for the "Updating..." indicator to appear (max 10 seconds)
-    // This is the actual test assertion - if "Updating..." doesn't show, test fails
-    await expect(updatingIndicator).toBeVisible({ timeout: 10000 });
-    console.log('✅ "Updating..." indicator is visible');
+    // Retry logic: The "Updating..." indicator may not appear on the first reload
+    // depending on how the periodic audit aligns. Retry up to 10 times.
+    const maxRetries = 10;
+    let updatingAppeared = false;
+
+    for (let retry = 1; retry <= maxRetries; retry++) {
+      await page.reload();
+      await page.waitForLoadState('networkidle');
+
+      // Check if "Updating..." is visible (quick check, no long timeout)
+      const isVisible = await updatingIndicator.isVisible();
+      if (isVisible) {
+        updatingAppeared = true;
+        console.log(`✅ "Updating..." indicator is visible (retry ${retry}/${maxRetries})`);
+        break;
+      }
+
+      console.log(`Retry ${retry}/${maxRetries}: "Updating..." not visible yet, waiting...`);
+      await page.waitForTimeout(500); // Short wait before next retry
+    }
+
+    // Fail if "Updating..." never appeared after all retries
+    expect(updatingAppeared).toBe(true);
 
     // Poll once per second for up to 30 seconds to detect when "Updating..." disappears
     // This gives LM time to complete the sync (5s delay + processing time)

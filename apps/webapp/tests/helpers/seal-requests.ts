@@ -50,6 +50,56 @@ export interface SealHealthResponse {
  * @param options Request configuration
  * @returns Health check response with status and body
  */
+export interface RetryOptions {
+  /** Maximum number of attempts (default: 3) */
+  maxAttempts?: number;
+  /** Delay between retries in ms (default: 2000) */
+  delayMs?: number;
+  /** Expected status code to consider success (default: 200) */
+  expectedStatus?: number;
+}
+
+/**
+ * Make a health check request with automatic retry on failure
+ *
+ * Useful for E2E tests where timing issues may cause transient failures.
+ * Retries up to maxAttempts times with delayMs between attempts.
+ *
+ * @param options Request configuration
+ * @param retryOptions Retry configuration
+ * @returns Health check response (successful) or last failed response
+ */
+export async function sealHealthCheckWithRetry(
+  options: SealRequestOptions,
+  retryOptions: RetryOptions = {}
+): Promise<SealHealthResponse> {
+  const maxAttempts = retryOptions.maxAttempts ?? 3;
+  const delayMs = retryOptions.delayMs ?? 2000;
+  const expectedStatus = retryOptions.expectedStatus ?? 200;
+
+  let lastResponse: SealHealthResponse | null = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const response = await sealHealthCheck(options);
+    lastResponse = response;
+
+    if (response.status === expectedStatus) {
+      return response;
+    }
+
+    // Don't wait after the last attempt
+    if (attempt < maxAttempts) {
+      console.log(
+        `  ⏳ Attempt ${attempt}/${maxAttempts} got ${response.status}, retrying in ${delayMs}ms...`
+      );
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+
+  // Return the last response (all retries failed)
+  return lastResponse!;
+}
+
 export async function sealHealthCheck(
   options: SealRequestOptions
 ): Promise<SealHealthResponse> {

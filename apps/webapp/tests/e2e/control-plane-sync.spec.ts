@@ -13,7 +13,7 @@ import { test, expect, Page } from '@playwright/test';
 import { waitAfterMutation } from '../helpers/wait-utils';
 import { resetCustomer, ensureTestBalance } from '../helpers/db';
 import { db } from '@suiftly/database';
-import { serviceInstances, sealKeys, systemControl } from '@suiftly/database/schema';
+import { serviceInstances, systemControl } from '@suiftly/database/schema';
 import { eq, and } from 'drizzle-orm';
 import { SERVICE_TYPE } from '@suiftly/shared/constants';
 
@@ -127,7 +127,7 @@ async function getLMHealth(): Promise<LMHealthResponse> {
   if (!response.ok) {
     throw new Error(`LM health check failed: ${await response.text()}`);
   }
-  return response.json();
+  return response.json() as Promise<LMHealthResponse>;
 }
 
 test.describe('Control Plane Sync Flow', () => {
@@ -220,9 +220,6 @@ test.describe('Control Plane Sync Flow', () => {
     const { customer } = await customerData.json();
     const customerId = customer.customerId;
 
-    // Get initial vault seq
-    const initialSeq = await getCurrentVaultSeq();
-
     // Subscribe, enable, create key, add package (makes cpEnabled=true)
     await page.goto('/services/seal');
     await waitAfterMutation(page);
@@ -280,13 +277,10 @@ test.describe('Control Plane Sync Flow', () => {
       return;
     }
 
-    // Get customer ID (auth already done in beforeEach)
-    const customerData = await page.request.get('http://localhost:22700/test/data/customer');
-    const { customer } = await customerData.json();
-
-    // Get initial LM vault seq from vaults array
+    // Get initial LM vault seq from vaults array (find the SMA vault)
     const initialLMHealth = await getLMHealth();
-    const initialLMSeq = initialLMHealth.vaults[0]?.seq ?? 0;
+    const initialSmaVault = initialLMHealth.vaults.find(v => v.type === 'sma');
+    const initialLMSeq = initialSmaVault?.applied?.seq ?? 0;
 
     // Subscribe, enable, create key, add package
     await page.goto('/services/seal');
@@ -336,10 +330,13 @@ test.describe('Control Plane Sync Flow', () => {
     console.log('Vaults:', JSON.stringify(finalLMHealth.vaults, null, 2));
     console.log('Initial LM seq was:', initialLMSeq);
 
-    // Vaults array assertions
-    expect(finalLMHealth.vaults).toHaveLength(1);
-    const smaVault = finalLMHealth.vaults[0];
-    expect(smaVault.type).toBe('sma');
+    // Vaults array assertions - should have at least one vault
+    // (more vaults may be added in the future, so don't assert exact count)
+    expect(finalLMHealth.vaults.length).toBeGreaterThanOrEqual(1);
+    const smaVault = finalLMHealth.vaults.find(v => v.type === 'sma');
+    if (!smaVault) {
+      throw new Error('SMA vault not found in LM health response');
+    }
 
     // Vault should be applied (not processing)
     expect(smaVault.applied).not.toBeNull();

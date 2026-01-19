@@ -57,6 +57,9 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
       // Service was created successfully
       // Always invalidate to trigger UI transition
       utils.services.list.invalidate();
+      // Subscription auto-creates an API key - invalidate to reflect it
+      utils.seal.listApiKeys.invalidate();
+      utils.seal.getUsageStats.invalidate();
 
       // Show appropriate toast based on payment status
       if (data.paymentPending) {

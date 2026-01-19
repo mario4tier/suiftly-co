@@ -1,5 +1,5 @@
 {
-  "id": "5a8847ae-3f76-4a47-a9b8-8268c593ec08",
+  "id": "fa09d80e-3b6b-4e59-9b5b-93df186cf821",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -3109,15 +3109,8 @@
           "notNull": false,
           "default": 0
         },
-        "smm_vault_seq": {
-          "name": "smm_vault_seq",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "default": 0
-        },
-        "sms_vault_seq": {
-          "name": "sms_vault_seq",
+        "smk_vault_seq": {
+          "name": "smk_vault_seq",
           "type": "integer",
           "primaryKey": false,
           "notNull": false,
@@ -3137,15 +3130,8 @@
           "notNull": false,
           "default": 0
         },
-        "stm_vault_seq": {
-          "name": "stm_vault_seq",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "default": 0
-        },
-        "sts_vault_seq": {
-          "name": "sts_vault_seq",
+        "stk_vault_seq": {
+          "name": "stk_vault_seq",
           "type": "integer",
           "primaryKey": false,
           "notNull": false,
@@ -3172,15 +3158,8 @@
           "notNull": false,
           "default": 1
         },
-        "smm_next_vault_seq": {
-          "name": "smm_next_vault_seq",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "default": 1
-        },
-        "sms_next_vault_seq": {
-          "name": "sms_next_vault_seq",
+        "smk_next_vault_seq": {
+          "name": "smk_next_vault_seq",
           "type": "integer",
           "primaryKey": false,
           "notNull": false,
@@ -3200,15 +3179,8 @@
           "notNull": false,
           "default": 1
         },
-        "stm_next_vault_seq": {
-          "name": "stm_next_vault_seq",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "default": 1
-        },
-        "sts_next_vault_seq": {
-          "name": "sts_next_vault_seq",
+        "stk_next_vault_seq": {
+          "name": "stk_next_vault_seq",
           "type": "integer",
           "primaryKey": false,
           "notNull": false,
@@ -3248,14 +3220,8 @@
           "primaryKey": false,
           "notNull": false
         },
-        "smm_vault_content_hash": {
-          "name": "smm_vault_content_hash",
-          "type": "varchar(16)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "sms_vault_content_hash": {
-          "name": "sms_vault_content_hash",
+        "smk_vault_content_hash": {
+          "name": "smk_vault_content_hash",
           "type": "varchar(16)",
           "primaryKey": false,
           "notNull": false
@@ -3272,14 +3238,8 @@
           "primaryKey": false,
           "notNull": false
         },
-        "stm_vault_content_hash": {
-          "name": "stm_vault_content_hash",
-          "type": "varchar(16)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "sts_vault_content_hash": {
-          "name": "sts_vault_content_hash",
+        "stk_vault_content_hash": {
+          "name": "stk_vault_content_hash",
           "type": "varchar(16)",
           "primaryKey": false,
           "notNull": false

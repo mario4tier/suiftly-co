@@ -15,12 +15,17 @@ X_API_KEY_SECRET=<64-hex-chars>
 DATABASE_URL=postgresql://deploy:PROD_PASSWORD@localhost/suiftly_prod
 # FLUENTD_DB_PASSWORD: For HAProxy log ingestion (fluentd-gm → PostgreSQL)
 FLUENTD_DB_PASSWORD=<random-password>
+# SEAL_MASTER_SEED_*: For keyserver nodes only (derives customer keys)
+SEAL_MASTER_SEED_MAINNET=<0x + 64-hex-chars>
+SEAL_MASTER_SEED_TESTNET=<0x + 64-hex-chars>
 
 # Generate base64 secrets: openssl rand -base64 32
 # Generate X_API_KEY_SECRET: python3 -c "import secrets; print(secrets.token_hex(32))"
 # Generate FLUENTD_DB_PASSWORD: python3 -c "import secrets; print(secrets.token_urlsafe(24))"
+# Generate SEAL_MASTER_SEED: python3 -c "import secrets; print('0x' + secrets.token_hex(32))"
 # Backup to password manager BEFORE using in production
 # CRITICAL: X_API_KEY_SECRET must be copied to all HAProxy nodes
+# CRITICAL: SEAL_MASTER_SEED_* must be identical across all keyservers for the same network
 ```
 
 **Development (optional - config has safe defaults):**
@@ -35,6 +40,9 @@ X_API_KEY_SECRET=8776c4c0e84428c6e86fca4647abe16459649aa78fe4c72e7643dc3a1434333
 DATABASE_URL=postgresql://deploy:deploy_password_change_me@localhost/suiftly_dev
 # FLUENTD_DB_PASSWORD: For HAProxy log ingestion (auto-set by setup-user.py)
 FLUENTD_DB_PASSWORD=fluentd_dev_password
+# SEAL_MASTER_SEED_*: Test seeds for development (NEVER use in production!)
+SEAL_MASTER_SEED_MAINNET=0x5d175fc5977e9a65c199a43025988a3219e1f3e2efe7c2688c0a4a9427b8e216
+SEAL_MASTER_SEED_TESTNET=0xf045c830cd9940bc2f367609dc25c946fdbfa325b958bfd850b1691d5376e6ce
 ```
 
 ---
@@ -60,6 +68,8 @@ FLUENTD_DB_PASSWORD=fluentd_dev_password
 | `X_API_KEY_SECRET` | Encrypt API keys for HAProxy validation | 64 hex chars (32 bytes) | Shared with HAProxy |
 | `DATABASE_URL` | PostgreSQL connection (contains password) | URI | Production only |
 | `FLUENTD_DB_PASSWORD` | fluentd-gm PostgreSQL user password | URL-safe string | Copied to /etc/fluentd/fluentd.env |
+| `SEAL_MASTER_SEED_MAINNET` | Seal key derivation (mainnet keyservers) | 66 hex chars (0x + 32 bytes) | Keyserver nodes only |
+| `SEAL_MASTER_SEED_TESTNET` | Seal key derivation (testnet keyservers) | 66 hex chars (0x + 32 bytes) | Keyserver nodes only |
 
 ### X_API_KEY_SECRET (Special Case)
 
@@ -109,6 +119,48 @@ FLUENTD_DB_PASSWORD=fluentd_dev_password
 **If keys differ:** HAProxy cannot decrypt API keys → all authenticated requests fail with 401
 
 **See:** [API_KEY_DESIGN.md](API_KEY_DESIGN.md) for cryptographic details
+
+### SEAL_MASTER_SEED (Keyserver Nodes Only)
+
+**Purpose:** Derive customer encryption keys for Seal keyservers. Each customer key is derived from the master seed using a unique derivation index.
+
+**Why two secrets:**
+- `SEAL_MASTER_SEED_MAINNET`: For mainnet keyservers (mseal1, mseal2)
+- `SEAL_MASTER_SEED_TESTNET`: For testnet keyservers (tseal1, tseal2)
+
+**Format:** `0x` prefix + 64 hex characters (32 bytes)
+```bash
+# Generate a new master seed
+python3 -c "import secrets; print('0x' + secrets.token_hex(32))"
+```
+
+**Storage (keyserver nodes only):**
+
+| Role | Location | Notes |
+|------|----------|-------|
+| Keyserver | `~/.suiftly.env` | Loaded by seal-wrapper.sh at startup |
+| API Server | Not needed | API servers don't derive keys |
+| HAProxy | Not needed | HAProxy doesn't derive keys |
+
+**CRITICAL - Must be identical across:**
+- All mainnet keyservers (mseal1, mseal2) → same `SEAL_MASTER_SEED_MAINNET`
+- All testnet keyservers (tseal1, tseal2) → same `SEAL_MASTER_SEED_TESTNET`
+
+**If seeds differ:** Keys derived on different keyservers won't match → decryption fails.
+
+**Startup validation:**
+The seal-wrapper.sh script validates that the required seed is present before starting the keyserver:
+- Mainnet keyservers require `SEAL_MASTER_SEED_MAINNET`
+- Testnet keyservers require `SEAL_MASTER_SEED_TESTNET`
+
+**Development vs Production:**
+- **Development:** Use test seeds from configs.py (already in the development example above)
+- **Production:** Generate new seeds, store in password manager, copy to all keyserver nodes
+
+**Security notes:**
+- Master seeds are more sensitive than individual keys (compromise reveals ALL derived keys)
+- Backup securely to password manager before deployment
+- Never commit to git or include in container images
 
 ### Environment Detection
 
@@ -257,14 +309,23 @@ ssh db-node 'echo "FLUENTD_DB_PASSWORD=..." | sudo tee /etc/fluentd/fluentd.env'
 ssh db-node 'sudo chown root:fluentd /etc/fluentd/fluentd.env && sudo chmod 640 /etc/fluentd/fluentd.env'
 ssh db-node 'sudo systemctl restart fluentd-gm'
 
-# 4. Restore database from backup
+# 4. Restore SEAL master seeds on keyserver nodes
+# Each keyserver user needs the seed in their ~/.suiftly.env
+ssh keyserver-node 'sudo -u mseal1 bash -c "echo SEAL_MASTER_SEED_MAINNET=... >> ~/.suiftly.env && chmod 600 ~/.suiftly.env"'
+ssh keyserver-node 'sudo -u tseal1 bash -c "echo SEAL_MASTER_SEED_TESTNET=... >> ~/.suiftly.env && chmod 600 ~/.suiftly.env"'
+# Repeat for mseal2, tseal2, etc.
+
+# 5. Restore database from backup
 psql suiftly_prod < backup.sql
 
-# 5. Verify encryption works
+# 6. Verify encryption works
 curl https://api.suiftly.io/health
+
+# 7. Restart keyserver services
+ssh keyserver-node 'sudo systemctl restart mseal1 mseal2 tseal1 tseal2'
 ```
 
-**RTO:** ~30 minutes | **RPO:** 24 hours (daily backups)
+**RTO:** ~45 minutes | **RPO:** 24 hours (daily backups)
 
 ---
 

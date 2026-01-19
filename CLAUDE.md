@@ -45,73 +45,22 @@ Initial setup phase - no code scaffolded yet.
 
 **Two types of configuration files:**
 
-1. **`~/.suiftly.env`** (Home directory) - **SENSITIVE SECRETS AND CREDENTIALS**
-   - Location: `~/.suiftly.env` (NOT in project directory)
-   - Contains: `JWT_SECRET`, `DB_APP_FIELDS_ENCRYPTION_KEY`, `COOKIE_SECRET`, `X_API_KEY_SECRET`, `DATABASE_URL`
+1. **`~/.suiftly.env`** (Home directory) - **SENSITIVE SECRETS**
+   - Contains: `JWT_SECRET`, `DB_APP_FIELDS_ENCRYPTION_KEY`, `COOKIE_SECRET`, `X_API_KEY_SECRET`, `DATABASE_URL`, `SEAL_MASTER_SEED_*`
    - Permissions: `chmod 600 ~/.suiftly.env`
-   - **Why `~/.suiftly.env` not `~/.env`?** Avoids conflicts with Python venvs
-   - **Production:** Each server has its own `~/.suiftly.env` with unique secrets
    - **Development:** Optional (config.ts provides safe defaults)
-   - **Shared secrets:** `X_API_KEY_SECRET` must be IDENTICAL on API server and all HAProxy nodes
+   - **Production:** Required with unique secrets per server
 
 2. **Project `.env` files** (In repo directories) - **DEVELOPMENT DEFAULTS ONLY**
-   - Examples: `packages/database/.env`, `.env` (root)
-   - Contains: `DATABASE_URL` (dev default password), `NODE_ENV=test`
-   - **Safe to commit** because they use well-known development defaults
-   - **Production:** NEVER use project `.env` files - all config comes from `~/.suiftly.env`
-   - **IMPORTANT:** Do NOT put `MOCK_AUTH` in `.env` files (`.env` can be a Python directory)
+   - Examples: `packages/database/.env`
+   - **Safe to commit** (well-known dev defaults)
+   - **IMPORTANT:** Do NOT put `MOCK_AUTH` in `.env` files
 
-**First-time setup (Development):**
-```bash
-# 1. Generate secrets (run 3 times to get 3 different values)
-openssl rand -base64 32
-
-# 2. Edit ~/.suiftly.env and replace GENERATE_ME_* placeholders
-vim ~/.suiftly.env
-
-# The file contains clear instructions on what to do
-# Replace each GENERATE_ME_* line with a generated secret
-```
-
-**Development (optional - config has safe defaults):**
-```bash
-# ~/.suiftly.env (chmod 600)
-# Base64-encoded 32-byte secrets with "dev" markers (decode to plaintext)
-JWT_SECRET=ZGV2LXNlY3JldC1mb3ItdGVzdGluZy1vbmx5ISEhISE=
-DB_APP_FIELDS_ENCRYPTION_KEY=ZGV2LWVuY3J5cHRpb24ta2V5LXRlc3Qtb25seSEhISE=
-COOKIE_SECRET=ZGV2LWNvb2tpZS1zZWNyZXQtdGVzdGluZy1vbmx5ISE=
-# X_API_KEY_SECRET: 64 hex chars (32 bytes) - encrypts API keys, shared with HAProxy
-X_API_KEY_SECRET=8776c4c0e84428c6e86fca4647abe16459649aa78fe4c72e7643dc3a14343337
-DATABASE_URL=postgresql://deploy:deploy_password_change_me@localhost/suiftly_dev
-```
-
-**Production setup:**
-```bash
-# Generate secure production secrets
-cd ~
-echo "JWT_SECRET=$(openssl rand -base64 32)" > ~/.suiftly.env
-echo "DB_APP_FIELDS_ENCRYPTION_KEY=$(openssl rand -base64 32)" >> ~/.suiftly.env
-echo "COOKIE_SECRET=$(openssl rand -base64 32)" >> ~/.suiftly.env
-# X_API_KEY_SECRET: 64 hex chars - MUST be identical on API server AND all HAProxy nodes
-echo "X_API_KEY_SECRET=$(python3 -c 'import secrets; print(secrets.token_hex(32))')" >> ~/.suiftly.env
-echo "DATABASE_URL=postgresql://deploy:PROD_PASSWORD@localhost/suiftly_prod" >> ~/.suiftly.env
-chmod 600 ~/.suiftly.env
-
-# IMPORTANT: Back up these secrets to a password manager!
-# CRITICAL: Copy X_API_KEY_SECRET to ALL HAProxy nodes (must be identical)
-cat ~/.suiftly.env  # Copy to 1Password/Bitwarden
-```
-
-**Note about `MOCK_AUTH`:**
-- **NEVER** put `MOCK_AUTH` in `.env` files (`.env` can be a Python directory on some systems)
-- `MOCK_AUTH` defaults to `true` in development/test based on `NODE_ENV` (see [config.ts](apps/api/src/lib/config.ts))
-- Production systems automatically get `MOCK_AUTH=false` based on `NODE_ENV=production`
-
-**How it works:**
-- [apps/api/src/lib/config.ts](apps/api/src/lib/config.ts) loads `~/.suiftly.env` at startup
-- Validates secrets (production must NOT use dev defaults)
-- Project `.env` files loaded by package-specific tools (Drizzle, test runners)
-- See [docs/APP_SECURITY_DESIGN.md](docs/APP_SECURITY_DESIGN.md) for complete details
+**See [docs/APP_SECURITY_DESIGN.md](docs/APP_SECURITY_DESIGN.md) for:**
+- Complete secret reference and generation commands
+- Production setup instructions
+- Shared secrets (X_API_KEY_SECRET, SEAL_MASTER_SEED_*)
+- Disaster recovery procedures
 
 ## Environment Detection
 

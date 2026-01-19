@@ -7,7 +7,7 @@
  * - Names new packages as "package-{N}"
  */
 
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, afterAll, afterEach } from 'vitest';
 import { randomBytes, randomInt } from 'crypto';
 import {
   db,
@@ -129,7 +129,7 @@ async function addPackage(
   packageAddress: string,
   name?: string
 ): Promise<{ packageId: number; name: string }> {
-  // Get existing packages for this seal key
+  // Get all packages for this seal key (including disabled) for name generation
   const existingPackages = await db.query.sealPackages.findMany({
     where: eq(sealPackages.sealKeyId, sealKeyId),
     columns: { name: true },
@@ -168,6 +168,16 @@ async function addPackage(
 
   testPackageIds.push(newPackage.packageId);
   return { packageId: newPackage.packageId, name: packageName };
+}
+
+/**
+ * Disable a package (soft delete)
+ */
+async function disablePackage(packageId: number): Promise<void> {
+  await db
+    .update(sealPackages)
+    .set({ isUserEnabled: false })
+    .where(eq(sealPackages.packageId, packageId));
 }
 
 async function cleanupTestData(): Promise<void> {
@@ -257,6 +267,24 @@ describe('Seal Package Auto-Naming', () => {
       expect(pkg1.name).toBe('package-1');
       expect(pkg2.name).toBe('package-2');
       expect(pkg3.name).toBe('package-3');
+    });
+
+    it('should consider disabled packages when generating names', async () => {
+      const customer = await createTestCustomer();
+      const service = await createTestServiceInstance(customer.customerId);
+      const sealKey = await createTestSealKey(
+        customer.customerId,
+        service.instanceId
+      );
+
+      // Create package-1 and disable it
+      const pkg1 = await addPackage(sealKey.sealKeyId, '0x' + '1'.repeat(64));
+      expect(pkg1.name).toBe('package-1');
+      await disablePackage(pkg1.packageId);
+
+      // Next package should be package-2, not package-1 (disabled packages count)
+      const pkg2 = await addPackage(sealKey.sealKeyId, '0x' + '2'.repeat(64));
+      expect(pkg2.name).toBe('package-2');
     });
   });
 

@@ -266,9 +266,9 @@ describe('@walrus/server-configs', () => {
       if (serverId === 'us-e2-3') {
         const server = getCurrentServer();
         expect(server.data_tx).toContain('sma');
-        expect(server.data_tx).toContain('smm');
+        expect(server.data_tx).toContain('smk');
         expect(server.data_install).toContain('sma');
-        expect(server.data_install).toContain('smm');
+        expect(server.data_install).toContain('smk');
         expect(server.has_fluentd_lm).toBe(true);
         expect(server.has_fluentd_gm).toBe(true);
       }

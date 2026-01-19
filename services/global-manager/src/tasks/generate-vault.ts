@@ -70,30 +70,28 @@ const TIER_CONFIG: Record<string, { ilim: number; glim: number; blim: number; bq
 };
 
 // Type for vault type codes
-type VaultTypeCode = 'sma' | 'smm' | 'sms' | 'smo' | 'sta' | 'stm' | 'sts' | 'sto' | 'skk';
+type VaultTypeCode = 'sma' | 'smk' | 'smo' | 'sta' | 'stk' | 'sto' | 'skk';
 
 // Column mapping for vault types in system_control
 type VaultSeqColumn = keyof Pick<typeof systemControl.$inferSelect,
-  'smaVaultSeq' | 'smmVaultSeq' | 'smsVaultSeq' | 'smoVaultSeq' |
-  'staVaultSeq' | 'stmVaultSeq' | 'stsVaultSeq' | 'stoVaultSeq' | 'skkVaultSeq'
+  'smaVaultSeq' | 'smkVaultSeq' | 'smoVaultSeq' |
+  'staVaultSeq' | 'stkVaultSeq' | 'stoVaultSeq' | 'skkVaultSeq'
 >;
 type VaultHashColumn = keyof Pick<typeof systemControl.$inferSelect,
-  'smaVaultContentHash' | 'smmVaultContentHash' | 'smsVaultContentHash' | 'smoVaultContentHash' |
-  'staVaultContentHash' | 'stmVaultContentHash' | 'stsVaultContentHash' | 'stoVaultContentHash' | 'skkVaultContentHash'
+  'smaVaultContentHash' | 'smkVaultContentHash' | 'smoVaultContentHash' |
+  'staVaultContentHash' | 'stkVaultContentHash' | 'stoVaultContentHash' | 'skkVaultContentHash'
 >;
 type VaultNextSeqColumn = keyof Pick<typeof systemControl.$inferSelect,
-  'smaNextVaultSeq' | 'smmNextVaultSeq' | 'smsNextVaultSeq' | 'smoNextVaultSeq' |
-  'staNextVaultSeq' | 'stmNextVaultSeq' | 'stsNextVaultSeq' | 'stoNextVaultSeq' | 'skkNextVaultSeq'
+  'smaNextVaultSeq' | 'smkNextVaultSeq' | 'smoNextVaultSeq' |
+  'staNextVaultSeq' | 'stkNextVaultSeq' | 'stoNextVaultSeq' | 'skkNextVaultSeq'
 >;
 
 const VAULT_COLUMNS: Record<VaultTypeCode, { seq: VaultSeqColumn; hash: VaultHashColumn; nextSeq: VaultNextSeqColumn }> = {
   sma: { seq: 'smaVaultSeq', hash: 'smaVaultContentHash', nextSeq: 'smaNextVaultSeq' },
-  smm: { seq: 'smmVaultSeq', hash: 'smmVaultContentHash', nextSeq: 'smmNextVaultSeq' },
-  sms: { seq: 'smsVaultSeq', hash: 'smsVaultContentHash', nextSeq: 'smsNextVaultSeq' },
+  smk: { seq: 'smkVaultSeq', hash: 'smkVaultContentHash', nextSeq: 'smkNextVaultSeq' },
   smo: { seq: 'smoVaultSeq', hash: 'smoVaultContentHash', nextSeq: 'smoNextVaultSeq' },
   sta: { seq: 'staVaultSeq', hash: 'staVaultContentHash', nextSeq: 'staNextVaultSeq' },
-  stm: { seq: 'stmVaultSeq', hash: 'stmVaultContentHash', nextSeq: 'stmNextVaultSeq' },
-  sts: { seq: 'stsVaultSeq', hash: 'stsVaultContentHash', nextSeq: 'stsNextVaultSeq' },
+  stk: { seq: 'stkVaultSeq', hash: 'stkVaultContentHash', nextSeq: 'stkNextVaultSeq' },
   sto: { seq: 'stoVaultSeq', hash: 'stoVaultContentHash', nextSeq: 'stoNextVaultSeq' },
   skk: { seq: 'skkVaultSeq', hash: 'skkVaultContentHash', nextSeq: 'skkNextVaultSeq' },
 };
@@ -194,13 +192,11 @@ function detectDrift(
   builtData: Record<string, string>,
   cachedVault: VaultInstance | null
 ): { hasDrift: boolean; reason?: string } {
-  // If no vault exists in data_tx, we have drift (need to create initial vault)
+  // If no vault exists in data_tx, always create one (even if empty)
+  // This ensures the vault infrastructure is established before customers exist.
+  // An empty vault is valid; a missing vault file is not.
   if (!cachedVault) {
-    if (Object.keys(builtData).length > 0) {
-      return { hasDrift: true, reason: 'no_vault_in_data_tx' };
-    }
-    // Both empty - no drift
-    return { hasDrift: false };
+    return { hasDrift: true, reason: 'no_vault_file' };
   }
 
   const cachedData = cachedVault.data;
@@ -803,16 +799,21 @@ export async function generateVault(
 }
 
 /**
- * Generate all API vaults for a network
- * Currently only generates 'sma' (seal mainnet api)
+ * Generate all vaults for a network
+ * Currently generates:
+ * - sma: Seal Mainnet API (customer configs for HAProxy)
+ * - smk: Seal Mainnet Keyserver (seal keys for keyserver)
  *
  * Future: Add grpc (rma) and graphql (gma) when services are implemented
  */
 export async function generateAllVaults(storageDir?: string) {
   const results: Record<string, Awaited<ReturnType<typeof generateVault>>> = {};
 
-  // Generate seal mainnet api vault
+  // Generate seal mainnet api vault (HAProxy configuration)
   results.sma = await generateVault('sma', storageDir);
+
+  // Generate seal mainnet keyserver vault (keyserver configuration)
+  results.smk = await generateVault('smk', storageDir);
 
   // Future: Add other vaults
   // results.rma = await generateVault('rma', storageDir);

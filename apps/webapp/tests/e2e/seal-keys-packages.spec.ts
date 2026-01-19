@@ -248,9 +248,9 @@ test.describe('Seal Keys & Packages Management', () => {
     await createSealKeyViaUI(page);
     await addPackageViaUI(page, '0x' + '1'.repeat(64), 'Package to Disable');
 
-    // Should see the package with Active status
+    // Should see the package with Enabled status
     await expect(page.locator('text=Package to Disable')).toBeVisible();
-    await expect(page.locator('text=Active').first()).toBeVisible();
+    await expect(page.locator('text=Enabled').first()).toBeVisible();
 
     // Find the package row and check buttons within it
     const packageRow = page.locator('tr:has-text("Package to Disable")');
@@ -318,8 +318,8 @@ test.describe('Seal Keys & Packages Management', () => {
     // Wait for toast to disappear (ensures mutation completed and UI updated)
     await expect(enableToast).toBeHidden({ timeout: 10000 });
 
-    // Should see Active status badge again
-    await expect(page.locator('text=Active').last()).toBeVisible({ timeout: 5000 });
+    // Should see Enabled status badge again
+    await expect(page.locator('text=Enabled').last()).toBeVisible({ timeout: 5000 });
 
     // Find the package row to check buttons within it
     const packageRow = page.locator('tr:has-text("Package to Enable")');
@@ -402,14 +402,14 @@ test.describe('Seal Keys & Packages Management', () => {
   test('package status badges display correctly', async ({ page }) => {
     // Setup: Create a seal key and two packages
     await createSealKeyViaUI(page);
-    await addPackageViaUI(page, '0x' + '4'.repeat(64), 'Active Package');
+    await addPackageViaUI(page, '0x' + '4'.repeat(64), 'Enabled Package');
     await addPackageViaUI(page, '0x' + '5'.repeat(64), 'Package to Disable');
 
-    // Both packages should show Active status initially (check within table tbody only)
+    // Both packages should show Enabled status initially (check within table tbody only)
     const packagesTable = page.locator('table').first();
     // Use more specific selector: status badges are in the Status column (3rd td in each row)
-    const activeBadges = packagesTable.locator('tbody tr td:nth-child(3) span:has-text("Active")');
-    await expect(activeBadges).toHaveCount(2, { timeout: 5000 });
+    const enabledBadges = packagesTable.locator('tbody tr td:nth-child(3) span:has-text("Enabled")');
+    await expect(enabledBadges).toHaveCount(2, { timeout: 5000 });
 
     // Disable the second package
     const packageRow = page.locator('tr:has-text("Package to Disable")');
@@ -424,20 +424,18 @@ test.describe('Seal Keys & Packages Management', () => {
     await expect(toast).toBeVisible({ timeout: 5000 });
     await expect(toast).toBeHidden({ timeout: 10000 });
 
-    // Should now have 1 Active and 1 Disabled badge in the table
-    await expect(packagesTable.locator('tbody tr td:nth-child(3) span:has-text("Active")')).toHaveCount(1);
+    // Should now have 1 Enabled and 1 Disabled badge in the table
+    await expect(packagesTable.locator('tbody tr td:nth-child(3) span:has-text("Enabled")')).toHaveCount(1);
     await expect(packagesTable.locator('tbody tr td:nth-child(3) span:has-text("Disabled")')).toHaveCount(1);
 
-    // Check badge colors via CSS classes
-    const activeBadge = packagesTable.locator('tbody tr td:nth-child(3) span:has-text("Active")');
+    // Check status text colors via CSS classes
+    const enabledBadge = packagesTable.locator('tbody tr td:nth-child(3) span:has-text("Enabled")');
     const disabledBadge = packagesTable.locator('tbody tr td:nth-child(3) span:has-text("Disabled")');
 
-    // Active badge should have green classes
-    await expect(activeBadge).toHaveClass(/bg-green/);
-    await expect(activeBadge).toHaveClass(/text-green/);
+    // Enabled status should have green text color
+    await expect(enabledBadge).toHaveClass(/text-green/);
 
-    // Disabled badge should have red classes
-    await expect(disabledBadge).toHaveClass(/bg-red/);
+    // Disabled status should have red text color
     await expect(disabledBadge).toHaveClass(/text-red/);
 
     console.log('✅ Package status badges display with correct colors');
@@ -525,6 +523,10 @@ test.describe('Seal Keys & Packages Management', () => {
     // Reload page to fetch updated data
     await page.reload();
     await waitAfterMutation(page);
+
+    // Wait for seal keys list to load first (shows "X of Y used" where X > 0)
+    // This ensures React Query has fetched and rendered the data
+    await expect(page.locator('text=/Seal Keys & Packages \\(1 of/i')).toBeVisible({ timeout: 10000 });
 
     // Object ID should be visible (keys are always expanded)
     await expect(page.locator('text=Object ID:')).toBeVisible({ timeout: 5000 });
