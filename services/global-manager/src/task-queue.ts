@@ -586,7 +586,10 @@ async function executeSyncAll(): Promise<void> {
   // - Scenario 1 (Reactive): Customer has configChangeVaultSeq > currentVaultSeq
   // - Scenario 2 (Drift): DB content differs from data_tx content
   try {
+    const vaultStartTime = Date.now();
     const vaultResults = await generateAllVaults();
+    const vaultDurationMs = Date.now() - vaultStartTime;
+
     const generated = Object.entries(vaultResults)
       .filter(([_, r]) => r.generated)
       .map(([type, r]) => `${type}:${r.seq}(${r.trigger})`)
@@ -597,10 +600,16 @@ async function executeSyncAll(): Promise<void> {
       .join(', ');
 
     if (generated) {
-      console.log(`[SYNC] sync-all vaults generated: ${generated}`);
+      console.log(`[SYNC] sync-all vaults generated: ${generated} (${vaultDurationMs}ms)`);
     }
     if (unchanged) {
-      console.log(`[SYNC] sync-all vaults unchanged: ${unchanged}`);
+      console.log(`[SYNC] sync-all vaults unchanged: ${unchanged} (${vaultDurationMs}ms)`);
+    }
+
+    // Check for slow vault generation (threshold: 4 seconds)
+    // Deduplicated notification - only fires once per slow period
+    if (vaultDurationMs > VAULT_GENERATION_SLOW_THRESHOLD_MS) {
+      await createSlowVaultNotification(vaultDurationMs, vaultResults);
     }
   } catch (vaultError) {
     console.error('[SYNC] sync-all vault generation failed:', vaultError);
@@ -646,6 +655,70 @@ async function createVaultFailureNotification(error: unknown): Promise<void> {
     });
   } catch (notifyError) {
     console.error('[QUEUE] Failed to create vault failure notification:', notifyError);
+  }
+}
+
+/**
+ * Deduplication state for slow vault notifications
+ * Only notify once per hour to avoid spam during prolonged slowness
+ */
+let lastSlowVaultNotificationAt: Date | null = null;
+const SLOW_VAULT_NOTIFICATION_COOLDOWN_MS = 60 * 60 * 1000; // 1 hour
+
+/**
+ * Create a deduplicated admin notification for slow vault generation
+ * Only creates notification if:
+ * 1. No notification has been sent in the last hour, OR
+ * 2. The duration is significantly worse (>2x) than the threshold
+ */
+async function createSlowVaultNotification(
+  durationMs: number,
+  vaultResults: Record<string, { generated: boolean; seq: number; customerCount: number }>
+): Promise<void> {
+  const now = new Date();
+
+  // Check cooldown (1 hour between notifications)
+  if (lastSlowVaultNotificationAt) {
+    const timeSinceLastNotification = now.getTime() - lastSlowVaultNotificationAt.getTime();
+    if (timeSinceLastNotification < SLOW_VAULT_NOTIFICATION_COOLDOWN_MS) {
+      // Still in cooldown - skip notification but log for debugging
+      console.warn(
+        `[QUEUE] Slow vault generation (${durationMs}ms) - notification suppressed (cooldown: ${Math.round((SLOW_VAULT_NOTIFICATION_COOLDOWN_MS - timeSinceLastNotification) / 1000)}s remaining)`
+      );
+      return;
+    }
+  }
+
+  // Create notification
+  try {
+    const totalCustomers = Object.values(vaultResults).reduce((sum, r) => sum + r.customerCount, 0);
+    const generatedVaults = Object.entries(vaultResults)
+      .filter(([_, r]) => r.generated)
+      .map(([type, r]) => `${type}:${r.seq}`)
+      .join(', ');
+
+    await db.insert(adminNotifications).values({
+      severity: 'warning',
+      category: 'vault',
+      code: 'VAULT_GENERATION_SLOW',
+      message: `Vault generation took ${durationMs}ms (threshold: ${VAULT_GENERATION_SLOW_THRESHOLD_MS}ms)`,
+      details: JSON.stringify({
+        durationMs,
+        thresholdMs: VAULT_GENERATION_SLOW_THRESHOLD_MS,
+        totalCustomers,
+        generatedVaults: generatedVaults || 'none',
+        timestamp: now.toISOString(),
+      }),
+    });
+
+    // Update last notification time
+    lastSlowVaultNotificationAt = now;
+
+    console.warn(
+      `[QUEUE] ADMIN NOTIFICATION: Slow vault generation (${durationMs}ms > ${VAULT_GENERATION_SLOW_THRESHOLD_MS}ms threshold)`
+    );
+  } catch (notifyError) {
+    console.error('[QUEUE] Failed to create slow vault notification:', notifyError);
   }
 }
 
@@ -707,8 +780,11 @@ let periodicLMStatusInterval: ReturnType<typeof setInterval> | null = null;
  * Interval constants for periodic tasks
  */
 export const LM_STATUS_INTERVAL_MS = 5 * 1000; // 5 seconds (both dev and prod)
-export const SYNC_ALL_INTERVAL_DEV_MS = 30 * 1000; // 30 seconds (test/dev)
-export const SYNC_ALL_INTERVAL_PROD_MS = 5 * 60 * 1000; // 5 minutes (production)
+export const SYNC_ALL_INTERVAL_DEV_MS = 5 * 1000; // 5 seconds (test/dev)
+export const SYNC_ALL_INTERVAL_PROD_MS = 5 * 1000; // 5 seconds (production)
+
+// Threshold for slow vault generation warning (ms)
+const VAULT_GENERATION_SLOW_THRESHOLD_MS = 4000;
 
 /**
  * Start periodic sync-all processing (billing, vault generation, drift detection)

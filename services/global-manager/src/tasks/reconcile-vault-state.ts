@@ -18,13 +18,19 @@ import { db, systemControl } from '@suiftly/database';
 import { eq } from 'drizzle-orm';
 import { getLatestValidVault, computeContentHash, createVaultReader } from '@walrus/vault-codec';
 
-// Vault types to reconcile (add more as implemented)
-const VAULT_TYPES = ['sma'] as const;
+// Vault types to reconcile
+const VAULT_TYPES = ['sma', 'smk', 'smo', 'sta', 'stk', 'sto', 'skk'] as const;
 type VaultTypeCode = (typeof VAULT_TYPES)[number];
 
 // Column mapping for vault types in system_control
-const VAULT_COLUMNS: Record<VaultTypeCode, { seq: string; hash: string }> = {
-  sma: { seq: 'smaVaultSeq', hash: 'smaVaultContentHash' },
+const VAULT_COLUMNS: Record<VaultTypeCode, { seq: string; hash: string; entries: string }> = {
+  sma: { seq: 'smaVaultSeq', hash: 'smaVaultContentHash', entries: 'smaVaultEntries' },
+  smk: { seq: 'smkVaultSeq', hash: 'smkVaultContentHash', entries: 'smkVaultEntries' },
+  smo: { seq: 'smoVaultSeq', hash: 'smoVaultContentHash', entries: 'smoVaultEntries' },
+  sta: { seq: 'staVaultSeq', hash: 'staVaultContentHash', entries: 'staVaultEntries' },
+  stk: { seq: 'stkVaultSeq', hash: 'stkVaultContentHash', entries: 'stkVaultEntries' },
+  sto: { seq: 'stoVaultSeq', hash: 'stoVaultContentHash', entries: 'stoVaultEntries' },
+  skk: { seq: 'skkVaultSeq', hash: 'skkVaultContentHash', entries: 'skkVaultEntries' },
 };
 
 interface ReconcileResult {
@@ -34,6 +40,7 @@ interface ReconcileResult {
   action: 'no_change' | 'updated_db' | 'no_vault_files' | 'error';
   newDbSeq?: number;
   contentHash?: string;
+  entries?: number;
   error?: string;
 }
 
@@ -83,28 +90,32 @@ async function reconcileVaultType(vaultType: VaultTypeCode): Promise<ReconcileRe
       // data_tx has newer vault than DB - update DB
       console.log(`[RECONCILE] ${vaultType}: data_tx seq=${dataTxSeq} > DB seq=${dbSeq}, updating DB`);
 
-      // Get content hash from vault or compute it
+      // Get content hash and entry count from vault
       let contentHash = latestValid.contentHash;
-      if (!contentHash) {
-        // Load vault data to compute hash
-        const reader = createVaultReader({ storageDir });
-        const vault = await reader.loadBySeq(vaultType, dataTxSeq);
-        if (vault) {
+      let entryCount = 0;
+
+      // Load vault data to compute hash and count entries
+      const reader = createVaultReader({ storageDir });
+      const vault = await reader.loadBySeq(vaultType, dataTxSeq);
+      if (vault) {
+        if (!contentHash) {
           contentHash = computeContentHash(vault.data);
         }
+        entryCount = Object.keys(vault.data).length;
       }
 
-      // Update DB
+      // Update DB with seq, hash, and entries
       await db
         .update(systemControl)
         .set({
           [columns.seq]: dataTxSeq,
           [columns.hash]: contentHash ?? dbHash,
+          [columns.entries]: entryCount,
           updatedAt: new Date(),
         })
         .where(eq(systemControl.id, 1));
 
-      console.log(`[RECONCILE] ${vaultType}: DB updated to seq=${dataTxSeq}, hash=${contentHash}`);
+      console.log(`[RECONCILE] ${vaultType}: DB updated to seq=${dataTxSeq}, hash=${contentHash}, entries=${entryCount}`);
 
       return {
         vaultType,
@@ -113,6 +124,7 @@ async function reconcileVaultType(vaultType: VaultTypeCode): Promise<ReconcileRe
         action: 'updated_db',
         newDbSeq: dataTxSeq,
         contentHash: contentHash ?? undefined,
+        entries: entryCount,
       };
     } else if (dataTxSeq < dbSeq) {
       // DB has higher seq than data_tx - unusual, log warning

@@ -36,7 +36,7 @@ interface ProcessingState {
  */
 interface VaultStatus {
   type: string;
-  customerCount: number;
+  entries: number;
   applied: AppliedState | null;
   processing: ProcessingState | null;
 }
@@ -109,7 +109,7 @@ async function updateLMStatus(
         vaultType: smaVault?.type ?? 'unknown',
         appliedSeq,
         processingSeq,
-        customerCount: smaVault?.customerCount ?? 0,
+        entries: smaVault?.entries ?? 0,
         lastSeenAt: now,
         lastError: null,
         updatedAt: now,
@@ -123,7 +123,7 @@ async function updateLMStatus(
           vaultType: smaVault?.type ?? 'unknown',
           appliedSeq,
           processingSeq,
-          customerCount: smaVault?.customerCount ?? 0,
+          entries: smaVault?.entries ?? 0,
           lastSeenAt: now,
           lastError: null,
           updatedAt: now,

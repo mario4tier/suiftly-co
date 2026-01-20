@@ -285,6 +285,11 @@ GRANT SELECT ON haproxy_system_logs TO fluentd;
 EOF
 echo "   ✅ fluentd permissions granted"
 
+# Step 10: Restart HAProxy to clear internal map state
+echo "🔟  Restarting HAProxy to clear internal map state..."
+systemctl restart haproxy
+echo "   ✅ HAProxy restarted (in-memory maps cleared)"
+
 echo ""
 echo "🎉 Database reset complete!"
 echo ""

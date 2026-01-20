@@ -7,6 +7,9 @@
  * - Single operation lock (prevents concurrent login/logout conflicts)
  * - Supports both mock and real wallets
  * - Auto-refresh access tokens (user signs once, works for 30 days)
+ * - Uses keepalive: true to ensure auth requests complete on navigation
+ *
+ * @see https://developer.mozilla.org/en-US/docs/Web/API/Request/keepalive
  */
 
 import { useSignPersonalMessage, useCurrentAccount } from '@mysten/dapp-kit';
@@ -151,9 +154,11 @@ export function useAuth() {
   async function performLogout(): Promise<void> {
     try {
       // Call REST logout endpoint (clears httpOnly cookie)
+      // Uses keepalive to ensure server-side session is invalidated even if user navigates
       await fetch('/i/auth/logout', {
         method: 'POST',
         credentials: 'include', // Important: send cookies
+        keepalive: true,
       });
     } catch (error) {
       console.error('[AUTH] Logout error:', error);

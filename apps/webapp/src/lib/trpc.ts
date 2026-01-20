@@ -1,6 +1,13 @@
 /**
  * tRPC client setup for React with React Query
  * Type-safe API calls to backend with auth support
+ *
+ * IMPORTANT: All fetch calls use `keepalive: true` to ensure requests complete
+ * even if the user navigates away before the response arrives. This prevents
+ * mutations from being silently dropped when users navigate quickly.
+ *
+ * @see https://developer.mozilla.org/en-US/docs/Web/API/Request/keepalive
+ * @see https://developer.mozilla.org/en-US/docs/Web/API/RequestInit#keepalive
  */
 
 import { createTRPCReact } from '@trpc/react-query';
@@ -27,6 +34,19 @@ function getAccessToken(): string | null {
 }
 
 /**
+ * Create fetch options with keepalive enabled and AbortSignal stripped.
+ *
+ * Why strip the signal? React Query aborts requests on component unmount,
+ * but we want mutations to complete even when users navigate away.
+ * Combined with keepalive=true, this ensures requests finish.
+ */
+function createKeepaliveFetchOptions(options?: RequestInit): RequestInit {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { signal, ...fetchOptions } = options || {};
+  return { ...fetchOptions, credentials: 'include', keepalive: true };
+}
+
+/**
  * React Query tRPC client - USE THIS IN 99% OF CASES
  * Provides hooks (.useQuery, .useMutation) for use in React components
  * Includes automatic caching, refetching, and React state integration
@@ -48,7 +68,7 @@ export const vanillaTrpc = createTRPCClient<AppRouter>({
         return token ? { Authorization: `Bearer ${token}` } : {};
       },
       fetch(url, options) {
-        return fetch(url, { ...options, credentials: 'include' });
+        return fetch(url, createKeepaliveFetchOptions(options));
       },
     }),
   ],
@@ -67,9 +87,10 @@ export function getTRPCLinks() {
       },
 
       // Custom fetch with auto-refresh on 401
+      // Uses createKeepaliveFetchOptions() to strip AbortSignal and add keepalive
       async fetch(url, options) {
-        // Add credentials: 'include' to send cookies (for refresh token)
-        let response = await fetch(url, { ...options, credentials: 'include' });
+        const fetchOptions = createKeepaliveFetchOptions(options);
+        let response = await fetch(url, fetchOptions);
 
         // If access token expired (401), try refresh once
         if (response.status === 401) {
@@ -99,14 +120,10 @@ export function getTRPCLinks() {
                 console.log('[TRPC] Token refreshed, retrying request');
 
                 // Retry with new token - rebuild headers with new Authorization
-                const newHeaders = new Headers(options?.headers || {});
+                const newHeaders = new Headers(fetchOptions.headers || {});
                 newHeaders.set('Authorization', `Bearer ${newAccessToken}`);
 
-                response = await fetch(url, {
-                  ...options,
-                  credentials: 'include',
-                  headers: newHeaders,
-                });
+                response = await fetch(url, { ...fetchOptions, headers: newHeaders });
               }
             } else {
               // Refresh failed (refresh token expired/revoked)

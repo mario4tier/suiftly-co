@@ -9,7 +9,7 @@ import Fastify from 'fastify';
 import { z } from 'zod';
 import type { VaultType } from '@walrus/vault-codec';
 import { getGlobalVaultTypes } from '@walrus/server-configs';
-import { db, adminNotifications } from '@suiftly/database';
+import { db, adminNotifications, systemControl } from '@suiftly/database';
 import { getMockClockState, setMockClockState } from '@suiftly/database/test-kv';
 import { desc, eq, and } from 'drizzle-orm';
 import { dbClock } from '@suiftly/shared/db-clock';
@@ -576,7 +576,7 @@ async function logAdminNotificationDedup(params: {
  */
 const configuredVaultTypes = getGlobalVaultTypes() as VaultType[];
 
-// Get vault status from data_tx
+// Get vault status from data_tx (versions from disk, entries from DB)
 server.get('/api/vault/status', async () => {
   const { createVaultReader } = await import('@walrus/vault-codec');
 
@@ -584,12 +584,31 @@ server.get('/api/vault/status', async () => {
     storageDir: '/opt/syncf/data_tx',
   });
 
+  // Get entry counts from DB (stored transactionally during vault generation)
+  const [control] = await db
+    .select()
+    .from(systemControl)
+    .where(eq(systemControl.id, 1))
+    .limit(1);
+
+  // Map vault type to entries column
+  const entriesFromDb: Record<string, number> = {
+    sma: control?.smaVaultEntries ?? 0,
+    smk: control?.smkVaultEntries ?? 0,
+    smo: control?.smoVaultEntries ?? 0,
+    sta: control?.staVaultEntries ?? 0,
+    stk: control?.stkVaultEntries ?? 0,
+    sto: control?.stoVaultEntries ?? 0,
+    skk: control?.skkVaultEntries ?? 0,
+  };
+
   // Get status for configured vault types (from server_configs.py data_tx field)
   const vaults: Record<string, {
     vaultType: string;
     latest: { seq: number; pg: number; filename: string } | null;
     previous: { seq: number; pg: number; filename: string } | null;
     allVersions: Array<{ seq: number; pg: number; filename: string }>;
+    entries: number;
   }> = {};
 
   for (const vaultType of configuredVaultTypes) {
@@ -603,6 +622,7 @@ server.get('/api/vault/status', async () => {
         latest,
         previous,
         allVersions: versions.slice(0, 10), // Limit to 10 versions
+        entries: entriesFromDb[vaultType] ?? 0,
       };
     } catch {
       vaults[vaultType] = {
@@ -610,6 +630,7 @@ server.get('/api/vault/status', async () => {
         latest: null,
         previous: null,
         allVersions: [],
+        entries: 0,
       };
     }
   }
@@ -626,7 +647,7 @@ server.get('/api/lm/status', async () => {
     appliedSeq: number;
     processingSeq: number | null;
     processingError: string | null;
-    customerCount: number;
+    entries: number;
   }
   interface LMStatus {
     name: string;
@@ -660,7 +681,7 @@ server.get('/api/lm/status', async () => {
       const data = await res.json() as {
         vaults: Array<{
           type: string;
-          customerCount: number;
+          entries: number;
           applied: { seq: number; at: string } | null;
           processing: { seq: number; startedAt: string; error: string | null } | null;
         }>;
@@ -674,7 +695,7 @@ server.get('/api/lm/status', async () => {
         appliedSeq: v.applied?.seq ?? 0,
         processingSeq: v.processing?.seq ?? null,
         processingError: v.processing?.error ?? null,
-        customerCount: v.customerCount,
+        entries: v.entries,
       }));
 
       // Store raw LM data for debugging
@@ -776,7 +797,7 @@ server.get('/api/sync/overview', async () => {
           reachable: isReachable,
           appliedSeq: s.appliedSeq,
           processingSeq: s.processingSeq,
-          customerCount: s.customerCount,
+          entries: s.entries,
           lastSeenAt: s.lastSeenAt?.toISOString() ?? null,
           lastError: s.lastError,
         };

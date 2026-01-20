@@ -381,7 +381,10 @@ export function Dashboard() {
                         padding: '0.5rem',
                         borderRadius: '0.25rem',
                         overflow: 'auto',
-                        maxHeight: '100px'
+                        maxHeight: '100px',
+                        maxWidth: '100%',
+                        whiteSpace: 'pre-wrap',
+                        wordBreak: 'break-word',
                       }}>
                         {JSON.stringify(n.details, null, 2)}
                       </pre>

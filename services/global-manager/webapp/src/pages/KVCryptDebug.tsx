@@ -13,6 +13,7 @@ interface VaultInfo {
   latest: VaultVersion | null;
   previous: VaultVersion | null;
   allVersions: VaultVersion[];
+  entries: number;
 }
 
 interface LMVaultStatus {
@@ -20,7 +21,7 @@ interface LMVaultStatus {
   appliedSeq: number;
   processingSeq: number | null;
   processingError: string | null;
-  customerCount: number;
+  entries: number;
 }
 
 interface LMStatus {
@@ -41,16 +42,25 @@ interface GMVaultStatus {
   error?: string;
 }
 
-// Vault type labels (short names for display)
+// Vault type display names (abbreviation + full name)
 // Note: Master seeds are stored in ~/.suiftly.env, not in vaults (see APP_SECURITY_DESIGN.md)
-const VAULT_LABELS: Record<string, string> = {
-  sma: 'SMA',  // Seal Mainnet API (HAProxy config)
-  smk: 'SMK',  // Seal Mainnet Keyserver
-  smo: 'SMO',  // Seal Mainnet Open
-  sta: 'STA',  // Seal Testnet API (HAProxy config)
-  stk: 'STK',  // Seal Testnet Keyserver
-  sto: 'STO',  // Seal Testnet Open
-  skk: 'SKK',  // Seal Test/Dev
+const VAULT_LONG_LABELS: Record<string, { abbr: string; name: string }> = {
+  sma: { abbr: 'SMA', name: 'Seal Mainnet API' },
+  smk: { abbr: 'SMK', name: 'Seal Mainnet Keyserver' },
+  smo: { abbr: 'SMO', name: 'Seal Mainnet Open' },
+  sta: { abbr: 'STA', name: 'Seal Testnet API' },
+  stk: { abbr: 'STK', name: 'Seal Testnet Keyserver' },
+  sto: { abbr: 'STO', name: 'Seal Testnet Open' },
+  skk: { abbr: 'SKK', name: 'Seal Test/Dev' },
+};
+
+// Helper to format vault display name
+const getVaultDisplayName = (vaultType: string): string => {
+  const label = VAULT_LONG_LABELS[vaultType];
+  if (label) {
+    return `${label.abbr}-${label.name}`;
+  }
+  return vaultType.toUpperCase();
 };
 
 export function KVCryptDebug() {
@@ -150,14 +160,9 @@ export function KVCryptDebug() {
         alignItems: 'center',
         marginBottom: '1.5rem',
       }}>
-        <div>
-          <h1 style={{ fontSize: '1.25rem', color: '#e2e8f0', margin: 0 }}>
-            KVCrypt Vault Status
-          </h1>
-          <p style={{ fontSize: '0.875rem', color: '#64748b', margin: '0.25rem 0 0' }}>
-            Monitor vault propagation between GM and LMs
-          </p>
-        </div>
+        <p style={{ fontSize: '0.875rem', color: '#64748b', margin: 0 }}>
+          Monitor vault propagation between GM and LMs
+        </p>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           <button
             onClick={handleRefresh}
@@ -229,33 +234,34 @@ export function KVCryptDebug() {
         </div>
 
         {gmVaults?.vaults && Object.keys(gmVaults.vaults).length > 0 ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-            {Object.entries(gmVaults.vaults).map(([vaultType, info]) => (
-              <div
-                key={vaultType}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '1rem',
-                  fontSize: '0.875rem',
-                }}
-              >
-                <span style={{ color: '#94a3b8', minWidth: '40px' }}>
-                  <span style={{ fontFamily: 'monospace' }}>{VAULT_LABELS[vaultType] || vaultType.toUpperCase()}</span>
-                </span>
-                {info.latest ? (
-                  <span style={{ color: '#94a3b8' }}>
-                    seq=<span style={{ fontFamily: 'monospace', color: '#4ade80' }}>{info.latest.seq}</span>
-                  </span>
-                ) : (
-                  <>
-                    <span style={{ color: '#f87171', fontWeight: 500 }}>No vault files</span>
-                    <SyncIndicator state={SyncState.Error} />
-                  </>
-                )}
-              </div>
-            ))}
-          </div>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+            <thead>
+              <tr style={{ borderBottom: '1px solid #334155' }}>
+                <th style={{ textAlign: 'left', padding: '0.25rem 0.5rem', color: '#64748b', fontWeight: 500, width: '220px' }}>Vault</th>
+                <th style={{ textAlign: 'right', padding: '0.25rem 0.5rem', color: '#64748b', fontWeight: 500, width: '90px' }}>Seq</th>
+                <th style={{ textAlign: 'right', padding: '0.25rem 0.5rem', color: '#64748b', fontWeight: 500, width: '70px' }}>Entries</th>
+                <th style={{ textAlign: 'right', padding: '0.25rem 0.5rem' }}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {Object.entries(gmVaults.vaults).map(([vaultType, info]) => (
+                <tr key={vaultType}>
+                  <td style={{ padding: '0.25rem 0.5rem', color: '#94a3b8', fontFamily: 'monospace' }}>
+                    {getVaultDisplayName(vaultType)}
+                  </td>
+                  <td style={{ textAlign: 'right', padding: '0.25rem 0.5rem', fontFamily: 'monospace', color: info.latest ? '#4ade80' : '#f87171' }}>
+                    {info.latest ? info.latest.seq : '—'}
+                  </td>
+                  <td style={{ textAlign: 'right', padding: '0.25rem 0.5rem', fontFamily: 'monospace', color: '#94a3b8' }}>
+                    {info.latest ? info.entries : '—'}
+                  </td>
+                  <td style={{ textAlign: 'right', padding: '0.25rem 0.5rem' }}>
+                    {!info.latest && <SyncIndicator state={SyncState.Error} />}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         ) : (
           <p style={{ color: '#f87171', fontSize: '0.875rem', margin: 0 }}>
             No vaults configured or accessible
@@ -347,66 +353,71 @@ export function KVCryptDebug() {
                         </div>
                       </div>
 
-                      {lm.reachable && (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                          {/* Show all vault types that LM reports (LM knows its expected types) */}
-                          {lm.vaults.map((lmVault) => {
-                            const vaultType = lmVault.type;
-                            const gmSeq = gmVaults?.vaults?.[vaultType]?.latest?.seq;
-                            const gmHasVault = gmSeq !== undefined && gmSeq > 0;
-                            const isBehind = gmHasVault && lmVault.appliedSeq < gmSeq;
-                            const hasNoData = lmVault.appliedSeq === 0 && lmVault.processingSeq === null;
-                            const hasError = lmVault.processingError !== null;
+                      {lm.reachable && lm.vaults.length > 0 && (
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+                          <thead>
+                            <tr style={{ borderBottom: '1px solid #334155' }}>
+                              <th style={{ textAlign: 'left', padding: '0.25rem 0.5rem', color: '#64748b', fontWeight: 500, width: '220px' }}>Vault</th>
+                              <th style={{ textAlign: 'right', padding: '0.25rem 0.5rem', color: '#64748b', fontWeight: 500, width: '90px' }}>Applied</th>
+                              <th style={{ textAlign: 'right', padding: '0.25rem 0.5rem', color: '#64748b', fontWeight: 500, width: '70px' }}>Entries</th>
+                              <th style={{ textAlign: 'right', padding: '0.25rem 0.5rem', color: '#64748b', fontWeight: 500, width: '100px' }}>Pending</th>
+                              <th style={{ textAlign: 'right', padding: '0.25rem 0.5rem' }}></th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {lm.vaults.map((lmVault) => {
+                              const vaultType = lmVault.type;
+                              const gmSeq = gmVaults?.vaults?.[vaultType]?.latest?.seq;
+                              const gmHasVault = gmSeq !== undefined && gmSeq > 0;
+                              const isBehind = gmHasVault && lmVault.appliedSeq < gmSeq;
+                              const hasNoData = lmVault.appliedSeq === 0 && lmVault.processingSeq === null;
+                              const hasError = lmVault.processingError !== null;
 
-                            return (
-                              <div
-                                key={vaultType}
-                                style={{
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  gap: '1rem',
-                                  fontSize: '0.875rem',
-                                }}
-                              >
-                                <span style={{ color: '#94a3b8', minWidth: '40px' }}>
-                                  <span style={{ fontFamily: 'monospace' }}>{VAULT_LABELS[vaultType] || vaultType.toUpperCase()}</span>
-                                </span>
-                                {hasError ? (
-                                  <>
-                                    <span style={{ color: '#f87171', fontWeight: 500 }}>
-                                      error: {lmVault.processingError}
-                                    </span>
-                                    <SyncIndicator state={SyncState.Error} />
-                                  </>
-                                ) : hasNoData ? (
-                                  <>
-                                    <span style={{ color: '#f87171', fontWeight: 500 }}>
-                                      not loaded
-                                      {gmHasVault && <span> (GM: {gmSeq})</span>}
-                                    </span>
-                                    <SyncIndicator state={SyncState.Error} />
-                                  </>
-                                ) : (
-                                  <>
-                                    <span style={{ color: '#94a3b8' }}>
-                                      applied=<span style={{ fontFamily: 'monospace' }}>{lmVault.appliedSeq}</span>
-                                      {lmVault.processingSeq !== null && (
-                                        <span style={{ color: '#60a5fa' }}> (processing: {lmVault.processingSeq})</span>
-                                      )}
-                                      {isBehind && (
-                                        <span style={{ color: '#fbbf24' }}> (GM: {gmSeq})</span>
-                                      )}
-                                    </span>
-                                    <span style={{ color: '#94a3b8' }}>
-                                      customers=<span style={{ fontFamily: 'monospace' }}>{lmVault.customerCount}</span>
-                                    </span>
-                                    <SyncIndicator state={getVaultState(lmVault, isBehind)} />
-                                  </>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
+                              // Build pending column content
+                              const hasPending = lmVault.processingSeq !== null || isBehind;
+
+                              return (
+                                <tr key={vaultType}>
+                                  <td style={{ padding: '0.25rem 0.5rem', color: '#94a3b8', fontFamily: 'monospace' }}>
+                                    {getVaultDisplayName(vaultType)}
+                                  </td>
+                                  <td style={{ textAlign: 'right', padding: '0.25rem 0.5rem', fontFamily: 'monospace' }}>
+                                    {hasError ? (
+                                      <span style={{ color: '#f87171' }} title={lmVault.processingError || ''}>error</span>
+                                    ) : hasNoData ? (
+                                      <span style={{ color: '#f87171' }}>—</span>
+                                    ) : (
+                                      <span style={{ color: isBehind ? '#fbbf24' : '#4ade80' }}>{lmVault.appliedSeq}</span>
+                                    )}
+                                  </td>
+                                  <td style={{ textAlign: 'right', padding: '0.25rem 0.5rem', fontFamily: 'monospace', color: '#94a3b8' }}>
+                                    {hasError || hasNoData ? '—' : lmVault.entries}
+                                  </td>
+                                  <td style={{ textAlign: 'right', padding: '0.25rem 0.5rem', fontFamily: 'monospace' }}>
+                                    {hasError || hasNoData ? (
+                                      <span style={{ color: '#64748b' }}>---</span>
+                                    ) : !hasPending ? (
+                                      <span style={{ color: '#64748b' }}>---</span>
+                                    ) : (
+                                      <>
+                                        {lmVault.processingSeq !== null && (
+                                          <span style={{ color: '#60a5fa' }}>{lmVault.processingSeq}</span>
+                                        )}
+                                        {lmVault.processingSeq !== null && isBehind && ' '}
+                                        {isBehind && (
+                                          <span style={{ color: '#fbbf24' }}>{gmSeq}</span>
+                                        )}
+                                      </>
+                                    )}
+                                  </td>
+                                  <td style={{ textAlign: 'right', padding: '0.25rem 0.5rem' }}>
+                                    <SyncIndicator state={hasError || hasNoData ? SyncState.Error : getVaultState(lmVault, isBehind)} />
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
                       )}
                     </>
                   );
@@ -473,12 +484,10 @@ export function KVCryptDebug() {
         <strong style={{ color: '#94a3b8' }}>Legend:</strong>
         <div style={{ display: 'flex', gap: '1.5rem', marginTop: '0.5rem' }}>
           <span><span style={{ color: '#4ade80' }}>GREEN</span> = Latest/In Sync</span>
-          <span><span style={{ color: '#fbbf24' }}>YELLOW</span> = Previous/Behind</span>
+          <span><span style={{ color: '#60a5fa' }}>BLUE</span> = Processing</span>
+          <span><span style={{ color: '#fbbf24' }}>YELLOW</span> = Behind/Pending</span>
           <span><span style={{ color: '#f87171' }}>RED</span> = Error/Down</span>
         </div>
-        <p style={{ margin: '0.5rem 0 0' }}>
-          GM writes to data_tx, sync-files copies to data, LMs read from data.
-        </p>
       </div>
     </div>
   );

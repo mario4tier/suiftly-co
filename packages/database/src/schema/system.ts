@@ -69,6 +69,15 @@ export const systemControl = pgTable('system_control', {
   stoVaultContentHash: varchar('sto_vault_content_hash', { length: 16 }),
   skkVaultContentHash: varchar('skk_vault_content_hash', { length: 16 }),
 
+  // Entry counts (number of KV pairs in vault, for sanity checks)
+  smaVaultEntries: integer('sma_vault_entries').default(0),
+  smkVaultEntries: integer('smk_vault_entries').default(0),
+  smoVaultEntries: integer('smo_vault_entries').default(0),
+  staVaultEntries: integer('sta_vault_entries').default(0),
+  stkVaultEntries: integer('stk_vault_entries').default(0),
+  stoVaultEntries: integer('sto_vault_entries').default(0),
+  skkVaultEntries: integer('skk_vault_entries').default(0),
+
   // Seal key derivation index counters (per process group)
   // Each PG has its own master seed, so derivation indices are independent namespaces.
   // Atomic increment ensures globally unique indices within each PG.
@@ -110,8 +119,8 @@ export const lmStatus = pgTable('lm_status', {
   appliedSeq: integer('applied_seq').default(0), // vaults[].applied.seq (null if no vault applied yet)
   processingSeq: integer('processing_seq'), // vaults[].processing.seq (for visibility, not used in sync logic)
 
-  // Customer count from vault
-  customerCount: integer('customer_count').default(0),
+  // Entry count from vault
+  entries: integer('customer_count').default(0),
 
   // Connection status - derived from response availability
   lastSeenAt: timestamp('last_seen_at'),

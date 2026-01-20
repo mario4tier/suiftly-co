@@ -67,46 +67,6 @@ async function getLMHealth(): Promise<LMHealthResponse | null> {
     return null;
   }
 }
-
-// Helper to wait for vault to propagate and be applied by LM
-// Options:
-// - requireCustomers: if true, also waits for customerCount > 0
-async function waitForVaultSync(expectedMinSeq: number, options?: { requireCustomers?: boolean }): Promise<number> {
-  const maxAttempts = 120; // 60 seconds total (increased for race condition handling)
-  const pollInterval = 500;
-  const requireCustomers = options?.requireCustomers ?? false;
-
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const health = await getLMHealth();
-    if (health) {
-      const smaVault = health.vaults.find((v) => v.type === 'sma');
-      if (
-        smaVault?.applied &&
-        smaVault.applied.seq >= expectedMinSeq &&
-        !smaVault.processing &&
-        (!requireCustomers || smaVault.customerCount > 0)
-      ) {
-        console.log(
-          `Vault sync detected after ${(attempt + 1) * pollInterval}ms (seq=${smaVault.applied.seq}, customers=${smaVault.customerCount})`
-        );
-        return smaVault.customerCount;
-      }
-    }
-    await new Promise((resolve) => setTimeout(resolve, pollInterval));
-  }
-
-  throw new Error(
-    `Vault sync timed out after ${maxAttempts * pollInterval}ms waiting for seq >= ${expectedMinSeq}${requireCustomers ? ' with customers' : ''}`
-  );
-}
-
-// Helper to trigger GM vault generation
-async function triggerGMSync(): Promise<void> {
-  await fetch(`${GM_URL}/api/queue/sync-all?source=e2e-real-seal-test`, {
-    method: 'POST',
-  });
-}
-
 // Sudob API URL (privileged service for root operations)
 const SUDOB_URL = 'http://127.0.0.1:22800';
 
@@ -115,6 +75,8 @@ interface HAProxyConfigCheck {
   ok: boolean;
   version: number;
   customerId: number | null;
+  headerHex: string | null;  // Full 16-char header for debugging
+  glim: number | null;       // GLIM value (positions 7-8)
   controlFlags: number | null;
   hasIpAllowlist: boolean | null;
   inlineIps: string[] | null;
@@ -128,12 +90,15 @@ async function verifyHAProxyConfig(
   expectedConfig?: {
     hasIpAllowlist?: boolean;
     inlineIps?: string[];
+    glim?: number;  // Expected GLIM value (0 = service disabled)
   }
 ): Promise<HAProxyConfigCheck> {
   const result: HAProxyConfigCheck = {
     ok: false,
     version: 0,
     customerId: null,
+    headerHex: null,
+    glim: null,
     controlFlags: null,
     hasIpAllowlist: null,
     inlineIps: null,
@@ -175,8 +140,10 @@ async function verifyHAProxyConfig(
         result.customerId = customerId;
 
         // Parse header (16 hex chars): 00000ILGLBLQCCCC
-        // Control flags are last 4 hex chars
+        // Positions: 5-6=IL(ILIM), 7-8=GL(GLIM), 9-10=BL(BLIM), 11=Q(BQoS), 12-15=CCCC(ControlFlags)
         const headerHex = customerMatch[2];
+        result.headerHex = headerHex;
+        result.glim = parseInt(headerHex.slice(7, 9), 16);  // GLIM at positions 7-8
         result.controlFlags = parseInt(headerHex.slice(-4), 16);
         result.hasIpAllowlist = (result.controlFlags & 0x0002) !== 0;
 
@@ -227,6 +194,13 @@ async function verifyHAProxyConfig(
           return result;
         }
       }
+
+      if (expectedConfig.glim !== undefined) {
+        if (result.glim !== expectedConfig.glim) {
+          result.error = `GLIM mismatch: expected ${expectedConfig.glim}, got ${result.glim}`;
+          return result;
+        }
+      }
     }
 
     result.ok = true;
@@ -248,6 +222,7 @@ async function waitForHAProxyConfig(
   expectedConfig: {
     hasIpAllowlist?: boolean;
     inlineIps?: string[];
+    glim?: number;  // Expected GLIM value (0 = service disabled)
   },
   options?: {
     timeout?: number;
@@ -277,7 +252,8 @@ async function waitForHAProxyConfig(
     if (result.ok) {
       console.log(
         `HAProxy config verified after ${(attempt + 1) * pollInterval}ms: ` +
-        `version=${result.version}, controlFlags=0x${result.controlFlags?.toString(16)}, ` +
+        `version=${result.version}, header=${result.headerHex}, GLIM=${result.glim}, ` +
+        `controlFlags=0x${result.controlFlags?.toString(16)}, ` +
         `hasIpAllowlist=${result.hasIpAllowlist}, inlineIps=[${result.inlineIps?.join(',')}]`
       );
       return result;
@@ -297,6 +273,95 @@ async function waitForHAProxyConfig(
     finalResult.error = `Timeout waiting for HAProxy config: ${finalResult.error || 'config not found'}`;
   }
   return finalResult;
+}
+
+// Helper to wait for both customer config AND API key to be synced to HAProxy
+// This does a test health check to verify the full path works
+async function waitForHAProxyReady(
+  customerId: number,
+  apiKey: string,
+  options?: {
+    timeout?: number;
+    pollInterval?: number;
+    retryDelay?: number;
+  }
+): Promise<HAProxyConfigCheck> {
+  const timeout = options?.timeout ?? 60000;
+  const pollInterval = options?.pollInterval ?? 500;
+  const retryDelay = options?.retryDelay ?? 3000;
+  const startTime = Date.now();
+
+  // First, wait for customer to appear in config map
+  const configCheck = await waitForHAProxyConfig(customerId, {}, { timeout: timeout / 2, pollInterval });
+  if (!configCheck.ok) {
+    return configCheck;
+  }
+
+  // Then, retry health check until API key is also synced
+  const maxRetries = Math.ceil((timeout / 2) / retryDelay);
+  for (let retry = 0; retry < maxRetries; retry++) {
+    const response = await sealHealthCheck({
+      apiKey,
+      port: SEAL_METERED_PORT,
+    });
+
+    if (response.status === 200) {
+      console.log(`✅ HAProxy ready: customer ${customerId} + API key synced (took ${Date.now() - startTime}ms)`);
+      return configCheck;
+    }
+
+    if (response.status === 403) {
+      // API key valid but customer not authorized (GLIM=0) - might need more time
+      console.log(`  ⏳ Attempt ${retry + 1}/${maxRetries} got 403 (GLIM=0), retrying in ${retryDelay}ms...`);
+    } else if (response.status === 401) {
+      // API key not found yet
+      console.log(`  ⏳ Attempt ${retry + 1}/${maxRetries} got 401 (API key not synced), retrying in ${retryDelay}ms...`);
+    } else {
+      // Unexpected status - might be backend issue
+      console.log(`  ⏳ Attempt ${retry + 1}/${maxRetries} got ${response.status}, retrying in ${retryDelay}ms...`);
+    }
+
+    if (retry < maxRetries - 1) {
+      await new Promise((resolve) => setTimeout(resolve, retryDelay));
+    }
+  }
+
+  // Timeout - return config check but mark as failed
+  configCheck.ok = false;
+  configCheck.error = `Timeout: customer config synced but API key or GLIM not ready after ${timeout}ms`;
+  return configCheck;
+}
+
+// Helper to wait for health check to return expected status
+// Used after toggle changes to ensure HAProxy has fully applied the config
+// Max wait time is 3 seconds (6 retries x 500ms)
+async function waitForHealthCheckStatus(
+  apiKey: string,
+  expectedStatus: number
+): Promise<{ status: number; ok: boolean }> {
+  const maxRetries = 6;
+  const retryDelay = 500;
+
+  for (let retry = 0; retry < maxRetries; retry++) {
+    const response = await sealHealthCheck({
+      apiKey,
+      port: SEAL_METERED_PORT,
+    });
+
+    if (response.status === expectedStatus) {
+      console.log(`✅ Health check returned expected ${expectedStatus} after ${(retry + 1) * retryDelay}ms`);
+      return { status: response.status, ok: true };
+    }
+
+    if (retry < maxRetries - 1) {
+      console.log(`  ⏳ Got ${response.status}, waiting for ${expectedStatus}... (${(retry + 1) * retryDelay}ms)`);
+      await new Promise((resolve) => setTimeout(resolve, retryDelay));
+    }
+  }
+
+  // Return last status
+  const finalResponse = await sealHealthCheck({ apiKey, port: SEAL_METERED_PORT });
+  return { status: finalResponse.status, ok: false };
 }
 
 // API key type from listApiKeys endpoint
@@ -376,10 +441,6 @@ test.describe('Real Seal Requests', () => {
       return;
     }
 
-    // Get initial vault sequence for later comparison
-    const initialSeq = lmHealth.vaults.find((v) => v.type === 'sma')?.applied?.seq ?? 0;
-    console.log(`Initial vault seq: ${initialSeq}`);
-
     // === STEP 1: Subscribe to Seal service through UI ===
     await page.click('text=Seal');
     await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
@@ -447,13 +508,23 @@ test.describe('Real Seal Requests', () => {
     expect(apiKey.length).toBe(37); // Expected format: S + 36 chars
     console.log(`✅ API key retrieved: ${apiKey.substring(0, 10)}...`);
 
-    // === STEP 5b: Verify UI clipboard copy matches API key ===
+    // === STEP 6: Wait for vault sync ===
+    // Get customer ID and wait for customer to appear in HAProxy config
+    const customerData = await getCustomerData(page.request);
+    const customerId = customerData.customer?.customerId as number;
+    const configCheck = await waitForHAProxyConfig(customerId, {}, { timeout: 60000 });
+    if (!configCheck.ok) {
+      throw new Error(`HAProxy config not applied: ${configCheck.error}`);
+    }
+    console.log(`✅ Customer ${customerId} in HAProxy config (version=${configCheck.version})`);
+
+    // === STEP 7: Verify UI clipboard copy matches API key ===
     // This ensures what users copy from the UI matches what we use for testing
+    // Note: Done AFTER vault sync because UI may filter keys during "Updating" state
     await page.goto('/services/seal/overview?tab=x-api-key');
     await waitAfterMutation(page);
 
     // Wait for API keys to load - the header shows "X of Y used" where X > 0
-    // This handles the case where navigation happens faster than data loading
     await expect(page.locator('text=/API Keys \\(1 of \\d+ used\\)/i')).toBeVisible({ timeout: 10000 });
 
     // Find the API key row by its fingerprint and click the copy button
@@ -470,16 +541,6 @@ test.describe('Real Seal Requests', () => {
     // Verify clipboard matches the API key from tRPC
     expect(clipboardContent).toBe(apiKey);
     console.log(`✅ UI clipboard copy verified: matches API key from tRPC`);
-
-    // === STEP 6: Trigger GM vault generation ===
-    await triggerGMSync();
-    console.log('✅ GM vault sync triggered');
-
-    // === STEP 7: Wait for vault to be applied by LM with our customer ===
-    // Use requireCustomers to handle race condition where vault might be applied
-    // before our cpEnabled change is included
-    const customerCount = await waitForVaultSync(initialSeq + 1, { requireCustomers: true });
-    console.log(`✅ Vault sync complete - ${customerCount} customer(s) in HAProxy`);
   });
 
   test('HAProxy health check with valid API key', async ({ page }) => {
@@ -500,8 +561,6 @@ test.describe('Real Seal Requests', () => {
       test.skip();
       return;
     }
-
-    const initialSeq = lmHealth.vaults.find((v) => v.type === 'sma')?.applied?.seq ?? 0;
 
     // === Subscribe and configure through UI (real user experience) ===
 
@@ -547,9 +606,13 @@ test.describe('Real Seal Requests', () => {
     const apiKey = apiKeys[0].fullKey;
     console.log(`API key from UI flow: ${apiKey.substring(0, 10)}... (${apiKey.length} chars)`);
 
-    // Trigger vault sync and wait for our customer to be included
-    await triggerGMSync();
-    await waitForVaultSync(initialSeq + 1, { requireCustomers: true });
+    // Get customer ID and wait for both customer config AND API key to be synced
+    const customerData = await getCustomerData(page.request);
+    const customerId = customerData.customer?.customerId as number;
+    const configCheck = await waitForHAProxyReady(customerId, apiKey, { timeout: 60000 });
+    if (!configCheck.ok) {
+      throw new Error(`HAProxy not ready: ${configCheck.error}`);
+    }
 
     // === Now make a real health check request through HAProxy (metered port) ===
     const healthResponse = await sealHealthCheck({
@@ -630,8 +693,6 @@ test.describe('Real Seal Requests', () => {
       'Seal backend (mseal1) not running on port 20401. Start it with: sudo systemctl start mseal1-node'
     ).toBe(true);
 
-    const initialSeq = lmHealth.vaults.find((v) => v.type === 'sma')?.applied?.seq ?? 0;
-
     // === STEP 1: Subscribe and configure through UI ===
     await page.click('text=Seal');
     await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
@@ -673,10 +734,16 @@ test.describe('Real Seal Requests', () => {
     const apiKey = apiKeys[0].fullKey;
     console.log(`✅ API key retrieved: ${apiKey.substring(0, 10)}... (${apiKey.length} chars)`);
 
-    // Trigger vault sync and wait for customer to be included
-    await triggerGMSync();
-    await waitForVaultSync(initialSeq + 1, { requireCustomers: true });
-    console.log('✅ Initial vault sync complete');
+    // Get customer ID for HAProxy config verification
+    const customerData = await getCustomerData(page.request);
+    const customerId = customerData.customer?.customerId as number;
+    console.log(`Customer ID: ${customerId}`);
+
+    // Wait for both customer config AND API key to be synced to HAProxy
+    let configCheck = await waitForHAProxyReady(customerId, apiKey, { timeout: 60000 });
+    if (!configCheck.ok) {
+      throw new Error(`HAProxy not ready: ${configCheck.error}`);
+    }
 
     // === STEP 2: Verify service ON returns 200 via metered port with API key ===
     // This validates the full flow: API key decryption → customer lookup → GLIM check → backend
@@ -699,22 +766,22 @@ test.describe('Real Seal Requests', () => {
     }
     console.log('✅ Service toggled OFF via UI');
 
-    // Trigger vault sync and wait
-    const seqAfterOff = (await getLMHealth())?.vaults.find((v) => v.type === 'sma')?.applied?.seq ?? 0;
-    await triggerGMSync();
-    await waitForVaultSync(seqAfterOff + 1, { requireCustomers: true });
-    console.log('✅ Vault sync after OFF complete');
+    // Wait for HAProxy config to update with GLIM=0 (service disabled)
+    const previousVersion = configCheck.version;
+    configCheck = await waitForHAProxyConfig(customerId, { glim: 0 }, { timeout: 60000, minVersion: previousVersion });
+    if (!configCheck.ok) {
+      throw new Error(`HAProxy config not updated after OFF: ${configCheck.error}`);
+    }
+    console.log(`✅ HAProxy config updated after OFF (version=${configCheck.version}, GLIM=${configCheck.glim}, was=${previousVersion})`);
 
     // === STEP 4: Verify service OFF returns 403 via metered port ===
     // When isUserEnabled=false, GLIM=0 in config map → HAProxy returns 403
-    response = await sealHealthCheck({
-      apiKey,
-      port: SEAL_METERED_PORT,
-    });
-    console.log('Service OFF response on metered port:', response);
+    // Wait for HAProxy to fully apply the change (map update != immediate enforcement)
+    const offResult = await waitForHealthCheckStatus(apiKey, 403);
+    console.log(`Service OFF response: ${offResult.status}`);
 
     // API key is valid (not 401), but customer not authorized (GLIM=0 → 403)
-    expect(response.status).toBe(403);
+    expect(offResult.status).toBe(403);
     console.log('✅ Service OFF: metered port returns 403 (API key valid, but GLIM=0)');
 
     // === STEP 5: Turn ON service via UI toggle ===
@@ -726,19 +793,19 @@ test.describe('Real Seal Requests', () => {
     }
     console.log('✅ Service toggled ON via UI');
 
-    // Trigger vault sync and wait
-    const seqAfterOn = (await getLMHealth())?.vaults.find((v) => v.type === 'sma')?.applied?.seq ?? 0;
-    await triggerGMSync();
-    await waitForVaultSync(seqAfterOn + 1, { requireCustomers: true });
-    console.log('✅ Vault sync after ON complete');
+    // Wait for HAProxy config to update (version must increment again)
+    const offVersion = configCheck.version;
+    configCheck = await waitForHAProxyConfig(customerId, {}, { timeout: 60000, minVersion: offVersion });
+    if (!configCheck.ok) {
+      throw new Error(`HAProxy config not updated after ON: ${configCheck.error}`);
+    }
+    console.log(`✅ HAProxy config updated after ON (version=${configCheck.version}, was=${offVersion})`);
 
     // === STEP 6: Verify service ON returns 200 again via metered port ===
-    response = await sealHealthCheck({
-      apiKey,
-      port: SEAL_METERED_PORT,
-    });
-    console.log('Service ON (restored) response on metered port:', response);
-    expect(response.status).toBe(200);
+    // Wait for HAProxy to fully apply the change
+    const onResult = await waitForHealthCheckStatus(apiKey, 200);
+    console.log(`Service ON (restored) response: ${onResult.status}`);
+    expect(onResult.status).toBe(200);
     console.log('✅ Service ON: metered port returns 200 again (GLIM restored)');
   });
 
@@ -955,12 +1022,8 @@ test.describe('Real Seal Requests - IP Allowlist', () => {
     const customerId = customerData.customer?.customerId as number;
     console.log(`Customer ID: ${customerId}`);
 
-    // Trigger GM sync to pick up the latest DB state
-    await triggerGMSync();
-    // Small delay to allow GM to process the sync
-    await page.waitForTimeout(500);
-
     // Wait for HAProxy config to have our IP allowlist with the expected config
+    // Natural sync will happen - no explicit trigger (production-like behavior)
     // This is more reliable than waiting for vault seq because it verifies actual config
     const configCheck = await waitForHAProxyConfig(customerId, {
       hasIpAllowlist: true,
@@ -1071,11 +1134,8 @@ test.describe('Real Seal Requests - IP Allowlist', () => {
     const customerId = customerData.customer?.customerId as number;
     console.log(`Customer ID: ${customerId}`);
 
-    // Trigger vault sync
-    await triggerGMSync();
-    await page.waitForTimeout(500);
-
     // Wait for HAProxy config to have both IPs in the inline filter
+    // Natural sync will happen - no explicit trigger (production-like behavior)
     // This verifies the actual config is applied, not just a version number
     const configCheck = await waitForHAProxyConfig(customerId, {
       hasIpAllowlist: true,
@@ -1130,8 +1190,6 @@ test.describe('Real Seal Requests - IP Allowlist', () => {
       test.skip();
       return;
     }
-
-    const initialSeq = lmHealth.vaults.find((v) => v.type === 'sma')?.applied?.seq ?? 0;
 
     // Subscribe to PRO tier
     await page.click('text=Seal');
@@ -1188,12 +1246,7 @@ test.describe('Real Seal Requests - IP Allowlist', () => {
     const customerId = customerData.customer?.customerId as number;
     console.log(`Customer ID: ${customerId}`);
 
-    // Trigger vault sync and wait for customer to be included in vault
-    // This ensures a clean slate - the test sets up its own customer data
-    await triggerGMSync();
-    await waitForVaultSync(initialSeq + 1, { requireCustomers: true });
-
-    // Now wait for HAProxy config to match expected state
+    // Wait for HAProxy config to match expected state
     let configCheck = await waitForHAProxyConfig(customerId, {
       hasIpAllowlist: true,
       inlineIps: [ALLOWED_IP],
@@ -1220,14 +1273,7 @@ test.describe('Real Seal Requests - IP Allowlist', () => {
     await page.locator('#ip-allowlist-toggle').click();
     await page.waitForTimeout(1500);
 
-    // Trigger vault sync and wait for it to be applied
-    // IMPORTANT: Use minVersion to ensure a NEW vault was generated and applied,
-    // not just checking the existing config state from Step 1
-    const seqBeforeDisable = (await getLMHealth())?.vaults.find((v) => v.type === 'sma')?.applied?.seq ?? 0;
-    await triggerGMSync();
-    await waitForVaultSync(seqBeforeDisable + 1, { requireCustomers: true });
-
-    // Now verify HAProxy config reflects the change
+    // Wait for HAProxy config to reflect the change
     configCheck = await waitForHAProxyConfig(customerId, {
       hasIpAllowlist: false,
     }, { timeout: 60000, minVersion: step1Version });
@@ -1302,8 +1348,6 @@ test.describe('Real Seal Requests - Log Ingestion', () => {
       return;
     }
 
-    const initialSeq = lmHealth.vaults.find((v) => v.type === 'sma')?.applied?.seq ?? 0;
-
     // === STEP 1: Subscribe and configure through UI ===
     await page.click('text=Seal');
     await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
@@ -1341,10 +1385,13 @@ test.describe('Real Seal Requests - Log Ingestion', () => {
     const apiKey = apiKeys[0].fullKey;
     console.log(`API key: ${apiKey.substring(0, 10)}...`);
 
-    // Trigger vault sync
-    await triggerGMSync();
-    await waitForVaultSync(initialSeq + 1, { requireCustomers: true });
-    console.log('✅ Vault sync complete');
+    // Get customer ID and wait for both customer config AND API key to be synced
+    const customerData = await getCustomerData(page.request);
+    const customerId = customerData.customer?.customerId as number;
+    const configCheck = await waitForHAProxyReady(customerId, apiKey, { timeout: 60000 });
+    if (!configCheck.ok) {
+      throw new Error(`HAProxy not ready: ${configCheck.error}`);
+    }
 
     // === STEP 2: Record timestamp before making request ===
     // Subtract 1 second because HAProxy logs only have second precision,

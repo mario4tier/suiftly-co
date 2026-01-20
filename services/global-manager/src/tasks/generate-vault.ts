@@ -85,15 +85,19 @@ type VaultNextSeqColumn = keyof Pick<typeof systemControl.$inferSelect,
   'smaNextVaultSeq' | 'smkNextVaultSeq' | 'smoNextVaultSeq' |
   'staNextVaultSeq' | 'stkNextVaultSeq' | 'stoNextVaultSeq' | 'skkNextVaultSeq'
 >;
+type VaultEntriesColumn = keyof Pick<typeof systemControl.$inferSelect,
+  'smaVaultEntries' | 'smkVaultEntries' | 'smoVaultEntries' |
+  'staVaultEntries' | 'stkVaultEntries' | 'stoVaultEntries' | 'skkVaultEntries'
+>;
 
-const VAULT_COLUMNS: Record<VaultTypeCode, { seq: VaultSeqColumn; hash: VaultHashColumn; nextSeq: VaultNextSeqColumn }> = {
-  sma: { seq: 'smaVaultSeq', hash: 'smaVaultContentHash', nextSeq: 'smaNextVaultSeq' },
-  smk: { seq: 'smkVaultSeq', hash: 'smkVaultContentHash', nextSeq: 'smkNextVaultSeq' },
-  smo: { seq: 'smoVaultSeq', hash: 'smoVaultContentHash', nextSeq: 'smoNextVaultSeq' },
-  sta: { seq: 'staVaultSeq', hash: 'staVaultContentHash', nextSeq: 'staNextVaultSeq' },
-  stk: { seq: 'stkVaultSeq', hash: 'stkVaultContentHash', nextSeq: 'stkNextVaultSeq' },
-  sto: { seq: 'stoVaultSeq', hash: 'stoVaultContentHash', nextSeq: 'stoNextVaultSeq' },
-  skk: { seq: 'skkVaultSeq', hash: 'skkVaultContentHash', nextSeq: 'skkNextVaultSeq' },
+const VAULT_COLUMNS: Record<VaultTypeCode, { seq: VaultSeqColumn; hash: VaultHashColumn; nextSeq: VaultNextSeqColumn; entries: VaultEntriesColumn }> = {
+  sma: { seq: 'smaVaultSeq', hash: 'smaVaultContentHash', nextSeq: 'smaNextVaultSeq', entries: 'smaVaultEntries' },
+  smk: { seq: 'smkVaultSeq', hash: 'smkVaultContentHash', nextSeq: 'smkNextVaultSeq', entries: 'smkVaultEntries' },
+  smo: { seq: 'smoVaultSeq', hash: 'smoVaultContentHash', nextSeq: 'smoNextVaultSeq', entries: 'smoVaultEntries' },
+  sta: { seq: 'staVaultSeq', hash: 'staVaultContentHash', nextSeq: 'staNextVaultSeq', entries: 'staVaultEntries' },
+  stk: { seq: 'stkVaultSeq', hash: 'stkVaultContentHash', nextSeq: 'stkNextVaultSeq', entries: 'stkVaultEntries' },
+  sto: { seq: 'stoVaultSeq', hash: 'stoVaultContentHash', nextSeq: 'stoNextVaultSeq', entries: 'stoVaultEntries' },
+  skk: { seq: 'skkVaultSeq', hash: 'skkVaultContentHash', nextSeq: 'skkNextVaultSeq', entries: 'skkVaultEntries' },
 };
 
 // ============================================================================
@@ -768,12 +772,13 @@ export async function generateVault(
     enableEmergencyBackup: false, // TODO: Enable when emergency keys are configured
   });
 
-  // 10. Update DB with new seq, content hash, and reset nextSeq
+  // 10. Update DB with new seq, content hash, entries, and reset nextSeq (transactional)
   await db
     .update(systemControl)
     .set({
       [columns.seq]: newSeq,
       [columns.hash]: contentHash,
+      [columns.entries]: customerCount,
       [columns.nextSeq]: newSeq + 1, // Reset for next cycle
       updatedAt: new Date(),
     })
