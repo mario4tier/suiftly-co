@@ -12,67 +12,44 @@ import { homedir } from 'os';
 import { join } from 'path';
 
 /**
- * Check if this is a production environment by reading system.conf files.
+ * Find system.conf path (searches mhaxbe first, then walrus for migration compatibility)
+ */
+function findSystemConf(): string | null {
+  const home = homedir();
+  const paths = [
+    join(home, 'mhaxbe', 'system.conf'),
+    join(home, 'walrus', 'system.conf'),
+    '/etc/mhaxbe/system.conf',
+    '/etc/walrus/system.conf',
+  ];
+  return paths.find(p => existsSync(p)) || null;
+}
+
+/**
+ * Check if this is a production environment by reading system.conf.
  * CRITICAL: Must run before any tests to prevent production data corruption.
  */
 function checkNotProductionEnvironment(): void {
-  const home = homedir();
-  const walrusConfig = join(home, 'walrus', 'system.conf');
-  const etcConfig = '/etc/walrus/system.conf';
+  const confPath = findSystemConf();
 
-  // Check ~/walrus/system.conf (primary)
-  if (existsSync(walrusConfig)) {
+  if (confPath) {
     try {
-      const content = readFileSync(walrusConfig, 'utf8');
-      for (const line of content.split('\n')) {
-        const trimmed = line.trim();
-        if (trimmed.startsWith('#') || !trimmed) continue;
-        if (trimmed.startsWith('ENVIRONMENT=')) {
-          const value = trimmed.split('=')[1]?.replace(/["']/g, '').toLowerCase();
-          if (value === 'production') {
-            console.log('\n' + '='.repeat(70));
-            console.log('\x1b[31m\x1b[1mFATAL: CANNOT RUN TESTS IN PRODUCTION ENVIRONMENT!\x1b[0m');
-            console.log('='.repeat(70));
-            console.log(`\nDetected: ENVIRONMENT=production in ${walrusConfig}`);
-            console.log('\nTests are ONLY allowed in development environments.');
-            console.log('This prevents accidental data corruption or service disruption.');
-            console.log('\nTo run tests, ensure your system.conf has:');
-            console.log('  ENVIRONMENT=development  (in ~/walrus/system.conf)');
-            console.log('='.repeat(70) + '\n');
-            process.exit(1);
-          }
-        }
+      const content = readFileSync(confPath, 'utf8');
+      if (/^ENVIRONMENT\s*=\s*production/mi.test(content) ||
+          /^DEPLOYMENT_TYPE\s*=\s*production/mi.test(content)) {
+        console.log('\n' + '='.repeat(70));
+        console.log('\x1b[31m\x1b[1mFATAL: CANNOT RUN TESTS IN PRODUCTION ENVIRONMENT!\x1b[0m');
+        console.log('='.repeat(70));
+        console.log(`\nDetected: production environment in ${confPath}`);
+        console.log('\nTests are ONLY allowed in development environments.');
+        console.log('This prevents accidental data corruption or service disruption.');
+        console.log('\nTo run tests, ensure your system.conf has:');
+        console.log('  ENVIRONMENT=development');
+        console.log('='.repeat(70) + '\n');
+        process.exit(1);
       }
     } catch (err) {
-      // Log but don't fail - default to allowing tests if we can't read config
-      console.warn(`Warning: Could not read ${walrusConfig}:`, err);
-    }
-  }
-
-  // Check /etc/walrus/system.conf (secondary - production servers)
-  if (existsSync(etcConfig)) {
-    try {
-      const content = readFileSync(etcConfig, 'utf8');
-      for (const line of content.split('\n')) {
-        const trimmed = line.trim();
-        if (trimmed.startsWith('#') || !trimmed) continue;
-        if (trimmed.startsWith('DEPLOYMENT_TYPE=')) {
-          const value = trimmed.split('=')[1]?.replace(/["']/g, '').toLowerCase();
-          if (value === 'production') {
-            console.log('\n' + '='.repeat(70));
-            console.log('\x1b[31m\x1b[1mFATAL: CANNOT RUN TESTS IN PRODUCTION ENVIRONMENT!\x1b[0m');
-            console.log('='.repeat(70));
-            console.log(`\nDetected: DEPLOYMENT_TYPE=production in ${etcConfig}`);
-            console.log('\nTests are ONLY allowed in development/test environments.');
-            console.log('This prevents accidental data corruption or service disruption.');
-            console.log('='.repeat(70) + '\n');
-            process.exit(1);
-          }
-        }
-      }
-    } catch (err) {
-      // Log but don't fail - default to allowing tests if we can't read config
-      console.warn(`Warning: Could not read ${etcConfig}:`, err);
+      console.warn(`Warning: Could not read ${confPath}:`, err);
     }
   }
 
