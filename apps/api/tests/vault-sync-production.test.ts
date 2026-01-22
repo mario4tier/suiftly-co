@@ -26,9 +26,9 @@ import {
   createVaultReader,
   createVaultWriter,
   computeDiff,
-} from '@walrus/vault-codec';
-import { VaultHandler } from '@walrus/local-manager';
-import { createTestKeyProvider, createKeyProvider } from '@walrus/kvcrypt';
+} from '@mhaxbe/vault-codec';
+import { VaultHandler } from '@mhaxbe/local-manager';
+import { createTestKeyProvider, createKeyProvider } from '@mhaxbe/kvcrypt';
 
 // Production directories
 const DATA_TX_DIR = '/opt/syncf/data_tx';

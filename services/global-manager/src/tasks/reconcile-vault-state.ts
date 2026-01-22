@@ -16,7 +16,7 @@
 
 import { db, systemControl } from '@suiftly/database';
 import { eq } from 'drizzle-orm';
-import { getLatestValidVault, computeContentHash, createVaultReader } from '@walrus/vault-codec';
+import { getLatestValidVault, computeContentHash, createVaultReader } from '@mhaxbe/vault-codec';
 
 // Vault types to reconcile
 const VAULT_TYPES = ['sma', 'smk', 'smo', 'sta', 'stk', 'sto', 'skk'] as const;

@@ -12,8 +12,8 @@
   "dependencies": {
     "@suiftly/database": "*",
     "@suiftly/shared": "*",
-    "@walrus/server-configs": "file:../../../walrus/packages/server-configs",
-    "@walrus/vault-codec": "file:../../../walrus/packages/vault-codec",
+    "@mhaxbe/server-configs": "file:../../../walrus/packages/server-configs",
+    "@mhaxbe/vault-codec": "file:../../../walrus/packages/vault-codec",
     "drizzle-orm": "^0.44.7",
     "fastify": "^5.1.0",
     "pg": "^8.13.1",

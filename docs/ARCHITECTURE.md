@@ -139,7 +139,7 @@ The Suiftly infrastructure uses a two-repository model with clear dependency dir
 │  - SEAL key-server management                                   │
 │  - sync-files.py (VAULT distribution)                          │
 │  - Local Manager (TypeScript service)                          │
-│  - @walrus/shared (shared types package)                       │
+│  - @mhaxbe/shared (shared types package)                       │
 └─────────────────────────────────────────────────────────────────┘
                               ↑
                               │ suiftly-co imports from walrus
@@ -158,7 +158,7 @@ The Suiftly infrastructure uses a two-repository model with clear dependency dir
 
 **Key principle**: Gateway servers only need `~/walrus` deployed. The `~/suiftly-co` repository is only deployed on the primary server (eu-w1-1) where PostgreSQL and the Global Manager run.
 
-### @walrus/shared Package
+### @mhaxbe/shared Package
 
 Shared TypeScript types are defined in `~/walrus/services/shared/` and imported by both repositories:
 
@@ -170,7 +170,7 @@ Shared TypeScript types are defined in `~/walrus/services/shared/` and imported 
 // package.json (root or services/global-manager)
 {
   "dependencies": {
-    "@walrus/shared": "file:../walrus/services/shared"
+    "@mhaxbe/shared": "file:../walrus/services/shared"
   }
 }
 ```
@@ -178,7 +178,7 @@ Shared TypeScript types are defined in `~/walrus/services/shared/` and imported 
 **Usage:**
 ```typescript
 // services/global-manager/src/tasks/aggregate-status.ts
-import { ServerStatusReport, CustomerConfig } from '@walrus/shared'
+import { ServerStatusReport, CustomerConfig } from '@mhaxbe/shared'
 
 // Full type safety for:
 // - Status reports from Local Managers
@@ -188,7 +188,7 @@ import { ServerStatusReport, CustomerConfig } from '@walrus/shared'
 
 ### Shared Types
 
-Types defined in `@walrus/shared`:
+Types defined in `@mhaxbe/shared`:
 
 | Type | Description | Used By |
 |------|-------------|---------|
@@ -217,7 +217,7 @@ When working on features that span both repositories:
 3. **Update Global Manager** (suiftly-co):
    ```bash
    cd ~/suiftly-co/services/global-manager
-   npm install  # Picks up @walrus/shared changes
+   npm install  # Picks up @mhaxbe/shared changes
    npm run dev
    ```
 

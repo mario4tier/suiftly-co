@@ -10,7 +10,7 @@ import { randomBytes } from 'crypto';
 process.env.API_SECRET_KEY = randomBytes(32).toString('hex');
 
 import { generateApiKey, decodeApiKey, createApiKeyFingerprint, type SealType } from '../src/lib/api-keys';
-import { getSealProcessGroup } from '@walrus/system-config';
+import { getSealProcessGroup } from '@mhaxbe/system-config';
 
 describe('API Key Generation and Decoding', () => {
   describe('Basic Generation', () => {

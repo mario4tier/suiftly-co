@@ -17,7 +17,7 @@ import { generateSealKey } from '../lib/seal-key-generation';
 import { getTierPriceUsdCents } from '../lib/config-cache';
 import { dbClock } from '@suiftly/shared/db-clock';
 import { triggerVaultSync, markConfigChanged } from '../lib/gm-sync';
-import { getSealProcessGroup, isProduction } from '@walrus/system-config';
+import { getSealProcessGroup, isProduction } from '@mhaxbe/system-config';
 
 export const sealRouter = router({
   /**

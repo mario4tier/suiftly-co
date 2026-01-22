@@ -13,7 +13,7 @@ This document designs the control plane for Seal key registration on the Sui blo
 > ⚠️ **This is a DESIGN DOCUMENT** - some parts are implemented, others are pending.
 >
 > **What exists today (implemented):**
-> - Process group support (`getSealProcessGroup()` in `@walrus/system-config`)
+> - Process group support (`getSealProcessGroup()` in `@mhaxbe/system-config`)
 > - Master seed storage in `~/.suiftly.env` (see APP_SECURITY_DESIGN.md)
 > - Vault generation with process group (`generate-vault.ts` uses `getSealProcessGroup()`)
 > - Basic `seal_keys` table with derivation index tracking
@@ -71,7 +71,7 @@ If development and production share the same master seed (PG 1), then:
 ### Current State Analysis
 
 **Implemented:**
-- `getSealProcessGroup()` in `@walrus/system-config` reads from `system.conf`
+- `getSealProcessGroup()` in `@mhaxbe/system-config` reads from `system.conf`
 - `generate-vault.ts` uses `getSealProcessGroup()` for vault writer
 - Master seeds stored in `~/.suiftly.env` on keyserver nodes
 - Vault filename format includes PG: `{vault:3}-{pg:02d}-{seq:09d}-...`
@@ -139,7 +139,7 @@ export function getSealProcessGroup(): number {
 
 **API Server** (stores derivation index only):
 ```typescript
-import { getSealProcessGroup } from '@walrus/system-config';
+import { getSealProcessGroup } from '@mhaxbe/system-config';
 
 // apps/api/src/routes/seal.ts
 const pg = getSealProcessGroup();  // From system.conf (fixed per server)
@@ -213,7 +213,7 @@ export const systemControl = pgTable('system_control', {
 
 **Allocation Flow:**
 ```typescript
-import { getSealProcessGroup } from '@walrus/system-config';
+import { getSealProcessGroup } from '@mhaxbe/system-config';
 
 const pg = getSealProcessGroup();  // From system.conf
 
@@ -240,7 +240,7 @@ API keys embed process group (3 bits):
 procGroup: options.procGroup ?? 1
 
 // AFTER (from system.conf):
-import { getSealProcessGroup } from '@walrus/system-config';
+import { getSealProcessGroup } from '@mhaxbe/system-config';
 
 procGroup: options.procGroup ?? getSealProcessGroup()
 ```
@@ -254,7 +254,7 @@ HAProxy uses this to route to correct backend:
 **File:** `services/global-manager/src/tasks/generate-vault.ts`
 
 ```typescript
-import { getSealProcessGroup } from '@walrus/system-config';
+import { getSealProcessGroup } from '@mhaxbe/system-config';
 
 // BEFORE:
 const result = await writer.write(vaultType, vaultData, {
@@ -426,7 +426,7 @@ export const systemControl = pgTable('system_control', {
 ### Fixed Allocation Flow
 
 ```typescript
-import { getSealProcessGroup } from '@walrus/system-config';
+import { getSealProcessGroup } from '@mhaxbe/system-config';
 
 // In createKey mutation - FIXED
 createKey: protectedProcedure.mutation(async ({ ctx, input }) => {
@@ -1338,8 +1338,8 @@ This is separate from HAProxy sync status which is tracked per-service.
 > - GM vault generation (`generate-vault.ts`) - extended with new fields
 > - LM vault consumption and config application
 > - `sync-files.py` for vault distribution to remote servers
-> - `@walrus/system-config` package - extended with PG support
-> - `@walrus/vault-codec` for encrypted vault storage
+> - `@mhaxbe/system-config` package - extended with PG support
+> - `@mhaxbe/vault-codec` for encrypted vault storage
 >
 > **New Infrastructure (built by this plan):**
 > - Process group config (Phase -1)
@@ -1357,7 +1357,7 @@ This is separate from HAProxy sync status which is tracked per-service.
 1. Add `SEAL_PROCESS_GROUP` to `system.conf`:
    - Dev box: `SEAL_PROCESS_GROUP=2`
    - Production: `SEAL_PROCESS_GROUP=1`
-2. Add `getSealProcessGroup()` to `@walrus/system-config` package
+2. Add `getSealProcessGroup()` to `@mhaxbe/system-config` package
 3. Add master seeds to `~/.suiftly.env` on keyserver nodes (see APP_SECURITY_DESIGN.md)
 4. Add `processGroup` column to `seal_keys` table schema
 5. Replace all hardcoded `pg: 1` with `getSealProcessGroup()`:

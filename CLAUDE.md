@@ -64,13 +64,13 @@ Initial setup phase - no code scaffolded yet.
 
 ## Environment Detection
 
-**IMPORTANT: Never use NODE_ENV for environment detection in runtime code.** Use `system.conf` and `@walrus/system-config` instead.
+**IMPORTANT: Never use NODE_ENV for environment detection in runtime code.** Use `system.conf` and `@mhaxbe/system-config` instead.
 
 See [~/walrus/CLAUDE.md](~/walrus/CLAUDE.md) "Environment Detection (system.conf)" section for full documentation.
 
 Quick reference:
 ```typescript
-import { isDevelopment, isProduction, isTestFeaturesEnabled } from '@walrus/system-config';
+import { isDevelopment, isProduction, isTestFeaturesEnabled } from '@mhaxbe/system-config';
 
 // Enable test features only in non-production
 if (isTestFeaturesEnabled()) {

@@ -2,7 +2,7 @@
  * Generate Vault Task
  *
  * Generates versioned vault files for HAProxy configuration.
- * Uses @walrus/vault-codec for content management and @walrus/kvcrypt for encryption.
+ * Uses @mhaxbe/vault-codec for content management and @mhaxbe/kvcrypt for encryption.
  *
  * Vault types generated:
  * - sma: Seal Mainnet API (customer API keys, rate limits, HAProxy config)
@@ -46,8 +46,8 @@
 
 import { db, systemControl, serviceInstances, apiKeys, sealKeys, sealPackages } from '@suiftly/database';
 import { SERVICE_TYPE, SERVICE_STATE, type ServiceType } from '@suiftly/shared/constants';
-import { createVaultWriter, createVaultReader, computeContentHash, type VaultInstance } from '@walrus/vault-codec';
-import { getSealProcessGroup } from '@walrus/system-config';
+import { createVaultWriter, createVaultReader, computeContentHash, type VaultInstance } from '@mhaxbe/vault-codec';
+import { getSealProcessGroup } from '@mhaxbe/system-config';
 import { eq, and, isNull } from 'drizzle-orm';
 
 // ============================================================================

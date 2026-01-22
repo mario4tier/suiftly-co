@@ -1,5 +1,5 @@
 /**
- * Unit tests for @walrus/server-configs
+ * Unit tests for @mhaxbe/server-configs
  *
  * Validates that the server configuration helpers work correctly
  * when imported from suiftly-co.
@@ -20,9 +20,9 @@ import {
   resetConfig,
   type ServerClusterConfig,
   type ServerInfo,
-} from '@walrus/server-configs';
+} from '@mhaxbe/server-configs';
 
-describe('@walrus/server-configs', () => {
+describe('@mhaxbe/server-configs', () => {
   // Reset cache before each test to ensure fresh load
   beforeEach(() => {
     resetConfig();

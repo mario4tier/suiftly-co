@@ -5,7 +5,7 @@
  * IMPORTANT: Only active in non-production environments (per system.conf)
  */
 
-import { isTestFeaturesEnabled } from '@walrus/system-config';
+import { isTestFeaturesEnabled } from '@mhaxbe/system-config';
 
 interface DelayConfig {
   validateSubscription?: number; // ms

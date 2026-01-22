@@ -17,7 +17,7 @@ import { apiKeys } from '@suiftly/database/schema';
 import { eq, and, isNull } from 'drizzle-orm';
 import { encryptSecret, decryptSecret } from './encryption';
 import { dbClock } from '@suiftly/shared/db-clock';
-import { getSealProcessGroup } from '@walrus/system-config';
+import { getSealProcessGroup } from '@mhaxbe/system-config';
 
 /**
  * API_SECRET_KEY - 32-byte key for AES-128-CTR encryption and HMAC-SHA256

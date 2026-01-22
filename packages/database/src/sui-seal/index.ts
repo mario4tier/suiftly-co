@@ -21,7 +21,7 @@
  */
 
 import { createHash } from 'crypto';
-import { isProduction } from '@walrus/system-config';
+import { isProduction } from '@mhaxbe/system-config';
 
 // ============================================================================
 // Types

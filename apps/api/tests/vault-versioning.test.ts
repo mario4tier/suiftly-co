@@ -34,9 +34,9 @@ import {
   createVaultWriter,
   computeDiff,
   computeContentHash,
-} from '@walrus/vault-codec';
-import { VaultHandler } from '@walrus/local-manager';
-import { createTestKeyProvider, generateKey } from '@walrus/kvcrypt';
+} from '@mhaxbe/vault-codec';
+import { VaultHandler } from '@mhaxbe/local-manager';
+import { createTestKeyProvider, generateKey } from '@mhaxbe/kvcrypt';
 
 // Test wallet addresses for multi-customer tests
 const TEST_WALLET_2 = '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';

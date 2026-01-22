@@ -7,8 +7,8 @@
 
 import Fastify from 'fastify';
 import { z } from 'zod';
-import type { VaultType } from '@walrus/vault-codec';
-import { getGlobalVaultTypes } from '@walrus/server-configs';
+import type { VaultType } from '@mhaxbe/vault-codec';
+import { getGlobalVaultTypes } from '@mhaxbe/server-configs';
 import { db, adminNotifications, systemControl } from '@suiftly/database';
 import { getMockClockState, setMockClockState } from '@suiftly/database/test-kv';
 import { desc, eq, and } from 'drizzle-orm';
@@ -572,13 +572,13 @@ async function logAdminNotificationDedup(params: {
 
 /**
  * Vault types this GM instance manages.
- * Loaded from server_configs.py via @walrus/server-configs (data_tx field).
+ * Loaded from server_configs.py via @mhaxbe/server-configs (data_tx field).
  */
 const configuredVaultTypes = getGlobalVaultTypes() as VaultType[];
 
 // Get vault status from data_tx (versions from disk, entries from DB)
 server.get('/api/vault/status', async () => {
-  const { createVaultReader } = await import('@walrus/vault-codec');
+  const { createVaultReader } = await import('@mhaxbe/vault-codec');
 
   const reader = createVaultReader({
     storageDir: '/opt/syncf/data_tx',
