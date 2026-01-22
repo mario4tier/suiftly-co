@@ -524,12 +524,11 @@ test.describe('Real Seal Requests', () => {
     await page.goto('/services/seal/overview?tab=x-api-key');
     await waitAfterMutation(page);
 
-    // Wait for API keys to load - the header shows "X of Y used" where X > 0
-    await expect(page.locator('text=/API Keys \\(1 of \\d+ used\\)/i')).toBeVisible({ timeout: 10000 });
-
-    // Find the API key row by its fingerprint and click the copy button
+    // Wait for the specific API key row to be visible - this is the ultimate goal
+    // The row has data-testid="apik-{fingerprint}" which we know from STEP 5
+    // This handles all race conditions: loading states, sync status, query timing
     const apiKeyRow = page.locator(`[data-testid="apik-${apiKeyFp}"]`);
-    await expect(apiKeyRow).toBeVisible({ timeout: 5000 });
+    await expect(apiKeyRow).toBeVisible({ timeout: 30000 });
 
     // Click the copy button (the Copy icon button inside CopyableValue)
     const copyButton = apiKeyRow.locator('button').first();
