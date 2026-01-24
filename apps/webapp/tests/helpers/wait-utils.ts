@@ -340,3 +340,67 @@ export async function waitAfterMutation(
     await page.waitForTimeout(300);
   }
 }
+
+/**
+ * Wait for an item count heading to show at least the expected count.
+ * Handles the "Updating..." sync state race condition by waiting for the
+ * stable count indicator rather than trying to find specific elements.
+ *
+ * Pattern: "Section Name (X of Y used)" where X >= expectedCount
+ *
+ * THROWS an error if the condition is not met within the timeout.
+ *
+ * @param page - Playwright page
+ * @param sectionPattern - Regex pattern to match section heading (e.g., /Seal Keys.*\(\d+ of \d+ used\)/)
+ * @param expectedCount - Minimum count expected (e.g., 1 means "at least 1 of N")
+ * @param options - Timeout and message
+ *
+ * @example
+ * // Wait for at least 1 seal key to appear
+ * await waitForItemCount(page, /Seal Keys.*\((\d+) of \d+ used\)/, 1);
+ *
+ * // Wait for at least 1 API key to appear
+ * await waitForItemCount(page, /API Keys.*\((\d+) of \d+ used\)/, 1);
+ */
+export async function waitForItemCount(
+  page: Page,
+  sectionPattern: RegExp,
+  expectedCount: number,
+  options: {
+    timeout?: number;
+    interval?: number;
+    message?: string;
+  } = {}
+): Promise<void> {
+  const { timeout = 10000, interval = 500, message } = options;
+  const descriptor = message || `Item count to be at least ${expectedCount}`;
+
+  let lastFoundCount = -1;
+
+  const success = await waitForCondition(
+    async () => {
+      // Find all h3 headings on the page
+      const headings = await page.locator('h3').allTextContents();
+
+      for (const heading of headings) {
+        const match = heading.match(sectionPattern);
+        if (match && match[1]) {
+          lastFoundCount = parseInt(match[1], 10);
+          if (lastFoundCount >= expectedCount) {
+            return true;
+          }
+        }
+      }
+      return false;
+    },
+    { timeout, interval, message: descriptor }
+  );
+
+  if (!success) {
+    throw new Error(
+      `Timeout waiting for ${descriptor}. ` +
+      `Expected count >= ${expectedCount}, but found ${lastFoundCount >= 0 ? lastFoundCount : 'no matching heading'}. ` +
+      `Timeout: ${timeout}ms`
+    );
+  }
+}

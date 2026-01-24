@@ -24,6 +24,7 @@
 
 import { test, expect } from '@playwright/test';
 import { waitAfterMutation } from '../helpers/wait-utils';
+import { ServiceStabilityChecker } from '../helpers/service-stability';
 import { resetCustomer, ensureTestBalance, getCustomerData, waitForHaproxyLogs } from '../helpers/db';
 // Note: We intentionally don't use setupCpEnabled or createApiKey shortcuts
 // to test the real user experience through the UI
@@ -396,6 +397,9 @@ async function getApiKeys(request: import('@playwright/test').APIRequestContext)
 }
 
 test.describe('Real Seal Requests', () => {
+  // Service stability checker - detects unexpected service restarts during tests
+  let stabilityChecker: ServiceStabilityChecker;
+
   test.beforeAll(async () => {
     // Check prerequisites - HAProxy and LM must be running
     const haproxyAvailable = await isHAProxyAvailable();
@@ -414,7 +418,12 @@ test.describe('Real Seal Requests', () => {
     }
   });
 
-  test.beforeEach(async ({ page }) => {
+  test.beforeEach(async ({ page }, testInfo) => {
+    // Initialize stability checker and capture initial PIDs
+    stabilityChecker = new ServiceStabilityChecker(page.request);
+    stabilityChecker.setTestName(testInfo.title);
+    await stabilityChecker.captureInitialState();
+
     // Reset customer to clean state
     await resetCustomer(page.request);
 
@@ -429,6 +438,12 @@ test.describe('Real Seal Requests', () => {
 
     // Ensure customer has balance for subscription
     await ensureTestBalance(page.request, 1000, { spendingLimitUsd: 250 });
+  });
+
+  test.afterEach(async () => {
+    // Verify services didn't restart during test (throws if PIDs changed)
+    // This catches infrastructure instability that causes intermittent failures
+    await stabilityChecker.verifyServicesStable();
   });
 
   test('full user flow: subscribe, configure, and verify vault sync', async ({ page }) => {
@@ -912,7 +927,15 @@ test.describe('Real Seal Requests - Infrastructure Checks', () => {
  * - In tests, we can set any IP since we bypass the Cloudflare firewall
  */
 test.describe('Real Seal Requests - IP Allowlist', () => {
-  test.beforeEach(async ({ page }) => {
+  // Service stability checker - detects unexpected service restarts during tests
+  let stabilityChecker: ServiceStabilityChecker;
+
+  test.beforeEach(async ({ page }, testInfo) => {
+    // Initialize stability checker and capture initial PIDs
+    stabilityChecker = new ServiceStabilityChecker(page.request);
+    stabilityChecker.setTestName(testInfo.title);
+    await stabilityChecker.captureInitialState();
+
     // Reset customer to clean state
     await resetCustomer(page.request);
 
@@ -927,6 +950,11 @@ test.describe('Real Seal Requests - IP Allowlist', () => {
 
     // Ensure customer has balance for subscription
     await ensureTestBalance(page.request, 1000, { spendingLimitUsd: 250 });
+  });
+
+  test.afterEach(async () => {
+    // Verify services didn't restart during test (throws if PIDs changed)
+    await stabilityChecker.verifyServicesStable();
   });
 
   test('IP allowlist blocks non-allowed IP with 403', async ({ page }) => {
@@ -1310,7 +1338,15 @@ test.describe('Real Seal Requests - IP Allowlist', () => {
  * - PostgreSQL with haproxy_raw_logs table
  */
 test.describe('Real Seal Requests - Log Ingestion', () => {
-  test.beforeEach(async ({ page }) => {
+  // Service stability checker - detects unexpected service restarts during tests
+  let stabilityChecker: ServiceStabilityChecker;
+
+  test.beforeEach(async ({ page }, testInfo) => {
+    // Initialize stability checker and capture initial PIDs
+    stabilityChecker = new ServiceStabilityChecker(page.request);
+    stabilityChecker.setTestName(testInfo.title);
+    await stabilityChecker.captureInitialState();
+
     // Reset customer to clean state
     await resetCustomer(page.request);
 
@@ -1325,6 +1361,11 @@ test.describe('Real Seal Requests - Log Ingestion', () => {
 
     // Ensure customer has balance for subscription
     await ensureTestBalance(page.request, 1000, { spendingLimitUsd: 250 });
+  });
+
+  test.afterEach(async () => {
+    // Verify services didn't restart during test (throws if PIDs changed)
+    await stabilityChecker.verifyServicesStable();
   });
 
   test('HAProxy request is logged to database via fluentd pipeline', async ({ page }) => {

@@ -102,6 +102,20 @@ if (config.NODE_ENV !== 'production') {
     createApiKeyForTesting,
   } = await import('./lib/test-data.js');
 
+  // Get process info for service stability tests
+  // Tests capture PID at start and verify it hasn't changed at end
+  // to detect unexpected service restarts during test execution
+  server.get('/test/process-info', {
+    config: { rateLimit: false },
+  }, async () => {
+    return {
+      service: 'api',
+      pid: process.pid,
+      uptime: process.uptime(),
+      startedAt: new Date(Date.now() - process.uptime() * 1000).toISOString(),
+    };
+  });
+
   // Get test configuration - allows tests to verify server config
   server.get('/test/config', {
     config: { rateLimit: false },

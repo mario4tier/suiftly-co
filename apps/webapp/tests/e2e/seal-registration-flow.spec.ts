@@ -4,8 +4,9 @@
  */
 
 import { test, expect, Page } from '@playwright/test';
-import { waitAfterMutation } from '../helpers/wait-utils';
+import { waitAfterMutation, waitForItemCount } from '../helpers/wait-utils';
 import { waitForToastsToDisappear } from '../helpers/locators';
+import { ServiceStabilityChecker } from '../helpers/service-stability';
 import { db } from '@suiftly/database';
 import { sealKeys, sealRegistrationOps } from '@suiftly/database/schema';
 import { eq, desc } from 'drizzle-orm';
@@ -19,6 +20,13 @@ async function createSealKeyViaUI(page: Page): Promise<void> {
   await addKeyButton.click();
   await waitAfterMutation(page);
   await expect(page.locator('text=/Seal key created successfully/i')).toBeVisible({ timeout: 5000 });
+
+  // Wait for seal key count to update (handles "Updating..." sync state race condition)
+  // Without this, the UI may show "0 of X used" even though the key was created
+  await waitForItemCount(page, /Seal Keys.*\((\d+) of \d+ used\)/, 1, {
+    timeout: 15000,
+    message: 'Seal key count to be at least 1 after creation',
+  });
 }
 
 // Helper function to get the most recent seal key for a customer
@@ -37,7 +45,15 @@ async function getCustomerId(page: Page): Promise<number> {
 }
 
 test.describe('Seal Key Registration Flow', () => {
-  test.beforeEach(async ({ page }) => {
+  // Service stability checker - detects unexpected service restarts during tests
+  let stabilityChecker: ServiceStabilityChecker;
+
+  test.beforeEach(async ({ page }, testInfo) => {
+    // Initialize stability checker and capture initial PIDs
+    stabilityChecker = new ServiceStabilityChecker(page.request);
+    stabilityChecker.setTestName(testInfo.title);
+    await stabilityChecker.captureInitialState();
+
     // Reset customer test data
     const resetResponse = await page.request.post('http://localhost:22700/test/data/reset', {
       data: {
@@ -469,7 +485,7 @@ test.describe('Seal Key Registration Flow', () => {
     await createSealKeyViaUI(page);
     await waitForToastsToDisappear(page);
 
-    // Wait for any status badge to appear (confirming key is visible on page)
+    // Now wait for any status badge to appear (confirming key is visible on page)
     const registeringBadge = page.locator('span:has-text("On-chain Registering...")');
     const registeredBadge = page.locator('span:has-text("On-chain Registered")');
     await expect(registeringBadge.or(registeredBadge)).toBeVisible({ timeout: 5000 });
@@ -509,6 +525,10 @@ test.describe('Seal Key Registration Flow', () => {
   });
 
   test.afterEach(async ({ page }) => {
+    // Verify services didn't restart during test (throws if PIDs changed)
+    // This catches infrastructure instability that causes intermittent failures
+    await stabilityChecker.verifyServicesStable();
+
     // Cleanup: Delete test seal keys and registration ops
     const customerId = await getCustomerId(page);
 

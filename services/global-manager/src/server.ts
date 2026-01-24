@@ -347,6 +347,18 @@ if (isTestDeployment()) {
   dbClockProvider.configureTestKvSync(getMockClockState, setMockClockState);
   dbClockProvider.enableTestKvSync();
 
+  // Get process info for service stability tests
+  // Tests capture PID at start and verify it hasn't changed at end
+  // to detect unexpected service restarts during test execution
+  server.get('/api/test/process-info', async () => {
+    return {
+      service: 'global-manager',
+      pid: process.pid,
+      uptime: process.uptime(),
+      startedAt: new Date(Date.now() - process.uptime() * 1000).toISOString(),
+    };
+  });
+
   // Clock mock endpoints - GM is the single source of truth
   // Sets local mock clock AND writes to test_kv for other processes
   server.post('/api/test/clock/mock', async (request, reply) => {

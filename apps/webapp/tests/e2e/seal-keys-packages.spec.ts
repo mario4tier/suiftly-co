@@ -4,8 +4,9 @@
  */
 
 import { test, expect, Page } from '@playwright/test';
-import { waitAfterMutation } from '../helpers/wait-utils';
+import { waitAfterMutation, waitForItemCount } from '../helpers/wait-utils';
 import { waitForToastsToDisappear } from '../helpers/locators';
+import { ServiceStabilityChecker } from '../helpers/service-stability';
 import { db } from '@suiftly/database';
 import { sealKeys } from '@suiftly/database/schema';
 import { eq } from 'drizzle-orm';
@@ -16,6 +17,13 @@ async function createSealKeyViaUI(page: Page): Promise<void> {
   await addKeyButton.click();
   await waitAfterMutation(page);
   await expect(page.locator('text=/Seal key created successfully/i')).toBeVisible({ timeout: 5000 });
+
+  // Wait for seal key count to update (handles "Updating..." sync state race condition)
+  // Without this, the UI may show "0 of X used" even though the key was created
+  await waitForItemCount(page, /Seal Keys.*\((\d+) of \d+ used\)/, 1, {
+    timeout: 15000,
+    message: 'Seal key count to be at least 1 after creation',
+  });
 }
 
 // Helper function to add a package via UI (using modal form)
@@ -50,7 +58,15 @@ async function addPackageViaUI(page: Page, address: string, name: string): Promi
 }
 
 test.describe('Seal Keys & Packages Management', () => {
-  test.beforeEach(async ({ page }) => {
+  // Service stability checker - detects unexpected service restarts during tests
+  let stabilityChecker: ServiceStabilityChecker;
+
+  test.beforeEach(async ({ page }, testInfo) => {
+    // Initialize stability checker and capture initial PIDs
+    stabilityChecker = new ServiceStabilityChecker(page.request);
+    stabilityChecker.setTestName(testInfo.title);
+    await stabilityChecker.captureInitialState();
+
     // Reset customer test data
     const resetResponse = await page.request.post('http://localhost:22700/test/data/reset', {
       data: {
@@ -524,9 +540,11 @@ test.describe('Seal Keys & Packages Management', () => {
     await page.reload();
     await waitAfterMutation(page);
 
-    // Wait for seal keys list to load first (shows "X of Y used" where X > 0)
-    // This ensures React Query has fetched and rendered the data
-    await expect(page.locator('text=/Seal Keys & Packages \\(1 of/i')).toBeVisible({ timeout: 10000 });
+    // Wait for seal key count to update (handles "Updating..." sync state race condition)
+    await waitForItemCount(page, /Seal Keys.*\((\d+) of \d+ used\)/, 1, {
+      timeout: 15000,
+      message: 'Seal key count to be at least 1',
+    });
 
     // Object ID should be visible (keys are always expanded)
     await expect(page.locator('text=Object ID:')).toBeVisible({ timeout: 5000 });
@@ -592,6 +610,10 @@ test.describe('Seal Keys & Packages Management', () => {
   });
 
   test.afterEach(async ({ page }) => {
+    // Verify services didn't restart during test (throws if PIDs changed)
+    // This catches infrastructure instability that causes intermittent failures
+    await stabilityChecker.verifyServicesStable();
+
     // Cleanup: Delete test seal keys and packages
     const response = await page.request.get('http://localhost:22700/test/data/customer');
     const userData = await response.json();

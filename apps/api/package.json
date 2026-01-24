@@ -19,16 +19,16 @@
     "@suiftly/database": "*",
     "@suiftly/shared": "*",
     "@trpc/server": "^11.0.0-rc.665",
-    "@mhaxbe/system-config": "file:/home/olet/walrus/packages/system-config",
+    "@mhaxbe/system-config": "file:/home/olet/mhaxbe/packages/system-config",
     "fastify": "^5.1.0",
     "jose": "^5.9.6"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
     "@types/supertest": "^6.0.3",
-    "@mhaxbe/kvcrypt": "file:/home/olet/walrus/packages/kvcrypt",
-    "@mhaxbe/vault-codec": "file:/home/olet/walrus/packages/vault-codec",
-    "@mhaxbe/local-manager": "file:/home/olet/walrus/services/local-manager",
+    "@mhaxbe/kvcrypt": "file:/home/olet/mhaxbe/packages/kvcrypt",
+    "@mhaxbe/vault-codec": "file:/home/olet/mhaxbe/packages/vault-codec",
+    "@mhaxbe/local-manager": "file:/home/olet/mhaxbe/services/local-manager",
     "supertest": "^7.1.4",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
