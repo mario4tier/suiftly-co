@@ -6,7 +6,7 @@
 import { useCurrentAccount, useConnectWallet, useDisconnectWallet, useWallets } from '@mysten/dapp-kit';
 import { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate } from '@tanstack/react-router';
-import { connectMockWallet, disconnectMockWallet } from '../../lib/mockWallet';
+import { connectMockWallet, disconnectMockWallet, MOCK_WALLET_ADDRESSES } from '../../lib/mockWallet';
 import { useAuth } from '../../lib/auth';
 import {
   Wallet,
@@ -250,20 +250,39 @@ export function WalletButton() {
               </div>
             )}
 
-            {/* Mock Wallet Option (Dev) */}
+            {/* Mock Wallet Options (Dev) */}
             <div className="border-t border-gray-200 pt-4 mt-4">
               <p className="text-xs text-gray-500 mb-2">Development Mode</p>
-              <button
-                onClick={() => {
-                  console.log('[WALLET] Connecting mock wallet...');
-                  const account = connectMockWallet();
-                  setMockAccount(account);
-                  setPendingAuth(true);
-                }}
-                className="w-full px-4 py-3 bg-gray-50 hover:bg-gray-100 rounded-lg transition text-sm font-medium text-gray-700 border border-gray-200"
-              >
-                Connect Mock Wallet
-              </button>
+              <div className="space-y-2">
+                <button
+                  onClick={() => {
+                    console.log('[WALLET] Connecting mock wallet 0...');
+                    const account = connectMockWallet(0);
+                    setMockAccount(account);
+                    setPendingAuth(true);
+                  }}
+                  className="w-full px-4 py-3 bg-gray-50 hover:bg-gray-100 rounded-lg transition text-sm text-gray-700 border border-gray-200 text-left"
+                >
+                  <div className="font-medium">Mock Wallet 0</div>
+                  <div className="text-xs text-gray-400 font-mono mt-0.5">
+                    {MOCK_WALLET_ADDRESSES[0].slice(0, 10)}...{MOCK_WALLET_ADDRESSES[0].slice(-6)}
+                  </div>
+                </button>
+                <button
+                  onClick={() => {
+                    console.log('[WALLET] Connecting mock wallet 1...');
+                    const account = connectMockWallet(1);
+                    setMockAccount(account);
+                    setPendingAuth(true);
+                  }}
+                  className="w-full px-4 py-3 bg-amber-50 hover:bg-amber-100 rounded-lg transition text-sm text-gray-700 border border-amber-200 text-left"
+                >
+                  <div className="font-medium">Mock Wallet 1 <span className="text-xs text-amber-600">(Demo)</span></div>
+                  <div className="text-xs text-gray-400 font-mono mt-0.5">
+                    {MOCK_WALLET_ADDRESSES[1].slice(0, 10)}...{MOCK_WALLET_ADDRESSES[1].slice(-6)}
+                  </div>
+                </button>
+              </div>
             </div>
 
             {error && (

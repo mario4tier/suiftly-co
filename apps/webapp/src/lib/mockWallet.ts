@@ -6,9 +6,20 @@
 
 const MOCK_WALLET_KEY = 'suiftly_mock_wallet';
 
+// Mock wallet addresses (matching test-data.ts MOCK_WALLET_ADDRESS_0/1)
+// Wallet 0: Obvious test pattern (0xaaa...) - for unit tests
+// Wallet 1: Realistic-looking address - for demos/screenshots
+export const MOCK_WALLET_ADDRESSES = {
+  0: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+  1: '0x7a3f8c2e5d91b6a4f0e82c3d9b7a5f1e6c8d2a4b9e3f7c1d5a8b2e6f0c4d8a2b',
+} as const;
+
+export type MockWalletIndex = keyof typeof MOCK_WALLET_ADDRESSES;
+
 export interface MockWalletAccount {
   address: string;
   connected: boolean;
+  walletIndex?: MockWalletIndex;
 }
 
 /**
@@ -21,17 +32,16 @@ export function getMockWallet(): MockWalletAccount | null {
 }
 
 /**
- * Connect mock wallet (uses consistent test address)
+ * Connect mock wallet
+ * @param walletIndex - 0 for test address (0xaaa...), 1 for realistic address
  */
-export function connectMockWallet(): MockWalletAccount {
-  // Use consistent test address for stable development
-  // This prevents creating new customers on every connect
-  // Valid Sui address format (0x + 64 hex chars)
-  const address = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+export function connectMockWallet(walletIndex: MockWalletIndex = 0): MockWalletAccount {
+  const address = MOCK_WALLET_ADDRESSES[walletIndex];
 
   const account: MockWalletAccount = {
     address,
     connected: true,
+    walletIndex,
   };
 
   localStorage.setItem(MOCK_WALLET_KEY, JSON.stringify(account));

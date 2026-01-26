@@ -153,7 +153,7 @@ function LoginPage() {
           </div>
         )}
 
-        <div className="text-center text-xs text-gray-500">
+        <div className="text-center text-sm text-gray-500">
           Secure authentication with your Sui wallet
         </div>
       </div>
