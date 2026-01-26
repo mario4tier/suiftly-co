@@ -6,7 +6,7 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { useEffect, useState } from 'react';
 import { useCurrentAccount, useConnectWallet, useDisconnectWallet, useWallets } from '@mysten/dapp-kit';
-import { connectMockWallet } from '../lib/mockWallet';
+import { connectMockWallet, MOCK_WALLET_ADDRESSES } from '../lib/mockWallet';
 import { useAuth } from '../lib/auth';
 import { mockAuth } from '../lib/config';
 import { Wallet, AlertCircle } from 'lucide-react';
@@ -59,9 +59,9 @@ function LoginPage() {
     }, 100); // Small delay to ensure disconnect completes
   };
 
-  const handleMockConnect = () => {
-    console.log('[LOGIN] Connecting mock wallet...');
-    const account = connectMockWallet();
+  const handleMockConnect = (walletIndex: 0 | 1) => {
+    console.log(`[LOGIN] Connecting mock wallet ${walletIndex}...`);
+    const account = connectMockWallet(walletIndex);
     setMockAccount(account);
     setPendingAuth(true);
   };
@@ -119,7 +119,7 @@ function LoginPage() {
             </div>
           )}
 
-          {/* Mock Wallet Option (Dev) */}
+          {/* Mock Wallet Options (Dev) */}
           {mockAuth && (
             <>
               <div className="relative my-6">
@@ -130,16 +130,32 @@ function LoginPage() {
                   <span className="bg-white px-2 text-gray-500 uppercase tracking-wider">Development</span>
                 </div>
               </div>
-              <div className="flex justify-center">
+              <div className="flex justify-center gap-3">
                 <button
-                  onClick={handleMockConnect}
-                  className="px-4 py-3 bg-gray-50 hover:bg-amber-50 hover:border-amber-300 rounded-lg transition-all text-sm font-medium text-gray-700 border border-gray-200 active:scale-95 hover:shadow-md flex flex-col items-center gap-2"
+                  onClick={() => handleMockConnect(0)}
+                  className="px-4 py-3 bg-gray-50 hover:bg-gray-100 hover:border-gray-300 rounded-lg transition-all text-sm text-gray-700 border border-gray-200 active:scale-95 hover:shadow-md flex flex-col items-center gap-1"
                   style={{ width: '140px' }}
                 >
                   <div className="flex items-center justify-center flex-shrink-0" style={{ width: '32px', height: '32px' }}>
                     <Wallet className="h-6 w-6 text-gray-600" />
                   </div>
-                  <span>Mock Wallet</span>
+                  <span className="font-medium">Mock Wallet 0</span>
+                  <span className="text-[10px] text-gray-400 font-mono">
+                    {MOCK_WALLET_ADDRESSES[0].slice(0, 6)}...{MOCK_WALLET_ADDRESSES[0].slice(-4)}
+                  </span>
+                </button>
+                <button
+                  onClick={() => handleMockConnect(1)}
+                  className="px-4 py-3 bg-amber-50 hover:bg-amber-100 hover:border-amber-300 rounded-lg transition-all text-sm text-gray-700 border border-amber-200 active:scale-95 hover:shadow-md flex flex-col items-center gap-1"
+                  style={{ width: '140px' }}
+                >
+                  <div className="flex items-center justify-center flex-shrink-0" style={{ width: '32px', height: '32px' }}>
+                    <Wallet className="h-6 w-6 text-amber-600" />
+                  </div>
+                  <span className="font-medium">Mock Wallet 1</span>
+                  <span className="text-[10px] text-gray-400 font-mono">
+                    {MOCK_WALLET_ADDRESSES[1].slice(0, 6)}...{MOCK_WALLET_ADDRESSES[1].slice(-4)}
+                  </span>
                 </button>
               </div>
             </>
