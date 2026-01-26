@@ -18,7 +18,29 @@ import { decryptSecret } from './encryption';
 import { suiMockConfig } from '@suiftly/database/sui-mock';
 import { dbClock } from '@suiftly/shared/db-clock';
 
-const MOCK_WALLET_ADDRESS = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+// =============================================================================
+// Mock Test Customers
+// =============================================================================
+// Two test customers with different address styles:
+// - MOCK_WALLET_ADDRESS_0: Obvious test pattern (0xaaa...) - used by unit tests
+// - MOCK_WALLET_ADDRESS_1: Realistic-looking addresses - for demos/screenshots
+
+// Test customer 0: Obvious test pattern (legacy, heavily used in tests)
+export const MOCK_WALLET_ADDRESS_0 = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+export const MOCK_OBJECT_ID_0 = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+export const MOCK_PACKAGE_ID_0 = '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+
+// Test customer 1: Realistic-looking addresses (for demos/screenshots)
+// These look like real Sui addresses but are fixed for reproducibility
+export const MOCK_WALLET_ADDRESS_1 = '0x7a3f8c2e5d91b6a4f0e82c3d9b7a5f1e6c8d2a4b9e3f7c1d5a8b2e6f0c4d8a2b';
+export const MOCK_OBJECT_ID_1 = '0x4e8b2c6a9f1d5e3b7a0c4f8e2d6b9a3c5f1e7d0b8a4c2e6f9d3b5a1c7e0f4d8a';
+export const MOCK_PACKAGE_IDS_1 = [
+  '0x9c3a7e1f5b2d8a6c0e4f9b3d7a1c5e8f2b6d0a4c8e2f6b9d3a7c1e5f0b4d8a2c',
+  '0x2f8e4b6d1a9c5e3f7b0d4a8c2e6f1b5d9a3c7e0f4b8d2a6c1e5f9b3d7a0c4e8f',
+];
+
+// Legacy alias (for backward compatibility)
+const MOCK_WALLET_ADDRESS = MOCK_WALLET_ADDRESS_0;
 
 interface TestDataResetOptions {
   walletAddress?: string;
@@ -355,6 +377,14 @@ export async function getSealKeysTestData(walletAddress: string = MOCK_WALLET_AD
   };
 }
 
+interface SetupSealOptions {
+  walletAddress?: string;
+  /** Object ID for the seal key (hex string without 0x, 64 chars) */
+  objectIdHex?: string;
+  /** Package addresses (hex strings without 0x, 64 chars each) */
+  packageAddressesHex?: string[];
+}
+
 /**
  * Setup seal service with cpEnabled=true (for control plane sync tests)
  *
@@ -365,8 +395,20 @@ export async function getSealKeysTestData(walletAddress: string = MOCK_WALLET_AD
  * 4. Add a package to the seal key (triggers cpEnabled=true)
  *
  * This is a common setup for many tests that need to verify vault sync.
+ *
+ * @param options.walletAddress - Wallet address (default: MOCK_WALLET_ADDRESS_0)
+ * @param options.objectIdHex - Object ID hex (default: 'a' * 64)
+ * @param options.packageAddressesHex - Package addresses (default: ['b' * 64])
  */
-export async function setupSealWithCpEnabled(walletAddress: string = MOCK_WALLET_ADDRESS) {
+export async function setupSealWithCpEnabled(options: SetupSealOptions | string = {}) {
+  // Support legacy string parameter for backward compatibility
+  const opts: SetupSealOptions = typeof options === 'string'
+    ? { walletAddress: options }
+    : options;
+
+  const walletAddress = opts.walletAddress || MOCK_WALLET_ADDRESS;
+  const objectIdHex = opts.objectIdHex || 'a'.repeat(64);
+  const packageAddressesHex = opts.packageAddressesHex || ['b'.repeat(64)];
   const customer = await db.query.customers.findFirst({
     where: eq(customers.walletAddress, walletAddress),
   });
@@ -423,9 +465,9 @@ export async function setupSealWithCpEnabled(walletAddress: string = MOCK_WALLET
     // Use Buffer.from with hex encoding (96 hex chars = 48 bytes)
     const testPublicKey = Buffer.from('0'.repeat(96), 'hex');
 
-    // Generate a mock object ID (32 bytes) - simulates completed on-chain registration
+    // Use provided object ID or default - simulates completed on-chain registration
     // This allows the key to appear in SMK vault (keyserver config)
-    const testObjectId = Buffer.from('a'.repeat(64), 'hex');
+    const testObjectId = Buffer.from(objectIdHex, 'hex');
 
     const [newSealKey] = await db.insert(sealKeys).values({
       customerId,
@@ -437,30 +479,31 @@ export async function setupSealWithCpEnabled(walletAddress: string = MOCK_WALLET
       isUserEnabled: true,
     }).returning();
     sealKeyId = newSealKey.sealKeyId;
-    console.log(`[TEST DATA] Created seal key ${sealKeyId} for customer ${customerId} (with mock objectId)`);
+    console.log(`[TEST DATA] Created seal key ${sealKeyId} for customer ${customerId} (objectId: 0x${objectIdHex.slice(0, 8)}...)`);
   } else {
     sealKeyId = existingSealKeys[0].sealKeyId;
     console.log(`[TEST DATA] Using existing seal key ${sealKeyId}`);
   }
 
-  // Step 3: Create package for the seal key
+  // Step 3: Create packages for the seal key
   const existingPackages = await db.query.sealPackages.findMany({
     where: eq(sealPackages.sealKeyId, sealKeyId),
   });
 
   if (existingPackages.length === 0) {
-    // Package address must be exactly 32 bytes (64 hex chars = 32 bytes)
-    // Use non-zero address (simulates a real Sui package address)
-    const packageAddress = Buffer.from('b'.repeat(64), 'hex');
-    await db.insert(sealPackages).values({
-      sealKeyId,
-      packageAddress,
-      name: 'Test Package',
-      isUserEnabled: true,
-    });
-    console.log(`[TEST DATA] Created package for seal key ${sealKeyId}`);
+    // Create packages with provided addresses
+    for (let i = 0; i < packageAddressesHex.length; i++) {
+      const packageAddress = Buffer.from(packageAddressesHex[i], 'hex');
+      await db.insert(sealPackages).values({
+        sealKeyId,
+        packageAddress,
+        name: packageAddressesHex.length > 1 ? `Package ${i + 1}` : 'Test Package',
+        isUserEnabled: true,
+      });
+    }
+    console.log(`[TEST DATA] Created ${packageAddressesHex.length} package(s) for seal key ${sealKeyId}`);
   } else {
-    console.log(`[TEST DATA] Using existing package for seal key ${sealKeyId}`);
+    console.log(`[TEST DATA] Using existing ${existingPackages.length} package(s) for seal key ${sealKeyId}`);
   }
 
   // Step 4: Set cpEnabled=true (this is what triggers vault generation)
@@ -577,4 +620,56 @@ export async function getServiceInstanceTestData(
     ...service,
     subscriptionChargePending: service.subPendingInvoiceId !== null, // Convenience boolean for tests
   };
+}
+
+// =============================================================================
+// Convenience Functions for Mock Customers
+// =============================================================================
+
+/**
+ * Setup mock customer 1 with realistic-looking addresses (for demos/screenshots)
+ *
+ * Uses MOCK_WALLET_ADDRESS_1, MOCK_OBJECT_ID_1, and MOCK_PACKAGE_IDS_1
+ * which look like real Sui addresses but are fixed for reproducibility.
+ *
+ * @param balanceUsdCents - Initial balance (default: 10000 = $100)
+ */
+export async function setupMockCustomer1(balanceUsdCents: number = 10000) {
+  // First reset/create the customer
+  await resetCustomerTestData({
+    walletAddress: MOCK_WALLET_ADDRESS_1,
+    balanceUsdCents,
+  });
+
+  // Then setup seal service with realistic addresses
+  // Strip 0x prefix from addresses for the hex parameters
+  const objectIdHex = MOCK_OBJECT_ID_1.replace('0x', '');
+  const packageAddressesHex = MOCK_PACKAGE_IDS_1.map(p => p.replace('0x', ''));
+
+  return setupSealWithCpEnabled({
+    walletAddress: MOCK_WALLET_ADDRESS_1,
+    objectIdHex,
+    packageAddressesHex,
+  });
+}
+
+/**
+ * Setup mock customer 0 with test pattern addresses (legacy helper)
+ *
+ * Uses MOCK_WALLET_ADDRESS_0 (0xaaa...) with simple test addresses.
+ * This is the default behavior of setupSealWithCpEnabled().
+ *
+ * @param balanceUsdCents - Initial balance (default: 10000 = $100)
+ */
+export async function setupMockCustomer0(balanceUsdCents: number = 10000) {
+  // First reset/create the customer
+  await resetCustomerTestData({
+    walletAddress: MOCK_WALLET_ADDRESS_0,
+    balanceUsdCents,
+  });
+
+  // Then setup seal service with default test addresses
+  return setupSealWithCpEnabled({
+    walletAddress: MOCK_WALLET_ADDRESS_0,
+  });
 }
