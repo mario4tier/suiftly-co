@@ -673,7 +673,7 @@ const SLOW_VAULT_NOTIFICATION_COOLDOWN_MS = 60 * 60 * 1000; // 1 hour
  */
 async function createSlowVaultNotification(
   durationMs: number,
-  vaultResults: Record<string, { generated: boolean; seq: number; customerCount: number }>
+  vaultResults: Record<string, { generated: boolean; seq: number; entryCount: number }>
 ): Promise<void> {
   const now = new Date();
 
@@ -691,7 +691,7 @@ async function createSlowVaultNotification(
 
   // Create notification
   try {
-    const totalCustomers = Object.values(vaultResults).reduce((sum, r) => sum + r.customerCount, 0);
+    const totalEntries = Object.values(vaultResults).reduce((sum, r) => sum + r.entryCount, 0);
     const generatedVaults = Object.entries(vaultResults)
       .filter(([_, r]) => r.generated)
       .map(([type, r]) => `${type}:${r.seq}`)
@@ -705,7 +705,7 @@ async function createSlowVaultNotification(
       details: JSON.stringify({
         durationMs,
         thresholdMs: VAULT_GENERATION_SLOW_THRESHOLD_MS,
-        totalCustomers,
+        totalEntries,
         generatedVaults: generatedVaults || 'none',
         timestamp: now.toISOString(),
       }),

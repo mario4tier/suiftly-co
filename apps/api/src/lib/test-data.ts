@@ -423,15 +423,21 @@ export async function setupSealWithCpEnabled(walletAddress: string = MOCK_WALLET
     // Use Buffer.from with hex encoding (96 hex chars = 48 bytes)
     const testPublicKey = Buffer.from('0'.repeat(96), 'hex');
 
+    // Generate a mock object ID (32 bytes) - simulates completed on-chain registration
+    // This allows the key to appear in SMK vault (keyserver config)
+    const testObjectId = Buffer.from('a'.repeat(64), 'hex');
+
     const [newSealKey] = await db.insert(sealKeys).values({
       customerId,
       instanceId: instanceId ?? null,
       publicKey: testPublicKey,
+      objectId: testObjectId, // Set mock objectId to simulate completed registration
       derivationIndex: 0, // Required for derived keys
+      registrationStatus: 'registered', // Mark as registered
       isUserEnabled: true,
     }).returning();
     sealKeyId = newSealKey.sealKeyId;
-    console.log(`[TEST DATA] Created seal key ${sealKeyId} for customer ${customerId}`);
+    console.log(`[TEST DATA] Created seal key ${sealKeyId} for customer ${customerId} (with mock objectId)`);
   } else {
     sealKeyId = existingSealKeys[0].sealKeyId;
     console.log(`[TEST DATA] Using existing seal key ${sealKeyId}`);
@@ -444,7 +450,8 @@ export async function setupSealWithCpEnabled(walletAddress: string = MOCK_WALLET
 
   if (existingPackages.length === 0) {
     // Package address must be exactly 32 bytes (64 hex chars = 32 bytes)
-    const packageAddress = Buffer.from('0'.repeat(64), 'hex');
+    // Use non-zero address (simulates a real Sui package address)
+    const packageAddress = Buffer.from('b'.repeat(64), 'hex');
     await db.insert(sealPackages).values({
       sealKeyId,
       packageAddress,

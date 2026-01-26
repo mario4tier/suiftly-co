@@ -634,6 +634,199 @@ async function buildVaultData(
   return vaultData;
 }
 
+// ============================================================================
+// Keyserver Vault Data (SMK/STK)
+// ============================================================================
+// New compact schema - see docs/SEAL_SERVER_FEATURE.md "Client Configuration from Vault"
+//
+// Vault structure: Single "clients" key containing:
+// {
+//   "derived_keys": [{ cust_id, key_idx, idx, obj_id, pkg_ids }, ...],
+//   "imported_keys": [{ cust_id, key_idx, env_var, obj_id, pkg_ids }, ...]
+// }
+//
+// Generated client name: {cust_id}_{key_idx}
+// ============================================================================
+
+/**
+ * Derived key config for keyserver (compact schema)
+ */
+interface DerivedKeyConfig {
+  /** Customer identifier (maps to customerId) */
+  cust_id: string;
+  /** Key index within customer namespace (for unique naming) */
+  key_idx: number;
+  /** Derivation index from master seed (must be globally unique) */
+  idx: number;
+  /** Key server object ID (0x... format) */
+  obj_id: string;
+  /** Package IDs allowed for this key (0x... format) */
+  pkg_ids: string[];
+}
+
+/**
+ * Imported key config for keyserver (compact schema)
+ */
+interface ImportedKeyConfig {
+  /** Customer identifier (maps to customerId) */
+  cust_id: string;
+  /** Key index within customer namespace (for unique naming) */
+  key_idx: number;
+  /** Environment variable containing BLS key */
+  env_var: string;
+  /** Key server object ID (0x... format) */
+  obj_id: string;
+  /** Package IDs allowed for this key (0x... format) */
+  pkg_ids: string[];
+}
+
+/**
+ * Root structure for keyserver vault "clients" key
+ */
+interface KeyserverClientsConfig {
+  derived_keys: DerivedKeyConfig[];
+  imported_keys: ImportedKeyConfig[];
+}
+
+/**
+ * Build vault data for keyserver configuration (SMK/STK vaults)
+ *
+ * Produces a single "clients" key with compact schema:
+ * - derived_keys: Array of derived key configs (from master seed)
+ * - imported_keys: Array of imported key configs (from env vars)
+ *
+ * Note: Soft-deleted derived keys are still included in derived_keys to prevent
+ * derivation index reuse. The keyserver treats them as deprecated but keeps the
+ * index reserved.
+ *
+ * @param network - Filter by network ('mainnet' or 'testnet')
+ * @returns Record with single "clients" key → JSON config string
+ */
+async function buildKeyserverVaultData(
+  network: 'mainnet' | 'testnet'
+): Promise<Record<string, string>> {
+  const derivedKeys: DerivedKeyConfig[] = [];
+  const importedKeys: ImportedKeyConfig[] = [];
+
+  // Query all seal keys that are ready for keyserver config:
+  // 1. Have objectId (registration complete)
+  // 2. Service is cpEnabled (provisioned to control plane)
+  const serviceType = SERVICE_TYPE.SEAL;
+
+  try {
+    // Get all cpEnabled seal services for this network
+    const services = await db
+      .select({
+        instanceId: serviceInstances.instanceId,
+        customerId: serviceInstances.customerId,
+      })
+      .from(serviceInstances)
+      .where(
+        and(
+          eq(serviceInstances.serviceType, serviceType),
+          eq(serviceInstances.cpEnabled, true)
+        )
+      );
+
+    for (const service of services) {
+      // Customer ID as string for cust_id field
+      const custId = `c${service.customerId}`;
+
+      // Get seal keys for this service
+      // Include ALL keys (even soft-deleted) because:
+      // - Active derived keys → derived_keys array
+      // - Soft-deleted derived keys → still in derived_keys (prevents index reuse)
+      // - Active imported keys → imported_keys array
+      // - Soft-deleted imported keys → skipped (no index to protect)
+      const sealKeysData = await db
+        .select({
+          sealKeyId: sealKeys.sealKeyId,
+          objectId: sealKeys.objectId,
+          derivationIndex: sealKeys.derivationIndex,
+          encryptedPrivateKey: sealKeys.encryptedPrivateKey,
+          deletedAt: sealKeys.deletedAt,
+        })
+        .from(sealKeys)
+        .where(eq(sealKeys.instanceId, service.instanceId));
+
+      // Track key_idx per customer (index within customer's keys)
+      let derivedKeyIdx = 0;
+      let importedKeyIdx = 0;
+
+      for (const sk of sealKeysData) {
+        // Skip keys without objectId (still registering)
+        if (!sk.objectId) {
+          continue;
+        }
+
+        // Get packages for this seal key (only user-enabled packages)
+        const packages = await db
+          .select({
+            packageAddress: sealPackages.packageAddress,
+          })
+          .from(sealPackages)
+          .where(
+            and(eq(sealPackages.sealKeyId, sk.sealKeyId), eq(sealPackages.isUserEnabled, true))
+          );
+
+        // Format object ID with 0x prefix
+        const objId = '0x' + Buffer.from(sk.objectId).toString('hex');
+
+        // Format package addresses with 0x prefix
+        const pkgIds = packages.map((p) => '0x' + Buffer.from(p.packageAddress).toString('hex'));
+
+        // Determine key type and add to appropriate array
+        const isDeleted = sk.deletedAt !== null;
+
+        if (sk.derivationIndex !== null) {
+          // Derived key (active or soft-deleted - both included to prevent index reuse)
+          derivedKeys.push({
+            cust_id: custId,
+            key_idx: derivedKeyIdx++,
+            idx: sk.derivationIndex,
+            obj_id: objId,
+            pkg_ids: pkgIds,
+          });
+        } else if (sk.encryptedPrivateKey !== null && !isDeleted) {
+          // Imported key (only active - soft-deleted imported keys are skipped)
+          importedKeys.push({
+            cust_id: custId,
+            key_idx: importedKeyIdx++,
+            env_var: `SEAL_KEY_${sk.sealKeyId}`,
+            obj_id: objId,
+            pkg_ids: pkgIds,
+          });
+        } else if (!isDeleted) {
+          // Key has neither derivationIndex nor encryptedPrivateKey - skip
+          console.warn(`[VAULT] Skipping key ${sk.sealKeyId}: no derivationIndex or encryptedPrivateKey`);
+        }
+        // Soft-deleted imported keys are silently skipped (no index to protect)
+      }
+    }
+  } catch (error) {
+    console.error(`[VAULT] ERROR: buildKeyserverVaultData failed:`, error);
+    throw error;
+  }
+
+  // Build the clients config
+  const clientsConfig: KeyserverClientsConfig = {
+    derived_keys: derivedKeys,
+    imported_keys: importedKeys,
+  };
+
+  // Return single "clients" key with JSON value
+  return {
+    clients: JSON.stringify(clientsConfig),
+  };
+}
+
+/**
+ * Check if vault type is a keyserver vault (SMK/STK)
+ */
+function isKeyserverVaultType(vaultType: VaultTypeCode): boolean {
+  return vaultType === 'smk' || vaultType === 'stk';
+}
+
 /**
  * Generate vault for a specific type
  *
@@ -652,7 +845,7 @@ export async function generateVault(
   generated: boolean;
   seq: number;
   contentHash: string;
-  customerCount: number;
+  entryCount: number;
   filename?: string;
   reason?: string;
   trigger?: 'pending_changes' | 'drift' | 'none';
@@ -716,8 +909,14 @@ export async function generateVault(
 
   // 5. Build vault data from DB (needed for both scenarios)
   // Any API changes from this point forward will use currentSeq+2
-  const vaultData = await buildVaultData(serviceType, vaultType);
-  const customerCount = Object.keys(vaultData).length;
+  // Use different builders for different vault types:
+  // - SMK/STK: Keyserver config format (flattened seal keys)
+  // - SMA/STA: Customer config format (nested customer→services→sealKeys)
+  const network = getNetworkFromVaultType(vaultType);
+  const vaultData = isKeyserverVaultType(vaultType)
+    ? await buildKeyserverVaultData(network)
+    : await buildVaultData(serviceType, vaultType);
+  const entryCount = Object.keys(vaultData).length;
   const contentHash = computeContentHash(vaultData);
 
   // 6. Check Scenario 2: Drift detection (only if no pending changes)
@@ -743,12 +942,12 @@ export async function generateVault(
   const shouldGenerate = hasPending || hasDrift;
 
   if (!shouldGenerate) {
-    console.log(`[VAULT] ${vaultType} unchanged (seq=${currentSeq}, hash=${contentHash}, customers=${customerCount})`);
+    console.log(`[VAULT] ${vaultType} unchanged (seq=${currentSeq}, hash=${contentHash}, customers=${entryCount})`);
     return {
       generated: false,
       seq: currentSeq,
       contentHash,
-      customerCount,
+      entryCount,
       reason: 'unchanged',
       trigger: 'none',
     };
@@ -778,7 +977,7 @@ export async function generateVault(
     .set({
       [columns.seq]: newSeq,
       [columns.hash]: contentHash,
-      [columns.entries]: customerCount,
+      [columns.entries]: entryCount,
       [columns.nextSeq]: newSeq + 1, // Reset for next cycle
       updatedAt: new Date(),
     })
@@ -789,7 +988,7 @@ export async function generateVault(
 
   const trigger = hasPending ? 'pending_changes' : 'drift';
   console.log(
-    `[VAULT] ${vaultType} generated (seq=${newSeq}, hash=${contentHash}, customers=${customerCount}, ` +
+    `[VAULT] ${vaultType} generated (seq=${newSeq}, hash=${contentHash}, customers=${entryCount}, ` +
     `trigger=${trigger}, file=${result.filename})`
   );
 
@@ -797,7 +996,7 @@ export async function generateVault(
     generated: true,
     seq: newSeq,
     contentHash,
-    customerCount,
+    entryCount,
     filename: result.filename,
     trigger,
   };
