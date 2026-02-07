@@ -21,7 +21,7 @@ test.describe('Billing Page - No Escrow Account', () => {
 
     // Authenticate with mock wallet
     await page.goto('/');
-    await page.click('button:has-text("Mock Wallet")');
+    await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
 
     // Navigate to billing page
@@ -66,7 +66,7 @@ test.describe('Billing Page', () => {
 
     // Authenticate with mock wallet
     await page.goto('/');
-    await page.click('button:has-text("Mock Wallet")');
+    await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
   });
 

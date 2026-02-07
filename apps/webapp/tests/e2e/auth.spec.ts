@@ -4,7 +4,7 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { resetCustomer } from '../helpers/db';
+import { resetCustomer, authenticateWithMockWallet } from '../helpers/db';
 
 test.describe('Authentication Flow', () => {
   test.beforeEach(async ({ request }) => {
@@ -13,14 +13,8 @@ test.describe('Authentication Flow', () => {
   });
 
   test('can authenticate with mock wallet and access protected route', async ({ page }) => {
-    // Go to home page
-    await page.goto('/');
-
-    // Click "Mock Wallet" button directly on login page
-    await page.click('button:has-text("Mock Wallet")');
-
-    // Should authenticate and show address button (wait for auth to complete)
-    await expect(page.locator('text=/0x[a-f0-9]{4}\\.\\.\\./')).toBeVisible({ timeout: 5000 });
+    // Authenticate with mock wallet
+    await authenticateWithMockWallet(page);
 
     // Navigate to protected /test route
     await page.goto('/test');
@@ -56,10 +50,9 @@ test.describe('Authentication Flow', () => {
 
   test('logout works and clears session', async ({ page }) => {
     // Authenticate first
-    await page.goto('/');
-    await page.click('button:has-text("Mock Wallet")');
+    await authenticateWithMockWallet(page);
 
-    // Wait for address button to appear (authentication complete)
+    // Find the address button (in header after auth complete)
     const addressButton = page.locator('button', { hasText: /0x[a-f0-9]{4}/ });
     await expect(addressButton).toBeVisible({ timeout: 5000 });
 
@@ -74,8 +67,8 @@ test.describe('Authentication Flow', () => {
     await page.waitForURL('/login', { timeout: 5000 });
     expect(page.url()).toContain('/login');
 
-    // Should show "Mock Wallet" button again
-    await expect(page.locator('button:has-text("Mock Wallet")')).toBeVisible();
+    // Should show "Mock Wallet" buttons again (multiple mock wallets available)
+    await expect(page.locator('button:has-text("Mock Wallet 0")')).toBeVisible();
 
     // localStorage should be cleared
     const authState = await page.evaluate(() => localStorage.getItem('suiftly-auth'));

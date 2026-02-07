@@ -39,7 +39,7 @@ test.describe('Subscription Billing - Bug Detection', () => {
 
     // Authenticate
     await page.goto('/');
-    await page.click('button:has-text("Mock Wallet")');
+    await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
 
     // Subscribe to Seal Pro
@@ -109,7 +109,7 @@ test.describe('Subscription Billing - Bug Detection', () => {
 
     // Authenticate
     await page.goto('/');
-    await page.click('button:has-text("Mock Wallet")');
+    await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
 
     // Subscribe to Seal Pro
@@ -172,7 +172,7 @@ test.describe('Month Boundary Edge Cases', () => {
     });
 
     await page.goto('/');
-    await page.click('button:has-text("Mock Wallet")');
+    await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
 
     await page.click('text=Seal');
@@ -218,7 +218,7 @@ test.describe('Month Boundary Edge Cases', () => {
     });
 
     await page.goto('/');
-    await page.click('button:has-text("Mock Wallet")');
+    await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
 
     await page.click('text=Seal');
@@ -262,7 +262,7 @@ test.describe('Month Boundary Edge Cases', () => {
     });
 
     await page.goto('/');
-    await page.click('button:has-text("Mock Wallet")');
+    await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
 
     await page.click('text=Seal');
@@ -308,7 +308,7 @@ test.describe('Month Boundary Edge Cases', () => {
     });
 
     await page.goto('/');
-    await page.click('button:has-text("Mock Wallet")');
+    await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
 
     await page.click('text=Seal');
@@ -354,7 +354,7 @@ test.describe('Month Boundary Edge Cases', () => {
     });
 
     await page.goto('/');
-    await page.click('button:has-text("Mock Wallet")');
+    await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
 
     await page.click('text=Seal');
@@ -398,7 +398,7 @@ test.describe('Month Boundary Edge Cases', () => {
     });
 
     await page.goto('/');
-    await page.click('button:has-text("Mock Wallet")');
+    await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
 
     await page.click('text=Seal');
@@ -451,7 +451,7 @@ test.describe('Scheduled Change Date Display', () => {
     });
 
     await page.goto('/');
-    await page.click('button:has-text("Mock Wallet")');
+    await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
 
     // Subscribe to Enterprise tier first
@@ -522,7 +522,7 @@ test.describe('Scheduled Change Date Display', () => {
     });
 
     await page.goto('/');
-    await page.click('button:has-text("Mock Wallet")');
+    await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
 
     // Subscribe to Pro tier

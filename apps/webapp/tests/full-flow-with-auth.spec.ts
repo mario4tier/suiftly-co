@@ -11,7 +11,7 @@ test('complete flow: login with mock wallet and navigate dashboard', async ({ pa
   console.log('✓ Navigated to login page');
 
   // Step 3: Click Mock Wallet button
-  await page.click('text=Mock Wallet');
+  await page.click('text=Mock Wallet 0');
   console.log('✓ Clicked Mock Wallet button');
 
   // Step 4: Wait for authentication and redirect to dashboard

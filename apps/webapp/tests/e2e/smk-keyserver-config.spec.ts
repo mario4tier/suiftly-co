@@ -10,10 +10,9 @@
  * 3. LM reads SMK vault and generates key-server-config.yaml
  * 4. Seal server uses config to serve the correct keys
  *
- * SMK Vault Format (expected by cfg_mgr_seal.py):
+ * SMK Vault Format (single "clients" entry with arrays):
  * {
- *   "key_<id>": "{\"key_type\":\"Derived\",\"derivation_index\":1,...}",
- *   ...
+ *   "clients": "{\"derived_keys\":[{\"cust_id\":\"c0\",\"key_idx\":0,\"idx\":0,...}],\"imported_keys\":[...]}"
  * }
  *
  * This is DIFFERENT from SMA vault which uses customer-based structure.
@@ -24,7 +23,7 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { resetCustomer, setupCpEnabled, getCustomerData } from '../helpers/db';
+import { resetCustomer, setupCpEnabled } from '../helpers/db';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 
@@ -43,86 +42,90 @@ async function runKvcrypt(args: string[]): Promise<{ status: string; data?: Reco
   }
 }
 
-// Parsed SMK client config
-interface SMKClientConfig {
-  name: string;
-  keyType: 'Derived' | 'Imported' | 'Exported';
-  derivationIndex?: number;
-  deprecatedDerivationIndex?: number;
-  envVar?: string;
-  objectId: string;
-  packageIds: string[];
+// Vault key entry types (match GM's buildKeyserverVaultData output)
+interface SMKDerivedKey {
+  cust_id: string;
+  key_idx: number;
+  idx: number; // derivation index
+  obj_id: string;
+  pkg_ids: string[];
 }
 
-// Get SMK vault contents
-async function getSMKVault(): Promise<{
+interface SMKImportedKey {
+  cust_id: string;
+  key_idx: number;
+  env_var: string;
+  obj_id: string;
+  pkg_ids: string[];
+}
+
+interface SMKVaultContents {
   seq: number;
-  clients: SMKClientConfig[];
-}> {
+  derivedKeys: SMKDerivedKey[];
+  importedKeys: SMKImportedKey[];
+}
+
+// Test key has cust_id "c0" - used to filter it out when counting customer keys
+const TEST_KEY_CUST_ID = 'c0';
+
+// Get SMK vault contents by parsing the "clients" entry
+async function getSMKVault(): Promise<SMKVaultContents> {
   const result = await runKvcrypt(['get-all', 'smk', '--show-value']);
 
   if (result.status !== 'success' || !result.data) {
-    return { seq: 0, clients: [] };
+    return { seq: 0, derivedKeys: [], importedKeys: [] };
   }
 
-  const clients: SMKClientConfig[] = [];
   let seq = 0;
+  let derivedKeys: SMKDerivedKey[] = [];
+  let importedKeys: SMKImportedKey[] = [];
 
-  for (const [key, value] of Object.entries(result.data)) {
-    if (key === '__vault') {
-      try {
-        const meta = JSON.parse(value);
-        seq = meta.seq || 0;
-      } catch {
-        // Ignore parse errors
-      }
-      continue;
-    }
-
-    // Skip metadata keys
-    if (key.startsWith('_')) continue;
-
+  // Parse __vault metadata
+  if (result.data.__vault) {
     try {
-      const config = JSON.parse(value);
-      clients.push({
-        name: key,
-        keyType: config.key_type,
-        derivationIndex: config.derivation_index,
-        deprecatedDerivationIndex: config.deprecated_derivation_index,
-        envVar: config.env_var,
-        objectId: config.key_server_object_id,
-        packageIds: config.package_ids || [],
-      });
-    } catch (e) {
-      console.warn(`Failed to parse SMK entry '${key}': ${e}`);
+      const meta = JSON.parse(result.data.__vault);
+      seq = meta.seq || 0;
+    } catch {
+      // Ignore parse errors
     }
   }
 
-  return { seq, clients };
+  // Parse "clients" entry (single entry with derived_keys + imported_keys arrays)
+  if (result.data.clients) {
+    try {
+      const config = JSON.parse(result.data.clients);
+      derivedKeys = config.derived_keys || [];
+      importedKeys = config.imported_keys || [];
+    } catch (e) {
+      console.warn(`Failed to parse SMK "clients" entry: ${e}`);
+    }
+  }
+
+  return { seq, derivedKeys, importedKeys };
 }
 
-// Wait for SMK vault to contain expected client count
-async function waitForSMKVault(
-  expectedMinCount: number,
+// Wait for SMK vault to contain a derived key with the given cust_id.
+// This avoids counting from stale vault state (GM may not have regenerated yet after resetCustomer).
+async function waitForSMKVaultCustId(
+  custId: string,
   options?: { timeout?: number; pollInterval?: number }
 ): Promise<{
   success: boolean;
-  seq: number;
-  clients: SMKClientConfig[];
-}> {
+} & SMKVaultContents> {
   const timeout = options?.timeout ?? 30000;
   const pollInterval = options?.pollInterval ?? 2000;
   const maxAttempts = Math.ceil(timeout / pollInterval);
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const vault = await getSMKVault();
+    const found = vault.derivedKeys.some((k) => k.cust_id === custId);
 
-    if (vault.clients.length >= expectedMinCount) {
+    if (found) {
       return { success: true, ...vault };
     }
 
     console.log(
-      `  SMK vault: ${vault.clients.length}/${expectedMinCount} clients (attempt ${attempt + 1}/${maxAttempts})`
+      `  SMK vault: waiting for cust_id=${custId} (attempt ${attempt + 1}/${maxAttempts}, seq=${vault.seq}, derived=${vault.derivedKeys.length})`
     );
 
     if (attempt < maxAttempts - 1) {
@@ -143,59 +146,54 @@ test.describe('SMK Vault Keyserver Config', () => {
   test('setupCpEnabled populates SMK vault with correct keyserver config format', async ({ request }) => {
     test.setTimeout(90000);
 
-    // === STEP 1: Get initial SMK vault state ===
-    const initialVault = await getSMKVault();
-    console.log(`Initial SMK vault: seq=${initialVault.seq}, clients=${initialVault.clients.length}`);
-
-    // === STEP 2: Use setupCpEnabled helper to create seal key with package ===
-    // This is the same helper used by other tests - proven to work
+    // === STEP 1: Use setupCpEnabled helper to create seal key with package ===
     const setupResult = await setupCpEnabled(request);
     expect(setupResult.success).toBe(true);
     expect(setupResult.sealKeyId).toBeDefined();
-    console.log(`✅ setupCpEnabled completed: sealKeyId=${setupResult.sealKeyId}`);
+    expect(setupResult.customerId).toBeDefined();
+    console.log(`setupCpEnabled completed: sealKeyId=${setupResult.sealKeyId}, customerId=${setupResult.customerId}`);
 
-    // === STEP 3: Wait for SMK vault to be updated by GM ===
-    const expectedClientCount = initialVault.clients.length + 1;
-    console.log(`Waiting for SMK vault to have ${expectedClientCount} client(s)...`);
+    // === STEP 2: Wait for GM to regenerate SMK vault with the new customer's key ===
+    // GM detects drift every ~5s and regenerates. We wait for the specific cust_id
+    // instead of counting keys, because the vault may contain stale data from before resetCustomer.
+    const custId = `c${setupResult.customerId}`;
+    console.log(`Waiting for SMK vault to contain cust_id=${custId}...`);
 
-    const updatedVault = await waitForSMKVault(expectedClientCount, { timeout: 60000 });
+    const updatedVault = await waitForSMKVaultCustId(custId, { timeout: 60000 });
 
     if (!updatedVault.success) {
       console.log('SMK vault contents:', JSON.stringify(updatedVault, null, 2));
-      throw new Error(
-        `SMK vault not updated: expected >=${expectedClientCount} clients, got ${updatedVault.clients.length}`
-      );
+      throw new Error(`SMK vault not updated: cust_id=${custId} not found`);
     }
 
-    console.log(`✅ SMK vault updated: seq=${updatedVault.seq}, clients=${updatedVault.clients.length}`);
-
-    // === STEP 4: Find the new client entry ===
-    const newClient = updatedVault.clients.find(
-      (c) => c.name === `key_${setupResult.sealKeyId}`
+    console.log(
+      `SMK vault updated: seq=${updatedVault.seq}, derived=${updatedVault.derivedKeys.length}, imported=${updatedVault.importedKeys.length}`
     );
 
-    expect(newClient).toBeDefined();
-    console.log('New client entry:', JSON.stringify(newClient, null, 2));
+    // === STEP 3: Find the new customer entry (by cust_id) ===
+    const newKey = updatedVault.derivedKeys.find((k) => k.cust_id === custId);
 
-    // === STEP 5: Verify SMK vault schema matches keyserver config format ===
-    // This is the format expected by cfg_mgr_seal.py (see SEAL_SERVER_FEATURE.md)
-    expect(newClient!.keyType).toBe('Derived');
-    expect(typeof newClient!.derivationIndex).toBe('number');
-    expect(newClient!.derivationIndex).toBeGreaterThanOrEqual(0);
-    expect(newClient!.objectId).toMatch(/^0x[0-9a-fA-F]+$/);
-    expect(Array.isArray(newClient!.packageIds)).toBe(true);
-    expect(newClient!.packageIds.length).toBeGreaterThan(0);
+    expect(newKey).toBeDefined();
+    console.log('New derived key entry:', JSON.stringify(newKey, null, 2));
 
-    // For Derived keys, these should NOT be present
-    expect(newClient!.deprecatedDerivationIndex).toBeUndefined();
-    expect(newClient!.envVar).toBeUndefined();
+    // === STEP 4: Verify SMK vault schema matches keyserver config format ===
+    expect(typeof newKey!.idx).toBe('number');
+    expect(newKey!.idx).toBeGreaterThanOrEqual(0);
+    expect(newKey!.obj_id).toMatch(/^0x[0-9a-fA-F]+$/);
+    expect(Array.isArray(newKey!.pkg_ids)).toBe(true);
+    expect(newKey!.pkg_ids.length).toBeGreaterThan(0);
+    expect(typeof newKey!.key_idx).toBe('number');
+    expect(typeof newKey!.cust_id).toBe('string');
+
+    // Derived keys should NOT have env_var
+    expect((newKey as Record<string, unknown>).env_var).toBeUndefined();
 
     console.log('✅ SMK vault entry matches keyserver config schema:');
-    console.log(`   - Name: ${newClient!.name}`);
-    console.log(`   - Key Type: ${newClient!.keyType}`);
-    console.log(`   - Derivation Index: ${newClient!.derivationIndex}`);
-    console.log(`   - Object ID: ${newClient!.objectId.substring(0, 20)}...`);
-    console.log(`   - Package Count: ${newClient!.packageIds.length}`);
+    console.log(`   - Customer: ${newKey!.cust_id}`);
+    console.log(`   - Key Index: ${newKey!.key_idx}`);
+    console.log(`   - Derivation Index: ${newKey!.idx}`);
+    console.log(`   - Object ID: ${newKey!.obj_id.substring(0, 20)}...`);
+    console.log(`   - Package Count: ${newKey!.pkg_ids.length}`);
   });
 
   test('SMK vault entries have valid hex addresses', async ({ request }) => {
@@ -205,18 +203,26 @@ test.describe('SMK Vault Keyserver Config', () => {
     const setupResult = await setupCpEnabled(request);
     expect(setupResult.success).toBe(true);
 
-    // Wait for vault
-    const vault = await waitForSMKVault(1, { timeout: 60000 });
+    // Wait for vault to contain this customer's key
+    const custId = `c${setupResult.customerId}`;
+    const vault = await waitForSMKVaultCustId(custId, { timeout: 60000 });
     expect(vault.success).toBe(true);
-    expect(vault.clients.length).toBeGreaterThan(0);
 
-    // Verify all hex addresses are properly formatted
-    for (const client of vault.clients) {
+    // Verify all derived key hex addresses
+    for (const key of vault.derivedKeys) {
       // Object ID: 0x + 64 hex chars (32 bytes)
-      expect(client.objectId).toMatch(/^0x[0-9a-fA-F]{64}$/);
+      expect(key.obj_id).toMatch(/^0x[0-9a-fA-F]{64}$/);
 
       // Package IDs: 0x + 64 hex chars (32 bytes) each
-      for (const pkgId of client.packageIds) {
+      for (const pkgId of key.pkg_ids) {
+        expect(pkgId).toMatch(/^0x[0-9a-fA-F]{64}$/);
+      }
+    }
+
+    // Verify all imported key hex addresses
+    for (const key of vault.importedKeys) {
+      expect(key.obj_id).toMatch(/^0x[0-9a-fA-F]{64}$/);
+      for (const pkgId of key.pkg_ids) {
         expect(pkgId).toMatch(/^0x[0-9a-fA-F]{64}$/);
       }
     }
@@ -233,16 +239,17 @@ test.describe('SMK vs SMA Vault Structure', () => {
     const setupResult = await setupCpEnabled(request);
     expect(setupResult.success).toBe(true);
 
-    // Wait for SMK vault
-    const smkVault = await waitForSMKVault(1, { timeout: 60000 });
+    // Wait for SMK vault to have this customer's key
+    const custId = `c${setupResult.customerId}`;
+    const smkVault = await waitForSMKVaultCustId(custId, { timeout: 60000 });
     expect(smkVault.success).toBe(true);
+
+    // SMK should have derived_keys with customer entries
+    const customerDerived = smkVault.derivedKeys.filter((k) => k.cust_id !== TEST_KEY_CUST_ID);
+    expect(customerDerived.length).toBeGreaterThan(0);
 
     // Get SMA vault for comparison
     const smaResult = await runKvcrypt(['get-all', 'sma', '--show-value']);
-
-    // SMK should have "key_<id>" entries (flattened seal keys)
-    const smkHasKeyEntries = smkVault.clients.some((c) => c.name.startsWith('key_'));
-    expect(smkHasKeyEntries).toBe(true);
 
     // SMA should have "customer:<id>" entries (customer-based structure)
     const smaData = smaResult.data || {};
@@ -259,7 +266,7 @@ test.describe('SMK vs SMA Vault Structure', () => {
     }
 
     console.log('✅ SMK and SMA vaults have different structures:');
-    console.log(`   - SMK: Flattened seal keys (key_<id> → keyserver config)`);
+    console.log(`   - SMK: Single "clients" entry with derived_keys/imported_keys arrays`);
     console.log(`   - SMA: Customer structure (customer:<id> → services[])`);
   });
 });

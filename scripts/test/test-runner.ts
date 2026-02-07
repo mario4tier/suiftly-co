@@ -22,6 +22,7 @@ import { writeFileSync, appendFileSync, existsSync, readFileSync, unlinkSync } f
 import { homedir } from 'os';
 import { join } from 'path';
 import { waitForPortFree } from '../../playwright-test-utils';
+import { PORT } from '@suiftly/shared/constants';
 
 /**
  * Find system.conf path (searches mhaxbe first, then walrus for migration compatibility)
@@ -661,19 +662,21 @@ async function main() {
   section('Preparing for short-expiry tests (clean server state)...');
 
   // Clear any JWT-related test data that might cause pollution (while server is still running)
-  section('Cleaning database for short-expiry tests...');
+  section('Full clean-slate via sudob reset-all...');
   try {
-    const cleanupResponse = await fetch('http://localhost:22700/test/data/truncate-all', {
+    const cleanupResponse = await fetch(`http://localhost:${PORT.SUDOB}/api/test/reset-all`, {
       method: 'POST',
-      signal: AbortSignal.timeout(5000)
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+      signal: AbortSignal.timeout(60000)
     });
     if (cleanupResponse.ok) {
-      success('Database cleaned');
+      success('Full reset-all complete');
     } else {
-      warning('Database cleanup returned non-OK status');
+      warning('reset-all returned non-OK status');
     }
   } catch {
-    warning('Database cleanup failed or timed out');
+    warning('reset-all failed or timed out');
   }
 
   // Restart only API and Webapp (keep GM/LM running) to test if GM/LM is causing the issue

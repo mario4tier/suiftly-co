@@ -58,14 +58,13 @@ async function pollLM(endpoint: LMEndpoint): Promise<{
   data?: LMHealthResponse;
   error?: string;
 }> {
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), LM_HEALTH_CHECK_TIMEOUT);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), LM_HEALTH_CHECK_TIMEOUT);
 
+  try {
     const response = await fetch(`${endpoint.host}/api/health`, {
       signal: controller.signal,
     });
-    clearTimeout(timeout);
 
     if (!response.ok) {
       return {
@@ -79,6 +78,8 @@ async function pollLM(endpoint: LMEndpoint): Promise<{
   } catch (err) {
     const error = err instanceof Error ? err.message : 'Unknown error';
     return { success: false, error };
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -92,67 +93,51 @@ async function updateLMStatus(
   const now = new Date();
 
   if (result.success && result.data) {
-    // LM is reachable - extract first vault status (currently only 'sma')
-    const smaVault = result.data.vaults.find((v) => v.type === 'sma');
+    // LM is reachable - upsert one row per vault type
+    for (const vault of result.data.vaults) {
+      const appliedSeq = vault.applied?.seq ?? 0;
+      const processingSeq = vault.processing?.seq ?? null;
 
-    // Extract applied and processing sequences
-    const appliedSeq = smaVault?.applied?.seq ?? 0;
-    const processingSeq = smaVault?.processing?.seq ?? null;
-
-    await db
-      .insert(lmStatus)
-      .values({
-        lmId: endpoint.id,
-        displayName: endpoint.name,
-        host: endpoint.host,
-        region: endpoint.region ?? null,
-        vaultType: smaVault?.type ?? 'unknown',
-        appliedSeq,
-        processingSeq,
-        entries: smaVault?.entries ?? 0,
-        lastSeenAt: now,
-        lastError: null,
-        updatedAt: now,
-      })
-      .onConflictDoUpdate({
-        target: lmStatus.lmId,
-        set: {
+      await db
+        .insert(lmStatus)
+        .values({
+          lmId: endpoint.id,
           displayName: endpoint.name,
           host: endpoint.host,
           region: endpoint.region ?? null,
-          vaultType: smaVault?.type ?? 'unknown',
+          vaultType: vault.type,
           appliedSeq,
           processingSeq,
-          entries: smaVault?.entries ?? 0,
+          entries: vault.entries ?? 0,
           lastSeenAt: now,
           lastError: null,
           updatedAt: now,
-        },
-      });
+        })
+        .onConflictDoUpdate({
+          target: [lmStatus.lmId, lmStatus.vaultType],
+          set: {
+            displayName: endpoint.name,
+            host: endpoint.host,
+            region: endpoint.region ?? null,
+            appliedSeq,
+            processingSeq,
+            entries: vault.entries ?? 0,
+            lastSeenAt: now,
+            lastError: null,
+            updatedAt: now,
+          },
+        });
+    }
   } else {
-    // LM is unreachable - only update error status, preserve existing seq values
+    // LM is unreachable - update error status on all existing rows for this LM
     await db
-      .insert(lmStatus)
-      .values({
-        lmId: endpoint.id,
-        displayName: endpoint.name,
-        host: endpoint.host,
-        region: endpoint.region ?? null,
+      .update(lmStatus)
+      .set({
         lastErrorAt: now,
         lastError: result.error ?? 'Unknown error',
         updatedAt: now,
       })
-      .onConflictDoUpdate({
-        target: lmStatus.lmId,
-        set: {
-          displayName: endpoint.name,
-          host: endpoint.host,
-          region: endpoint.region ?? null,
-          lastErrorAt: now,
-          lastError: result.error ?? 'Unknown error',
-          updatedAt: now,
-        },
-      });
+      .where(eq(lmStatus.lmId, endpoint.id));
   }
 }
 
@@ -165,13 +150,13 @@ export async function pollLMStatus(): Promise<{
   polled: number;
   up: number;
   down: number;
-  minAppliedSeq: number | null;
+  minAppliedSeqByVault: Record<string, number>;
 }> {
   const endpoints = getLMEndpoints();
 
   let up = 0;
   let down = 0;
-  let minAppliedSeq: number | null = null;
+  const minAppliedSeqByVault: Record<string, number> = {};
 
   // Poll all LMs in parallel
   const results = await Promise.all(
@@ -182,31 +167,37 @@ export async function pollLMStatus(): Promise<{
     })
   );
 
-  // Calculate summary
+  // Calculate summary — track min applied seq per vault type
   for (const { result } of results) {
     if (result.success && result.data) {
       up++;
 
-      // Track minimum applied seq across all reachable LMs
-      const smaVault = result.data.vaults.find((v) => v.type === 'sma');
-      const appliedSeq = smaVault?.applied?.seq ?? 0;
-      if (smaVault && smaVault.applied && (minAppliedSeq === null || appliedSeq < minAppliedSeq)) {
-        minAppliedSeq = appliedSeq;
+      for (const vault of result.data.vaults) {
+        if (vault.applied) {
+          const current = minAppliedSeqByVault[vault.type];
+          if (current === undefined || vault.applied.seq < current) {
+            minAppliedSeqByVault[vault.type] = vault.applied.seq;
+          }
+        }
       }
     } else {
       down++;
     }
   }
 
+  const seqSummary = Object.entries(minAppliedSeqByVault)
+    .map(([type, seq]) => `${type}=${seq}`)
+    .join(', ') || 'N/A';
+
   console.log(
-    `[LM-POLL] Polled ${endpoints.length} LMs: ${up} up, ${down} down, minAppliedSeq=${minAppliedSeq ?? 'N/A'}`
+    `[LM-POLL] Polled ${endpoints.length} LMs: ${up} up, ${down} down, minAppliedSeq: ${seqSummary}`
   );
 
   return {
     polled: endpoints.length,
     up,
     down,
-    minAppliedSeq,
+    minAppliedSeqByVault,
   };
 }
 

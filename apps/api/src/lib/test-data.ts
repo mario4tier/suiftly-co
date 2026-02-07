@@ -11,9 +11,10 @@ import {
   customers, serviceInstances, serviceCancellationHistory, ledgerEntries, apiKeys, sealKeys, sealPackages,
   refreshTokens, billingRecords, escrowTransactions, usageRecords,
   haproxyRawLogs, userActivityLogs, mockSuiTransactions,
-  invoicePayments, customerCredits, billingIdempotency, adminNotifications
+  invoicePayments, customerCredits, billingIdempotency, adminNotifications,
+  systemControl,
 } from '@suiftly/database/schema';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { decryptSecret } from './encryption';
 import { suiMockConfig } from '@suiftly/database/sui-mock';
 import { dbClock } from '@suiftly/shared/db-clock';
@@ -469,12 +470,23 @@ export async function setupSealWithCpEnabled(options: SetupSealOptions | string 
     // This allows the key to appear in SMK vault (keyserver config)
     const testObjectId = Buffer.from(objectIdHex, 'hex');
 
+    // Atomically allocate derivation index (PG2 for dev, mirrors production seal.ts logic)
+    const [idxResult] = await db
+      .update(systemControl)
+      .set({
+        nextSealDerivationIndexPg2: sql`${systemControl.nextSealDerivationIndexPg2} + 1`,
+      })
+      .where(eq(systemControl.id, 1))
+      .returning({
+        allocatedIndex: sql<number>`${systemControl.nextSealDerivationIndexPg2} - 1`,
+      });
+
     const [newSealKey] = await db.insert(sealKeys).values({
       customerId,
       instanceId: instanceId ?? null,
       publicKey: testPublicKey,
       objectId: testObjectId, // Set mock objectId to simulate completed registration
-      derivationIndex: 0, // Required for derived keys
+      derivationIndex: idxResult.allocatedIndex,
       registrationStatus: 'registered', // Mark as registered
       isUserEnabled: true,
     }).returning();
@@ -672,4 +684,66 @@ export async function setupMockCustomer0(balanceUsdCents: number = 10000) {
   return setupSealWithCpEnabled({
     walletAddress: MOCK_WALLET_ADDRESS_0,
   });
+}
+
+/**
+ * Add a package to an existing seal key (for E2E tests that need a second package)
+ *
+ * @param sealKeyId - The seal key to add the package to
+ * @param packageAddressHex - 64-char hex string (without 0x prefix)
+ * @param name - Optional name for the package
+ */
+export async function addPackageToSealKey(
+  sealKeyId: number,
+  packageAddressHex: string,
+  name?: string,
+) {
+  // Verify the seal key exists
+  const key = await db.query.sealKeys.findFirst({
+    where: eq(sealKeys.sealKeyId, sealKeyId),
+  });
+
+  if (!key) {
+    return { success: false, error: `Seal key ${sealKeyId} not found` };
+  }
+
+  const packageAddress = Buffer.from(packageAddressHex, 'hex');
+  const [pkg] = await db.insert(sealPackages).values({
+    sealKeyId,
+    packageAddress,
+    name: name || 'Test Package',
+    isUserEnabled: true,
+  }).returning();
+
+  console.log(`[TEST DATA] Added package ${pkg.packageId} to seal key ${sealKeyId}`);
+
+  return {
+    success: true,
+    sealKeyId,
+    packageId: pkg.packageId,
+    customerId: key.customerId,
+  };
+}
+
+/**
+ * Disable a package on a seal key (set isUserEnabled=false)
+ *
+ * @param packageId - The package to disable
+ */
+export async function disablePackage(packageId: number) {
+  const pkg = await db.query.sealPackages.findFirst({
+    where: eq(sealPackages.packageId, packageId),
+  });
+
+  if (!pkg) {
+    return { success: false, error: `Package ${packageId} not found` };
+  }
+
+  await db.update(sealPackages)
+    .set({ isUserEnabled: false })
+    .where(eq(sealPackages.packageId, packageId));
+
+  console.log(`[TEST DATA] Disabled package ${packageId}`);
+
+  return { success: true, packageId };
 }

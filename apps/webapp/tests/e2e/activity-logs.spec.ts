@@ -4,7 +4,7 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { resetCustomer } from '../helpers/db';
+import { resetCustomer, authenticateWithMockWallet } from '../helpers/db';
 import { waitAfterMutation } from '../helpers/wait-utils';
 
 test.describe('Activity Logs', () => {
@@ -15,11 +15,7 @@ test.describe('Activity Logs', () => {
 
   test('displays login activity after authentication', async ({ page }) => {
     // Authenticate with mock wallet
-    await page.goto('/');
-    await page.click('button:has-text("Mock Wallet")');
-
-    // Wait for authentication to complete
-    await expect(page.locator('text=/0x[a-f0-9]{4}\\.\\.\\./')).toBeVisible({ timeout: 5000 });
+    await authenticateWithMockWallet(page);
 
     // Navigate to logs page
     await page.goto('/logs');
@@ -52,9 +48,7 @@ test.describe('Activity Logs', () => {
 
   test('pagination works correctly', async ({ page }) => {
     // Authenticate
-    await page.goto('/');
-    await page.click('button:has-text("Mock Wallet")');
-    await expect(page.locator('text=/0x[a-f0-9]{4}\\.\\.\\./')).toBeVisible({ timeout: 5000 });
+    await authenticateWithMockWallet(page);
 
     // Navigate to logs page
     await page.goto('/logs');
@@ -93,9 +87,7 @@ test.describe('Activity Logs', () => {
 
   test('limits display to 100 entries', async ({ page }) => {
     // Authenticate
-    await page.goto('/');
-    await page.click('button:has-text("Mock Wallet")');
-    await expect(page.locator('text=/0x[a-f0-9]{4}\\.\\.\\./')).toBeVisible({ timeout: 5000 });
+    await authenticateWithMockWallet(page);
 
     // Navigate to logs page
     await page.goto('/logs');
@@ -121,9 +113,7 @@ test.describe('Activity Logs', () => {
 
   test('displays log entries with proper formatting', async ({ page }) => {
     // Authenticate
-    await page.goto('/');
-    await page.click('button:has-text("Mock Wallet")');
-    await expect(page.locator('text=/0x[a-f0-9]{4}\\.\\.\\./')).toBeVisible({ timeout: 5000 });
+    await authenticateWithMockWallet(page);
 
     // Navigate to logs page
     await page.goto('/logs');
@@ -155,9 +145,7 @@ test.describe('Activity Logs', () => {
 
   test('can navigate back to top after loading more', async ({ page }) => {
     // Authenticate
-    await page.goto('/');
-    await page.click('button:has-text("Mock Wallet")');
-    await expect(page.locator('text=/0x[a-f0-9]{4}\\.\\.\\./')).toBeVisible({ timeout: 5000 });
+    await authenticateWithMockWallet(page);
 
     // Navigate to logs page
     await page.goto('/logs');
@@ -193,9 +181,7 @@ test.describe('Activity Logs', () => {
 
   test('handles errors gracefully', async ({ page, context }) => {
     // Authenticate first
-    await page.goto('/');
-    await page.click('button:has-text("Mock Wallet")');
-    await expect(page.locator('text=/0x[a-f0-9]{4}\\.\\.\\./')).toBeVisible({ timeout: 5000 });
+    await authenticateWithMockWallet(page);
 
     // Navigate to logs page first
     await page.goto('/logs');

@@ -226,12 +226,19 @@ export async function resetTestData(walletAddress?: string): Promise<void> {
 }
 
 /**
- * Truncate all tables (complete database reset)
+ * Full test environment clean-slate via sudob
+ * Stops services, deletes vault files, truncates DB, starts services.
+ * All destructive operations live in sudob (which never runs in production).
  */
 export async function truncateAllTables(): Promise<void> {
-  const result = await restCall('POST', '/test/data/truncate-all');
-  if (!result.success) {
-    throw new Error(`Failed to truncate tables: ${result.error}`);
+  const { PORT } = await import('@suiftly/shared/constants');
+  const response = await fetch(`http://localhost:${PORT.SUDOB}/api/test/reset-all`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to reset-all via sudob: ${await response.text()}`);
   }
 }
 

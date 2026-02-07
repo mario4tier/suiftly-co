@@ -171,7 +171,12 @@ for dir in "${GM_VAULT_DIRS[@]}"; do
     # Delete vault files (.enc and .rsa) recursively
     # Preserves directory structure - only deletes files
     find "$dir" -type f -name "sma-*.enc" -delete 2>/dev/null || true
+    find "$dir" -type f -name "smk-*.enc" -delete 2>/dev/null || true
+    find "$dir" -type f -name "smo-*.enc" -delete 2>/dev/null || true
     find "$dir" -type f -name "sta-*.enc" -delete 2>/dev/null || true
+    find "$dir" -type f -name "stk-*.enc" -delete 2>/dev/null || true
+    find "$dir" -type f -name "sto-*.enc" -delete 2>/dev/null || true
+    find "$dir" -type f -name "skk-*.enc" -delete 2>/dev/null || true
     find "$dir" -type f -name "*.rsa" -delete 2>/dev/null || true
     echo "      ✅ Cleaned $dir"
   fi
@@ -183,7 +188,12 @@ for dir in "${LM_VAULT_DIRS[@]}"; do
     # Delete vault files (.enc and .rsa) recursively
     # Preserves directory structure - only deletes files
     find "$dir" -type f -name "sma-*.enc" -delete 2>/dev/null || true
+    find "$dir" -type f -name "smk-*.enc" -delete 2>/dev/null || true
+    find "$dir" -type f -name "smo-*.enc" -delete 2>/dev/null || true
     find "$dir" -type f -name "sta-*.enc" -delete 2>/dev/null || true
+    find "$dir" -type f -name "stk-*.enc" -delete 2>/dev/null || true
+    find "$dir" -type f -name "sto-*.enc" -delete 2>/dev/null || true
+    find "$dir" -type f -name "skk-*.enc" -delete 2>/dev/null || true
     find "$dir" -type f -name "*.rsa" -delete 2>/dev/null || true
     echo "      ✅ Cleaned $dir"
   fi

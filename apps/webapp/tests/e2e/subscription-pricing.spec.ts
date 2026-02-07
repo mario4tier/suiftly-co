@@ -11,7 +11,7 @@ test.describe('Subscription Pricing Validation', () => {
   test.beforeEach(async ({ page }) => {
     // Authenticate with mock wallet first
     await page.goto('/');
-    await page.click('button:has-text("Mock Wallet")');
+    await page.click('button:has-text("Mock Wallet 0")');
 
     // Wait for redirect to /dashboard after auth
     await page.waitForURL('/dashboard', { timeout: 10000 });

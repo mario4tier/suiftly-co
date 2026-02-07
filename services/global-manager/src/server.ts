@@ -107,11 +107,40 @@ const server = Fastify({
 });
 
 // Health check endpoint (both paths for direct and proxied access)
-const healthResponse = async () => ({
-  status: 'up',
-  service: 'global-manager',
-  timestamp: new Date().toISOString(),
-});
+// Includes vault sync state for tests to determine if changes have been processed
+const healthResponse = async () => {
+  // Get vault state from system_control for sync status visibility
+  const [control] = await db
+    .select({
+      smaVaultSeq: systemControl.smaVaultSeq,
+      smaMaxConfigChangeSeq: systemControl.smaMaxConfigChangeSeq,
+      smkVaultSeq: systemControl.smkVaultSeq,
+    })
+    .from(systemControl)
+    .where(eq(systemControl.id, 1))
+    .limit(1);
+
+  const smaVaultSeq = control?.smaVaultSeq ?? 0;
+  const smaMaxConfigChangeSeq = control?.smaMaxConfigChangeSeq ?? 0;
+
+  return {
+    status: 'up',
+    service: 'global-manager',
+    timestamp: new Date().toISOString(),
+    // Vault sync state - used by tests to wait for correct seq
+    // hasPending: true means API has marked changes that GM hasn't yet processed into a vault
+    vaults: {
+      sma: {
+        vaultSeq: smaVaultSeq,
+        maxConfigChangeSeq: smaMaxConfigChangeSeq,
+        hasPending: smaMaxConfigChangeSeq > smaVaultSeq,
+      },
+      smk: {
+        vaultSeq: control?.smkVaultSeq ?? 0,
+      },
+    },
+  };
+};
 
 server.get('/health', healthResponse);
 server.get('/api/health', healthResponse);
@@ -492,6 +521,10 @@ if (isTestDeployment()) {
 
     return { success: true, count: notifications.length, notifications };
   });
+
+  // NOTE: DB truncation has been moved to sudob (/api/test/reset-all)
+  // sudob owns ALL destructive test operations and does truncation directly via pg.
+  // This keeps dangerous operations in one place (sudob, which never runs in production).
 }
 
 // ============================================================================
@@ -761,51 +794,96 @@ server.get('/api/lm/status', async () => {
 // Sync Overview API (for Admin Dashboard)
 // ============================================================================
 
-// Get fleet-wide sync overview
+// Get fleet-wide sync overview (per vault type)
 server.get('/api/sync/overview', async () => {
-  const { getLMStatuses, getMinAppliedSeq } = await import('./tasks/poll-lm-status.js');
+  const { getLMStatuses } = await import('./tasks/poll-lm-status.js');
   const { systemControl } = await import('@suiftly/database');
   const { eq } = await import('drizzle-orm');
 
-  // Get current vault seq from system_control
+  // Get current vault seqs from system_control
   const [control] = await db
     .select()
     .from(systemControl)
     .where(eq(systemControl.id, 1))
     .limit(1);
 
-  const currentVaultSeq = control?.smaVaultSeq ?? 0;
+  // Build per-vault-type sync status
+  const vaultTypes = [
+    { code: 'sma', seq: control?.smaVaultSeq ?? 0, hash: control?.smaVaultContentHash ?? null },
+    { code: 'smk', seq: control?.smkVaultSeq ?? 0, hash: control?.smkVaultContentHash ?? null },
+    { code: 'smo', seq: control?.smoVaultSeq ?? 0, hash: control?.smoVaultContentHash ?? null },
+    { code: 'sta', seq: control?.staVaultSeq ?? 0, hash: control?.staVaultContentHash ?? null },
+    { code: 'stk', seq: control?.stkVaultSeq ?? 0, hash: control?.stkVaultContentHash ?? null },
+    { code: 'sto', seq: control?.stoVaultSeq ?? 0, hash: control?.stoVaultContentHash ?? null },
+    { code: 'skk', seq: control?.skkVaultSeq ?? 0, hash: control?.skkVaultContentHash ?? null },
+  ];
 
-  // Get LM statuses
+  // Get LM statuses (now multiple rows per LM — one per vault type)
   const lmStatuses = await getLMStatuses();
-  const minAppliedSeq = await getMinAppliedSeq('sma');
-
-  // Calculate sync status
-  // LM is "reachable" if we've seen it recently (within last 30 seconds)
   const recentThreshold = new Date(Date.now() - 30000);
-  const lmsReachable = lmStatuses.filter(s => s.lastSeenAt && s.lastSeenAt > recentThreshold).length;
-  const lmsTotal = lmStatuses.length;
 
-  // Fleet is synced if all LMs have appliedSeq >= currentVaultSeq
-  const allSynced = minAppliedSeq !== null && minAppliedSeq >= currentVaultSeq;
+  // Count unique reachable LMs (by lmId, not by row)
+  const reachableLmIds = new Set<string>();
+  const allLmIds = new Set<string>();
+  for (const s of lmStatuses) {
+    allLmIds.add(s.lmId);
+    if (s.lastSeenAt && s.lastSeenAt > recentThreshold && !s.lastError) {
+      reachableLmIds.add(s.lmId);
+    }
+  }
+
+  // Build per-vault sync info
+  const vaults: Record<string, {
+    currentSeq: number;
+    contentHash: string | null;
+    minAppliedSeq: number | null;
+    synced: boolean;
+  }> = {};
+
+  // Compute min applied seq per vault type from already-fetched LM statuses
+  // (avoids N+1 queries — one per vault type)
+  const minAppliedSeqByVault = new Map<string, number>();
+  for (const s of lmStatuses) {
+    if (!s.vaultType || !s.appliedSeq || s.appliedSeq <= 0) continue;
+    if (!s.lastSeenAt || s.lastSeenAt <= recentThreshold) continue;
+    if (s.lastError) continue;
+    const current = minAppliedSeqByVault.get(s.vaultType);
+    if (current === undefined || s.appliedSeq < current) {
+      minAppliedSeqByVault.set(s.vaultType, s.appliedSeq);
+    }
+  }
+
+  let allVaultsSynced = true;
+
+  for (const vt of vaultTypes) {
+    // Skip vault types with seq 0 (never generated)
+    if (vt.seq === 0) continue;
+
+    const minSeq = minAppliedSeqByVault.get(vt.code) ?? null;
+    const synced = minSeq !== null && minSeq >= vt.seq;
+    if (!synced) allVaultsSynced = false;
+
+    vaults[vt.code] = {
+      currentSeq: vt.seq,
+      contentHash: vt.hash,
+      minAppliedSeq: minSeq,
+      synced,
+    };
+  }
 
   return {
-    vault: {
-      currentSeq: currentVaultSeq,
-      contentHash: control?.smaVaultContentHash ?? null,
-    },
+    vaults,
     lms: {
-      total: lmsTotal,
-      reachable: lmsReachable,
-      minAppliedSeq,
-      allSynced,
+      total: allLmIds.size,
+      reachable: reachableLmIds.size,
       statuses: lmStatuses.map(s => {
-        const isReachable = s.lastSeenAt && s.lastSeenAt > recentThreshold;
+        const isReachable = s.lastSeenAt && s.lastSeenAt > recentThreshold && !s.lastError;
         return {
           id: s.lmId,
           name: s.displayName,
           host: s.host,
           region: s.region,
+          vaultType: s.vaultType,
           reachable: isReachable,
           appliedSeq: s.appliedSeq,
           processingSeq: s.processingSeq,
@@ -815,7 +893,7 @@ server.get('/api/sync/overview', async () => {
         };
       }),
     },
-    syncStatus: allSynced ? 'synced' : 'pending',
+    syncStatus: allVaultsSynced ? 'synced' : 'pending',
   };
 });
 

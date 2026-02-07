@@ -206,6 +206,7 @@ export const PORT = {
   WEB: 22710,     // Webapp dev server (Vite)
   GM: 22600,      // Global Manager admin dashboard
   LM: 22610,      // Local Manager (22610-22613 for multi-server dev simulation)
+  SUDOB: 22800,   // Sudob privileged API (dev/test only, never production)
 } as const;
 
 // HAProxy Frontend Ports - Single source of truth: ~/walrus/PORT_MAP.md
@@ -248,4 +249,17 @@ export const SEAL_LIMITS = {
   // Absolute maximum keys per customer (includes soft-deleted)
   // This is a safety valve against abuse when deletion is enabled for pro/enterprise
   HARD_LIMIT_KEYS_PER_CUSTOMER: 20,
+} as const;
+
+// Seal Test Key - Hardcoded at derivation index 0
+// This key is always included in keyserver vault configs (SMK/STK).
+// It ensures the vault is never empty, which prevents keyserver crash-loops.
+// Real customer keys start at derivation index 1+.
+// TODO: Replace with valid mainnet object_id and package_id before production.
+export const SEAL_TEST_KEY = {
+  DERIVATION_INDEX: 0,
+  OBJECT_ID: '0x' + '01'.repeat(32),
+  PACKAGE_ID: '0x' + '02'.repeat(32),
+  CUST_ID: 'c0',
+  KEY_IDX: 0,
 } as const;

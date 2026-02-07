@@ -632,7 +632,7 @@ async function executeSyncLMStatus(): Promise<void> {
   // Only log if there are issues (silent for normal operation)
   if (lmResult.down > 0) {
     console.log(
-      `[SYNC] LM poll: ${lmResult.up}/${lmResult.polled} up, ${lmResult.down} down, minAppliedSeq=${lmResult.minAppliedSeq ?? 'N/A'}`
+      `[SYNC] LM poll: ${lmResult.up}/${lmResult.polled} up, ${lmResult.down} down, minAppliedSeq: ${Object.entries(lmResult.minAppliedSeqByVault).map(([t, s]) => `${t}=${s}`).join(', ') || 'N/A'}`
     );
   }
 }

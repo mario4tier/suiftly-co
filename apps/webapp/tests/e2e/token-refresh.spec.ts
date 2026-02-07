@@ -7,6 +7,7 @@
  */
 
 import { test, expect } from '@playwright/test';
+import { authenticateWithMockWallet } from '../helpers/db';
 
 test.describe('Token Expiry - Normal Config (15m access, 30d refresh)', () => {
   test('access token should remain valid after 5 seconds', async ({ page }) => {
@@ -14,11 +15,7 @@ test.describe('Token Expiry - Normal Config (15m access, 30d refresh)', () => {
     // This should be the default when ENABLE_SHORT_JWT_EXPIRY is not set
 
     // 1. Authenticate with mock wallet
-    await page.goto('/');
-    await page.click('button:has-text("Mock Wallet")');
-
-    // Wait for auth to complete
-    await expect(page.locator('text=/0x[a-f0-9]{4}\\.\\.\\./')).toBeVisible({ timeout: 5000 });
+    await authenticateWithMockWallet(page);
 
     // 2. Wait 5 seconds (token should still be valid with 15m expiry)
     console.log('[TEST] Waiting 5 seconds...');
@@ -51,9 +48,7 @@ test.describe('Token Expiry - Normal Config (15m access, 30d refresh)', () => {
 
   test('access token should remain valid after multiple API calls over 10 seconds', async ({ page }) => {
     // 1. Authenticate
-    await page.goto('/');
-    await page.click('button:has-text("Mock Wallet")');
-    await expect(page.locator('text=/0x[a-f0-9]{4}\\.\\.\\./')).toBeVisible({ timeout: 5000 });
+    await authenticateWithMockWallet(page);
 
     // 2. Navigate to test page
     await page.goto('/test');
@@ -108,9 +103,7 @@ test.describe('Token Refresh - Short Expiry Config (2s access, 10s refresh)', ()
 
   test('access token should auto-refresh after expiry (2s) and request should succeed', async ({ page }) => {
     // 1. Authenticate with mock wallet
-    await page.goto('/');
-    await page.click('button:has-text("Mock Wallet")');
-    await expect(page.locator('text=/0x[a-f0-9]{4}\\.\\.\\./')).toBeVisible({ timeout: 5000 });
+    await authenticateWithMockWallet(page);
 
     // 2. Wait for access token to expire (2 seconds + buffer)
     console.log('[TEST] Waiting 2.5 seconds for access token to expire...');
@@ -137,9 +130,7 @@ test.describe('Token Refresh - Short Expiry Config (2s access, 10s refresh)', ()
     // Backend automatically started with short expiry config via Playwright webServer
 
     // 1. Authenticate
-    await page.goto('/');
-    await page.click('button:has-text("Mock Wallet")');
-    await expect(page.locator('text=/0x[a-f0-9]{4}\\.\\.\\./')).toBeVisible({ timeout: 5000 });
+    await authenticateWithMockWallet(page);
 
     // 2. Wait for refresh token to expire (10 seconds + generous buffer)
     // The refresh token expires in 10s, but we add extra time to ensure it's fully expired

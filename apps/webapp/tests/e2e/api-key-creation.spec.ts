@@ -11,7 +11,7 @@ test.describe('API Key Creation on Subscription', () => {
   test.beforeEach(async ({ page }) => {
     // Authenticate with mock wallet
     await page.goto('/');
-    await page.click('button:has-text("Mock Wallet")');
+    await page.click('button:has-text("Mock Wallet 0")');
 
     // Wait for redirect to dashboard after auth
     await page.waitForURL('/dashboard', { timeout: 10000 });

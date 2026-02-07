@@ -21,7 +21,7 @@ test.describe('Billing Operations', () => {
 
     // Authenticate with mock wallet
     await page.goto('/');
-    await page.click('button:has-text("Mock Wallet")');
+    await page.click('button:has-text("Mock Wallet 0")');
 
     // Wait for auth to process (smart wait - returns as soon as network idle)
     await waitAfterMutation(page);
@@ -346,7 +346,7 @@ test.describe('Billing Validation Edge Cases', () => {
 
     // Authenticate (this recreates the customer with production defaults)
     await page.goto('/');
-    await page.click('button:has-text("Mock Wallet")');
+    await page.click('button:has-text("Mock Wallet 0")');
     await waitAfterMutation(page);
     await page.waitForURL('/dashboard', { timeout: 10000 });
 

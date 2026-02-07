@@ -19,20 +19,14 @@ import {
   isSealBackendAvailable,
   SEAL_PORTS,
 } from '../helpers/seal-requests';
+import {
+  waitForStabilization,
+  triggerSyncAndWait,
+  getLMHealth,
+} from '../helpers/vault-sync';
 
-const LM_URL = 'http://localhost:22610';
-const GM_URL = 'http://localhost:22600';
 const API_URL = 'http://localhost:22700';
 const SEAL_METERED_PORT = SEAL_PORTS.MAINNET_PUBLIC;
-
-interface LMHealthResponse {
-  vaults: Array<{
-    type: string;
-    customerCount: number;
-    applied: { seq: number; at: string } | null;
-    processing: object | null;
-  }>;
-}
 
 interface ApiKeyInfo {
   apiKeyFp: number;
@@ -41,61 +35,19 @@ interface ApiKeyInfo {
   isUserEnabled: boolean;
 }
 
-async function getLMHealth(): Promise<LMHealthResponse | null> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 5000);
-
-  try {
-    const response = await fetch(`${LM_URL}/api/health`, { signal: controller.signal });
-    return response.ok ? response.json() : null;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
-
-async function getCurrentVaultSeq(): Promise<number> {
-  const health = await getLMHealth();
-  return health?.vaults.find((v) => v.type === 'sma')?.applied?.seq ?? 0;
-}
-
-async function waitForVaultSync(expectedMinSeq: number): Promise<void> {
-  const maxAttempts = 120;
-  const pollInterval = 500;
-
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const health = await getLMHealth();
-    const smaVault = health?.vaults.find((v) => v.type === 'sma');
-    if (smaVault?.applied && smaVault.applied.seq >= expectedMinSeq && !smaVault.processing) {
-      // Give HAProxy time to reload the map after LM applies the vault
-      // HAProxy map reload can take a few seconds to propagate
-      await new Promise((resolve) => setTimeout(resolve, 3000));
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, pollInterval));
-  }
-  throw new Error(`Vault sync timed out waiting for seq >= ${expectedMinSeq}`);
-}
-
-async function triggerGMSync(): Promise<void> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 5000);
-
-  try {
-    await fetch(`${GM_URL}/api/queue/sync-all?source=e2e-key-rotation-test`, {
-      method: 'POST',
-      signal: controller.signal,
-    });
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
-
-async function syncVault(): Promise<void> {
-  const seq = await getCurrentVaultSeq();
-  await triggerGMSync();
-  await waitForVaultSync(seq + 1);
+/**
+ * Sync vault changes through the system.
+ *
+ * Usage pattern for test mutations:
+ * 1. BEFORE mutation: `const baseline = await waitForStabilization()` - capture baseline
+ * 2. Do mutation (API call, UI click, etc.)
+ * 3. AFTER mutation: `await syncVault(baseline.vaultSeq)` - wait for propagation
+ * 4. Verify the change took effect
+ *
+ * @param baselineSeq - The vault seq captured BEFORE the mutation
+ */
+async function syncVault(baselineSeq: number): Promise<void> {
+  await triggerSyncAndWait(baselineSeq, { source: 'e2e-key-rotation-test' });
 }
 
 async function getApiKeys(
@@ -185,7 +137,7 @@ test.describe('Seal Key Rotation', () => {
     await resetCustomer(page.request);
     await page.context().clearCookies();
     await page.goto('/');
-    await page.click('button:has-text("Mock Wallet")');
+    await page.click('button:has-text("Mock Wallet 0")');
     await waitAfterMutation(page);
     await page.waitForURL('/dashboard', { timeout: 10000 });
     await ensureTestBalance(page.request, 1000, { spendingLimitUsd: 250 });
@@ -195,19 +147,25 @@ test.describe('Seal Key Rotation', () => {
     test.setTimeout(300000);
     if (!(await checkPrerequisites())) { test.skip(); return; }
 
+    // BEFORE setup: get baseline
+    let baseline = await waitForStabilization();
+
     // Setup: Subscribe, enable, create seal key + package
     await setupSealService(page, 'a');
     console.log('✅ Setup complete');
 
-    // Get first API key and sync
+    // AFTER setup: wait for sync with baseline
+    await syncVault(baseline.vaultSeq);
+
+    // Get first API key and verify
     let apiKeys = await getApiKeys(page.request);
     expect(apiKeys.length).toBe(1);
     const key1 = apiKeys[0].fullKey;
     console.log(`Key 1: ${apiKeys[0].keyPreview}`);
-    await syncVault();
     await verifyKeyWorks(key1, 'Key 1 initial');
 
-    // Create second API key
+    // BEFORE creating second API key: get baseline
+    baseline = await waitForStabilization();
     await page.goto('/services/seal/overview?tab=x-api-key');
     await waitAfterMutation(page);
     await page.locator('button:has-text("Add New API Key")').click();
@@ -218,27 +176,34 @@ test.describe('Seal Key Rotation', () => {
     expect(apiKeys.length).toBe(2);
     const key2 = apiKeys[0].fullKey; // Newest first
     console.log(`Key 2: ${apiKeys[0].keyPreview}`);
-    await syncVault();
+    // AFTER: wait for sync with baseline
+    await syncVault(baseline.vaultSeq);
 
     // Verify both keys work
     await verifyKeyWorks(key1, 'Key 1');
     await verifyKeyWorks(key2, 'Key 2');
 
     // Toggle service OFF
+    // BEFORE: get baseline
+    baseline = await waitForStabilization();
     await page.goto('/services/seal/overview');
     await waitAfterMutation(page);
     await page.locator('button[role="switch"]').click();
     await waitAfterMutation(page);
-    await syncVault();
+    // AFTER: wait for sync with baseline
+    await syncVault(baseline.vaultSeq);
 
     // Both keys should return 403
     await verifyServiceDisabled(key1, 'Key 1 (OFF)');
     await verifyServiceDisabled(key2, 'Key 2 (OFF)');
 
     // Toggle service ON
+    // BEFORE: get baseline
+    baseline = await waitForStabilization();
     await page.locator('button[role="switch"]').click();
     await waitAfterMutation(page);
-    await syncVault();
+    // AFTER: wait for sync with baseline
+    await syncVault(baseline.vaultSeq);
 
     // Both keys work again
     await verifyKeyWorks(key1, 'Key 1 (ON)');
@@ -251,19 +216,25 @@ test.describe('Seal Key Rotation', () => {
     test.setTimeout(300000);
     if (!(await checkPrerequisites())) { test.skip(); return; }
 
+    // BEFORE setup: get baseline
+    let baseline = await waitForStabilization();
+
     await setupSealService(page, 'b');
     console.log('✅ Setup complete');
 
-    // Get Key 1 and sync
+    // AFTER setup: wait for sync with baseline
+    await syncVault(baseline.vaultSeq);
+
+    // Get Key 1 and verify
     let apiKeys = await getApiKeys(page.request);
     expect(apiKeys.length).toBe(1);
     const key1 = apiKeys[0].fullKey;
     const key1Fp = apiKeys[0].apiKeyFp;
     console.log(`Key 1: ${apiKeys[0].keyPreview}`);
-    await syncVault();
     await verifyKeyWorks(key1, 'Key 1 initial');
 
-    // Create Key 2
+    // BEFORE creating Key 2: get baseline
+    baseline = await waitForStabilization();
     await page.goto('/services/seal/overview?tab=x-api-key');
     await waitAfterMutation(page);
     await page.locator('button:has-text("Add New API Key")').click();
@@ -274,11 +245,13 @@ test.describe('Seal Key Rotation', () => {
     expect(apiKeys.length).toBe(2);
     const key2 = apiKeys.find((k) => k.apiKeyFp !== key1Fp)!.fullKey;
     console.log(`Key 2: ${apiKeys.find((k) => k.apiKeyFp !== key1Fp)!.keyPreview}`);
-    await syncVault();
+    // AFTER: wait for sync with baseline
+    await syncVault(baseline.vaultSeq);
     await verifyKeyWorks(key1, 'Key 1');
     await verifyKeyWorks(key2, 'Key 2');
 
-    // Disable Key 1 (simulating key rotation)
+    // BEFORE disabling Key 1: get baseline
+    baseline = await waitForStabilization();
     const key1Row = page.locator(`[data-testid="apik-${key1Fp}"]`);
     await key1Row.locator('button:has-text("Disable")').click();
     await waitAfterMutation(page);
@@ -287,7 +260,8 @@ test.describe('Seal Key Rotation', () => {
     await expect(page.locator('text=/Disable API Key/i')).not.toBeVisible({ timeout: 5000 });
     console.log('✅ Key 1 disabled');
 
-    await syncVault();
+    // AFTER: wait for sync with baseline
+    await syncVault(baseline.vaultSeq);
     await verifyKeyRejected(key1, 'Key 1 (disabled)');
     await verifyKeyWorks(key2, 'Key 2 (active)');
 
@@ -314,18 +288,24 @@ test.describe('Seal Key Rotation', () => {
     test.setTimeout(300000);
     if (!(await checkPrerequisites())) { test.skip(); return; }
 
+    // BEFORE setup: get baseline
+    let baseline = await waitForStabilization();
+
     await setupSealService(page, 'c');
     console.log('✅ Setup complete');
 
-    // Get Key 1 and sync
+    // AFTER setup: wait for sync with baseline
+    await syncVault(baseline.vaultSeq);
+
+    // Get Key 1 and verify
     let apiKeys = await getApiKeys(page.request);
     const key1 = apiKeys[0].fullKey;
     const key1Fp = apiKeys[0].apiKeyFp;
     console.log(`Key 1: ${apiKeys[0].keyPreview}`);
-    await syncVault();
     await verifyKeyWorks(key1, 'Key 1 initial');
 
-    // Create Key 2 (need 2 keys to properly test disable/enable)
+    // BEFORE creating Key 2: get baseline
+    baseline = await waitForStabilization();
     await page.goto('/services/seal/overview?tab=x-api-key');
     await waitAfterMutation(page);
     await page.locator('button:has-text("Add New API Key")').click();
@@ -335,11 +315,13 @@ test.describe('Seal Key Rotation', () => {
     apiKeys = await getApiKeys(page.request);
     const key2 = apiKeys.find((k) => k.apiKeyFp !== key1Fp)!.fullKey;
     console.log(`Key 2: ${apiKeys.find((k) => k.apiKeyFp !== key1Fp)!.keyPreview}`);
-    await syncVault();
+    // AFTER: wait for sync with baseline
+    await syncVault(baseline.vaultSeq);
     await verifyKeyWorks(key1, 'Key 1');
     await verifyKeyWorks(key2, 'Key 2');
 
-    // Disable Key 1
+    // BEFORE disabling Key 1: get baseline
+    baseline = await waitForStabilization();
     const keyRow = page.locator(`[data-testid="apik-${key1Fp}"]`);
     await keyRow.locator('button:has-text("Disable")').click();
     await waitAfterMutation(page);
@@ -347,18 +329,21 @@ test.describe('Seal Key Rotation', () => {
     await waitAfterMutation(page);
     console.log('✅ Key 1 disabled');
 
-    await syncVault();
+    // AFTER: wait for sync with baseline
+    await syncVault(baseline.vaultSeq);
     await verifyKeyRejected(key1, 'Key 1 (disabled)');
     await verifyKeyWorks(key2, 'Key 2');
 
-    // Re-enable Key 1
+    // BEFORE re-enabling Key 1: get baseline
+    baseline = await waitForStabilization();
     await page.reload();
     await waitAfterMutation(page);
     await page.locator(`[data-testid="apik-${key1Fp}"]`).locator('button:has-text("Enable")').click();
     await waitAfterMutation(page);
     console.log('✅ Key 1 re-enabled');
 
-    await syncVault();
+    // AFTER: wait for sync with baseline
+    await syncVault(baseline.vaultSeq);
     await verifyKeyWorks(key1, 'Key 1 (re-enabled)');
     await verifyKeyWorks(key2, 'Key 2');
 

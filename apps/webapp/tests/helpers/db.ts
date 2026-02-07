@@ -5,9 +5,11 @@
  * IMPORTANT: Uses deploy user TRUNCATE permission (no sudo required)
  */
 
-import type { APIRequestContext } from '@playwright/test';
+import type { APIRequestContext, Page } from '@playwright/test';
+import { expect } from '@playwright/test';
+import { PORT } from '@suiftly/shared/constants';
 
-const API_BASE = 'http://localhost:22700'; // See ~/walrus/PORT_MAP.md
+const API_BASE = `http://localhost:${PORT.API}`;
 
 export interface ResetCustomerOptions {
   walletAddress?: string;
@@ -42,21 +44,25 @@ export async function resetCustomer(
 }
 
 /**
- * Truncate all database tables (TRUNCATE-based, no sudo required)
- * - Clears ALL data from ALL tables
- * - Resets all sequences (auto-increment IDs)
- * - Fast and clean for complete database reset
+ * Full test environment clean-slate via sudob
+ * - Stops GM, LM, HAProxy
+ * - Deletes all vault files
+ * - Truncates all DB tables and resets counters
+ * - Starts GM, LM, HAProxy
  *
- * Use this when you need a completely clean database state.
+ * This is the SINGLE mechanism for complete test reset.
+ * All destructive operations live in sudob (which never runs in production).
  */
 export async function truncateAllTables(
   request: APIRequestContext
 ): Promise<void> {
-  const response = await request.post(`${API_BASE}/test/data/truncate-all`);
+  const response = await request.post(`http://localhost:${PORT.SUDOB}/api/test/reset-all`, {
+    data: {},
+  });
 
   if (!response.ok()) {
     const error = await response.text();
-    throw new Error(`Failed to truncate tables: ${error}`);
+    throw new Error(`Failed to reset-all via sudob: ${error}`);
   }
 }
 
@@ -229,6 +235,45 @@ export async function waitForHaproxyLogs(
 }
 
 /**
+ * Add a package to an existing seal key
+ * Used by E2E tests that need to add a second package after initial setup
+ */
+export async function addPackage(
+  request: APIRequestContext,
+  sealKeyId: number,
+  packageAddressHex: string,
+  name?: string
+): Promise<{ success: boolean; packageId?: number; customerId?: number; error?: string }> {
+  const response = await request.post(`${API_BASE}/test/data/add-package`, {
+    data: { sealKeyId, packageAddressHex, name },
+  });
+
+  if (!response.ok()) {
+    throw new Error(`Failed to add package: ${await response.text()}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Disable a package on a seal key (set isUserEnabled=false)
+ */
+export async function disablePackage(
+  request: APIRequestContext,
+  packageId: number
+): Promise<{ success: boolean; error?: string }> {
+  const response = await request.post(`${API_BASE}/test/data/disable-package`, {
+    data: { packageId },
+  });
+
+  if (!response.ok()) {
+    throw new Error(`Failed to disable package: ${await response.text()}`);
+  }
+
+  return response.json();
+}
+
+/**
  * Ensure the test wallet has a specific balance
  * - Deposits or withdraws as needed to reach the target balance
  * - Creates escrow account if it doesn't exist
@@ -318,4 +363,19 @@ export async function ensureTestBalance(
       throw new Error(`Failed to withdraw: ${withdrawData.error}`);
     }
   }
+}
+
+/**
+ * Authenticate with mock wallet and wait for auth to complete.
+ * Uses Mock Wallet 0 (0xaaaa...) for consistent test behavior.
+ *
+ * This properly waits for authentication to complete by verifying
+ * we're no longer on the login page (redirect happened).
+ */
+export async function authenticateWithMockWallet(page: Page): Promise<void> {
+  await page.goto('/');
+  // Click the first mock wallet button (Mock Wallet 0)
+  await page.click('button:has-text("Mock Wallet 0")');
+  // Wait for redirect away from login page (auth complete)
+  await expect(page).not.toHaveURL(/\/login/, { timeout: 10000 });
 }

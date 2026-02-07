@@ -21,6 +21,7 @@ import { test, expect } from '@playwright/test';
 import { waitAfterMutation } from '../helpers/wait-utils';
 import { waitForToastsToDisappear } from '../helpers/locators';
 import { resetCustomer, ensureTestBalance } from '../helpers/db';
+import { waitForStabilization } from '../helpers/vault-sync';
 
 // LM and API URLs for test endpoints
 const LM_URL = 'http://localhost:22610';
@@ -40,7 +41,7 @@ test.describe('Sync Status - Updating Indicator', () => {
 
     // Step 4: Authenticate with mock wallet (creates customer)
     await page.goto('/');
-    await page.click('button:has-text("Mock Wallet")');
+    await page.click('button:has-text("Mock Wallet 0")');
     await waitAfterMutation(page);
     await page.waitForURL('/dashboard', { timeout: 10000 });
 
@@ -115,7 +116,8 @@ test.describe('Sync Status - Updating Indicator', () => {
 
     // Wait for LM to sync the initial vault (from setup)
     // This ensures the baseline is synced before we set the delay
-    await page.waitForTimeout(2000);
+    const baseline = await waitForStabilization();
+    console.log(`✅ Baseline vault synced at seq=${baseline.vaultSeq}`);
 
     // Set a 5-second delay in LM BEFORE applying vault changes
     // This will keep the "Updating..." status visible while LM is processing
@@ -208,7 +210,8 @@ test.describe('Sync Status - Updating Indicator', () => {
     console.log(`✅ Initial state: ENABLED with cpEnabled=true, smaConfigChangeVaultSeq=${initialData.smaConfigChangeVaultSeq}`);
 
     // Wait for LM to sync the initial vault (from setup)
-    await page.waitForTimeout(2000);
+    const baseline = await waitForStabilization();
+    console.log(`✅ Baseline vault synced at seq=${baseline.vaultSeq}`);
 
     // NO LM delay set - sync should complete within ~10 seconds (LM applies + 5s GM poll)
 

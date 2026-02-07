@@ -1,4 +1,4 @@
-import { pgTable, integer, varchar, text, date, boolean, timestamp, check } from 'drizzle-orm/pg-core';
+import { pgTable, integer, varchar, text, date, boolean, timestamp, check, primaryKey } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
 /**
@@ -82,8 +82,8 @@ export const systemControl = pgTable('system_control', {
   // Each PG has its own master seed, so derivation indices are independent namespaces.
   // Atomic increment ensures globally unique indices within each PG.
   // PG 1 = Production, PG 2 = Development
-  nextSealDerivationIndexPg1: integer('next_seal_derivation_index_pg1').notNull().default(0),
-  nextSealDerivationIndexPg2: integer('next_seal_derivation_index_pg2').notNull().default(0),
+  nextSealDerivationIndexPg1: integer('next_seal_derivation_index_pg1').notNull().default(1),
+  nextSealDerivationIndexPg2: integer('next_seal_derivation_index_pg2').notNull().default(1),
 
   lastMonthlyReset: date('last_monthly_reset'),
   maintenanceMode: boolean('maintenance_mode').default(false),
@@ -109,13 +109,14 @@ export const systemControl = pgTable('system_control', {
  * - Service shows "Updating" when configChangeVaultSeq > MIN(appliedSeq) for any relevant vault
  */
 export const lmStatus = pgTable('lm_status', {
-  lmId: varchar('lm_id', { length: 64 }).primaryKey(),
+  lmId: varchar('lm_id', { length: 64 }).notNull(),
   displayName: varchar('display_name', { length: 128 }),
   host: varchar('host', { length: 256 }).notNull(),
   region: varchar('region', { length: 64 }),
 
   // Vault status (from LM health response)
-  vaultType: varchar('vault_type', { length: 8 }),
+  // One row per (lmId, vaultType) — each LM reports multiple vault types (sma, smk, etc.)
+  vaultType: varchar('vault_type', { length: 8 }).notNull(),
   appliedSeq: integer('applied_seq').default(0), // vaults[].applied.seq (null if no vault applied yet)
   processingSeq: integer('processing_seq'), // vaults[].processing.seq (for visibility, not used in sync logic)
 
@@ -129,4 +130,6 @@ export const lmStatus = pgTable('lm_status', {
 
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
-});
+}, (table) => ({
+  pk: primaryKey({ columns: [table.lmId, table.vaultType] }),
+}));

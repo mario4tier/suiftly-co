@@ -22,7 +22,7 @@ test.describe('Database Reset Example', () => {
 
     // Test continues with clean customer state...
     await page.goto('/');
-    await page.click('button:has-text("Mock Wallet")');
+    await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard');
   });
 

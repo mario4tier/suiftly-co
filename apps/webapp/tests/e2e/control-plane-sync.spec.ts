@@ -140,7 +140,7 @@ test.describe('Control Plane Sync Flow', () => {
 
     // Authenticate with mock wallet (creates customer if doesn't exist)
     await page.goto('/');
-    await page.click('button:has-text("Mock Wallet")');
+    await page.click('button:has-text("Mock Wallet 0")');
     await waitAfterMutation(page);
     await page.waitForURL('/dashboard', { timeout: 10000 });
 

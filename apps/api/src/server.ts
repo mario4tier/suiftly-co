@@ -261,6 +261,43 @@ if (config.NODE_ENV !== 'production') {
     reply.send(result);
   });
 
+  // Add a package to an existing seal key (for E2E tests that add a second package)
+  server.post('/test/data/add-package', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    const { addPackageToSealKey } = await import('./lib/test-data');
+    const body = request.body as any;
+    const result = await addPackageToSealKey(
+      body.sealKeyId,
+      body.packageAddressHex,
+      body.name,
+    );
+    reply.send(result);
+  });
+
+  // Disable a package on a seal key
+  server.post('/test/data/disable-package', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    const { disablePackage } = await import('./lib/test-data');
+    const body = request.body as any;
+    const result = await disablePackage(body.packageId);
+    reply.send(result);
+  });
+
+  // Reset derivation index counter (for E2E tests that need contiguous indexes)
+  server.post('/test/data/reset-derivation-counter', {
+    config: { rateLimit: false },
+  }, async (_request, reply) => {
+    const { db, systemControl } = await import('@suiftly/database');
+    const { eq } = await import('drizzle-orm');
+    await db.update(systemControl).set({
+      nextSealDerivationIndexPg1: 1,
+      nextSealDerivationIndexPg2: 1,
+    }).where(eq(systemControl.id, 1));
+    reply.send({ success: true });
+  });
+
   // Create API key for testing (returns plain key for E2E tests)
   // Use this when you need a real API key that works with HAProxy
   server.post('/test/data/create-api-key', {
@@ -272,75 +309,8 @@ if (config.NODE_ENV !== 'production') {
     reply.send(result);
   });
 
-  // Truncate all tables - DB-only reset (vault cleanup handled by sudob)
-  // Use sudob's /api/test/reset-all for full reset including vault files
-  server.post('/test/data/truncate-all', {
-    config: { rateLimit: false },
-  }, async (request, reply) => {
-    const { db } = await import('@suiftly/database');
-    const { sql } = await import('drizzle-orm');
-
-    try {
-      await db.transaction(async (tx) => {
-        // Disable triggers to avoid foreign key issues
-        await tx.execute(sql`SET CONSTRAINTS ALL DEFERRED`);
-
-        // Truncate all tables (CASCADE handles foreign keys)
-        await tx.execute(sql`
-          TRUNCATE TABLE
-            customers,
-            api_keys,
-            escrow_transactions,
-            ledger_entries,
-            user_activity_logs,
-            service_instances,
-            service_cancellation_history,
-            seal_keys,
-            seal_registration_ops,
-            auth_nonces,
-            refresh_tokens,
-            billing_records,
-            lm_status
-          CASCADE
-        `);
-
-        // Reset vault sequence numbers and derivation indices in system_control
-        // This ensures next vault generation starts fresh at seq=1
-        await tx.execute(sql`
-          UPDATE system_control SET
-            sma_vault_seq = 0,
-            sma_vault_content_hash = NULL,
-            smk_vault_seq = 0,
-            smk_vault_content_hash = NULL,
-            smo_vault_seq = 0,
-            smo_vault_content_hash = NULL,
-            sta_vault_seq = 0,
-            sta_vault_content_hash = NULL,
-            stk_vault_seq = 0,
-            stk_vault_content_hash = NULL,
-            sto_vault_seq = 0,
-            sto_vault_content_hash = NULL,
-            skk_vault_seq = 0,
-            skk_vault_content_hash = NULL,
-            next_seal_derivation_index_pg1 = 0,
-            next_seal_derivation_index_pg2 = 0
-          WHERE id = 1
-        `);
-      });
-
-      reply.send({
-        success: true,
-        message: 'All tables truncated and vault sequences reset',
-      });
-    } catch (error: any) {
-      console.error('[TRUNCATE ERROR]', error);
-      reply.code(500).send({
-        success: false,
-        error: error.message || String(error),
-        details: error.toString(),
-      });
-    }
-  });
+  // NOTE: DB truncation is handled by sudob (/api/test/reset-all on port 22800)
+  // sudob owns ALL destructive test operations (never runs in production)
 
   // Get HAProxy raw logs for E2E test verification
   // Used to verify that requests through HAProxy are being logged via fluentd pipeline
@@ -1236,7 +1206,7 @@ async function start() {
       console.log(`  🧪 Test Delays: POST http://${config.HOST}:${config.PORT}/test/delays`);
       console.log(`  🧪 Test Data Reset: POST http://${config.HOST}:${config.PORT}/test/data/reset`);
       console.log(`  🧪 Test Data Get: GET http://${config.HOST}:${config.PORT}/test/data/customer`);
-      console.log(`  🧪 Test Truncate All: POST http://${config.HOST}:${config.PORT}/test/data/truncate-all`);
+      console.log(`  🧪 Test Reset All: POST http://${config.HOST}:22800/api/test/reset-all (on sudob)`);
       console.log(`  🧪 Test Shutdown: POST http://${config.HOST}:${config.PORT}/test/shutdown`);
     }
     console.log('='.repeat(50));

@@ -14,7 +14,7 @@ test.describe('Dashboard Navigation', () => {
     // Authenticate with mock wallet before each test
     await page.goto('/');
     // Click the Mock Wallet button (button element with "Mock Wallet" text)
-    await page.click('button:has-text("Mock Wallet")');
+    await page.click('button:has-text("Mock Wallet 0")');
 
     // Wait for authentication and redirect to /dashboard
     await page.waitForURL('/dashboard', { timeout: 10000 });

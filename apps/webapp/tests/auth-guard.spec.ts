@@ -20,7 +20,7 @@ test('dashboard is accessible after authentication', async ({ page }) => {
   await page.goto('http://localhost:5174/login');
 
   // Connect with mock wallet
-  await page.click('text=Connect Mock Wallet');
+  await page.click('text=Mock Wallet 0');
 
   // Wait for authentication and redirect
   await page.waitForURL(/\/dashboard/, { timeout: 10000 });

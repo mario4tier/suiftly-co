@@ -44,10 +44,11 @@
  * - No reset of configChangeVaultSeq needed - the comparison handles it
  */
 
-import { db, systemControl, serviceInstances, apiKeys, sealKeys, sealPackages } from '@suiftly/database';
-import { SERVICE_TYPE, SERVICE_STATE, type ServiceType } from '@suiftly/shared/constants';
+import { db, systemControl, serviceInstances, apiKeys, sealKeys, sealPackages, adminNotifications } from '@suiftly/database';
+import { SERVICE_TYPE, SERVICE_STATE, SEAL_TEST_KEY, type ServiceType } from '@suiftly/shared/constants';
 import { createVaultWriter, createVaultReader, computeContentHash, type VaultInstance } from '@mhaxbe/vault-codec';
 import { getSealProcessGroup } from '@mhaxbe/system-config';
+import { isProduction } from '@mhaxbe/system-config';
 import { eq, and, isNull } from 'drizzle-orm';
 
 // ============================================================================
@@ -461,7 +462,7 @@ function getServiceTypeString(serviceType: ServiceType): 'seal' | 'grpc' | 'grap
  * New structure: CustomerVaultConfig with services[] array
  * Each service contains pre-encoded mapConfigHex for HAProxy
  */
-async function buildVaultData(
+async function buildHAProxyVaultData(
   serviceType: ServiceType,
   vaultType: string
 ): Promise<Record<string, string>> {
@@ -491,7 +492,7 @@ async function buildVaultData(
         )
       );
   } catch (error) {
-    console.error(`[VAULT] ERROR: buildVaultData services query failed:`, error);
+    console.error(`[VAULT] ERROR: buildHAProxyVaultData services query failed:`, error);
     throw error;
   }
 
@@ -626,7 +627,7 @@ async function buildVaultData(
       // Store as JSON string with customer: prefix
       vaultData[`customer:${service.customerId}`] = JSON.stringify(config);
     } catch (error) {
-      console.error(`[VAULT] ERROR: buildVaultData failed for customer ${service.customerId}:`, error);
+      console.error(`[VAULT] ERROR: buildHAProxyVaultData failed for customer ${service.customerId}:`, error);
       throw error; // Re-throw - one customer failure should fail the whole vault
     }
   }
@@ -808,6 +809,27 @@ async function buildKeyserverVaultData(
     throw error;
   }
 
+  // Prepend hardcoded test key at derivation index 0
+  // This ensures keyserver config is never empty (prevents crash-loops)
+  // SAFETY: Block production if test key still has placeholder values
+  if (isProduction() && SEAL_TEST_KEY.OBJECT_ID.includes('0101010101')) {
+    throw new Error('[VAULT] SEAL_TEST_KEY has placeholder values — replace with valid mainnet entries before production');
+  }
+  // Guard: remove any DB entry that collides with the reserved index
+  const testIdx = SEAL_TEST_KEY.DERIVATION_INDEX;
+  const collision = derivedKeys.findIndex(k => k.idx === testIdx);
+  if (collision !== -1) {
+    console.warn(`[VAULT] Removing DB key at reserved derivation index ${testIdx} (cust_id=${derivedKeys[collision].cust_id})`);
+    derivedKeys.splice(collision, 1);
+  }
+  derivedKeys.unshift({
+    cust_id: SEAL_TEST_KEY.CUST_ID,
+    key_idx: SEAL_TEST_KEY.KEY_IDX,
+    idx: SEAL_TEST_KEY.DERIVATION_INDEX,
+    obj_id: SEAL_TEST_KEY.OBJECT_ID,
+    pkg_ids: [SEAL_TEST_KEY.PACKAGE_ID],
+  });
+
   // Build the clients config
   const clientsConfig: KeyserverClientsConfig = {
     derived_keys: derivedKeys,
@@ -825,6 +847,19 @@ async function buildKeyserverVaultData(
  */
 function isKeyserverVaultType(vaultType: VaultTypeCode): boolean {
   return vaultType === 'smk' || vaultType === 'stk';
+}
+
+/**
+ * Get service type from vault type code
+ */
+function serviceTypeFromVaultType(vaultType: VaultTypeCode): ServiceType {
+  const ch = vaultType[0];
+  switch (ch) {
+    case 's': return SERVICE_TYPE.SEAL;
+    case 'r': return SERVICE_TYPE.GRPC;
+    case 'g': return SERVICE_TYPE.GRAPHQL;
+    default: throw new Error(`Invalid service type character in vault type: ${vaultType}`);
+  }
 }
 
 /**
@@ -865,35 +900,85 @@ export async function generateVault(
   const currentSeq = (control?.[columns.seq] as number) ?? 0;
   const currentNextSeq = (control?.[columns.nextSeq] as number) ?? 1;
 
-  // 2. Determine service type from vault code
-  const serviceTypeChar = vaultType[0];
-  let serviceType: ServiceType;
-  switch (serviceTypeChar) {
-    case 's':
-      serviceType = SERVICE_TYPE.SEAL;
-      break;
-    case 'r':
-      serviceType = SERVICE_TYPE.GRPC;
-      break;
-    case 'g':
-      serviceType = SERVICE_TYPE.GRAPHQL;
-      break;
-    default:
-      throw new Error(`Invalid service type character in vault type: ${vaultType}`);
+  // 1b. Seq regression check: on-disk vault has higher seq than DB
+  // This can happen after a database reset (dev/test) or indicates corruption (production).
+  const cachedForSeqCheck = await getCachedVault(vaultType, storageDir);
+  const diskSeq = cachedForSeqCheck?.metadata?.seq ?? 0;
+
+  if (diskSeq > currentSeq) {
+    if (isProduction()) {
+      // Production: raise admin notification — ops must investigate why seq went backward
+      await db.insert(adminNotifications).values({
+        severity: 'error',
+        category: 'vault',
+        code: 'VAULT_SEQ_REGRESSION',
+        message: `Vault ${vaultType} DB seq (${currentSeq}) is behind disk seq (${diskSeq})`,
+        details: JSON.stringify({ vaultType, dbSeq: currentSeq, diskSeq }),
+      });
+      console.error(`[VAULT] ${vaultType} SEQ REGRESSION: DB=${currentSeq} < disk=${diskSeq}. Admin notification raised.`);
+      return {
+        generated: false,
+        seq: currentSeq,
+        contentHash: cachedForSeqCheck?.metadata?.contentHash ?? '',
+        entryCount: 0,
+        reason: 'seq_regression',
+        trigger: 'none',
+      };
+    } else {
+      // Non-production: force regeneration by clearing vault cache and overwriting
+      console.warn(`[VAULT] ${vaultType} seq regression detected (DB=${currentSeq}, disk=${diskSeq}). Force regenerating (non-production).`);
+      vaultCache.delete(vaultType);
+
+      // Force-generate immediately: build data, write at seq=1, update DB
+      const network = getNetworkFromVaultType(vaultType);
+      const vaultData = isKeyserverVaultType(vaultType)
+        ? await buildKeyserverVaultData(network)
+        : await buildHAProxyVaultData(serviceTypeFromVaultType(vaultType), vaultType);
+      const entryCount = Object.keys(vaultData).length;
+      const contentHash = computeContentHash(vaultData);
+      const newSeq = currentSeq + 1;
+
+      const writer = createVaultWriter({ storageDir });
+      const result = await writer.write(vaultType, vaultData, {
+        seq: newSeq,
+        pg: getSealProcessGroup(),
+        source: 'gm-primary',
+        enableEmergencyBackup: false,
+      });
+
+      await db.update(systemControl).set({
+        [columns.seq]: newSeq,
+        [columns.hash]: contentHash,
+        [columns.entries]: entryCount,
+        [columns.nextSeq]: newSeq + 1,
+        updatedAt: new Date(),
+      }).where(eq(systemControl.id, 1));
+
+      vaultCache.delete(vaultType);
+      console.log(`[VAULT] ${vaultType} force-generated (seq=${newSeq}, hash=${contentHash}, file=${result.filename})`);
+      return {
+        generated: true,
+        seq: newSeq,
+        contentHash,
+        entryCount,
+        filename: result.filename,
+        trigger: 'drift',
+      };
+    }
   }
 
-  // 3. Check Scenario 1: Pending customer changes
+  // 2. Check Scenario 1: Pending customer changes
   // Read maxPendingSeq BEFORE bumping nextSeq (snapshot for newSeq calculation)
   const { hasPending, maxPendingSeq } = await hasPendingCustomerChanges(vaultType, currentSeq);
 
-  // 4. Bump nextSeq to currentSeq+2 BEFORE building vault data
+  // 3. Bump nextSeq to currentSeq+2 BEFORE building vault data
   // This is critical for preventing race conditions:
-  // - Any API changes that happen during buildVaultData will get assigned currentSeq+2
+  // - Any API changes that happen during vault data build will get assigned currentSeq+2
   // - Those changes won't be in this vault (built before they happened)
   // - But they'll have configChangeSeq = currentSeq+2 > newSeq, so they appear "not synced"
   // - Next generation cycle will include them
   //
-  // If we bump AFTER buildVaultData, a concurrent change would:
+  // If we bump AFTER building vault data, a concurrent change would:
   // - Use the OLD nextSeq (currentSeq+1)
   // - Not be in the vault (happened during build)
   // - But configChangeSeq would match vault seq → appears synced when it's NOT!
@@ -907,7 +992,7 @@ export async function generateVault(
       .where(eq(systemControl.id, 1));
   }
 
-  // 5. Build vault data from DB (needed for both scenarios)
+  // 4. Build vault data from DB (needed for both scenarios)
   // Any API changes from this point forward will use currentSeq+2
   // Use different builders for different vault types:
   // - SMK/STK: Keyserver config format (flattened seal keys)
@@ -915,11 +1000,11 @@ export async function generateVault(
   const network = getNetworkFromVaultType(vaultType);
   const vaultData = isKeyserverVaultType(vaultType)
     ? await buildKeyserverVaultData(network)
-    : await buildVaultData(serviceType, vaultType);
+    : await buildHAProxyVaultData(serviceTypeFromVaultType(vaultType), vaultType);
   const entryCount = Object.keys(vaultData).length;
   const contentHash = computeContentHash(vaultData);
 
-  // 6. Check Scenario 2: Drift detection (only if no pending changes)
+  // 5. Check Scenario 2: Drift detection (only if no pending changes)
   let hasDrift = false;
   let driftReason: string | undefined;
 
@@ -935,7 +1020,7 @@ export async function generateVault(
     }
   }
 
-  // 7. Determine if we need to generate
+  // 6. Determine if we need to generate
   // Note: nextSeq was already bumped in step 4 - this is intentional.
   // Even if we return early here, the bump is acceptable (one extra write per cycle)
   // vs the alternative of a race condition causing false "synced" status.
@@ -953,12 +1038,12 @@ export async function generateVault(
     };
   }
 
-  // 8. Calculate new seq number
+  // 7. Calculate new seq number
   // For pending changes: use the max pending seq (ensures we satisfy all pending requests)
   // For drift: increment current seq by 1
   const newSeq = hasPending ? Math.max(currentSeq + 1, maxPendingSeq) : currentSeq + 1;
 
-  // 9. Write vault to data_tx
+  // 8. Write vault to data_tx
   const writer = createVaultWriter({
     storageDir,
     // TODO: Add keyProvider and emergencyPublicKey from config
@@ -971,7 +1056,7 @@ export async function generateVault(
     enableEmergencyBackup: false, // TODO: Enable when emergency keys are configured
   });
 
-  // 10. Update DB with new seq, content hash, entries, and reset nextSeq (transactional)
+  // 9. Update DB with new seq, content hash, entries, and reset nextSeq (transactional)
   await db
     .update(systemControl)
     .set({
@@ -983,7 +1068,7 @@ export async function generateVault(
     })
     .where(eq(systemControl.id, 1));
 
-  // 11. Clear vault cache to force reload on next access
+  // 10. Clear vault cache to force reload on next access
   vaultCache.delete(vaultType);
 
   const trigger = hasPending ? 'pending_changes' : 'drift';

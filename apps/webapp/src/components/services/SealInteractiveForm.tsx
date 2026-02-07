@@ -8,7 +8,7 @@
  * - Field-level actions with immediate effect
  */
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { Info, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ActionButton } from "@/components/ui/action-button";
@@ -83,6 +83,7 @@ export function SealInteractiveForm({
   const [savedIpList, setSavedIpList] = useState<string[]>([]); // Server state
   const [editingIpText, setEditingIpText] = useState("");      // User input
   const [validationErrors, setValidationErrors] = useState<Array<{ ip: string; error: string }>>([]);
+  const ipTextInitializedRef = useRef(false);
 
   // Package modal state (add only - editing is done inline)
   const [packageModalOpen, setPackageModalOpen] = useState(false);
@@ -401,16 +402,23 @@ export function SealInteractiveForm({
     },
   });
 
-  // Load settings from backend on mount
+  // Sync server settings on initial load.
+  // Boolean flags (toggles) always sync from server.
+  // IP text only syncs on first load to avoid overwriting user edits
+  // when getMoreSettings refetches (e.g. after toggle mutation invalidation).
+  // Subsequent updates come through mutation onSuccess handlers.
   useEffect(() => {
     if (moreSettings) {
       setBurstEnabled(moreSettings.burstEnabled);
       setIpAllowlistEnabled(moreSettings.ipAllowlistEnabled);
 
-      // Load and format IP list
       const ipList = moreSettings.ipAllowlist || [];
       setSavedIpList(ipList);
-      setEditingIpText(formatIpAddressListForDisplay(ipList));
+
+      if (!ipTextInitializedRef.current) {
+        ipTextInitializedRef.current = true;
+        setEditingIpText(formatIpAddressListForDisplay(ipList));
+      }
     }
   }, [moreSettings]);
 

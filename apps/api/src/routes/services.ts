@@ -1016,12 +1016,18 @@ export const servicesRouter = router({
         }
       }
 
-      // For now, all services use 'sma' vault (can be extended to multi-vault later)
+      // SMA vault determines customer API endpoint availability (HAProxy config)
+      // SMK/STK vaults are internal (keyserver config) and don't affect customer-facing status
       const minAppliedSeq = vaultSeqMap.get('sma') ?? null;
-      const lmCount = lmStatuses.filter(lm => {
+      // Count unique reachable LMs (multiple rows per LM since composite PK lmId+vaultType)
+      const reachableLmIds = new Set<string>();
+      for (const lm of lmStatuses) {
         const isRecent = lm.lastSeenAt && lm.lastSeenAt > freshnessThreshold;
-        return isRecent && !lm.lastError;
-      }).length;
+        if (isRecent && !lm.lastError) {
+          reachableLmIds.add(lm.lmId);
+        }
+      }
+      const lmCount = reachableLmIds.size;
 
       // 5. Calculate status for each service
       const serviceStatuses = services.map(service => {

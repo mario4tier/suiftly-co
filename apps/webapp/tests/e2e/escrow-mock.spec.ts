@@ -33,7 +33,7 @@ test.describe('Escrow Mock - Wallet Operations', () => {
 
     // Authenticate with mock wallet
     await page.goto('/');
-    await page.click('button:has-text("Mock Wallet")');
+    await page.click('button:has-text("Mock Wallet 0")');
 
     // Wait for auth to process (smart wait - returns as soon as network idle)
     await waitAfterMutation(page);
@@ -207,7 +207,7 @@ test.describe('Escrow Mock - Service Subscription Scenarios', () => {
 
     // Authenticate with mock wallet
     await page.goto('/');
-    await page.click('button:has-text("Mock Wallet")');
+    await page.click('button:has-text("Mock Wallet 0")');
 
     // Wait for auth to process (smart wait - returns as soon as network idle)
     await waitAfterMutation(page);
@@ -383,7 +383,7 @@ test.describe('Subscription Charge Architecture - Critical Business Logic', () =
 
     // Authenticate
     await page.goto('/');
-    await page.click('button:has-text("Mock Wallet")');
+    await page.click('button:has-text("Mock Wallet 0")');
     await waitAfterMutation(page);
     await page.waitForURL('/dashboard', { timeout: 10000 });
 
