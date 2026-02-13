@@ -5,6 +5,7 @@
 
 import { initTRPC } from '@trpc/server';
 import type { CreateFastifyContextOptions } from '@trpc/server/adapters/fastify';
+import { isTestFeaturesEnabled } from '@mhaxbe/system-config';
 
 /**
  * Context passed to all tRPC procedures
@@ -43,7 +44,7 @@ export const protectedProcedure = t.procedure.use(async ({ ctx, next }) => {
 
   // Sync clock from test_kv in non-production (for testing)
   // This ensures API sees mock time set by GM
-  if (process.env.NODE_ENV !== 'production') {
+  if (isTestFeaturesEnabled()) {
     const { dbClockProvider } = await import('@suiftly/shared/db-clock');
     if (dbClockProvider.isTestKvSyncEnabled()) {
       await dbClockProvider.syncFromTestKv();

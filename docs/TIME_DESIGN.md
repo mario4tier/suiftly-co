@@ -157,7 +157,8 @@ In testing, multiple processes (API server, Global Manager) need the same mock t
 - `services/global-manager/src/task-queue.ts` - Syncs before billing operations
 
 **Production safety:**
-- All test_kv sync code is wrapped in `if (process.env.NODE_ENV !== 'production')`
+- API test_kv sync is guarded by `isTestFeaturesEnabled()` from `@mhaxbe/system-config` (reads `system.conf`)
+- GM test_kv sync and clock endpoints are guarded by `isTestDeployment()` (also reads `system.conf`)
 - Clock endpoints only exist in development mode
 - Zero overhead in production
 
