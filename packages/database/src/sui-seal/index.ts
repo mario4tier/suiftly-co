@@ -211,7 +211,7 @@ export class SuiTransactionService {
 
   constructor() {
     // Use mock in non-production (development/test)
-    // Environment is determined by /etc/walrus/system.conf, NOT NODE_ENV
+    // Environment is determined by /etc/mhaxbe/system.conf, NOT NODE_ENV
     this.isMockMode = !isProduction();
     console.log(`[SUI TX SERVICE] Mock mode: ${this.isMockMode} (isProduction: ${isProduction()})`);
   }

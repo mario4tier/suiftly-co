@@ -38,17 +38,17 @@ These scripts are run **before** the application code exists on the server. They
 **Prerequisites:**
 Before running this script, you **MUST** configure the system deployment type.
 
-**Option 1: Use walrus configure-deployment.py (Recommended)**
+**Option 1: Use mhaxbe configure-deployment.py (Recommended)**
 ```bash
-# Interactive setup - creates /etc/walrus/system.conf
-sudo ~/walrus/scripts/configure-deployment.py
+# Interactive setup - creates /etc/mhaxbe/system.conf
+sudo ~/mhaxbe/scripts/configure-deployment.py
 ```
 
 **Option 2: Manual configuration**
 ```bash
 # Create the config file manually
-sudo mkdir -p /etc/walrus
-sudo vim /etc/walrus/system.conf
+sudo mkdir -p /etc/mhaxbe
+sudo vim /etc/mhaxbe/system.conf
 
 # Add ONE of these lines:
 DEPLOYMENT_TYPE=development   # For dev machines
@@ -66,7 +66,7 @@ sudo python3 scripts/rare/setup-netops-server.py
 ```
 
 **Environment Detection (Single Source of Truth):**
-The script reads `DEPLOYMENT_TYPE` from `/etc/walrus/system.conf`:
+The script reads `DEPLOYMENT_TYPE` from `/etc/mhaxbe/system.conf`:
 - **DEPLOYMENT_TYPE=production**: Creates `suiftly_prod` only
 - **DEPLOYMENT_TYPE=development**: Creates `suiftly_dev` and `suiftly_test`
 - **File not found or DEPLOYMENT_TYPE not set**: Script fails with error
@@ -74,7 +74,7 @@ The script reads `DEPLOYMENT_TYPE` from `/etc/walrus/system.conf`:
 This ensures:
 1. **Explicit configuration**: No assumptions, no guessing, no defaults
 2. **Single source of truth**: One config file, no overrides
-3. **Consistent with walrus**: Uses same config file as walrus infrastructure
+3. **Consistent with mhaxbe**: Uses same config file as mhaxbe infrastructure
 4. **Security**: Dev and prod databases never coexist on same machine
 
 **Idempotent:** Can be run multiple times safely. Checks if each component is already installed before attempting installation.
@@ -88,9 +88,9 @@ This ensures:
 - 0: Success (all dependencies installed)
 - 1: Failure (check error message for details)
 
-## Relationship to walrus/scripts/utilities
+## Relationship to mhaxbe/scripts/utilities
 
-The walrus repository contains general-purpose utilities (`~/walrus/scripts/utilities/common.py`). This `setup-netops-server.py` script is **standalone** and doesn't depend on walrus utilities because it runs during initial setup when walrus may not be available.
+The mhaxbe repository contains general-purpose utilities (`~/mhaxbe/scripts/utilities/common.py`). This `setup-netops-server.py` script is **standalone** and doesn't depend on mhaxbe utilities because it runs during initial setup when mhaxbe may not be available.
 
 ## Next Steps After Running Setup
 
@@ -100,7 +100,7 @@ After Phase 0 (this script) completes successfully:
 2. Continue to Phase 1: Project scaffolding and npm setup
 3. See [IMPLEMENTATION_PLAN.md](../../IMPLEMENTATION_PLAN.md) for full development sequence
 
-## Working with Multiple Repos (suiftly-co + walrus)
+## Working with Multiple Repos (suiftly-co + mhaxbe)
 
 **VSCode Multi-root Workspace:**
 To work efficiently with both repos:
@@ -111,7 +111,7 @@ To work efficiently with both repos:
    {
      "folders": [
        {"path": "/home/olet/suiftly-co"},
-       {"path": "/home/olet/walrus"}
+       {"path": "/home/olet/mhaxbe"}
      ]
    }
    ```

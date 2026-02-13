@@ -21,8 +21,8 @@ AI Agent Task Sequence - Keep Token Count Low
 
 **Prerequisites:**
 1. Ubuntu 22.04 or 24.04
-2. Create `/etc/walrus/system.conf` with `DEPLOYMENT_TYPE=development` or `production`
-   - Use `sudo ~/walrus/scripts/configure-deployment.py` for interactive setup
+2. Create `/etc/mhaxbe/system.conf` with `DEPLOYMENT_TYPE=development` or `production`
+   - Use `sudo ~/mhaxbe/scripts/configure-deployment.py` for interactive setup
 
 **Usage:**
 ```bash
@@ -33,7 +33,7 @@ sudo python3 scripts/rare/setup-netops-server.py
 ```
 
 **Environment Detection:**
-- Reads `DEPLOYMENT_TYPE` from `/etc/walrus/system.conf` (single source of truth)
+- Reads `DEPLOYMENT_TYPE` from `/etc/mhaxbe/system.conf` (single source of truth)
 - Production: Creates `suiftly_prod` only
 - Development: Creates `suiftly_dev` and `suiftly_test`
 - No defaults or fallbacks (fails if not configured)
@@ -370,7 +370,7 @@ test('JWT cookie is httpOnly')
 - ✅ Idempotent operations (React.StrictMode safe)
 - ✅ Customer ID collision retry loop
 - ✅ Nonce reuse (10-minute window)
-- ✅ Production JWT_SECRET validation (reads from /etc/walrus/system.conf)
+- ✅ Production JWT_SECRET validation (reads from /etc/mhaxbe/system.conf)
 - ✅ Customer ID security (never exposed to client)
 
 **Testing:**
@@ -525,7 +525,7 @@ Service-first pattern implemented:
 - Idempotency tests (same billing cycle runs twice = same result)
 
 ## Phase 16: MA_VAULT Generation
-**Goal:** API key vault for walrus project
+**Goal:** API key vault for mhaxbe project
 **Ref:** docs/API_KEY_DESIGN.md
 **Files:** services/global-manager/src/tasks/vault.ts
 **Output format:**
@@ -537,7 +537,7 @@ customer_id,encrypted_key,rate_limit,tier,service_type
 
 **Format:** CSV (not JSON)
 - Each row represents an active API key
-- walrus HAProxy reads this file to authenticate/rate-limit requests
+- mhaxbe HAProxy reads this file to authenticate/rate-limit requests
 - Regenerated every Global Manager cycle (5 minutes)
 - File atomically replaced (write to temp, then rename)
 

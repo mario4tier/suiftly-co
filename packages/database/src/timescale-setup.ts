@@ -12,7 +12,7 @@ import { db } from './db';
  * This script is called by reset-database.sh - don't run directly.
  * If you need to reset the database, use: sudo ./scripts/dev/reset-database.sh
  *
- * Based on walrus HAPROXY_LOGS.md specification:
+ * Based on mhaxbe HAPROXY_LOGS.md specification:
  * - 1-hour chunks for faster pruning
  * - 6-hour compression policy
  * - 7-day retention (raw logs)

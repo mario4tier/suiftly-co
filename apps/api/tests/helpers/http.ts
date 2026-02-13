@@ -5,7 +5,7 @@
  * These simulate real client behavior by using fetch instead of direct function calls.
  */
 
-const API_BASE = 'http://localhost:22700'; // See ~/walrus/PORT_MAP.md
+const API_BASE = 'http://localhost:22700'; // See ~/mhaxbe/PORT_MAP.md
 
 /**
  * Make a tRPC query (GET) request

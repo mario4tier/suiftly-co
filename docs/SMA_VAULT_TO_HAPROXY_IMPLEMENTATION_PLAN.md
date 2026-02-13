@@ -107,7 +107,7 @@ const TIER_CONFIG = {
    - Include `extraApiKeyFps` when customer has >2 API keys
    - Include `ipAllowlist` when customer has IP restrictions
 
-### 2. LM: `walrus/services/local-manager/src/map-writer.ts`
+### 2. LM: `mhaxbe/services/local-manager/src/map-writer.ts`
 
 **Changes**:
 1. Add `writeCustomerMap()` for primary config map
@@ -115,7 +115,7 @@ const TIER_CONFIG = {
 3. Add `writeExtraKeysMap()` for extra API keys (>2)
 4. Add validation for hex format
 
-### 3. LM: `walrus/services/local-manager/src/haproxy-updater.ts`
+### 3. LM: `mhaxbe/services/local-manager/src/haproxy-updater.ts`
 
 **Changes**:
 1. Update `haproxyUpdateCallback()` to:
@@ -130,7 +130,7 @@ const TIER_CONFIG = {
    - `del map` for removed customers
    - Uses `VaultDiff` to identify changes
 
-### 4. LM: `walrus/services/local-manager/src/haproxy-socket.ts`
+### 4. LM: `mhaxbe/services/local-manager/src/haproxy-socket.ts`
 
 **Changes**:
 1. Add `addMapEntry(mapPath, key, value)` - runtime map add

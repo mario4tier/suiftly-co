@@ -98,7 +98,7 @@ export type CustomerStatus = typeof CUSTOMER_STATUS[keyof typeof CUSTOMER_STATUS
 API keys use 32-bit fingerprints derived from the first 7 Base32 characters of the key.
 
 **Documentation:**
-- **Implementation Details**: See `~/walrus/docs/HAPROXY_CONTROLS.md` (API-Keys-Filter section)
+- **Implementation Details**: See `~/mhaxbe/docs/HAPROXY_CONTROLS.md` (API-Keys-Filter section)
 - **Database Schema**: See [CUSTOMER_SERVICE_SCHEMA.md](./CUSTOMER_SERVICE_SCHEMA.md) (api_keys table)
 - **Database Design**: See [GLOBAL_MANAGER_DESIGN.md](./GLOBAL_MANAGER_DESIGN.md) (MA_VAULT generation)
 
@@ -120,7 +120,7 @@ API keys use 32-bit fingerprints derived from the first 7 Base32 characters of t
 ```
 
 **Usage:**
-- **Test/Dev Servers:** Hardcoded in code (shared with walrus/system.conf)
+- **Test/Dev Servers:** Hardcoded in code (shared with mhaxbe/system.conf)
 - **Production:** Loaded from KVCrypt (to be implemented)
 - Can override with `API_SECRET_KEY` environment variable if needed
 

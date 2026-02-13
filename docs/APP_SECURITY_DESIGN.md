@@ -164,7 +164,7 @@ The seal-wrapper.sh script validates that the required seed is present before st
 
 ### Environment Detection
 
-**System config:** `/etc/walrus/system.conf`
+**System config:** `/etc/mhaxbe/system.conf`
 ```bash
 DEPLOYMENT_TYPE=production  # or 'test' or 'development'
 APISERVER=1                 # 1 = runs API servers, 0 = other role
@@ -180,7 +180,7 @@ APISERVER=1                 # 1 = runs API servers, 0 = other role
 **See:** [apps/api/src/lib/config.ts](../apps/api/src/lib/config.ts)
 
 **Startup sequence:**
-1. Read `/etc/walrus/system.conf` (determine environment)
+1. Read `/etc/mhaxbe/system.conf` (determine environment)
 2. Load `~/.suiftly.env` into `process.env` (if exists)
 3. Parse/validate with Zod schema (includes dev defaults)
 4. Run `validateSecretSafety()` - blocks dev secrets in prod

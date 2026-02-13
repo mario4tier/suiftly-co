@@ -3,7 +3,7 @@
 // Environment variables:
 //   GM_PORT - Server port (default: 22600)
 //   GM_HOST - Server host (default: 0.0.0.0)
-// Deployment type from /etc/walrus/system.conf (DEPLOYMENT_TYPE=test|production)
+// Deployment type from /etc/mhaxbe/system.conf (DEPLOYMENT_TYPE=test|production)
 
 import Fastify from 'fastify';
 import { z } from 'zod';

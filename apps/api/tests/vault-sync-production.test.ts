@@ -7,7 +7,7 @@
  * Uses 'sma' (seal mainnet API) vault type for production-like testing.
  *
  * PREREQUISITES:
- * 1. Run: sudo python3 ~/walrus/scripts/setup-user.py (creates keys and directories)
+ * 1. Run: sudo python3 ~/mhaxbe/scripts/setup-user.py (creates keys and directories)
  * 2. Ensure sync-files.timer is running: systemctl status sync-files.timer
  *
  * Test flow:
@@ -66,7 +66,7 @@ async function checkPrerequisites(): Promise<{ ready: boolean; issues: string[] 
   try {
     await access(join(KEY_DIR, `${VAULT_TYPE}.key`), constants.R_OK);
   } catch {
-    issues.push(`Vault key not found at ${KEY_DIR}/${VAULT_TYPE}.key - run: sudo python3 ~/walrus/scripts/setup-user.py`);
+    issues.push(`Vault key not found at ${KEY_DIR}/${VAULT_TYPE}.key - run: sudo python3 ~/mhaxbe/scripts/setup-user.py`);
   }
 
   // Check sync-files.timer is active

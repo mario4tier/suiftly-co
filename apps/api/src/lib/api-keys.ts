@@ -24,7 +24,7 @@ import { getSealProcessGroup } from '@mhaxbe/system-config';
  *
  * Test/Development (hardcoded):
  *   8776c4c0e84428c6e86fca4647abe16459649aa78fe4c72e7643dc3a14343337
- *   This is a well-known test key shared with walrus/system.conf
+ *   This is a well-known test key shared with mhaxbe/system.conf
  *   Safe to hardcode as it's only used in test/dev environments
  *
  * Production:

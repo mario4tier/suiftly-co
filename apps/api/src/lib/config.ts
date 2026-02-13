@@ -14,7 +14,7 @@ import { homedir } from 'os';
 // STEP 0: Read system configuration to determine deployment type and API server role
 function readSystemConfig(): { deploymentType: string; isApiServer: boolean } {
   try {
-    const configPath = '/etc/walrus/system.conf';
+    const configPath = '/etc/mhaxbe/system.conf';
     const config = readFileSync(configPath, 'utf-8');
 
     const deploymentMatch = config.match(/DEPLOYMENT_TYPE=(\w+)/);
@@ -26,7 +26,7 @@ function readSystemConfig(): { deploymentType: string; isApiServer: boolean } {
     };
   } catch (error) {
     // If file doesn't exist, assume development non-API server
-    console.log('[Config] ⚠️  /etc/walrus/system.conf not found, assuming development');
+    console.log('[Config] ⚠️  /etc/mhaxbe/system.conf not found, assuming development');
     return { deploymentType: 'development', isApiServer: false };
   }
 }
@@ -44,7 +44,7 @@ const homeEnvPath = join(homedir(), '.suiftly.env');
 // GUARD: If APISERVER=1, ~/.suiftly.env MUST exist
 if (systemConfig.isApiServer && !existsSync(homeEnvPath)) {
   throw new Error(
-    `FATAL: APISERVER=1 in /etc/walrus/system.conf but ${homeEnvPath} not found!\n` +
+    `FATAL: APISERVER=1 in /etc/mhaxbe/system.conf but ${homeEnvPath} not found!\n` +
     `This system is configured as an API server and requires secrets.\n` +
     `See docs/APP_SECURITY_DESIGN.md for setup instructions.\n` +
     `Quick fix: Run setup-users.py or manually create ~/.suiftly.env`
@@ -83,7 +83,7 @@ if (existsSync(homeEnvPath)) {
 const envSchema = z.object({
   // Server
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
-  PORT: z.string().default('22700'), // See ~/walrus/PORT_MAP.md for port allocation
+  PORT: z.string().default('22700'), // See ~/mhaxbe/PORT_MAP.md for port allocation
   HOST: z.string().default('0.0.0.0'),
 
   // Database
@@ -120,7 +120,7 @@ const envSchema = z.object({
   ),
 
   // CORS
-  CORS_ORIGIN: z.string().default('http://localhost:22710'), // See ~/walrus/PORT_MAP.md
+  CORS_ORIGIN: z.string().default('http://localhost:22710'), // See ~/mhaxbe/PORT_MAP.md
 
   // Rate limiting
   RATE_LIMIT_MAX: z.string().transform(Number).default('100'), // requests per minute

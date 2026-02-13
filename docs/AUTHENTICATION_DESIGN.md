@@ -739,7 +739,7 @@ The JWT signing secret is stored in a `~/.suiftly.env` file in the home director
 # All environments (production, development, test)
 ~/.suiftly.env
 
-# Environment is determined by /etc/walrus/system.conf (not by user account)
+# Environment is determined by /etc/mhaxbe/system.conf (not by user account)
 # Same user runs both production and development systems
 # Each system has its own ~/.suiftly.env with appropriate secrets
 ```
@@ -776,7 +776,7 @@ openssl rand -base64 32  # DB_APP_FIELDS_ENCRYPTION_KEY
 **Important Security Notes:**
 - ✅ Never commit `.env` files to git (add to `.gitignore`)
 - ✅ Use different secrets for production and development systems
-- ✅ Environment determined by `/etc/walrus/system.conf` (not user account)
+- ✅ Environment determined by `/etc/mhaxbe/system.conf` (not user account)
 - ✅ Both secrets should be at least 32 bytes (256 bits)
 - ⚠️ If JWT_SECRET compromised, all existing JWTs become invalid when rotated
 - ⚠️ If DB_APP_FIELDS_ENCRYPTION_KEY compromised, all encrypted secrets must be re-encrypted
@@ -833,7 +833,7 @@ chmod 600 ~/.suiftly.env
 cat ~/.suiftly.env  # Verify both secrets were created
 ```
 
-**Note:** Environment (production vs development) is determined by `/etc/walrus/system.conf`, not by user account or secret values.
+**Note:** Environment (production vs development) is determined by `/etc/mhaxbe/system.conf`, not by user account or secret values.
 
 ---
 

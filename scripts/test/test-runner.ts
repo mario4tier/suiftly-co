@@ -25,15 +25,13 @@ import { waitForPortFree } from '../../playwright-test-utils';
 import { PORT } from '@suiftly/shared/constants';
 
 /**
- * Find system.conf path (searches mhaxbe first, then walrus for migration compatibility)
+ * Find system.conf path
  */
 function findSystemConf(): string | null {
   const home = homedir();
   const paths = [
     join(home, 'mhaxbe', 'system.conf'),
-    join(home, 'walrus', 'system.conf'),
     '/etc/mhaxbe/system.conf',
-    '/etc/walrus/system.conf',
   ];
   return paths.find(p => existsSync(p)) || null;
 }

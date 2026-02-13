@@ -505,7 +505,7 @@ Rate limits are enforced **per customer**, not per API key.
 - Simplifies customer experience (aggregate view of usage)
 - Aligns with billing (customer pays for total usage)
 
-**Implementation:** HAProxy enforces rate limits using map files. See `~/walrus/docs` for HAProxy configuration details.
+**Implementation:** HAProxy enforces rate limits using map files. See `~/mhaxbe/docs` for HAProxy configuration details.
 
 ## Service-Specific API Keys
 

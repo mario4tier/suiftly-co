@@ -19,7 +19,7 @@ Exit Codes:
   1 - One or more tests failed
   2 - Skipped (e.g., production environment)
 
-See: ~/walrus/scripts/tests/README.md for full documentation
+See: ~/mhaxbe/scripts/tests/README.md for full documentation
 """
 
 import json
@@ -45,18 +45,18 @@ def is_production_environment() -> tuple[bool, str]:
     Check if this is a production environment.
 
     Checks two locations:
-    1. ~/walrus/system.conf - ENVIRONMENT variable
-    2. /etc/walrus/system.conf - DEPLOYMENT_TYPE variable
+    1. ~/mhaxbe/system.conf - ENVIRONMENT variable
+    2. /etc/mhaxbe/system.conf - DEPLOYMENT_TYPE variable
 
     Returns:
         tuple[bool, str]: (is_production, reason)
     """
     home = os.path.expanduser("~")
-    walrus_config = os.path.join(home, "walrus", "system.conf")
+    mhaxbe_config = os.path.join(home, "mhaxbe", "system.conf")
 
-    if os.path.exists(walrus_config):
+    if os.path.exists(mhaxbe_config):
         try:
-            with open(walrus_config, 'r') as f:
+            with open(mhaxbe_config, 'r') as f:
                 for line in f:
                     line = line.strip()
                     if line.startswith('#') or not line:
@@ -64,13 +64,13 @@ def is_production_environment() -> tuple[bool, str]:
                     if line.startswith('ENVIRONMENT='):
                         value = line.split('=', 1)[1].strip('"\'').lower()
                         if value == 'production':
-                            return True, f"ENVIRONMENT=production in {walrus_config}"
+                            return True, f"ENVIRONMENT=production in {mhaxbe_config}"
                         elif value == 'development':
-                            return False, f"ENVIRONMENT=development in {walrus_config}"
+                            return False, f"ENVIRONMENT=development in {mhaxbe_config}"
         except Exception as e:
-            print(f"Warning: Could not read {walrus_config}: {e}")
+            print(f"Warning: Could not read {mhaxbe_config}: {e}")
 
-    etc_config = "/etc/walrus/system.conf"
+    etc_config = "/etc/mhaxbe/system.conf"
     if os.path.exists(etc_config):
         try:
             with open(etc_config, 'r') as f:
@@ -205,7 +205,7 @@ def main() -> int:
         print(f"  Detected: {reason}")
         print()
         print("  Tests are ONLY allowed in development environments.")
-        print("  To run tests, ensure ~/walrus/system.conf has:")
+        print("  To run tests, ensure ~/mhaxbe/system.conf has:")
         print("    ENVIRONMENT=development")
         print("!" * 70)
         return 2

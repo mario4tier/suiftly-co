@@ -199,7 +199,7 @@ export const USAGE_PRICING_CENTS_PER_1000 = {
   [SERVICE_TYPE.GRAPHQL]: 10,   // Same pricing
 } as const satisfies Record<ServiceType, number>;
 
-// Port Allocations - Single source of truth: ~/walrus/PORT_MAP.md
+// Port Allocations - Single source of truth: ~/mhaxbe/PORT_MAP.md
 // Short names for convenient use in tests and configs
 export const PORT = {
   API: 22700,     // API Server (22700-22703 in production, load balanced)
@@ -209,7 +209,7 @@ export const PORT = {
   SUDOB: 22800,   // Sudob privileged API (dev/test only, never production)
 } as const;
 
-// HAProxy Frontend Ports - Single source of truth: ~/walrus/PORT_MAP.md
+// HAProxy Frontend Ports - Single source of truth: ~/mhaxbe/PORT_MAP.md
 // These are the ports where HAProxy listens for Seal service requests
 // Pattern: 2NXXY where N=network (0=mainnet, 1=testnet), XX=access (00=public, 01=private, 02=local), Y=service (2=seal)
 export const SEAL_PORT = {

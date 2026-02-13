@@ -4,7 +4,7 @@
  * These helpers enable E2E tests that verify the full flow:
  * customer → API key → vault sync → HAProxy → Seal backend
  *
- * Port reference: ~/walrus/PORT_MAP.md (single source of truth)
+ * Port reference: ~/mhaxbe/PORT_MAP.md (single source of truth)
  * Constants defined in: @suiftly/shared/constants
  */
 

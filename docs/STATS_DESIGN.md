@@ -9,7 +9,7 @@ Stats system for Suiftly services serving three purposes:
 
 **Related:** [BILLING_DESIGN.md](./BILLING_DESIGN.md)
 
-**Data Source:** HAProxy logs defined in `~/walrus/docs/HAPROXY_LOGS.md` (source of truth for schema).
+**Data Source:** HAProxy logs defined in `~/mhaxbe/docs/HAPROXY_LOGS.md` (source of truth for schema).
 
 **Pipeline:** HAProxy → rsyslog → Fluentd → TimescaleDB
 

@@ -15,7 +15,7 @@
  * - Global Manager (GM) running for vault generation
  * - API server running with test endpoints
  *
- * Port reference (~/walrus/PORT_MAP.md):
+ * Port reference (~/mhaxbe/PORT_MAP.md):
  * - 20202: SEAL local access (unmetered) - used for testing
  * - 22600: Global Manager API
  * - 22610: Local Manager API

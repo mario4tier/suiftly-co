@@ -3,7 +3,7 @@
 # Uses sudob for systemd services (GM, LM, fluentd), direct kill for others
 
 SUDOB_URL="http://localhost:22800"
-SYSTEM_CONF="/etc/walrus/system.conf"
+SYSTEM_CONF="/etc/mhaxbe/system.conf"
 
 # ============================================================================
 # Check system.conf exists (required for proper dev setup)
@@ -15,7 +15,7 @@ if [ ! -f "$SYSTEM_CONF" ]; then
   echo "  This file is required to identify the deployment type."
   echo "  Create it with:"
   echo ""
-  echo "    sudo ~/walrus/scripts/configure-deployment.py"
+  echo "    sudo ~/mhaxbe/scripts/configure-deployment.py"
   echo ""
   exit 1
 fi

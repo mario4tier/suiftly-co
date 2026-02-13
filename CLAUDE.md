@@ -16,7 +16,7 @@ Self-service dashboard where customers configure and manage Suiftly infrastructu
 - Usage-based billing with Web3 wallet integration
 - API backend with tRPC (type-safe)
 
-Infrastructure (HAProxy, Seal servers) lives in separate **walrus** project.
+Infrastructure (HAProxy, Seal servers) lives in separate **mhaxbe** project.
 
 ## Architecture
 
@@ -66,7 +66,7 @@ Initial setup phase - no code scaffolded yet.
 
 **IMPORTANT: Never use NODE_ENV for environment detection in runtime code.** Use `system.conf` and `@mhaxbe/system-config` instead.
 
-See [~/walrus/CLAUDE.md](~/walrus/CLAUDE.md) "Environment Detection (system.conf)" section for full documentation.
+See [~/mhaxbe/CLAUDE.md](~/mhaxbe/CLAUDE.md) "Environment Detection (system.conf)" section for full documentation.
 
 Quick reference:
 ```typescript
@@ -78,7 +78,7 @@ if (isTestFeaturesEnabled()) {
 }
 ```
 
-The `system.conf` file in `~/walrus/` or `~/suiftly-co/` determines the environment. Copy from `system.conf.example` and set `ENVIRONMENT=development` (dev) or `ENVIRONMENT=production` (prod).
+The `system.conf` file in `~/mhaxbe/` or `~/suiftly-co/` determines the environment. Copy from `system.conf.example` and set `ENVIRONMENT=development` (dev) or `ENVIRONMENT=production` (prod).
 
 ## Database Management
 
@@ -188,7 +188,7 @@ See [docs/ROUTE_SECURITY.md](docs/ROUTE_SECURITY.md) for complete details.
 - API server on port 22700
 - Webapp on port 22710
 
-**Port Reference:** See `~/walrus/PORT_MAP.md` for the single source of truth on all port allocations.
+**Port Reference:** See `~/mhaxbe/PORT_MAP.md` for the single source of truth on all port allocations.
 
 **Benefits:**
 - Aggressive cleanup of stale processes (multiple passes)

@@ -1,7 +1,7 @@
 /**
  * Local Manager (LM) Configuration
  *
- * Reads deployment type from /etc/walrus/system.conf (DEPLOYMENT_TYPE).
+ * Reads deployment type from /etc/mhaxbe/system.conf (DEPLOYMENT_TYPE).
  * - test: Local LM only (localhost:22610)
  * - production: Multiple LMs across regions
  */
@@ -19,7 +19,7 @@ export interface LMEndpoint {
 let systemConfig: Record<string, string> | null = null;
 
 /**
- * Read and parse /etc/walrus/system.conf
+ * Read and parse /etc/mhaxbe/system.conf
  */
 function getSystemConfig(): Record<string, string> {
   if (systemConfig !== null) {
@@ -28,7 +28,7 @@ function getSystemConfig(): Record<string, string> {
 
   systemConfig = {};
   try {
-    const content = readFileSync('/etc/walrus/system.conf', 'utf-8');
+    const content = readFileSync('/etc/mhaxbe/system.conf', 'utf-8');
     for (const line of content.split('\n')) {
       const trimmed = line.trim();
       if (trimmed && !trimmed.startsWith('#')) {
@@ -39,7 +39,7 @@ function getSystemConfig(): Record<string, string> {
       }
     }
   } catch (e) {
-    console.warn('[LM-CONFIG] Could not read /etc/walrus/system.conf, assuming test deployment');
+    console.warn('[LM-CONFIG] Could not read /etc/mhaxbe/system.conf, assuming test deployment');
   }
 
   return systemConfig;

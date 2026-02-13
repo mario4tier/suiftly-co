@@ -16,7 +16,7 @@ Requirements:
     - nvm installed for the user (with Node.js v22)
     - Internet connection for package downloads
 
-Note: Similar utilities exist in ~/walrus/scripts/utilities/common.py
+Note: Similar utilities exist in ~/mhaxbe/scripts/utilities/common.py
       (get_current_user, etc.) but this script is standalone for initial setup.
 """
 
@@ -539,15 +539,15 @@ def setup_postgresql_databases(context: SetupContext):
     """Create databases and enable TimescaleDB extension."""
     print_step("Setting up PostgreSQL databases...")
 
-    # Single source of truth: /etc/walrus/system.conf
+    # Single source of truth: /etc/mhaxbe/system.conf
     # MUST exist and MUST have DEPLOYMENT_TYPE set
-    system_conf_path = "/etc/walrus/system.conf"
+    system_conf_path = "/etc/mhaxbe/system.conf"
     deployment_type = None
 
     # Check if system.conf exists
     if not os.path.exists(system_conf_path):
         print_error(f"Configuration file not found: {system_conf_path}")
-        print_error("You must create /etc/walrus/system.conf with DEPLOYMENT_TYPE set")
+        print_error("You must create /etc/mhaxbe/system.conf with DEPLOYMENT_TYPE set")
         print_error("\nExample content:")
         print_error("  # For development machines:")
         print_error("  DEPLOYMENT_TYPE=development")
@@ -555,8 +555,8 @@ def setup_postgresql_databases(context: SetupContext):
         print_error("  # For production machines:")
         print_error("  DEPLOYMENT_TYPE=production")
         print_error("\nCreate it with:")
-        print_error("  sudo mkdir -p /etc/walrus")
-        print_error("  sudo vim /etc/walrus/system.conf")
+        print_error("  sudo mkdir -p /etc/mhaxbe")
+        print_error("  sudo vim /etc/mhaxbe/system.conf")
         sys.exit(1)
 
     # Read DEPLOYMENT_TYPE from system.conf
@@ -577,7 +577,7 @@ def setup_postgresql_databases(context: SetupContext):
     # DEPLOYMENT_TYPE must be set
     if not deployment_type:
         print_error(f"DEPLOYMENT_TYPE not found in {system_conf_path}")
-        print_error("You must set DEPLOYMENT_TYPE in /etc/walrus/system.conf")
+        print_error("You must set DEPLOYMENT_TYPE in /etc/mhaxbe/system.conf")
         print_error("\nAdd one of:")
         print_error("  DEPLOYMENT_TYPE=development")
         print_error("  DEPLOYMENT_TYPE=production")
@@ -660,7 +660,7 @@ def setup_database_permissions(context: SetupContext):
     print_step("Setting up database permissions...")
 
     # Read deployment type to determine which databases to configure
-    system_conf_path = "/etc/walrus/system.conf"
+    system_conf_path = "/etc/mhaxbe/system.conf"
     deployment_type = None
 
     try:

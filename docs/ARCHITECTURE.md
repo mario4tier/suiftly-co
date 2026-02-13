@@ -9,7 +9,7 @@ Customer-facing platform for Suiftly services:
 - PostgreSQL database (customer data, configs, HAProxy logs)
 - Global Manager (centralized worker: billing, metering, vault generation)
 
-Infrastructure (HAProxy, Seal servers, Local Manager) handled by **walrus** project (local repos always at ~/walrus). The control plane spans both repositories - see [CONTROL_PLANE_DESIGN.md](./CONTROL_PLANE_DESIGN.md) for the complete architecture.
+Infrastructure (HAProxy, Seal servers, Local Manager) handled by **mhaxbe** project (local repos always at ~/mhaxbe). The control plane spans both repositories - see [CONTROL_PLANE_DESIGN.md](./CONTROL_PLANE_DESIGN.md) for the complete architecture.
 
 ## Principles
 
@@ -130,7 +130,7 @@ The Suiftly infrastructure uses a two-repository model with clear dependency dir
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  ~/walrus (Base Layer)                                          │
+│  ~/mhaxbe (Base Layer)                                          │
 │  Deployed: ALL servers (gateway + primary)                      │
 │                                                                 │
 │  Contains:                                                      │
@@ -142,7 +142,7 @@ The Suiftly infrastructure uses a two-repository model with clear dependency dir
 │  - @mhaxbe/shared (shared types package)                       │
 └─────────────────────────────────────────────────────────────────┘
                               ↑
-                              │ suiftly-co imports from walrus
+                              │ suiftly-co imports from mhaxbe
                               │ (never the reverse)
 ┌─────────────────────────────────────────────────────────────────┐
 │  ~/suiftly-co (NetOps Layer)                                    │
@@ -156,13 +156,13 @@ The Suiftly infrastructure uses a two-repository model with clear dependency dir
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**Key principle**: Gateway servers only need `~/walrus` deployed. The `~/suiftly-co` repository is only deployed on the primary server (eu-w1-1) where PostgreSQL and the Global Manager run.
+**Key principle**: Gateway servers only need `~/mhaxbe` deployed. The `~/suiftly-co` repository is only deployed on the primary server (eu-w1-1) where PostgreSQL and the Global Manager run.
 
 ### @mhaxbe/shared Package
 
-Shared TypeScript types are defined in `~/walrus/services/shared/` and imported by both repositories:
+Shared TypeScript types are defined in `~/mhaxbe/services/shared/` and imported by both repositories:
 
-**Package location:** `~/walrus/services/shared/`
+**Package location:** `~/mhaxbe/services/shared/`
 
 **Importing in suiftly-co:**
 
@@ -170,7 +170,7 @@ Shared TypeScript types are defined in `~/walrus/services/shared/` and imported 
 // package.json (root or services/global-manager)
 {
   "dependencies": {
-    "@mhaxbe/shared": "file:../walrus/services/shared"
+    "@mhaxbe/shared": "file:../mhaxbe/services/shared"
   }
 }
 ```
@@ -203,14 +203,14 @@ When working on features that span both repositories:
 
 1. **Update shared types first** (if needed):
    ```bash
-   cd ~/walrus/services/shared
+   cd ~/mhaxbe/services/shared
    # Edit types
    npm run build
    ```
 
-2. **Update Local Manager** (walrus):
+2. **Update Local Manager** (mhaxbe):
    ```bash
-   cd ~/walrus/services/local-manager
+   cd ~/mhaxbe/services/local-manager
    npm run dev
    ```
 
@@ -225,14 +225,14 @@ When working on features that span both repositories:
 
 | Server | Repositories | Services |
 |--------|--------------|----------|
-| **eu-w1-1** (Primary) | walrus + suiftly-co | Global Manager, API, Webapp, PostgreSQL, HAProxy, Local Manager |
-| **us-e1-1** (Gateway) | walrus only | HAProxy, Local Manager, SEAL key-server |
-| **us-w1-1** (Gateway) | walrus only | HAProxy, Local Manager, SEAL key-server |
-| **as-s1-1** (Gateway) | walrus only | HAProxy, Local Manager, SEAL key-server |
+| **eu-w1-1** (Primary) | mhaxbe + suiftly-co | Global Manager, API, Webapp, PostgreSQL, HAProxy, Local Manager |
+| **us-e1-1** (Gateway) | mhaxbe only | HAProxy, Local Manager, SEAL key-server |
+| **us-w1-1** (Gateway) | mhaxbe only | HAProxy, Local Manager, SEAL key-server |
+| **as-s1-1** (Gateway) | mhaxbe only | HAProxy, Local Manager, SEAL key-server |
 
 **For detailed control plane design, see [CONTROL_PLANE_DESIGN.md](./CONTROL_PLANE_DESIGN.md)**
 
-**For Local Manager implementation, see [~/walrus/docs/LOCAL_MANAGER_FEATURE.md](~/walrus/docs/LOCAL_MANAGER_FEATURE.md)**
+**For Local Manager implementation, see [~/mhaxbe/docs/LOCAL_MANAGER_FEATURE.md](~/mhaxbe/docs/LOCAL_MANAGER_FEATURE.md)**
 
 ---
 
@@ -564,7 +564,7 @@ npm install
 | **Web App (Vite)** | **22710** | `apps/webapp/vite.config.ts` | Frontend SPA (dev only) |
 | **Global Manager** | **22600** | `services/global-manager/.env` | Admin dashboard (localhost only) |
 
-**Port Allocation:** See [~/walrus/PORT_MAP.md](~/walrus/PORT_MAP.md) for the single source of truth. In production, multiple API servers (22700-22703) run behind HAProxy.
+**Port Allocation:** See [~/mhaxbe/PORT_MAP.md](~/mhaxbe/PORT_MAP.md) for the single source of truth. In production, multiple API servers (22700-22703) run behind HAProxy.
 
 **Port Enforcement:**
 - Playwright config uses `baseURL: 'http://localhost:22710'` (see [playwright.config.ts](../playwright.config.ts))
@@ -1012,7 +1012,7 @@ See [.claude/commands/g.md](.claude/commands/g.md) for command definition.
 - Application-level AES-256-GCM encryption for sensitive fields (API keys, refresh tokens)
 - Master key stored in `~/.suiftly.env` (separate from database)
 - Database backups contain only ciphertext (safe to store remotely)
-- Environment (production vs development) determined by `/etc/walrus/system.conf`
+- Environment (production vs development) determined by `/etc/mhaxbe/system.conf`
 - See [APP_SECURITY_DESIGN.md](./APP_SECURITY_DESIGN.md) for implementation details and procedures
 
 ---

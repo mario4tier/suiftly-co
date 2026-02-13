@@ -279,10 +279,10 @@ const result = await writer.write(vaultType, vaultData, {
 1. **Configure system.conf:**
    ```bash
    # On dev box:
-   echo "SEAL_PROCESS_GROUP=2" >> ~/walrus/system.conf
+   echo "SEAL_PROCESS_GROUP=2" >> ~/mhaxbe/system.conf
 
    # On production:
-   echo "SEAL_PROCESS_GROUP=1" >> ~/walrus/system.conf
+   echo "SEAL_PROCESS_GROUP=1" >> ~/mhaxbe/system.conf
    ```
 
 2. **Configure master seeds in `~/.suiftly.env`:**

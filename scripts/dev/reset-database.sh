@@ -129,26 +129,26 @@ read -r
 # Step 1: Stop GM and clean vault directories
 echo "1️⃣  Stopping Global Manager and cleaning vault directories..."
 
-# SAFETY: Check Walrus deployment type from /etc/walrus/system.conf
+# SAFETY: Check mhaxbe deployment type from /etc/mhaxbe/system.conf
 # Vault cleanup ONLY safe for test deployments (DEPLOYMENT_TYPE=test)
 # NEVER run in production (DEPLOYMENT_TYPE=production)
-WALRUS_CONF="/etc/walrus/system.conf"
-if [ -f "$WALRUS_CONF" ]; then
-  # Source walrus system config to get DEPLOYMENT_TYPE
-  source "$WALRUS_CONF"
+MHAXBE_CONF="/etc/mhaxbe/system.conf"
+if [ -f "$MHAXBE_CONF" ]; then
+  # Source mhaxbe system config to get DEPLOYMENT_TYPE
+  source "$MHAXBE_CONF"
 
   # Block vault cleanup if production deployment
   if [ "${DEPLOYMENT_TYPE:-}" = "production" ]; then
-    echo "❌ ERROR: Production walrus deployment detected"
-    echo "   DEPLOYMENT_TYPE=$DEPLOYMENT_TYPE (from $WALRUS_CONF)"
+    echo "❌ ERROR: Production deployment detected"
+    echo "   DEPLOYMENT_TYPE=$DEPLOYMENT_TYPE (from $MHAXBE_CONF)"
     echo "   Vault cleanup is ONLY for test deployments."
     echo "   Production vaults contain live customer data and must NEVER be deleted."
     exit 1
   fi
 
-  echo "   ✅ Walrus DEPLOYMENT_TYPE=${DEPLOYMENT_TYPE:-not set} (safe to clean vaults)"
+  echo "   ✅ DEPLOYMENT_TYPE=${DEPLOYMENT_TYPE:-not set} (safe to clean vaults)"
 else
-  echo "   ℹ️  No walrus system.conf found (OK for development)"
+  echo "   ℹ️  No mhaxbe system.conf found (OK for development)"
 fi
 
 # Stop GM if running (so vault files aren't being written during cleanup)
