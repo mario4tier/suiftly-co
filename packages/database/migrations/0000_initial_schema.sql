@@ -7,7 +7,6 @@ CREATE TYPE "public"."service_tier" AS ENUM('starter', 'pro', 'enterprise');--> 
 CREATE TYPE "public"."service_type" AS ENUM('seal', 'grpc', 'graphql');--> statement-breakpoint
 CREATE TYPE "public"."transaction_type" AS ENUM('deposit', 'withdraw', 'charge', 'credit');--> statement-breakpoint
 CREATE TYPE "public"."seal_registration_status" AS ENUM('registering', 'registered', 'updating');--> statement-breakpoint
-CREATE SEQUENCE IF NOT EXISTS invoice_number_seq START WITH 148372;--> statement-breakpoint
 CREATE TABLE "admin_notifications" (
 	"notification_id" serial PRIMARY KEY NOT NULL,
 	"severity" varchar(20) NOT NULL,
@@ -137,7 +136,6 @@ CREATE TABLE "billing_records" (
 	"type" "transaction_type" NOT NULL,
 	"status" "billing_status" NOT NULL,
 	"tx_digest" "bytea",
-	"invoice_number" varchar(50) DEFAULT nextval('invoice_number_seq')::text NOT NULL,
 	"due_date" timestamp with time zone,
 	"billing_type" "billing_type" DEFAULT 'scheduled' NOT NULL,
 	"amount_paid_usd_cents" bigint DEFAULT 0 NOT NULL,
@@ -316,11 +314,11 @@ CREATE TABLE "config_global" (
 );
 --> statement-breakpoint
 CREATE TABLE "lm_status" (
-	"lm_id" varchar(64) PRIMARY KEY NOT NULL,
+	"lm_id" varchar(64) NOT NULL,
 	"display_name" varchar(128),
 	"host" varchar(256) NOT NULL,
 	"region" varchar(64),
-	"vault_type" varchar(8),
+	"vault_type" varchar(8) NOT NULL,
 	"applied_seq" integer DEFAULT 0,
 	"processing_seq" integer,
 	"customer_count" integer DEFAULT 0,
@@ -328,7 +326,8 @@ CREATE TABLE "lm_status" (
 	"last_error_at" timestamp,
 	"last_error" text,
 	"created_at" timestamp DEFAULT now() NOT NULL,
-	"updated_at" timestamp DEFAULT now() NOT NULL
+	"updated_at" timestamp DEFAULT now() NOT NULL,
+	CONSTRAINT "lm_status_lm_id_vault_type_pk" PRIMARY KEY("lm_id","vault_type")
 );
 --> statement-breakpoint
 CREATE TABLE "processing_state" (
@@ -362,8 +361,15 @@ CREATE TABLE "system_control" (
 	"stk_vault_content_hash" varchar(16),
 	"sto_vault_content_hash" varchar(16),
 	"skk_vault_content_hash" varchar(16),
-	"next_seal_derivation_index_pg1" integer DEFAULT 0 NOT NULL,
-	"next_seal_derivation_index_pg2" integer DEFAULT 0 NOT NULL,
+	"sma_vault_entries" integer DEFAULT 0,
+	"smk_vault_entries" integer DEFAULT 0,
+	"smo_vault_entries" integer DEFAULT 0,
+	"sta_vault_entries" integer DEFAULT 0,
+	"stk_vault_entries" integer DEFAULT 0,
+	"sto_vault_entries" integer DEFAULT 0,
+	"skk_vault_entries" integer DEFAULT 0,
+	"next_seal_derivation_index_pg1" integer DEFAULT 1 NOT NULL,
+	"next_seal_derivation_index_pg2" integer DEFAULT 1 NOT NULL,
 	"last_monthly_reset" date,
 	"maintenance_mode" boolean DEFAULT false,
 	"updated_at" timestamp DEFAULT now() NOT NULL,

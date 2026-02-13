@@ -140,7 +140,7 @@ export async function processInvoicePayment(
     const chargeResult = await suiService.charge({
       userAddress: customer.walletAddress,
       amountUsdCents: creditResult.remainingInvoiceAmountCents,
-      description: `Invoice ${invoice.invoiceNumber ?? billingRecordId}`,
+      description: `Invoice ${billingRecordId}`,
       escrowAddress: customer.escrowContractId,
     });
 

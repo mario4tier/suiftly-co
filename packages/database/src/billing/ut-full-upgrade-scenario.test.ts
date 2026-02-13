@@ -227,7 +227,7 @@ describe('Full Upgrade Scenario: Deposit → Pro → Schedule Downgrade → Ente
 
     console.log(`  Total billing records: ${allRecords.length}`);
     for (const record of allRecords) {
-      console.log(`    - ${record.status}: $${(record.amountUsdCents/100).toFixed(2)} (${record.type}) invoice#: ${record.invoiceNumber || 'null'}`);
+      console.log(`    - ${record.status}: $${(record.amountUsdCents/100).toFixed(2)} (${record.type}) id: ${record.id}`);
     }
 
     // Should have: 1 PAID for Pro subscription, 1 DRAFT for next month
@@ -312,7 +312,6 @@ describe('Full Upgrade Scenario: Deposit → Pro → Schedule Downgrade → Ente
       console.log(`    Status: ${record.status}`);
       console.log(`    Type: ${record.type}`);
       console.log(`    Amount: $${(record.amountUsdCents/100).toFixed(2)} (${record.amountUsdCents} cents)`);
-      console.log(`    Invoice#: ${record.invoiceNumber || 'NULL'}`);
       console.log('    ---');
     }
 
@@ -342,30 +341,7 @@ describe('Full Upgrade Scenario: Deposit → Pro → Schedule Downgrade → Ente
     expect(draftRecordsFinal[0].amountUsdCents).toBe(TIER_PRICES_USD_CENTS.enterprise);
     console.log(`  ✓ DRAFT invoice correct: $${(draftRecordsFinal[0].amountUsdCents/100).toFixed(2)}`);
 
-    // ========== STEP 8: Check which records have invoice numbers (UI display issue?) ==========
-    console.log('\n========================================');
-    console.log('INVOICE NUMBER ANALYSIS:');
-    console.log('========================================');
-
-    const withInvoiceNumber = allRecords.filter(r => r.invoiceNumber);
-    const withoutInvoiceNumber = allRecords.filter(r => !r.invoiceNumber);
-
-    console.log(`  Records WITH invoice#: ${withInvoiceNumber.length}`);
-    for (const r of withInvoiceNumber) {
-      console.log(`    - ${r.status}: $${(r.amountUsdCents/100).toFixed(2)} → ${r.invoiceNumber}`);
-    }
-
-    console.log(`  Records WITHOUT invoice#: ${withoutInvoiceNumber.length}`);
-    for (const r of withoutInvoiceNumber) {
-      console.log(`    - ${r.status}: $${(r.amountUsdCents/100).toFixed(2)} → NO INVOICE#`);
-    }
-
-    // FIXED: All records should now have invoice numbers
-    expect(withoutInvoiceNumber.length).toBe(0);
-    expect(withInvoiceNumber.length).toBe(3); // 2 PAID + 1 DRAFT
-    console.log('\n✓ All records have invoice numbers - billing history will show all charges');
-
-    // ========== STEP 9: Check invoice_payments table ==========
+    // ========== STEP 8: Check invoice_payments table ==========
     console.log('\n========================================');
     console.log('INVOICE PAYMENTS:');
     console.log('========================================');
@@ -405,43 +381,4 @@ describe('Full Upgrade Scenario: Deposit → Pro → Schedule Downgrade → Ente
     console.log('========================================\n');
   });
 
-  it('should verify invoice_number assignment logic', async () => {
-    // This test specifically checks if PAID records get invoice numbers assigned
-
-    // Subscribe to Pro
-    await db.update(serviceInstances)
-      .set({ tier: 'pro', state: 'enabled', isUserEnabled: true })
-      .where(eq(serviceInstances.customerId, testCustomerId));
-
-    await handleSubscriptionBilling(
-      db,
-      testCustomerId,
-      'seal',
-      'pro',
-      TIER_PRICES_USD_CENTS.pro,
-      suiService,
-      clock
-    );
-
-    // Get the PAID record
-    const [paidRecord] = await db.select().from(billingRecords).where(and(
-      eq(billingRecords.customerId, testCustomerId),
-      eq(billingRecords.status, 'paid')
-    ));
-
-    console.log('\nPAID record invoice_number:', paidRecord?.invoiceNumber || 'NULL');
-
-    // Get the DRAFT record
-    const [draftRecord] = await db.select().from(billingRecords).where(and(
-      eq(billingRecords.customerId, testCustomerId),
-      eq(billingRecords.status, 'draft')
-    ));
-
-    console.log('DRAFT record invoice_number:', draftRecord?.invoiceNumber || 'NULL');
-
-    // FIXED: Both PAID and DRAFT records should have invoice numbers
-    expect(paidRecord?.invoiceNumber).toBeTruthy();
-    expect(draftRecord?.invoiceNumber).toBeTruthy();
-    console.log('\n✓ Both PAID and DRAFT records have invoice numbers');
-  });
 });

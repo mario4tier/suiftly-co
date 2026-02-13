@@ -267,7 +267,7 @@ describe('Bug: Upgrade while downgrade is scheduled', () => {
       console.log(`    status: ${record.status}`);
       console.log(`    type: ${record.type}`);
       console.log(`    amount: ${record.amountUsdCents} cents ($${(record.amountUsdCents / 100).toFixed(2)})`);
-      console.log(`    invoice#: ${record.invoiceNumber}`);
+      console.log(`    id: ${record.id}`);
       console.log('    ---');
     }
 

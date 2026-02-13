@@ -700,7 +700,6 @@ interface Transaction {
   description: string | null;
   txDigest: string | null;
   createdAt: string;
-  invoiceNumber?: string;
   status?: string;
   source: 'ledger' | 'invoice';
 }
@@ -767,10 +766,10 @@ function TransactionItem({ transaction }: { transaction: Transaction }) {
             <span className="text-gray-500">Date:</span>
             <span>{fullDate} {time}</span>
           </div>
-          {transaction.invoiceNumber && (
+          {transaction.source === 'invoice' && (
             <div className="flex gap-2">
               <span className="text-gray-500">Invoice:</span>
-              <span>#{transaction.invoiceNumber}</span>
+              <span>#{transaction.id}</span>
             </div>
           )}
           {transaction.txDigest && (

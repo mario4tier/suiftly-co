@@ -208,7 +208,6 @@ export const billingRouter = router({
           amountUsdCents: billingRecords.amountUsdCents,
           txDigest: billingRecords.txDigest,
           createdAt: billingRecords.createdAt,
-          invoiceNumber: billingRecords.invoiceNumber,
           // Get semantic line item fields
           itemType: invoiceLineItems.itemType,
           serviceType: invoiceLineItems.serviceType,
@@ -233,7 +232,6 @@ export const billingRouter = router({
         amountUsdCents: number;
         txDigest: Buffer | null;
         createdAt: Date;
-        invoiceNumber: string;
         lineItemDescriptions: string[];
       }>();
 
@@ -263,7 +261,6 @@ export const billingRouter = router({
             amountUsdCents: Number(row.amountUsdCents),
             txDigest: row.txDigest,
             createdAt: row.createdAt,
-            invoiceNumber: row.invoiceNumber,
             lineItemDescriptions: lineItemDescription ? [lineItemDescription] : [],
           });
         }
@@ -277,7 +274,6 @@ export const billingRouter = router({
         description: string | null;
         txDigest: string | null;
         createdAt: string;
-        invoiceNumber?: string;
         status?: string;
         source: 'ledger' | 'invoice';
       }> = [];
@@ -315,7 +311,6 @@ export const billingRouter = router({
           description: invoiceDescription,
           txDigest: invoice.txDigest ? `0x${invoice.txDigest.toString('hex')}` : null,
           createdAt: invoice.createdAt.toISOString(),
-          invoiceNumber: invoice.invoiceNumber,
           status: invoice.status,
           source: 'invoice',
         });
@@ -822,7 +817,7 @@ export const billingRouter = router({
       lineItems,
       totalUsd,
       dueDate,
-      invoiceNumber: draft.invoiceNumber,
+      invoiceId: draft.id,
       lastUpdatedAt,
     };
   }),

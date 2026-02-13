@@ -387,7 +387,6 @@ describe('Billing Processor (Phase 1B)', () => {
         amountUsdCents: 2900, // $29.00 (matches Pro tier)
         type: 'charge',
         status: 'draft',
-        invoiceNumber: '100001', // Test invoice number
         createdAt: clock.now(),
       }).returning();
 

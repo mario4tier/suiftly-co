@@ -1,5 +1,5 @@
 {
-  "id": "fa09d80e-3b6b-4e59-9b5b-93df186cf821",
+  "id": "8a98d260-c1cc-4455-bb30-390fb6d67154",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -1194,13 +1194,6 @@
           "type": "bytea",
           "primaryKey": false,
           "notNull": false
-        },
-        "invoice_number": {
-          "name": "invoice_number",
-          "type": "varchar(50)",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "nextval('invoice_number_seq')::text"
         },
         "due_date": {
           "name": "due_date",
@@ -2972,7 +2965,7 @@
         "lm_id": {
           "name": "lm_id",
           "type": "varchar(64)",
-          "primaryKey": true,
+          "primaryKey": false,
           "notNull": true
         },
         "display_name": {
@@ -2997,7 +2990,7 @@
           "name": "vault_type",
           "type": "varchar(8)",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "applied_seq": {
           "name": "applied_seq",
@@ -3054,7 +3047,15 @@
       },
       "indexes": {},
       "foreignKeys": {},
-      "compositePrimaryKeys": {},
+      "compositePrimaryKeys": {
+        "lm_status_lm_id_vault_type_pk": {
+          "name": "lm_status_lm_id_vault_type_pk",
+          "columns": [
+            "lm_id",
+            "vault_type"
+          ]
+        }
+      },
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
@@ -3256,19 +3257,68 @@
           "primaryKey": false,
           "notNull": false
         },
+        "sma_vault_entries": {
+          "name": "sma_vault_entries",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 0
+        },
+        "smk_vault_entries": {
+          "name": "smk_vault_entries",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 0
+        },
+        "smo_vault_entries": {
+          "name": "smo_vault_entries",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 0
+        },
+        "sta_vault_entries": {
+          "name": "sta_vault_entries",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 0
+        },
+        "stk_vault_entries": {
+          "name": "stk_vault_entries",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 0
+        },
+        "sto_vault_entries": {
+          "name": "sto_vault_entries",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 0
+        },
+        "skk_vault_entries": {
+          "name": "skk_vault_entries",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 0
+        },
         "next_seal_derivation_index_pg1": {
           "name": "next_seal_derivation_index_pg1",
           "type": "integer",
           "primaryKey": false,
           "notNull": true,
-          "default": 0
+          "default": 1
         },
         "next_seal_derivation_index_pg2": {
           "name": "next_seal_derivation_index_pg2",
           "type": "integer",
           "primaryKey": false,
           "notNull": true,
-          "default": 0
+          "default": 1
         },
         "last_monthly_reset": {
           "name": "last_monthly_reset",
