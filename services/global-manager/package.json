@@ -10,17 +10,17 @@
     "test": "vitest"
   },
   "dependencies": {
-    "@suiftly/database": "*",
-    "@suiftly/shared": "*",
     "@mhaxbe/server-configs": "file:../../../mhaxbe/packages/server-configs",
     "@mhaxbe/vault-codec": "file:../../../mhaxbe/packages/vault-codec",
-    "drizzle-orm": "^0.44.7",
+    "@suiftly/database": "*",
+    "@suiftly/shared": "*",
+    "drizzle-orm": "^0.45.1",
     "fastify": "^5.1.0",
     "pg": "^8.13.1",
     "zod": "^3.24.1"
   },
   "devDependencies": {
-    "@types/node": "^22.10.2",
+    "@types/node": "^25.2.3",
     "@types/pg": "^8.11.10",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"

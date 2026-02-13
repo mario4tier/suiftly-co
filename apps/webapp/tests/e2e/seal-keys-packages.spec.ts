@@ -531,23 +531,18 @@ test.describe('Seal Keys & Packages Management', () => {
       throw new Error('Seal key not found after creation');
     }
 
-    // Update the key to add an objectId (simulating on-chain registration)
+    // Update the key to add an objectId and mark as registered (simulating on-chain registration)
     await db.update(sealKeys)
-      .set({ objectId: Buffer.from('f'.repeat(64), 'hex') })
+      .set({
+        objectId: Buffer.from('f'.repeat(64), 'hex'),
+        registrationStatus: 'registered',
+      })
       .where(eq(sealKeys.sealKeyId, existingKey.sealKeyId));
 
-    // Reload page to fetch updated data
-    await page.reload();
-    await waitAfterMutation(page);
-
-    // Wait for seal key count to update (handles "Updating..." sync state race condition)
-    await waitForItemCount(page, /Seal Keys.*\((\d+) of \d+ used\)/, 1, {
-      timeout: 15000,
-      message: 'Seal key count to be at least 1',
-    });
-
-    // Object ID should be visible (keys are always expanded)
-    await expect(page.locator('text=Object ID:')).toBeVisible({ timeout: 5000 });
+    // The listKeys query auto-refetches every 3s while keys are in 'registering' status.
+    // After the DB update, the next refetch will pick up the objectId.
+    // No page reload needed — avoids the race condition where reload shows 0 keys.
+    await expect(page.locator('text=Object ID:')).toBeVisible({ timeout: 10000 });
 
     // Find the Object ID row and click the copy button
     const objectIdRow = page.locator('div:has-text("Object ID:")');

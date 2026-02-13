@@ -12,7 +12,7 @@
  * @see https://developer.mozilla.org/en-US/docs/Web/API/Request/keepalive
  */
 
-import { useSignPersonalMessage, useCurrentAccount } from '@mysten/dapp-kit';
+import { useCurrentAccount, useDAppKit } from '@mysten/dapp-kit-react';
 import { useAuthStore } from '../stores/auth';
 import { toast } from 'sonner';
 import { getMockWallet, mockSignMessage } from './mockWallet';
@@ -35,7 +35,7 @@ export function useAuth() {
     clearAuth,
   } = useAuthStore();
   const currentAccount = useCurrentAccount();
-  const { mutateAsync: signMessage } = useSignPersonalMessage();
+  const dAppKit = useDAppKit();
 
   /**
    * Login with wallet signature
@@ -65,7 +65,7 @@ export function useAuth() {
       currentOperation = null;
       currentOperationType = null;
     }
-  }, [isAuthenticated, currentAccount, setUser, setAccessToken, signMessage]);
+  }, [isAuthenticated, currentAccount, setUser, setAccessToken, dAppKit]);
 
   async function performLogin(account: {address: string}): Promise<boolean> {
     const mockAccount = getMockWallet();
@@ -90,7 +90,7 @@ export function useAuth() {
       if (useMock) {
         signatureResult = mockSignMessage(new TextEncoder().encode(challenge.message));
       } else {
-        signatureResult = await signMessage({
+        signatureResult = await dAppKit.signPersonalMessage({
           message: new TextEncoder().encode(challenge.message),
         });
       }

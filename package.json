@@ -19,10 +19,10 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.56.1",
-    "@types/node": "^22.10.2",
+    "@types/node": "^25.2.3",
     "@types/pg": "^8.11.10",
     "drizzle-kit": "^0.31.6",
-    "drizzle-orm": "^0.44.7",
+    "drizzle-orm": "^0.45.1",
     "pg": "^8.13.1",
     "tsx": "^4.19.2",
     "turbo": "^2.3.3",

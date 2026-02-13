@@ -3,10 +3,10 @@
  * Shows connected wallet address and account menu for authenticated users
  */
 
-import { useCurrentAccount, useDisconnectWallet } from '@mysten/dapp-kit';
-import { useState, useEffect, useRef } from 'react';
+import { useCurrentAccount, useDAppKit } from '@mysten/dapp-kit-react';
+import { useState } from 'react';
 import { Link, useNavigate } from '@tanstack/react-router';
-import { disconnectMockWallet } from '../../lib/mockWallet';
+import { disconnectMockWallet, getMockWallet } from '../../lib/mockWallet';
 import { useAuth } from '../../lib/auth';
 import {
   Wallet,
@@ -19,14 +19,13 @@ import {
 export function WalletWidget() {
   const currentAccount = useCurrentAccount();
   const navigate = useNavigate();
-  const { mutate: disconnect } = useDisconnectWallet();
+  const dAppKit = useDAppKit();
   const [showAccountMenu, setShowAccountMenu] = useState(false);
   const [copySuccess, setCopySuccess] = useState(false);
   const { user, isAuthenticated, logout } = useAuth();
 
-  // Check if we're using mock wallet by examining localStorage
-  const mockWallet = localStorage.getItem('mock-wallet');
-  const isMock = !!mockWallet && !currentAccount;
+  // Check if we're using mock wallet
+  const isMock = !!getMockWallet() && !currentAccount;
 
   // If not authenticated, we shouldn't show this widget
   if (!isAuthenticated || !user) {
@@ -49,7 +48,7 @@ export function WalletWidget() {
     if (isMock) {
       disconnectMockWallet();
     } else {
-      disconnect(); // Disconnect real wallet
+      await dAppKit.disconnectWallet(); // Disconnect real wallet
     }
 
     setShowAccountMenu(false);

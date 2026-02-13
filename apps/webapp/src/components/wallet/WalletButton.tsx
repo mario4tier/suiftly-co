@@ -3,10 +3,10 @@
  * Premium design with professional styling
  */
 
-import { useCurrentAccount, useConnectWallet, useDisconnectWallet, useWallets } from '@mysten/dapp-kit';
+import { useCurrentAccount, useWallets, useDAppKit, useWalletConnection } from '@mysten/dapp-kit-react';
 import { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate } from '@tanstack/react-router';
-import { connectMockWallet, disconnectMockWallet, MOCK_WALLET_ADDRESSES } from '../../lib/mockWallet';
+import { connectMockWallet, MOCK_WALLET_ADDRESSES } from '../../lib/mockWallet';
 import { useAuth } from '../../lib/auth';
 import {
   Wallet,
@@ -21,8 +21,9 @@ export function WalletButton() {
   const currentAccount = useCurrentAccount();
   const wallets = useWallets();
   const navigate = useNavigate();
-  const { mutate: connect, error, isPending } = useConnectWallet();
-  const { mutate: disconnect } = useDisconnectWallet();
+  const dAppKit = useDAppKit();
+  const walletConnection = useWalletConnection();
+  const [connectError, setConnectError] = useState<Error | null>(null);
   const [showWalletModal, setShowWalletModal] = useState(false);
   const [showAccountMenu, setShowAccountMenu] = useState(false);
   const [mockAccount, setMockAccount] = useState<{address: string} | null>(null);
@@ -67,7 +68,7 @@ export function WalletButton() {
       if (isMock) {
         setMockAccount(null); // Clear component state
       } else {
-        disconnect(); // Disconnect real wallet
+        await dAppKit.disconnectWallet(); // Disconnect real wallet
       }
 
       setShowAccountMenu(false);
@@ -77,7 +78,7 @@ export function WalletButton() {
     };
 
     performDisconnect();
-  }, [triggerDisconnect, isMock, logout, disconnect, navigate]);
+  }, [triggerDisconnect, isMock, logout, dAppKit, navigate]);
 
   const handleCopyAddress = () => {
     if (user) {
@@ -235,11 +236,16 @@ export function WalletButton() {
                 {wallets.map((wallet) => (
                   <button
                     key={wallet.name}
-                    onClick={() => {
-                      if (isPending) return;
+                    onClick={async () => {
+                      if (walletConnection.isConnecting) return;
                       console.log('[WALLET] Requesting real wallet connection...');
-                      connect({ wallet });
-                      setPendingAuth(true);
+                      setConnectError(null);
+                      try {
+                        await dAppKit.connectWallet({ wallet });
+                        setPendingAuth(true);
+                      } catch (err) {
+                        setConnectError(err instanceof Error ? err : new Error(String(err)));
+                      }
                     }}
                     className="w-full px-4 py-3 bg-white hover:bg-gray-50 rounded-lg flex items-center gap-3 transition border border-gray-200"
                   >
@@ -285,9 +291,9 @@ export function WalletButton() {
               </div>
             </div>
 
-            {error && (
+            {connectError && (
               <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
-                {error.message}
+                {connectError.message}
               </div>
             )}
           </div>

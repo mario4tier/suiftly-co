@@ -10,8 +10,18 @@
  * 6. Database persistence
  */
 
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { getToast, waitForToastsToDisappear } from '../helpers/locators';
+
+/** Click "Save Changes" and wait for the API mutation response + UI to settle */
+async function saveAndWaitForCompletion(page: Page) {
+  const saveResponse = page.waitForResponse(
+    (resp) => resp.url().includes('/i/api') && resp.request().method() === 'POST' && resp.ok()
+  );
+  await page.locator('button:has-text("Save Changes")').click();
+  await saveResponse;
+  await expect(page.locator('button:has-text("Save Changes")')).not.toBeVisible({ timeout: 10000 });
+}
 
 test.describe('Seal IP Allowlist - Validation & Save/Cancel', () => {
   test.beforeEach(async ({ page, request }) => {
@@ -127,9 +137,8 @@ test.describe('Seal IP Allowlist - Validation & Save/Cancel', () => {
     // No validation errors
     await expect(page.locator('text=/Validation Errors/i')).not.toBeVisible();
 
-    // Click Save and wait for completion (button disappears when saved)
-    await page.locator('button:has-text("Save Changes")').click();
-    await expect(page.locator('button:has-text("Save Changes")')).not.toBeVisible({ timeout: 5000 });
+    // Click Save and wait for API response + UI to settle
+    await saveAndWaitForCompletion(page);
 
     // Verify database has normalized IP (without /32)
     const serviceData = await (await request.get('http://localhost:22700/test/data/service-instance?serviceType=seal')).json();
@@ -161,9 +170,7 @@ test.describe('Seal IP Allowlist - Validation & Save/Cancel', () => {
 
     // Start with a saved IP
     await textarea.fill('192.168.1.1');
-    await page.locator('button:has-text("Save Changes")').click();
-    await expect(page.locator('button:has-text("Save Changes")')).not.toBeVisible({ timeout: 5000 });
-    // Wait for save's onSuccess refetches to complete (prevents re-render clobbering next fill)
+    await saveAndWaitForCompletion(page);
     await page.waitForLoadState('networkidle');
     // Verify component settled to saved state before filling again
     await expect(textarea).toHaveValue('192.168.1.1', { timeout: 5000 });
@@ -197,9 +204,8 @@ test.describe('Seal IP Allowlist - Validation & Save/Cancel', () => {
     // No validation errors
     await expect(page.locator('text=/Validation Errors/i')).not.toBeVisible();
 
-    // Save and wait for completion
-    await page.locator('button:has-text("Save Changes")').click();
-    await expect(page.locator('button:has-text("Save Changes")')).not.toBeVisible({ timeout: 5000 });
+    // Save and wait for API response + UI to settle
+    await saveAndWaitForCompletion(page);
 
     // Verify database
     const serviceData = await (await request.get('http://localhost:22700/test/data/service-instance?serviceType=seal')).json();
@@ -257,9 +263,8 @@ test.describe('Seal IP Allowlist - Validation & Save/Cancel', () => {
     // No errors
     await expect(page.locator('text=/Validation Errors/i')).not.toBeVisible();
 
-    // Save and wait for completion
-    await page.locator('button:has-text("Save Changes")').click();
-    await expect(page.locator('button:has-text("Save Changes")')).not.toBeVisible({ timeout: 5000 });
+    // Save and wait for API response + UI to settle
+    await saveAndWaitForCompletion(page);
 
     // Verify both IPs saved
     const serviceData = await (await request.get('http://localhost:22700/test/data/service-instance?serviceType=seal')).json();
@@ -294,8 +299,7 @@ test.describe('Seal IP Allowlist - Validation & Save/Cancel', () => {
 
     // Add and save an IP
     await textarea.fill('192.168.1.1');
-    await page.locator('button:has-text("Save Changes")').click();
-    await expect(page.locator('button:has-text("Save Changes")')).not.toBeVisible({ timeout: 5000 });
+    await saveAndWaitForCompletion(page);
 
     // Disable toggle - wait for mutation response
     const disableResponse = page.waitForResponse(
@@ -333,8 +337,7 @@ test.describe('Seal IP Allowlist - Validation & Save/Cancel', () => {
 
     // Enter 2 IPs
     await textarea.fill('192.168.1.1\n10.0.0.1');
-    await page.locator('button:has-text("Save Changes")').click();
-    await expect(page.locator('button:has-text("Save Changes")')).not.toBeVisible({ timeout: 5000 });
+    await saveAndWaitForCompletion(page);
 
     // Verify formatted output (use toHaveValue to retry until onSuccess reformats)
     await expect(textarea).toHaveValue('192.168.1.1, 10.0.0.1', { timeout: 5000 }); // comma+space format
@@ -373,9 +376,7 @@ test.describe('Seal IP Allowlist - Validation & Save/Cancel', () => {
 
     // First, save a valid IP
     await textarea.fill('192.168.1.1');
-    await page.locator('button:has-text("Save Changes")').click();
-    await expect(page.locator('button:has-text("Save Changes")')).not.toBeVisible({ timeout: 5000 });
-    // Wait for save's onSuccess refetches to complete (prevents re-render clobbering next fill)
+    await saveAndWaitForCompletion(page);
     await page.waitForLoadState('networkidle');
     // Verify component settled to saved state before filling again
     await expect(textarea).toHaveValue('192.168.1.1', { timeout: 5000 });
@@ -446,33 +447,41 @@ test.describe('Seal IP Allowlist - Persistence & Reload', () => {
     await page.waitForURL(/\/services\/seal\/overview/, { timeout: 5000 });
   });
 
-  test('saved IPs persist after page reload', async ({ page }) => {
+  test('saved IPs persist after page reload', async ({ page, request }) => {
+    // Wait for subscription toast to clear before proceeding
+    await waitForToastsToDisappear(page);
+
     // Navigate to More Settings and wait for tab content
     await page.click('button[role="tab"]:has-text("More Settings")');
     await expect(page.locator('#ip-allowlist-toggle')).toBeVisible({ timeout: 5000 });
 
-    // Enable IP allowlist - wait for the toggle mutation response
+    // Enable IP allowlist - wait for mutation + all triggered refetches to complete
     const toggleResponse = page.waitForResponse(
       (resp) => resp.url().includes('/i/api') && resp.request().method() === 'POST' && resp.ok()
     );
     await page.locator('#ip-allowlist-toggle').click();
     await toggleResponse;
+    await page.waitForLoadState('networkidle');
 
     // Add and save IP
     const textarea = page.locator('#ip-allowlist');
     await textarea.fill('192.168.1.100');
-    await page.locator('button:has-text("Save Changes")').click();
-    // Wait for save to complete: button disappears when saved state matches editing state
-    await expect(page.locator('button:has-text("Save Changes")')).not.toBeVisible({ timeout: 5000 });
+    await saveAndWaitForCompletion(page);
+    await page.waitForLoadState('networkidle');
+
+    // Verify data persisted in database before reloading
+    const serviceData = await (await request.get('http://localhost:22700/test/data/service-instance?serviceType=seal')).json();
+    expect(serviceData.config.ipAllowlistEnabled).toBe(true);
+    expect(serviceData.config.ipAllowlist).toEqual(['192.168.1.100']);
 
     // Reload page and navigate back to More Settings
     await page.reload();
     await page.click('button[role="tab"]:has-text("More Settings")');
-    await expect(page.locator('#ip-allowlist-toggle')).toBeVisible({ timeout: 5000 });
+    // Wait for data to load — toggle will be checked once the fetched config has ipAllowlistEnabled=true
+    await expect(page.locator('#ip-allowlist-toggle')).toBeChecked({ timeout: 10000 });
 
-    // Verify IP persisted and toggle still ON
-    await expect(textarea).toHaveValue('192.168.1.100', { timeout: 5000 });
-    await expect(page.locator('#ip-allowlist-toggle')).toBeChecked();
+    // Verify IP persisted in UI
+    await expect(textarea).toHaveValue('192.168.1.100', { timeout: 10000 });
 
     console.log('✅ IPs persist after reload');
   });

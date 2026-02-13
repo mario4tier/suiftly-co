@@ -10,25 +10,25 @@
     "test": "vitest"
   },
   "dependencies": {
-    "@fastify/cookie": "^10.0.1",
+    "@fastify/cookie": "^11.0.2",
     "@fastify/cors": "^11.1.0",
     "@fastify/helmet": "^13.0.2",
     "@fastify/rate-limit": "^10.3.0",
-    "@fastify/static": "^8.3.0",
-    "@mysten/sui": "^1.43.2",
+    "@fastify/static": "^9.0.0",
+    "@mhaxbe/system-config": "file:/home/olet/mhaxbe/packages/system-config",
+    "@mysten/sui": "^2.4.0",
     "@suiftly/database": "*",
     "@suiftly/shared": "*",
     "@trpc/server": "^11.0.0-rc.665",
-    "@mhaxbe/system-config": "file:/home/olet/mhaxbe/packages/system-config",
     "fastify": "^5.1.0",
-    "jose": "^5.9.6"
+    "jose": "^6.1.3"
   },
   "devDependencies": {
-    "@types/node": "^22.10.2",
-    "@types/supertest": "^6.0.3",
     "@mhaxbe/kvcrypt": "file:/home/olet/mhaxbe/packages/kvcrypt",
-    "@mhaxbe/vault-codec": "file:/home/olet/mhaxbe/packages/vault-codec",
     "@mhaxbe/local-manager": "file:/home/olet/mhaxbe/services/local-manager",
+    "@mhaxbe/vault-codec": "file:/home/olet/mhaxbe/packages/vault-codec",
+    "@types/node": "^25.2.3",
+    "@types/supertest": "^6.0.3",
     "supertest": "^7.1.4",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"

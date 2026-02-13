@@ -5,7 +5,7 @@
 
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { useEffect, useState } from 'react';
-import { useCurrentAccount, useConnectWallet, useDisconnectWallet, useWallets } from '@mysten/dapp-kit';
+import { useCurrentAccount, useWallets, useDAppKit } from '@mysten/dapp-kit-react';
 import { connectMockWallet, MOCK_WALLET_ADDRESSES } from '../lib/mockWallet';
 import { useAuth } from '../lib/auth';
 import { mockAuth } from '../lib/config';
@@ -20,10 +20,10 @@ function LoginPage() {
   const navigate = useNavigate();
   const currentAccount = useCurrentAccount();
   const wallets = useWallets();
-  const { mutate: connect, error, isPending } = useConnectWallet();
-  const { mutate: disconnect } = useDisconnectWallet();
+  const dAppKit = useDAppKit();
   const [mockAccount, setMockAccount] = useState<{address: string} | null>(null);
   const [pendingAuth, setPendingAuth] = useState(false);
+  const [connectError, setConnectError] = useState<Error | null>(null);
 
   const connectedAccount = mockAccount || currentAccount;
 
@@ -48,15 +48,18 @@ function LoginPage() {
     }
   }, [pendingAuth, connectedAccount, isAuthenticated, login]);
 
-  const handleWalletSelect = (wallet: any) => {
+  const handleWalletSelect = async (wallet: any) => {
     console.log('[LOGIN] Requesting real wallet connection...');
-    // Disconnect any pending/existing connection to close old dialog
-    disconnect();
-    // Open fresh wallet dialog
-    setTimeout(() => {
-      connect({ wallet });
+    setConnectError(null);
+    try {
+      // Disconnect any pending/existing connection to close old dialog
+      await dAppKit.disconnectWallet();
+      // Open fresh wallet dialog
+      await dAppKit.connectWallet({ wallet });
       setPendingAuth(true);
-    }, 100); // Small delay to ensure disconnect completes
+    } catch (err) {
+      setConnectError(err instanceof Error ? err : new Error(String(err)));
+    }
   };
 
   const handleMockConnect = (walletIndex: 0 | 1) => {
@@ -162,10 +165,10 @@ function LoginPage() {
           )}
         </div>
 
-        {error && (
+        {connectError && (
           <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg flex gap-2 items-start">
             <AlertCircle className="h-4 w-4 text-red-600 flex-shrink-0 mt-0.5" />
-            <p className="text-sm text-red-700">{error.message}</p>
+            <p className="text-sm text-red-700">{connectError.message}</p>
           </div>
         )}
 

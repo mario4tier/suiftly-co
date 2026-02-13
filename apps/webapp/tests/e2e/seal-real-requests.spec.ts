@@ -535,8 +535,9 @@ test.describe('Real Seal Requests', () => {
 
     // === STEP 7: Verify UI clipboard copy matches API key ===
     // This ensures what users copy from the UI matches what we use for testing
-    // Note: Done AFTER vault sync because UI may filter keys during "Updating" state
-    await page.goto('/services/seal/overview?tab=x-api-key');
+    // Note: Done AFTER vault sync because UI may filter keys during "Updating" state.
+    // Use tab click (not page.goto) to avoid full page reload which can show stale empty data.
+    await page.click('button[role="tab"]:has-text("X-API-Key")');
     await waitAfterMutation(page);
 
     // Wait for the specific API key row to be visible - this is the ultimate goal

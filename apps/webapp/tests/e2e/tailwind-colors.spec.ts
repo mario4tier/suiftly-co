@@ -275,15 +275,15 @@ test.describe('Tailwind Color System', () => {
         return window.getComputedStyle(el).backgroundColor;
       });
 
-      // bg-amber-100 = rgb(254, 243, 199)
-      expect(bgColor).toBe('rgb(254, 243, 199)');
+      // bg-amber-100: rgb(254, 243, 199) or oklch(0.962 0.059 95.617)
+      expectColorMatch(bgColor, 'rgb(254, 243, 199)', 'oklch(0.962 0.059 95.617)');
 
       const textColor = await mockBadge.evaluate((el) => {
         return window.getComputedStyle(el).color;
       });
 
-      // text-amber-700 = rgb(180, 83, 9)
-      expect(textColor).toBe('rgb(180, 83, 9)');
+      // text-amber-700: rgb(180, 83, 9) or oklch(0.555 0.163 48.998)
+      expectColorMatch(textColor, 'rgb(180, 83, 9)', 'oklch(0.555 0.163 48.998)');
 
       console.log('✅ MOCK badge has amber-100 background and amber-700 text');
     } else {
