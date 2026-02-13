@@ -5,9 +5,9 @@
 Billing system for Suiftly infrastructure services:
 - Subscription charges (monthly base fees)
 - Usage charges (per-request, see [STATS_DESIGN.md](./STATS_DESIGN.md))
-- Crypto escrow payments (MVP), Stripe fiat (Phase 3)
+- Multi-provider payments (Crypto, Stripe, PayPal) — see [PAYMENT_DESIGN.md](./PAYMENT_DESIGN.md)
 
-**Related:** [TIME_DESIGN.md](./TIME_DESIGN.md), [STATS_DESIGN.md](./STATS_DESIGN.md), [CUSTOMER_SERVICE_SCHEMA.md](./CUSTOMER_SERVICE_SCHEMA.md)
+**Related:** [TIME_DESIGN.md](./TIME_DESIGN.md), [STATS_DESIGN.md](./STATS_DESIGN.md), [CUSTOMER_SERVICE_SCHEMA.md](./CUSTOMER_SERVICE_SCHEMA.md), [PAYMENT_DESIGN.md](./PAYMENT_DESIGN.md)
 
 ---
 
@@ -37,14 +37,14 @@ All subscriptions bill on **1st of month**. Mid-month signups pay full rate upfr
 
 **Reconciliation credit:** `credit = amount_paid × (days_not_used / days_in_month)`
 
-## Payment Sources (MVP)
+## Payment Sources
 
-1. **Credits** (oldest expiring first) - non-withdrawable
-2. **Escrow** (crypto balance) - on-chain USDC
+1. **Credits** (oldest expiring first) — non-withdrawable, always applied first
+2. **Payment methods** in user-defined priority order — auto-fallback to next on failure
 
-Phase 3: Stripe fiat fallback.
+Supported providers: Crypto (escrow), Stripe (credit/debit card), PayPal.
 
-**Spending order:** Credits first → Escrow → Stripe
+See [PAYMENT_DESIGN.md](./PAYMENT_DESIGN.md) for provider abstraction, charge flow, and schema.
 
 ## Insufficient Balance Handling
 
@@ -93,9 +93,12 @@ DRAFT → PENDING → PAID/FAILED/VOIDED
 - 7-day cooldown before re-provisioning allowed
 - Function: `scheduleCancellation()`, `undoCancellation()`
 
-### Key Operation Blocking
-- Seal key generate/import blocked until `paidOnce = true`
-- Function: `canPerformKeyOperation()`
+### Service Gate (Payment Blocking)
+- Service enabling and key operations blocked until:
+  1. `paidOnce = true` (service has been paid for at least once)
+  2. `subPendingInvoiceId` is resolved (no pending subscription invoice)
+  3. At least one active payment method exists (see [PAYMENT_DESIGN.md](./PAYMENT_DESIGN.md))
+- Function: `canPerformKeyOperation()` (key ops), service gate logic in `services.ts` / `seal.ts`
 
 ---
 
@@ -186,21 +189,27 @@ async function updateInvoiceInternal(tx: LockedTransaction, invoiceId: string): 
 ### Core Tables
 - `billing_records` - Invoices (status: draft/pending/paid/failed/voided)
 - `invoice_line_items` - Itemized charges
-- `invoice_payments` - Multi-source payment tracking
+- `invoice_payments` - Multi-source payment tracking (credit, escrow, stripe, paypal)
 - `customer_credits` - Off-chain non-withdrawable credits
 - `escrow_transactions` - On-chain transactions
 - `billing_idempotency` - Prevent double-billing
 - `service_cancellation_history` - Anti-abuse cooldown
+- `customer_payment_methods` - User's payment methods and priority order
+- `payment_webhook_events` - Webhook idempotency (Stripe, PayPal)
+
+See [PAYMENT_DESIGN.md](./PAYMENT_DESIGN.md) for payment-related schema details.
 
 ### Key Fields on `customers`
 - `paid_once` - Grace period eligibility
 - `grace_period_start` - When grace period started
 - `spending_limit_usd_cents` - 28-day cap
-- `current_balance_usd_cents` - Escrow balance
+- `current_balance_usd_cents` - Escrow balance (synced from blockchain)
+- `escrow_contract_id` - On-chain escrow address
+- `stripe_customer_id` - Stripe Customer object ID
 
 ### Key Fields on `service_instances`
 - `paid_once` - Service-level payment tracking
-- `subscription_charge_pending` - Awaiting first payment
+- `sub_pending_invoice_id` - Pending subscription invoice (blocks service enabling until paid)
 - `scheduled_tier`, `scheduled_tier_effective_date` - Downgrade
 - `cancellation_scheduled_for`, `cancellation_effective_at` - Cancellation
 
@@ -231,7 +240,7 @@ async function updateInvoiceInternal(tx: LockedTransaction, invoiceId: string): 
 | Periodic job | ✅ Complete | `packages/database/src/billing/periodic-job.ts` |
 | Service billing | ✅ Complete | `packages/database/src/billing/service-billing.ts` |
 | Usage metering | ❌ Pending | See [STATS_DESIGN.md](./STATS_DESIGN.md) |
-| Stripe integration | ❌ Phase 3 | — |
+| Payment providers | ❌ Pending | See [PAYMENT_DESIGN.md](./PAYMENT_DESIGN.md) |
 | Tax compliance | ❌ Post-MVP | — |
 
 ---
@@ -256,8 +265,9 @@ async function updateInvoiceInternal(tx: LockedTransaction, invoiceId: string): 
 
 1. **Usage metering integration** - See [STATS_DESIGN.md](./STATS_DESIGN.md)
 2. **Invoice history API** - `/billing/invoices` endpoints
+3. **Multi-provider payment** - See [PAYMENT_DESIGN.md](./PAYMENT_DESIGN.md)
 
 ---
 
-**Version:** 3.0
-**Last Updated:** 2025-01-28
+**Version:** 3.1
+**Last Updated:** 2026-02-13

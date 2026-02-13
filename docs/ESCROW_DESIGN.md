@@ -8,6 +8,10 @@ Suiftly uses a **per-user shared object** escrow model where each user has their
 
 **Initial Asset:** For MVP launch, **only USDC** is accepted as the escrow deposit asset. SUI and other tokens may be added in future phases.
 
+**Note:** Escrow is one of multiple payment providers (alongside Stripe and PayPal). See [PAYMENT_DESIGN.md](./PAYMENT_DESIGN.md) for the multi-provider abstraction. This document covers the escrow-specific on-chain design and UX flows.
+
+**Related:** [PAYMENT_DESIGN.md](./PAYMENT_DESIGN.md), [BILLING_DESIGN.md](./BILLING_DESIGN.md), [CUSTOMER_SERVICE_SCHEMA.md](./CUSTOMER_SERVICE_SCHEMA.md)
+
 **Architecture Highlights:**
 - **Per-user isolation:** Each user has their own shared Account object (no centralized user list)
 - **Dual capabilities:** Both Suiftly and user can operate on the shared object
@@ -261,7 +265,7 @@ Current SUI rate: 1 SUI = $2.45 (updated 47s ago, from 3 sources)
 10. After 3 confirmations → TX finalized
     ↓
 11. Backend detects AccountCreated event:
-    - Stores shared_account_address in database (customers.shared_account_address)
+    - Stores shared_account_address in database (`customers.escrow_contract_id`)
     - Credits $100 USD to balance in database
     ↓
 12. Balance updates in UI: $0 → $100
@@ -281,6 +285,8 @@ Current SUI rate: 1 SUI = $2.45 (updated 47s ago, from 3 sources)
 
 ### Flow 2: Enable Service (Auto-Charge from Escrow)
 
+> **Implementation note:** This flow describes the UX from the user's perspective. The actual backend charge flow creates a PENDING invoice and processes it through `processInvoicePayment()` which applies credits first, then tries payment providers in the user's priority order. If escrow is the active provider, `EscrowPaymentProvider` calls `ISuiService.charge()` (an on-chain TX). See [PAYMENT_DESIGN.md](./PAYMENT_DESIGN.md) for the provider chain and [BILLING_DESIGN.md](./BILLING_DESIGN.md) for invoice lifecycle.
+
 ```
 User balance: $100
 User on: /services/seal (not configured)
@@ -294,6 +300,7 @@ User on: /services/seal (not configured)
                        "Charge now: $30 (pro-rated for current month)"
    ↓
 3. Frontend validates continuously:
+   - Payment method check: escrow configured ✓
    - Balance check: $100 > $30 ✓
    - 28-day limit check: $0 + $30 = $30 < $250 ✓
    - Result: "Enable Service" button ENABLED
@@ -302,38 +309,37 @@ User on: /services/seal (not configured)
    ↓
 5. API call: POST /api/services.updateConfig
    ↓
-6. Backend validates:
-   - Balance: $100 > $30 ✓
-   - 28-day limit: $30 < $250 ✓
-   - Signature check: JWT valid ✓
+6. Backend creates PENDING invoice → processInvoicePayment() →
+   provider chain charges escrow via on-chain TX
    ↓
-7. Backend decrements balance in database: $100 → $70 (NO blockchain TX)
+7. Balance decremented on-chain and in database: $100 → $70
    ↓
-8. Backend creates service config in database
+8. Frontend receives success response
    ↓
-9. Frontend receives success response
-   ↓
-10. UI updates:
+9. UI updates:
     - Balance: $100 → $70
     - Service page: Onboarding form → Tab view (Config/Keys/Stats/Logs)
     - Sidebar: Seal service shows 🟢 green dot
     ↓
-11. Toast: "Seal service enabled. $30 charged from escrow balance."
+10. Toast: "Seal service enabled. $30 charged from escrow balance."
     ↓
-12. Activity log: "Service enabled - Pro tier - Charged $30 (pro-rated)"
+11. Activity log: "Service enabled - Pro tier - Charged $30 (pro-rated)"
 ```
 
-**Key Point:** No wallet signature required for the charge. Escrow model allows backend to deduct automatically.
+**Key Point:** No wallet signature required for the charge. Escrow model allows backend to deduct automatically via `ISuiService.charge()`.
 
 ---
 
 ### Flow 3: Config Change (Insufficient Balance - Proactively Blocked)
+
+> **Implementation note:** This flow applies when escrow is the user's primary (or only) payment method. If the user has other payment methods configured (Stripe, PayPal), the balance check is less restrictive — the provider chain will try fallback methods at charge time. See [PAYMENT_DESIGN.md](./PAYMENT_DESIGN.md).
 
 ```
 User balance: $15
 28-day period spent: $50
 28-day limit: $250
 Active service: Seal (Pro tier, $40/month)
+Payment method: escrow only (no fallback)
 
 1. User clicks [Edit] on service config
    ↓
@@ -368,16 +374,18 @@ Active service: Seal (Pro tier, $40/month)
     ↓
 12. User clicks "Save Changes"
     ↓
-13. Config updated, $25 charged
+13. Config updated, $25 charged via provider chain
     ↓
 14. Toast: "Configuration updated. $25 charged from escrow balance."
 ```
 
-**Key Point:** Change blocked upfront if insufficient balance. No failed save attempts. Current service continues without interruption.
+**Key Point:** Change blocked upfront if insufficient balance and no fallback payment method. Current service continues without interruption.
 
 ---
 
 ### Flow 4: Config Change (Would Exceed 28-Day Limit - Blocked)
+
+> **Note:** The 28-day spending limit is an escrow-specific safety mechanism (`customers.spending_limit_usd_cents`). It applies to escrow charges only, not to Stripe/PayPal. See [PAYMENT_DESIGN.md](./PAYMENT_DESIGN.md) for the full payment flow.
 
 ```
 User balance: $500
@@ -483,9 +491,14 @@ Active services: Seal ($60/month)
 
 ### Flow 6: Running Out of Funds (Active Service)
 
+> **Implementation note:** With multi-provider payments, escrow running low doesn't necessarily cause suspension. If the user has other payment methods (Stripe, PayPal) configured as fallback, the provider chain will try those first. Suspension only occurs when ALL payment methods fail. See [PAYMENT_DESIGN.md](./PAYMENT_DESIGN.md).
+
+**Scenario: Escrow is the only payment method**
+
 ```
 Service active: Seal ($60/month)
 Balance drops over time: $75 → $35 → $10 → $0
+Payment method: escrow only (no fallback)
 
 Timeline:
 Day 1 (balance $35):
@@ -494,23 +507,21 @@ Day 1 (balance $35):
 Day 5 (balance $10):
   → Warning banner on all pages: "⚠ Low Balance ($10). Service will be suspended when balance is insufficient for next charge. [Top Up Now]"
 
-Day 8 (charge attempt fails - balance insufficient):
-  → Service automatically moves to "suspended" state:
-    - Service state: active → suspended
-    - Banner: "⚠ Service Suspended - Insufficient Funds. Deposit to resume service automatically."
+Day 8 (charge attempt fails - all providers exhausted):
+  → Service enters grace period / suspension:
+    - Banner: "⚠ Payment Failed. Add funds or configure another payment method."
     - API requests return 402 Payment Required
     - No new charges applied during suspension
 
 User deposits $100:
   → Periodic check triggered on deposit
-  → Balance check: $100 > monthly cost ✓
+  → Provider chain retries → escrow charge succeeds
   → Service automatically resumes:
-    - Service state: suspended → active
-    - Toast: "Service resumed. Sufficient balance detected."
+    - Toast: "Service resumed. Payment successful."
     - Charge applied for current period
 ```
 
-**Automatic Resume:** Service automatically resumes when sufficient balance is detected (checked on deposit and periodic billing cycles). No manual intervention required.
+**Automatic Resume:** Service automatically resumes when payment succeeds (checked on deposit and periodic billing cycles). No manual intervention required.
 
 ---
 
@@ -856,7 +867,7 @@ fun update_period_spending(account: &mut Account, amount: u64, clock: &Clock) {
 
 3. `AccountCreated` event emitted (for discovery/indexing)
 
-4. Backend monitors event → stores `shared_account_address` in database
+4. Backend monitors event → stores account address in database (`customers.escrow_contract_id`)
 
 **Result:** User has isolated Account object with dual capabilities (non-revocable)
 
@@ -896,7 +907,7 @@ fun update_period_spending(account: &mut Account, amount: u64, clock: &Clock) {
    - Updates tracking object to point to new Account (if provided)
    - Emits `AccountUpgraded` event
 
-4. Backend monitors event → updates `shared_account_address` in database
+4. Backend monitors event → updates account address in database (`customers.escrow_contract_id`)
 
 **Result:** User migrated to new contract version, old Account preserved for audit trail
 
@@ -924,56 +935,25 @@ fun update_period_spending(account: &mut Account, amount: u64, clock: &Clock) {
 
 ## Backend Database Schema
 
-**For the complete database schema including all tables, see [CUSTOMER_SERVICE_SCHEMA.md](./CUSTOMER_SERVICE_SCHEMA.md#database-schema-summary).**
+**Source of truth:** `packages/database/src/schema/` (Drizzle ORM definitions). See [CUSTOMER_SERVICE_SCHEMA.md](./CUSTOMER_SERVICE_SCHEMA.md) for schema file reference.
 
-This section describes the escrow-specific tables and their usage:
+### Key Fields for Escrow Operations
 
-### Key Tables for Escrow Operations
+**Escrow-specific fields on `customers` table** (`schema/customers.ts`):
+- `escrow_contract_id` — On-chain address of user's shared Account object (set once by `findOrCreateCustomerWithEscrow()`, immutable after)
+- `current_balance_usd_cents` — Escrow balance synced from blockchain
+- `spending_limit_usd_cents` — 28-day spending cap (user-configurable on-chain)
+- `current_period_charged_usd_cents` — Amount charged this 28-day period
+- `current_period_start` — Start of current spending period
 
-**customers** (canonical schema in CUSTOMER_SERVICE_SCHEMA.md)
-- Stores wallet_address, balance_usd_cents, max_monthly_usd_cents (28-day spending limit)
-- **NEW:** `shared_account_address` - Address of user's shared Account object on-chain
-- customer_id is a random 32-bit integer (1 to 4,294,967,295)
-- See [CUSTOMER_SERVICE_SCHEMA.md](./CUSTOMER_SERVICE_SCHEMA.md#complete-schema) for complete table definition
+**`escrow_transactions` table** (`schema/escrow.ts`):
+- Records on-chain charge/credit transactions with `tx_digest` (32-byte bytea)
+- Referenced by `invoice_payments.escrow_transaction_id` for payment tracking
+- Created by `EscrowPaymentProvider.charge()` — see [PAYMENT_DESIGN.md](./PAYMENT_DESIGN.md)
 
-**Escrow-specific fields in customers table:**
-```sql
-ALTER TABLE customers ADD COLUMN IF NOT EXISTS
-  shared_account_address VARCHAR(66);  -- On-chain address of user's Account object (for discovery/recovery)
-
-CREATE INDEX idx_customers_shared_account ON customers(shared_account_address)
-  WHERE shared_account_address IS NOT NULL;
-```
-
-**Notes:**
-- `shared_account_address` is NULL until user creates their first Account object
-- Backend populates this by monitoring `AccountCreated` events
-- Used for discovery when tracking object is lost
-- Updated when Account is upgraded (`AccountUpgraded` event)
-
-**ledger_entries** - All financial transactions
-```sql
-CREATE TABLE ledger_entries (
-  id UUID PRIMARY KEY,
-  customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
-  type VARCHAR(20) NOT NULL,  -- 'deposit', 'withdrawal', 'charge', 'credit'
-  amount_usd_cents BIGINT NOT NULL,  -- USD amount (signed: + for deposit/credit, - for charge/withdrawal)
-  amount_usdc_cents BIGINT,  -- USDC amount in smallest unit (MVP: USDC only), null for charges/credits
-  asset_type VARCHAR(20),  -- 'USDC' (MVP), future: 'SUI', 'USDT', etc.
-  asset_usd_rate_cents BIGINT,  -- Rate at transaction time (cents per 1 token), MVP: 100 = $1.00 for USDC
-  tx_hash VARCHAR(66),  -- On-chain TX hash for deposits/withdrawals, null for charges/credits
-  description TEXT,  -- e.g., "Service enabled - Pro tier (pro-rated)"
-  invoice_id VARCHAR(50),  -- e.g., "INV-2025-01-001"
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX idx_ledger_customer_created ON ledger_entries(customer_id, created_at DESC);
-CREATE INDEX idx_ledger_tx_hash ON ledger_entries(tx_hash) WHERE tx_hash IS NOT NULL;
-```
-
-**Note:** For MVP with USDC only, `asset_type='USDC'` and `asset_usd_rate_cents=100` (1:1 peg). Future multi-asset support will use variable rates for SUI and other tokens.
-
-**Note:** With rolling 28-day period model, we don't need a separate `spending_window` table. The `customers.current_month_charged_usd_cents` field tracks spending for the current 28-day period. The period resets automatically based on timestamp arithmetic (every 28 days from `current_month_start`), enforced at the smart contract level when charges are applied.
+**`billing_idempotency` table** (`schema/billing.ts`):
+- Prevents double-billing for the same operation
+- Keyed by `idempotency_key` + `customer_id`
 
 ---
 
@@ -1088,18 +1068,9 @@ function calculateMaxAffordable(
    - Keys expire after 24 hours
    - Frontend generates: `crypto.randomUUID()` for each operation
 
-   ```typescript
-   // ledger_idempotency table
-   CREATE TABLE ledger_idempotency (
-     idempotency_key UUID PRIMARY KEY,
-     customer_id INTEGER NOT NULL,
-     response_json JSONB NOT NULL,
-     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-   );
+   Table: `billing_idempotency` (see `packages/database/src/schema/billing.ts`)
 
-   // Cleanup old keys daily
-   DELETE FROM ledger_idempotency WHERE created_at < NOW() - INTERVAL '24 hours';
-   ```
+   Cleanup: Periodic billing job removes keys older than 24 hours.
 
 2. **Balance Validation**
    - Always check balance BEFORE applying charge
@@ -1113,12 +1084,12 @@ function calculateMaxAffordable(
    - Prevent rapid account creation (fraud detection)
 
 4. **Audit Logging**
-   - All ledger entries immutable (INSERT only, no UPDATE/DELETE)
-   - Log includes: User ID, action, amount, timestamp, TX hash, idempotency key
+   - All escrow transactions immutable (INSERT only, no UPDATE/DELETE)
+   - Log includes: customer ID, action, amount, timestamp, TX hash, idempotency key
    - Account creation events logged (`AccountCreated`, `AccountUpgraded`)
 
 5. **Discovery/Recovery Security**
-   - `shared_account_address` in database protected by auth (JWT validation)
+   - `escrow_contract_id` in database protected by auth (JWT validation)
    - Tracking object is convenience only (loss doesn't compromise security)
    - Three-tier discovery ensures users can always recover access
    - On-chain events provide independent verification of account ownership

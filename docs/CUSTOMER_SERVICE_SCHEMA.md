@@ -4,6 +4,8 @@
 
 This document defines the high-level schema for managing customers and backend services in the Suiftly platform.
 
+**Related:** [BILLING_DESIGN.md](./BILLING_DESIGN.md), [PAYMENT_DESIGN.md](./PAYMENT_DESIGN.md), [ESCROW_DESIGN.md](./ESCROW_DESIGN.md)
+
 ## Core Concepts
 
 ### Customer Identity
@@ -18,17 +20,18 @@ This document defines the high-level schema for managing customers and backend s
 
 ```
 customers (wallet_address)
-├── escrow_contract_id (on-chain)
-│   └── ledger_entries (completed on-chain transactions ONLY)
-│       ├── Deposits (tx_digest, amount_sui_mist, sui_usd_rate_cents)
-│       ├── Withdrawals (tx_digest, amount_sui_mist, sui_usd_rate_cents)
-│       └── Charges (tx_digest, amount_sui_mist, sui_usd_rate_cents)
+├── customer_payment_methods (user-defined priority order)
+│   ├── Crypto (escrow) → customers.escrow_contract_id (on-chain)
+│   ├── Stripe (card) → customers.stripe_customer_id
+│   └── PayPal → provider_ref (billing agreement ID)
 │
-├── billing_records (invoices - intent to charge/credit)
-│   ├── Status: 'pending' (not yet executed on-chain)
-│   ├── Status: 'paid' (successfully charged, references ledger_entry_id)
-│   ├── Status: 'failed' (charge failed, no ledger_entry)
-│   └── line_items (itemization: subscription, usage, adjustments)
+├── escrow_transactions (on-chain charge/credit records)
+│
+├── customer_credits (non-withdrawable, applied first in payment order)
+│
+├── billing_records (invoices: draft/pending/paid/failed/voided)
+│   ├── invoice_line_items (itemized charges per invoice)
+│   └── invoice_payments (multi-source payment tracking per invoice)
 │
 ├── service_instances (0 or more)
 │   ├── Seal: service_type='seal'
@@ -46,6 +49,8 @@ customers (wallet_address)
 └── usage_records (billing and metering)
     └── haproxy_raw_logs (TimescaleDB: request logs)
 ```
+
+See [BILLING_DESIGN.md](./BILLING_DESIGN.md) for invoice lifecycle and [PAYMENT_DESIGN.md](./PAYMENT_DESIGN.md) for payment provider abstraction.
 
 ## On-Chain Account (Escrow Contract)
 
@@ -196,46 +201,20 @@ For off-chain configuration and management operations, we use wallet-based authe
 
 ### Balance & Spending Limit Validation
 
-**Real-Time Checks:**
+**Escrow-Specific Checks (on-chain account):**
 
-Before allowing any operation that may incur charges, the backend validates:
+Before allowing escrow charges, the backend validates:
 
 1. **Sufficient Balance**: `current_balance >= estimated_cost`
-2. **Within Monthly Limit**: `current_month_charged + estimated_cost <= max_monthly_usd`
+2. **Within Spending Limit**: `current_period_charged + estimated_cost <= spending_limit_usd`
 
-**Declining Operations:**
+**Service Gate (multi-provider):**
 
-Suiftly can decline off-chain operations if:
-- Insufficient funds in escrow account
-- Monthly spending limit would be exceeded
-- Account is suspended or disabled
+With multi-provider payments, service enabling requires:
+1. At least one active payment method in `customer_payment_methods`
+2. Any pending subscription invoice (`sub_pending_invoice_id`) resolved
 
-**Response Example:**
-
-```typescript
-// Operation declined - insufficient balance
-{
-  "success": false,
-  "error": "insufficient_balance",
-  "details": {
-    "current_balance_usd": 5.42,
-    "estimated_cost_usd": 10.00,
-    "required_deposit_usd": 4.58
-  }
-}
-
-// Operation declined - monthly limit exceeded
-{
-  "success": false,
-  "error": "monthly_limit_exceeded",
-  "details": {
-    "max_monthly_usd": 100.00,
-    "current_month_charged_usd": 95.50,
-    "estimated_cost_usd": 10.00,
-    "remaining_authorization_usd": 4.50
-  }
-}
-```
+A user with $0 escrow but a valid Stripe card passes the gate — actual payment validation happens at charge time via the provider chain. See [PAYMENT_DESIGN.md](./PAYMENT_DESIGN.md) for details.
 
 **Operations Subject to Validation:**
 - Enabling a new service
@@ -277,206 +256,28 @@ Each service can be configured independently with different tiers:
 
 ### Service Billing
 
-**Three-Table Model:**
-1. **`usage_records`** - Metering (what was used)
-2. **`billing_records`** - Invoicing (intent to charge - pending/paid/failed)
-3. **`ledger_entries`** - Accounting (completed on-chain transactions)
-
 **Key Principles:**
-- **Primary model**: Usage-based charging (e.g., requests count)
+- **Primary model**: Subscription + usage-based charging
 - **Tier structure**: See [UI_DESIGN.md](./UI_DESIGN.md) for tier definitions and rate limits
 - **Metering**: Real-time usage tracking against rate limits → `usage_records`
-- **Billing cycle**: Charges accumulated, then billed when threshold reached (e.g., $5)
-- **Monthly limits**: All charges validated against customer's authorized monthly spending cap
+- **Invoice lifecycle**: DRAFT → PENDING → PAID/FAILED/VOIDED (see [BILLING_DESIGN.md](./BILLING_DESIGN.md))
+- **Payment processing**: Credits first, then provider chain in user-defined priority order (see [PAYMENT_DESIGN.md](./PAYMENT_DESIGN.md))
 
-**Billing Flow:**
+**Key tables:**
+- `usage_records` — metering (what was used)
+- `billing_records` — invoices (DRAFT projections, PENDING charges, PAID/FAILED outcomes)
+- `invoice_line_items` — itemized charges per invoice
+- `invoice_payments` — multi-source payment tracking (which provider paid what)
+- `escrow_transactions` — on-chain charge/credit records
 
-```typescript
-// On each billing cycle (e.g., hourly or daily)
-async function processBilling(customerId: number, serviceType: string) {
-  // 1. Calculate usage charges from usage_records
-  const usage = await getUsageForPeriod(customerId, serviceType, period);
-  const lineItems = [
-    {
-      description: `${serviceType} usage - ${period}`,
-      amount_usd_cents: usage.requests * tierConfig.price_per_request,
-      quantity: usage.requests,
-      service_type: serviceType,
-      period: period
-    }
-  ];
-  const totalAmountUsdCents = lineItems.reduce((sum, item) => sum + item.amount_usd_cents, 0);
+**Billing flow:**
+1. `usage_records` aggregated → line items added to DRAFT invoice
+2. DRAFT → PENDING on 1st of month (or immediately for mid-cycle charges)
+3. `processInvoicePayment()` applies credits first, then tries providers in user's priority order
+4. On success → invoice marked PAID, `invoice_payments` records created per source
 
-  // 2. Create billing_record (status='pending')
-  const billingRecord = await db.insert(billing_records).values({
-    customer_id: customerId,
-    billing_period_start: period.start,
-    billing_period_end: period.end,
-    amount_usd_cents: totalAmountUsdCents,
-    type: 'charge',
-    status: 'pending',
-    line_items: lineItems,
-    ledger_entry_id: null  // Not yet executed
-  });
-
-  // 3. Validate against monthly limit (off-chain check)
-  const customer = await getCustomer(customerId);
-  if (customer.current_month_charged_usd_cents + totalAmountUsdCents > customer.max_monthly_usd_cents) {
-    // Mark billing_record as failed
-    await db.update(billing_records).set({ status: 'failed' }).where(eq(billing_records.id, billingRecord.id));
-    await suspendService(customerId, serviceType, "monthly_limit_exceeded");
-    return { success: false, reason: "monthly_limit_exceeded" };
-  }
-
-  // 4. Validate balance (off-chain check)
-  if (customer.current_balance_usd_cents < totalAmountUsdCents) {
-    await db.update(billing_records).set({ status: 'failed' }).where(eq(billing_records.id, billingRecord.id));
-    await suspendService(customerId, serviceType, "insufficient_balance");
-    return { success: false, reason: "insufficient_balance" };
-  }
-
-  // 5. Execute on-chain charge via escrow contract
-  const { txDigest, amountSuiMist, suiUsdRateCents } = await chargeEscrowAccount(
-    customer.wallet_address,
-    totalAmountUsdCents
-  );
-
-  // 6. Create ledger_entry (on-chain record)
-  const ledgerEntry = await db.insert(ledger_entries).values({
-    customer_id: customerId,
-    type: 'charge',
-    amount_usd_cents: -totalAmountUsdCents,  // Negative for charges
-    amount_sui_mist: amountSuiMist,
-    sui_usd_rate_cents: suiUsdRateCents,
-    tx_digest: txDigest,
-    description: `Billing period ${period.start} to ${period.end}`
-  });
-
-  // 7. Update billing_record (status='paid', reference ledger_entry)
-  await db.update(billing_records).set({
-    status: 'paid',
-    ledger_entry_id: ledgerEntry.id
-  }).where(eq(billing_records.id, billingRecord.id));
-
-  // 8. Update customer spending cache
-  await updateCustomerSpending(customerId, totalAmountUsdCents);
-
-  return { success: true, tx_digest: txDigest, ledger_entry_id: ledgerEntry.id };
-}
-```
-
-**Relationship:**
-- `usage_records` → aggregated → creates `billing_record` (pending)
-- `billing_record` (pending) → execute on-chain → creates `ledger_entry`
-- `billing_record` → updated to (paid) → references `ledger_entry.id`
-
-**Monthly Reset:**
-
-On the first day of each calendar month:
-1. **Save Previous Month**: Store `current_month_charged_usd` as `last_month_charged_usd` (both on-chain and off-chain)
-2. **Reset Counter**: Reset `current_month_charged_usd` to 0 (on-chain contract)
-3. **Sync Off-Chain**: Backend detects event and updates database:
-   - `customers.last_month_charged_usd_cents` ← previous month's total
-   - `customers.current_month_charged_usd_cents` ← 0
-   - `customers.current_month_start` ← first day of new month
-4. **Re-enable Services**: Suspended services (due to monthly limit) are automatically re-enabled if balance is sufficient
-
-**Display to Customer:**
-
-The dashboard shows:
-- **Account Balance**: Current funds in escrow (on-chain state)
-- **Pending Charges**: Unbilled usage since last billing cycle (off-chain calculation)
-- **Last Month Total**: Final charges from the previous completed month (calculated from on-chain transaction history)
-- **Monthly Spending Limit**: Authorized maximum spending per month (on-chain state)
-
-```typescript
-// Example dashboard data
-{
-  "account_balance_usd": 150.00,        // On-chain: actual funds available
-  "pending_charges_usd": 3.42,          // Off-chain: unbilled usage (calculated in real-time)
-  "current_month": "2025-02",
-  "last_month_total_usd": 87.23,        // Calculated from on-chain transaction history: January 2025 total
-  "max_monthly_usd": 100.00             // On-chain: safety limit
-}
-```
-
-**Rationale:**
-- **Account Balance** is the primary metric - customers need to know when to deposit funds
-- **Pending Charges** provides early warning before billing executes (helps avoid service suspension)
-- **Last Month Total** provides historical context for budgeting
-- **Monthly Limit** is a safety mechanism, not a spending target
-- Avoid showing "Current Month Charged" - potentially confusing when combined with pending charges
-- Avoid "Available This Month" calculation - it adds confusion between balance and limit constraints
-
-**Pending Charges Calculation:**
-
-```typescript
-// Optimized with materialized view and application-level caching
-class PendingChargesCache {
-  private cache = new Map<number, { value: number; timestamp: number }>();
-  private TTL = 30_000; // 30 seconds
-
-  async calculatePendingCharges(customerId: number): Promise<number> {
-    // Check application-level cache first (30-second TTL)
-    const cached = this.cache.get(customerId);
-    if (cached && Date.now() - cached.timestamp < this.TTL) {
-      return cached.value;
-    }
-
-    // Use materialized view for fast aggregation
-    const result = await db.query(`
-      SELECT SUM(pending_charge_usd_cents) as total
-      FROM pending_charges_view
-      WHERE customer_id = $1
-    `, [customerId]);
-
-    const totalCents = result.rows[0]?.total || 0;
-    const totalUsd = totalCents / 100;
-
-    // Update application cache
-    this.cache.set(customerId, {
-      value: totalUsd,
-      timestamp: Date.now()
-    });
-
-    // Optional: Cleanup old entries periodically
-    if (this.cache.size > 10000) {
-      this.cleanupOldEntries();
-    }
-
-    return totalUsd;
-  }
-
-  private cleanupOldEntries() {
-    const now = Date.now();
-    for (const [key, entry] of this.cache.entries()) {
-      if (now - entry.timestamp > this.TTL) {
-        this.cache.delete(key);
-      }
-    }
-  }
-}
-
-// Background job updates materialized view every 30 seconds
-CREATE MATERIALIZED VIEW pending_charges_view AS
-SELECT
-  customer_id,
-  service_type,
-  SUM(request_count * tier_price_per_request) as pending_charge_usd_cents
-FROM usage_records
-WHERE charged_amount IS NULL
-  AND window_start >= DATE_TRUNC('hour', NOW() - INTERVAL '24 hours')
-GROUP BY customer_id, service_type;
-
-CREATE INDEX idx_pending_customer ON pending_charges_view(customer_id);
-```
-
-**Performance Optimizations:**
-- Application-level cache reduces DB queries for frequently accessed data
-- Materialized view pre-aggregates data (refreshed every 30s)
-- Index on customer_id for O(log n) lookups
-- Background refresh prevents blocking
-- No external cache dependencies (simpler operations)
+See [BILLING_DESIGN.md](./BILLING_DESIGN.md) for concurrency control, tier change logic, and periodic job details.
+See [PAYMENT_DESIGN.md](./PAYMENT_DESIGN.md) for `IPaymentProvider` interface and charge flow.
 
 ## API Key System
 
@@ -544,7 +345,7 @@ These are completely different concepts:
 
 ### Seal Key Management
 
-**Schema:** See `seal_keys` table in [Database Schema Summary](#database-schema-summary) below.
+**Schema:** See `seal_keys` table in `packages/database/src/schema/seal.ts`.
 
 **Seal Key Cryptography (BLS12-381 IBE):**
 
@@ -687,7 +488,7 @@ When transitioning to enabled state, the object_id must be set and can never be 
 
 ### Seal Service Configuration
 
-**Schema:** See `service_instances` table in [Database Schema Summary](#database-schema-summary) below.
+**Schema:** See `service_instances` table in `packages/database/src/schema/services.ts`.
 
 **Seal Service Configuration:**
 
@@ -716,357 +517,36 @@ Each service type has its own namespace for API keys (identified by first charac
 
 See [API_KEY_DESIGN.md](./API_KEY_DESIGN.md) for implementation details.
 
-## Database Schema Summary
+## Database Schema
 
-**NOTE**: The schema uses PostgreSQL ENUM types for type safety. See [ENUM_IMPLEMENTATION.md](./ENUM_IMPLEMENTATION.md) for details.
+**Source of truth:** `packages/database/src/schema/` (Drizzle ORM definitions)
 
-### Complete Schema
+The Drizzle schema files are the authoritative reference for all table definitions, column types, constraints, and indexes. Run `npm run db:generate` to produce migrations from schema changes.
 
-```sql
--- ENUM types (single source of truth - see ENUM_IMPLEMENTATION.md)
-CREATE TYPE customer_status AS ENUM('active', 'suspended', 'closed');
-CREATE TYPE service_type AS ENUM('seal', 'grpc', 'graphql');
-CREATE TYPE service_state AS ENUM('not_provisioned', 'provisioning', 'disabled', 'enabled', 'suspended_maintenance', 'suspended_no_payment');
-CREATE TYPE service_tier AS ENUM('starter', 'pro', 'enterprise');
-CREATE TYPE transaction_type AS ENUM('deposit', 'withdraw', 'charge', 'credit');
-CREATE TYPE billing_status AS ENUM('pending', 'paid', 'failed');
+**ENUM types:** See [ENUM_IMPLEMENTATION.md](./ENUM_IMPLEMENTATION.md) for PostgreSQL ENUM type definitions and usage.
 
--- Customers (wallet = customer)
-CREATE TABLE customers (
-  customer_id INTEGER PRIMARY KEY,         -- 32-bit random ID (full signed range: -2,147,483,648 to 2,147,483,647, excludes 0)
-  wallet_address VARCHAR(66) NOT NULL UNIQUE, -- Sui wallet address (0x...)
-  escrow_contract_id VARCHAR(66),          -- On-chain escrow object ID
-  status customer_status NOT NULL DEFAULT 'active', -- ENUM provides type safety
-  max_monthly_usd_cents BIGINT,            -- Maximum authorized monthly spending (USD cents, NULL = unlimited)
-  current_balance_usd_cents BIGINT,        -- Current balance in USD cents (cached from on-chain)
-  current_month_charged_usd_cents BIGINT,  -- Amount charged this calendar month (USD cents)
-  last_month_charged_usd_cents BIGINT,     -- Amount charged last calendar month (USD cents) - for display
-  current_month_start DATE,                -- Start date of current billing month (1st of month)
-  created_at TIMESTAMP NOT NULL,
-  updated_at TIMESTAMP NOT NULL,
+**Schema files:**
 
-  INDEX idx_wallet (wallet_address),
-  INDEX idx_customer_status (status) WHERE status != 'active',  -- Partial index for non-active customers
-  CHECK (customer_id != 0)                 -- Ensure customer_id is never 0 (allows full 32-bit signed range)
-);
+| File | Tables |
+|------|--------|
+| `schema/customers.ts` | `customers` |
+| `schema/services.ts` | `service_instances` |
+| `schema/escrow.ts` | `billing_records`, `escrow_transactions`, `mock_sui_transactions` |
+| `schema/billing.ts` | `invoice_line_items`, `invoice_payments`, `customer_credits`, `billing_idempotency` |
+| `schema/seal.ts` | `seal_keys`, `seal_packages`, `seal_key_sequences`, `seal_key_pool` |
+| `schema/api-keys.ts` | `api_keys` |
+| `schema/enums.ts` | PostgreSQL ENUM type definitions |
 
--- Service instances
-CREATE TABLE service_instances (
-  instance_id SERIAL PRIMARY KEY,              -- Auto-increment (purely internal, never exposed)
-  customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
-  service_type service_type NOT NULL,          -- ENUM
-  state service_state NOT NULL DEFAULT 'not_provisioned', -- ENUM
-  tier service_tier NOT NULL,                  -- ENUM
-  is_user_enabled BOOLEAN NOT NULL DEFAULT true,
-  subscription_charge_pending BOOLEAN NOT NULL DEFAULT true,
-  config JSONB,
-  enabled_at TIMESTAMP,
-  disabled_at TIMESTAMP,
+**Key relationships:**
 
-  UNIQUE (customer_id, service_type),
-  INDEX idx_service_type_state (service_type, state)  -- Efficient service-type iteration for backend sync
-);
+- `customers` 1:N `service_instances` (one instance per service type per customer)
+- `customers` 1:N `billing_records` (invoices: draft/pending/paid/failed/voided)
+- `billing_records` 1:N `invoice_line_items` (itemized charges)
+- `billing_records` 1:N `invoice_payments` (multi-source payment tracking)
+- `service_instances` 1:N `seal_keys` 1:N `seal_packages`
+- `service_instances` has `sub_pending_invoice_id` FK → `billing_records` (payment gate)
 
--- API keys for service authentication (see API_KEY_DESIGN.md for format and encryption details)
-CREATE TABLE api_keys (
-  api_key_fp INTEGER PRIMARY KEY,          -- 32-bit fingerprint (signed, stores unsigned values)
-                                           -- First 7 Base32 chars of key → 32-bit integer
-                                           -- Values >= 2^31 stored as negative (two's complement)
-  api_key_id VARCHAR(100) UNIQUE NOT NULL, -- Full API key string (encrypted)
-  customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
-  service_type service_type NOT NULL,      -- ENUM: 'seal', 'grpc', 'graphql'
-  metadata JSONB NOT NULL DEFAULT '{}',    -- Service-specific fields (flexible for multi-service)
-                                           -- Seal: {key_version, seal_network, seal_access, seal_source, proc_group}
-                                           -- gRPC: TBD
-                                           -- GraphQL: TBD
-  is_user_enabled BOOLEAN NOT NULL DEFAULT true,
-  created_at TIMESTAMP NOT NULL,
-  revoked_at TIMESTAMP NULL,
-  deleted_at TIMESTAMP NULL,               -- Soft delete timestamp
-
-  INDEX idx_customer_service (customer_id, service_type, is_user_enabled)
-  -- Note: No index on api_key_fp needed - PRIMARY KEY automatically indexed
-);
-
--- Seal keys (Seal service specific - IBE master keys for encryption)
-CREATE TABLE seal_keys (
-  seal_key_id SERIAL PRIMARY KEY,                  -- Auto-increment for performance (internal-only)
-  customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
-  instance_id INTEGER REFERENCES service_instances(instance_id) ON DELETE CASCADE,
-
-  -- Optional user-defined name (max 64 chars for DNS/Kubernetes compatibility)
-  name VARCHAR(64),
-
-  -- Derived keys: store derivation_index (can regenerate from MASTER_SEED)
-  -- Imported keys: derivation_index is NULL
-  derivation_index INTEGER,
-
-  -- Encrypted private key (32 bytes BLS12-381 scalar, encrypted with customer wallet key)
-  -- NULL for derived keys (regenerable), required for imported keys
-  encrypted_private_key TEXT,
-
-  -- BLS12-381 master public key (mpk) for Boneh-Franklin IBE
-  -- Typically 48 bytes (G1 point, compressed) - registered on-chain for client encryption
-  -- May be 96 bytes (G2 point) in alternative implementations
-  public_key BYTEA NOT NULL CHECK (LENGTH(public_key) IN (48, 96)),
-
-  -- Sui blockchain object ID for key server registration (32 bytes)
-  -- NULL until on-chain registration succeeds
-  object_id BYTEA CHECK (object_id IS NULL OR LENGTH(object_id) = 32),
-
-  -- On-chain registration transaction digest (32 bytes)
-  register_txn_digest BYTEA CHECK (LENGTH(register_txn_digest) = 32),
-
-  is_user_enabled BOOLEAN NOT NULL DEFAULT true,
-  created_at TIMESTAMP NOT NULL,
-
-  -- Indexes
-  INDEX idx_seal_customer (customer_id),
-  INDEX idx_seal_instance (instance_id),
-  INDEX idx_seal_public_key (public_key),
-  INDEX idx_seal_object_id (object_id),
-
-  -- Constraints
-  CHECK (name IS NULL OR LENGTH(name) <= 64),
-  CHECK (
-    (derivation_index IS NOT NULL AND encrypted_private_key IS NULL) OR
-    (derivation_index IS NULL AND encrypted_private_key IS NOT NULL)
-  ),
-
-  -- Unique constraint: derivation_index must be globally unique (when not NULL)
-  -- Prevents race conditions in key derivation
-  UNIQUE (derivation_index)
-);
-
--- Seal packages (Seal service specific - package addresses associated with Seal keys)
-CREATE TABLE seal_packages (
-  package_id SERIAL PRIMARY KEY,                   -- Auto-increment for performance (internal-only)
-  seal_key_id INTEGER NOT NULL REFERENCES seal_keys(seal_key_id) ON DELETE CASCADE,
-  package_address BYTEA NOT NULL CHECK (LENGTH(package_address) = 32),  -- Sui package address (32 bytes)
-
-  -- Optional user-defined name (max 64 chars for DNS/Kubernetes compatibility)
-  name VARCHAR(64),
-
-  is_user_enabled BOOLEAN NOT NULL DEFAULT true,
-  created_at TIMESTAMP NOT NULL,
-
-  -- Indexes
-  INDEX idx_package_seal_key (seal_key_id),
-  INDEX idx_package_address (package_address),
-
-  -- Constraints
-  CHECK (name IS NULL OR LENGTH(name) <= 64)
-);
-
--- Seal key derivation index sequence (global sequence per proc_index)
--- Ensures atomic increment of derivation_index with no gaps on transaction rollback
-CREATE TABLE seal_key_sequences (
-  proc_index INTEGER PRIMARY KEY,                  -- Processing group (currently always 1)
-  next_derivation_index INTEGER NOT NULL DEFAULT 0, -- Next available derivation index
-  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
-);
-
--- Initialize sequence for proc_index = 1
--- INSERT INTO seal_key_sequences (proc_index, next_derivation_index)
--- SELECT 1, COALESCE(MAX(derivation_index), -1) + 1
--- FROM seal_keys
--- WHERE derivation_index IS NOT NULL;
-
--- Seal key pool (pre-derived keys ready for instant customer assignment)
--- MVP requirement: maintains 100 pre-registered keys to avoid Sui network delays
-CREATE TABLE seal_key_pool (
-  pool_key_id SERIAL PRIMARY KEY,
-  derivation_index INTEGER NOT NULL UNIQUE,        -- References global sequence
-  public_key BYTEA NOT NULL CHECK (LENGTH(public_key) IN (48, 96)),
-  object_id BYTEA NOT NULL CHECK (LENGTH(object_id) = 32),
-  register_txn_digest BYTEA NOT NULL CHECK (LENGTH(register_txn_digest) = 32),
-  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-
-  -- Index for FIFO assignment (oldest keys assigned first)
-  INDEX idx_pool_ready (created_at)
-);
-
--- Usage tracking for billing
-CREATE TABLE usage_records (
-  record_id BIGSERIAL PRIMARY KEY,
-  customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
-  service_type service_type NOT NULL,  -- ENUM
-  request_count BIGINT NOT NULL,
-  bytes_transferred BIGINT,
-  window_start TIMESTAMP NOT NULL,
-  window_end TIMESTAMP NOT NULL,
-  charged_amount DECIMAL(20, 8),
-
-  INDEX idx_customer_time (customer_id, window_start),
-  INDEX idx_billing (customer_id, service_type, window_start)
-);
-
--- HAProxy raw logs (TimescaleDB hypertable for usage metering and ops monitoring)
--- Based on walrus HAPROXY_LOGS.md specification
--- Ref: ~/walrus/docs/HAPROXY_LOGS.md and haproxy_log_record.py
-CREATE TABLE haproxy_raw_logs (
-  -- Timestamp (TimescaleDB partition key)
-  timestamp TIMESTAMPTZ NOT NULL,
-
-  -- Customer context (NULL if unauthenticated)
-  customer_id INTEGER,                  -- NULL for auth failures, malformed requests
-  path_prefix TEXT,                     -- First 10 chars of URL path without leading "/" (traffic analysis), NULL if missing
-  config_hex BIGINT,                    -- Customer config (64-bit), NULL if denied before lookup
-
-  -- Infrastructure context (decoded from merge_fields_1, all NOT NULL since merge_fields_1 always present)
-  network SMALLINT NOT NULL,            -- Network (0=testnet, 1=mainnet, 2=devnet, 3=localnet)
-  server_id SMALLINT NOT NULL,          -- Encoded: (region_id << 4) | server_num (8-bit)
-  service_type SMALLINT NOT NULL,       -- Service (1=Seal, 2=SSFN, 3=Sealo)
-  api_key_fp INTEGER NOT NULL,          -- API key fingerprint (32-bit), 0 if missing
-  fe_type SMALLINT NOT NULL,            -- Frontend type (1=private, 2=metered, 3=local)
-  traffic_type SMALLINT NOT NULL,       -- Traffic class (0=N/A, 1=guaranteed, 2=burst, 3=denied, 4=dropped, 5=ip_dropped, 6=unavailable)
-  event_type SMALLINT NOT NULL,         -- Event type (0=success, 10-16=auth, 20-21=IP, 30=authz, 50-63=backend)
-  client_ip INET NOT NULL,              -- Real client IP from CF-Connecting-IP (fallback to src)
-
-  -- API key context (decoded from merge_fields_2, NULL if no valid API key)
-  key_metadata SMALLINT,                -- 16-bit key metadata from API key
-
-  -- Response (always present)
-  status_code SMALLINT NOT NULL,        -- HTTP status code
-  bytes_sent BIGINT NOT NULL DEFAULT 0, -- Response body size
-
-  -- Timing (always available from HAProxy)
-  time_total INT NOT NULL,              -- Total time (ms) - always available
-  time_request INT,                     -- Time to receive request (ms), NULL if error before completion
-  time_queue INT,                       -- Time in queue (ms), NULL if no queue wait
-  time_connect INT,                     -- Backend connect time (ms), NULL if no backend connection
-  time_response INT,                    -- Backend response time (ms), NULL if no backend response
-
-  -- Backend routing
-  backend_id SMALLINT DEFAULT 0,        -- Backend server (0=none, 1-9=local, 10-19=backup)
-  termination_state TEXT,               -- HAProxy termination code (e.g., 'SD', 'SH', 'PR')
-
-  -- Indexes (partial where useful to exclude common values)
-  INDEX idx_logs_customer_time (customer_id, timestamp DESC) WHERE customer_id IS NOT NULL,
-  INDEX idx_logs_server_time (server_id, timestamp DESC),
-  INDEX idx_logs_service_network (service_type, network, timestamp DESC),
-  INDEX idx_logs_traffic_type (traffic_type, timestamp DESC),
-  INDEX idx_logs_event_type (event_type, timestamp DESC) WHERE event_type != 0,  -- Exclude successful requests
-  INDEX idx_logs_status_code (status_code, timestamp DESC),
-  INDEX idx_logs_api_key_fp (api_key_fp, timestamp DESC) WHERE api_key_fp != 0   -- Exclude requests without API key
-);
-
--- NOTE: Implementation currently uses TEXT for client_ip, but INET is recommended for efficiency and validation
-
--- TimescaleDB hypertable configuration (applied via migration)
--- SELECT create_hypertable('haproxy_raw_logs', 'timestamp', chunk_time_interval => INTERVAL '1 hour');
--- SELECT add_compression_policy('haproxy_raw_logs', INTERVAL '6 hours');
--- SELECT add_retention_policy('haproxy_raw_logs', INTERVAL '2 days');  -- Aggressive: aggregates preserve historical data
-
--- Note: Continuous aggregates (metering_by_second, ops_by_minute) are defined separately
--- for efficient querying of historical data after raw logs are pruned.
-
--- Auth nonces (wallet signature anti-replay protection)
-CREATE TABLE auth_nonces (
-  address VARCHAR(66) PRIMARY KEY,         -- Wallet address
-  nonce VARCHAR(64) NOT NULL,              -- Random challenge string
-  created_at TIMESTAMP NOT NULL,           -- For 5-minute TTL expiry
-
-  INDEX idx_created_at (created_at)        -- Cleanup expired nonces
-);
-
--- Refresh tokens (JWT session revocation)
-CREATE TABLE refresh_tokens (
-  id SERIAL PRIMARY KEY,
-  customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
-  token_hash VARCHAR(64) NOT NULL UNIQUE,  -- SHA256 hash of refresh token
-  expires_at TIMESTAMP NOT NULL,
-  created_at TIMESTAMP NOT NULL,
-
-  INDEX idx_refresh_customer (customer_id),
-  INDEX idx_expires_at (expires_at)        -- Cleanup expired tokens
-);
-
--- Ledger entries (completed on-chain transactions ONLY - immutable blockchain record)
--- Pure mirror of blockchain state - every entry corresponds to a completed Sui transaction
-CREATE TABLE ledger_entries (
-  id UUID PRIMARY KEY,
-  customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
-  type transaction_type NOT NULL,          -- ENUM: 'deposit', 'withdraw', 'charge', 'credit'
-  amount_usd_cents BIGINT NOT NULL,        -- USD amount (signed: + for deposit/credit, - for charge/withdrawal)
-  amount_sui_mist BIGINT NOT NULL,         -- SUI amount in mist (1 SUI = 10^9 mist) - ALWAYS present for on-chain
-  sui_usd_rate_cents BIGINT NOT NULL,      -- Exchange rate at transaction time (cents per 1 SUI), e.g., 245 = $2.45
-  tx_digest BYTEA NOT NULL CHECK (LENGTH(tx_digest) = 32),  -- On-chain transaction digest (32 bytes) - NEVER NULL
-  description TEXT,                        -- Human-readable description
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
-  INDEX idx_customer_created (customer_id, created_at DESC),
-  INDEX idx_ledger_tx_digest (tx_digest)  -- UNIQUE index since each tx should appear once
-);
-
--- Billing records (invoices - intent to charge/credit)
--- Represents what NEEDS to be done (pending) vs what WAS done (paid/failed)
--- References ledger_entries when successfully executed on-chain
-CREATE TABLE billing_records (
-  id UUID PRIMARY KEY,
-  customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
-  billing_period_start TIMESTAMP NOT NULL,
-  billing_period_end TIMESTAMP NOT NULL,
-  amount_usd_cents BIGINT NOT NULL,        -- Charged amount (positive) or credit (negative)
-  type transaction_type NOT NULL,          -- ENUM: 'charge', 'credit' (deposit/withdraw are not billed)
-  status billing_status NOT NULL,          -- ENUM: 'pending', 'paid', 'failed'
-
-  -- Itemization (JSON array of line items)
-  line_items JSONB NOT NULL DEFAULT '[]', -- [{description, amount_usd_cents, quantity, service_type, period}]
-  -- Example: [{"description": "Seal Pro tier subscription", "amount_usd_cents": 5000, "service_type": "seal", "period": "2025-01"}]
-
-  -- Reference to completed on-chain transaction (NULL if pending/failed)
-  ledger_entry_id UUID REFERENCES ledger_entries(id),
-
-  created_at TIMESTAMP NOT NULL,
-  updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
-
-  INDEX idx_customer_period (customer_id, billing_period_start),
-  INDEX idx_billing_status (status) WHERE status != 'paid',
-  INDEX idx_ledger_reference (ledger_entry_id) WHERE ledger_entry_id IS NOT NULL
-);
-
--- Processing state (Global Manager resumability)
-CREATE TABLE processing_state (
-  key TEXT PRIMARY KEY,                    -- e.g., 'last_log_timestamp', 'last_billing_run'
-  value TEXT NOT NULL,                     -- Timestamp or other state value
-  updated_at TIMESTAMP NOT NULL
-);
-
--- Global configuration (key-value store for ALL system settings)
--- Includes: tier pricing, bandwidth limits, feature flags, system parameters
--- Tier configuration keys:
---   - fsubs_usd_sta, fsubs_usd_pro, fsubs_usd_ent (monthly subscription price in USD)
---   - fbw_sta, fbw_pro, fbw_ent (bandwidth in req/sec per region)
---   - freg_count (number of regions)
--- Loaded into memory at server startup for O(1) lookups (see apps/api/src/lib/config-cache.ts)
-CREATE TABLE config_global (
-  key TEXT PRIMARY KEY,                    -- Configuration key
-  value TEXT NOT NULL,                     -- Configuration value (stored as string)
-  updated_at TIMESTAMP NOT NULL
-);
-
--- User activity logs (audit trail for customer actions)
-CREATE TABLE user_activity_logs (
-  id SERIAL PRIMARY KEY,
-  customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
-  timestamp TIMESTAMPTZ DEFAULT NOW() NOT NULL,
-  client_ip INET NOT NULL,                 -- Client IP address
-  message TEXT NOT NULL,                   -- Activity description
-
-  INDEX idx_activity_customer_time (customer_id, timestamp DESC)
-);
-
--- System control (singleton table for system-wide state)
-CREATE TABLE system_control (
-  id INTEGER PRIMARY KEY CHECK (id = 1),   -- Singleton: only 1 row allowed
-  ma_vault_version VARCHAR(64),            -- Expected MA_VAULT version deployed to infrastructure
-  mm_vault_version VARCHAR(64),            -- Expected MM_VAULT version (if used)
-  last_monthly_reset DATE,                 -- Last calendar month reset date
-  maintenance_mode BOOLEAN DEFAULT false,  -- Pause new signups during maintenance
-  updated_at TIMESTAMP NOT NULL
-);
-```
+**For billing/payment schema details**, see [BILLING_DESIGN.md](./BILLING_DESIGN.md) and [PAYMENT_DESIGN.md](./PAYMENT_DESIGN.md).
 
 ## Implementation Notes
 
@@ -1103,96 +583,24 @@ CREATE TABLE system_control (
 
 ---
 
-**Document Version**: 1.17
-**Last Updated**: 2025-01-19
-**Status**: Design specification (not yet implemented)
+**Document Version**: 2.0
+**Last Updated**: 2026-02-13
 
 **Changelog:**
-- v1.17: Consolidated financial tables and clarified billing/ledger relationship:
-  - **Removed `escrow_transactions` table** (redundant with ledger_entries)
-  - **Updated `ledger_entries`** to be on-chain transactions ONLY:
-    - `tx_digest` now NOT NULL (every entry is a completed blockchain transaction)
-    - `amount_sui_mist` and `sui_usd_rate_cents` now NOT NULL (always present for on-chain)
-    - Pure mirror of blockchain state - immutable record
-  - **Enhanced `billing_records`** for invoicing workflow:
-    - Added `line_items` JSONB field for itemization (subscription, usage, adjustments)
-    - Added `ledger_entry_id` foreign key to reference completed on-chain transaction
-    - Type restricted to 'charge' or 'credit' (deposits/withdrawals are not billed)
-    - Represents intent (pending) vs execution (paid/failed)
-  - **Three-table billing model**:
-    - `usage_records` → metering (what was used)
-    - `billing_records` → invoicing (intent to charge)
-    - `ledger_entries` → accounting (completed on-chain)
-  - **Updated Service Billing section** with complete flow showing relationship
-  - **Updated customer account structure diagram** to show new relationships
-- v1.16: Added global derivation index sequence, seal key pool, and security architecture:
-  - **Added `seal_key_sequences` table** for atomic derivation_index increment
-  - **Added `seal_key_pool` table** for MVP pre-registered key pool (100 keys)
-  - Global sequence per `proc_index` (currently always 1) prevents race conditions
-  - Transaction-safe: rollback prevents gaps in derivation sequence
-  - **Added UNIQUE constraint** on `seal_keys.derivation_index` (prevents duplicates)
-  - **Updated Creation Flow** to document pool-based instant assignment:
-    - Option 1: Background job maintains pre-registered pool of 100 keys
-    - Customer requests get instant assignment from pool (no Sui network delay)
-    - Pool continuously refilled by privileged script
-  - **Updated Option 2 (Import)** to document required object transfer:
-    - Customer must transfer seal key object ownership to Suiftly
-    - Required for updating key server URL on-chain
-  - **Security boundary**: API server NEVER has mm-reader access
-  - Privileged TypeScript script (`scripts/seal-keys/pool-manager.ts`) handles pool management
-  - Script requires mm-reader + postgres access to read MASTER_SEED and register keys
-  - Documented global scope of derivation_index (across all customers)
-  - **Seal Key Pool is MVP requirement**, not future enhancement
-- v1.15: Added user-defined names to seal_keys and seal_packages:
-  - Added `name VARCHAR(64)` field to both seal_keys and seal_packages
-  - 64-character limit for DNS/Kubernetes compatibility (RFC 1123 DNS label)
-  - Optional field for user-friendly identification
-  - Added CHECK constraints to enforce 64-character limit
-- v1.14: Simplified seal_keys schema based on Boneh-Franklin IBE research:
-  - **Removed `key_type` field** - use NULL `derivation_index` to identify imported keys (simpler)
-  - **Made `object_id` nullable** - NULL until on-chain registration succeeds
-  - Clarified `public_key` is the IBE master public key (mpk, 48 bytes G1 point)
-  - Confirmed public_key is registered on-chain via `create_and_transfer_v1` function
-  - Updated CHECK constraint to use `derivation_index` nullability instead of `key_type`
-  - Added detailed explanation of Boneh-Franklin IBE and BLS12-381 key sizes
-- v1.13: Enhanced seal_keys schema for BLS12-381 IBE and derived/imported keys:
-  - Added `derivation_index` for derived keys (regenerable from MASTER_SEED)
-  - Made `encrypted_private_key` nullable (NULL for derived, required for imported)
-  - Added `object_id` field (32 bytes) for Sui blockchain key server registration
-  - Updated `public_key` CHECK constraint to allow 48 bytes (G1) or 96 bytes (G2)
-  - Added comprehensive documentation on BLS12-381 IBE key structure
-  - Added CHECK constraint to enforce derived/imported key consistency rules
-  - Added index on `object_id` for on-chain validation lookups
-- v1.12: Optimized seal_keys and seal_packages tables:
-  - Changed primary keys from UUID to SERIAL for better performance
-  - Changed all Sui addresses/digests from VARCHAR to BYTEA (50% storage reduction)
-  - Renamed purchase_tx_digest → register_txn_digest (more accurate naming)
-  - Added indexes on public_key and package_address for lookups
-  - Added CHECK constraints to enforce 32-byte length for binary fields
-  - Standardized all transaction digest fields across schema to use BYTEA
-- v1.11: Refactored API key design to separate document:
-  - Moved detailed API key implementation to API_KEY_DESIGN.md
-  - Kept high-level overview and database schema in this document
-  - Added cross-references for complete specification
-- v1.10: Simplified caching architecture:
-  - Replaced Redis with application-level caching for simpler operations
-  - Application cache provides 30-second TTL for pending charges
-  - Maintains same performance with reduced operational complexity
-  - No external cache dependencies required
-- v1.9: Major performance and security improvements:
-  - Kept 4-byte reserved field in API key payload for future extensibility (25 chars total)
-  - Added bloom filter for revocation checks (+5ns for 99.9% of requests)
-  - Implemented rate limiting for API key generation (max 10 keys/service, 5/hour)
-  - Added materialized view + application-level caching for pending charges
-  - Improved cache consistency with idempotent operations and circuit breakers
-  - Fixed all customer_uuid references to customer_id
-  - Enhanced error handling for monthly reset race conditions
-- v1.8: Changed customer_id from auto-increment to cryptographically random (1 to 4,294,967,295)
-- v1.7: Added HMAC-SHA256 authentication, HAProxy Lua validation (~230ns total)
-- v1.6: Changed encoding from Base58 to Base32 for 10x faster decode (~20ns)
-- v1.5: Optimized API key format with single character service identifier
-- v1.4: Reduced customer identifier from UUID to 32-bit integer
-- v1.3: Enhanced API key design with embedded metadata
-- v1.2: Changed terminology from "spent" to "charged"
-- v1.1: Added monthly spending authorization
-- v1.0: Initial schema design
+- v2.0: Major cleanup — removed stale SQL schema, aligned with implemented billing/payment design:
+  - **Removed inline SQL schema** — Drizzle schema (`packages/database/src/schema/`) is the source of truth
+  - **Added Database Schema section** with schema file reference table and key relationships
+  - **Updated Customer Account Structure** diagram to reflect implemented tables (invoice_payments, customer_payment_methods, customer_credits, escrow_transactions)
+  - **Replaced Service Billing section** — removed escrow-hardcoded pseudocode, now references BILLING_DESIGN.md and PAYMENT_DESIGN.md
+  - **Updated Balance & Spending Limit Validation** for multi-provider model (service gate checks payment method existence, not just escrow balance)
+  - **Added cross-references** to BILLING_DESIGN.md and PAYMENT_DESIGN.md throughout
+- v1.17: Consolidated financial tables and clarified billing/ledger relationship
+- v1.16: Added global derivation index sequence, seal key pool, and security architecture
+- v1.15: Added user-defined names to seal_keys and seal_packages
+- v1.14: Simplified seal_keys schema based on Boneh-Franklin IBE research
+- v1.13: Enhanced seal_keys schema for BLS12-381 IBE and derived/imported keys
+- v1.12: Optimized seal_keys and seal_packages tables
+- v1.11: Refactored API key design to separate document
+- v1.10: Simplified caching architecture
+- v1.9: Major performance and security improvements
+- v1.8-v1.0: Earlier iterations (see git history)

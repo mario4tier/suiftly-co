@@ -390,14 +390,18 @@ suiftly-co/
 
 **For API key format and implementation, see [API_KEY_DESIGN.md](./API_KEY_DESIGN.md).**
 
+**For billing and payment design, see [BILLING_DESIGN.md](./BILLING_DESIGN.md) and [PAYMENT_DESIGN.md](./PAYMENT_DESIGN.md).**
+
 **Key tables used by this architecture:**
 
-- **customers** - customer_id (random 32-bit), wallet_address, escrow_contract_id, balance, monthly limits
+- **customers** - customer_id (random 32-bit), wallet_address, escrow_contract_id, stripe_customer_id, balance, monthly limits
 - **service_instances** - instance_id, customer_id, service_type, tier, is_user_enabled, config (JSONB)
 - **api_keys** - api_key_id, customer_id, service_type, derivation, is_user_enabled (see [API_KEY_DESIGN.md](./API_KEY_DESIGN.md))
 - **haproxy_logs** (TimescaleDB hypertable) - timestamp, customer_id, service_type, method, status_code, bytes_out
 - **usage_records** - customer_id, service_type, request_count, window_start, window_end, charged_amount
 - **escrow_transactions** - customer_id, tx_digest, tx_type, amount, timestamp
+- **customer_payment_methods** - customer_id, provider_type, priority, status (see [PAYMENT_DESIGN.md](./PAYMENT_DESIGN.md))
+- **payment_webhook_events** - event_id, provider_type, processed (Stripe/PayPal webhook idempotency)
 - **config_global** - key-value configuration table for system-wide settings (see below)
 
 ### ConfigGlobal Table
@@ -484,10 +488,16 @@ appRouter = {
   auth: { connectWallet, verifySignature, refresh },
   customer: { getProfile, updateProfile },
   services: { list, getConfig, updateConfig },
-  billing: { getUsage, getInvoices },
+  billing: { getUsage, getInvoices, getPaymentMethods, addPaymentMethod,
+             removePaymentMethod, reorderPaymentMethods, createStripeSetupIntent },
   logs: { query },
   wallet: { getBalance, deposit, withdraw }
 }
+
+// Raw REST routes (mounted before tRPC — bypass auth guard):
+// POST /stripe/webhook  — Stripe event handler (signature-verified)
+// POST /paypal/webhook  — PayPal event handler (signature-verified)
+// See PAYMENT_DESIGN.md for webhook handling details.
 ```
 
 ---
