@@ -11,7 +11,7 @@
 
 import { test, expect, Page } from '@playwright/test';
 import { waitAfterMutation } from '../helpers/wait-utils';
-import { resetCustomer, ensureTestBalance } from '../helpers/db';
+import { resetCustomer, ensureTestBalance, truncateAllTables } from '../helpers/db';
 import { db } from '@suiftly/database';
 import { serviceInstances, systemControl } from '@suiftly/database/schema';
 import { eq, and } from 'drizzle-orm';
@@ -131,6 +131,13 @@ async function getLMHealth(): Promise<LMHealthResponse> {
 }
 
 test.describe('Control Plane Sync Flow', () => {
+  // Full reset-all cleans vault files on disk so loadLatest() won't pick up
+  // stale high-seq files from previous test runs (which would cause LM to
+  // ignore newly generated low-seq vaults).
+  test.beforeAll(async ({ request }) => {
+    await truncateAllTables(request);
+  });
+
   test.beforeEach(async ({ page }) => {
     // Reset customer to clean state
     await resetCustomer(page.request);
