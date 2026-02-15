@@ -20,7 +20,7 @@ export interface CustomerBillingResult {
  * Individual billing operation performed
  */
 export interface BillingOperation {
-  type: 'monthly_billing' | 'credit_application' | 'escrow_charge' | 'grace_period_start' | 'grace_period_end' | 'payment_retry' | 'reconciliation';
+  type: 'monthly_billing' | 'credit_application' | 'escrow_charge' | 'stripe_charge' | 'paypal_charge' | 'grace_period_start' | 'grace_period_end' | 'payment_retry' | 'reconciliation';
   timestamp: Date;
   amountUsdCents?: number;
   invoiceId?: number;
@@ -78,9 +78,9 @@ export interface InvoicePaymentResult {
   amountPaidCents: number;
   fullyPaid: boolean;
   paymentSources: Array<{
-    type: 'credit' | 'escrow';
+    type: 'credit' | 'escrow' | 'stripe' | 'paypal';
     amountCents: number;
-    referenceId: string; // credit_id or escrow_transaction_id
+    referenceId: string; // credit_id, escrow_transaction_id, Stripe PI ID, or PayPal order ID
   }>;
   error?: BillingError;
 }

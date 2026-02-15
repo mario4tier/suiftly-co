@@ -90,12 +90,46 @@ CREATE TABLE "invoice_payments" (
 	"source_type" varchar(20) NOT NULL,
 	"credit_id" integer,
 	"escrow_transaction_id" bigint,
+	"provider_reference_id" varchar(200),
 	"amount_usd_cents" bigint NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "check_source_type_match" CHECK (
-    ("invoice_payments"."source_type" = 'credit' AND "invoice_payments"."credit_id" IS NOT NULL AND "invoice_payments"."escrow_transaction_id" IS NULL) OR
-    ("invoice_payments"."source_type" = 'escrow' AND "invoice_payments"."escrow_transaction_id" IS NOT NULL AND "invoice_payments"."credit_id" IS NULL)
+    ("invoice_payments"."source_type" = 'credit'
+      AND "invoice_payments"."credit_id" IS NOT NULL
+      AND "invoice_payments"."escrow_transaction_id" IS NULL
+      AND "invoice_payments"."provider_reference_id" IS NULL) OR
+    ("invoice_payments"."source_type" = 'escrow'
+      AND "invoice_payments"."escrow_transaction_id" IS NOT NULL
+      AND "invoice_payments"."credit_id" IS NULL
+      AND "invoice_payments"."provider_reference_id" IS NULL) OR
+    ("invoice_payments"."source_type" IN ('stripe', 'paypal')
+      AND "invoice_payments"."provider_reference_id" IS NOT NULL
+      AND "invoice_payments"."credit_id" IS NULL
+      AND "invoice_payments"."escrow_transaction_id" IS NULL)
   )
+);
+--> statement-breakpoint
+CREATE TABLE "customer_payment_methods" (
+	"id" bigserial PRIMARY KEY NOT NULL,
+	"customer_id" integer NOT NULL,
+	"provider_type" varchar(20) NOT NULL,
+	"status" varchar(20) DEFAULT 'active' NOT NULL,
+	"priority" integer NOT NULL,
+	"provider_ref" varchar(200),
+	"provider_config" jsonb,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "payment_webhook_events" (
+	"event_id" varchar(200) PRIMARY KEY NOT NULL,
+	"provider_type" varchar(20) NOT NULL,
+	"event_type" varchar(100) NOT NULL,
+	"processed" boolean DEFAULT false NOT NULL,
+	"customer_id" integer,
+	"data" text,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"processed_at" timestamp with time zone
 );
 --> statement-breakpoint
 CREATE TABLE "service_cancellation_history" (
@@ -113,6 +147,7 @@ CREATE TABLE "customers" (
 	"customer_id" integer PRIMARY KEY NOT NULL,
 	"wallet_address" varchar(66) NOT NULL,
 	"escrow_contract_id" varchar(66),
+	"stripe_customer_id" varchar(100),
 	"status" "customer_status" DEFAULT 'active' NOT NULL,
 	"spending_limit_usd_cents" bigint DEFAULT 25000,
 	"current_balance_usd_cents" bigint DEFAULT 0,
@@ -419,6 +454,8 @@ ALTER TABLE "invoice_line_items" ADD CONSTRAINT "invoice_line_items_billing_reco
 ALTER TABLE "invoice_payments" ADD CONSTRAINT "invoice_payments_billing_record_id_billing_records_id_fk" FOREIGN KEY ("billing_record_id") REFERENCES "public"."billing_records"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "invoice_payments" ADD CONSTRAINT "invoice_payments_credit_id_customer_credits_credit_id_fk" FOREIGN KEY ("credit_id") REFERENCES "public"."customer_credits"("credit_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "invoice_payments" ADD CONSTRAINT "invoice_payments_escrow_transaction_id_escrow_transactions_tx_id_fk" FOREIGN KEY ("escrow_transaction_id") REFERENCES "public"."escrow_transactions"("tx_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "customer_payment_methods" ADD CONSTRAINT "customer_payment_methods_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "payment_webhook_events" ADD CONSTRAINT "payment_webhook_events_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "service_cancellation_history" ADD CONSTRAINT "service_cancellation_history_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "billing_records" ADD CONSTRAINT "billing_records_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "escrow_transactions" ADD CONSTRAINT "escrow_transactions_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
@@ -448,6 +485,11 @@ CREATE INDEX "idx_line_items_billing" ON "invoice_line_items" USING btree ("bill
 CREATE INDEX "idx_payment_billing_record" ON "invoice_payments" USING btree ("billing_record_id");--> statement-breakpoint
 CREATE INDEX "idx_payment_credit" ON "invoice_payments" USING btree ("credit_id") WHERE "invoice_payments"."credit_id" IS NOT NULL;--> statement-breakpoint
 CREATE INDEX "idx_payment_escrow" ON "invoice_payments" USING btree ("escrow_transaction_id") WHERE "invoice_payments"."escrow_transaction_id" IS NOT NULL;--> statement-breakpoint
+CREATE INDEX "idx_payment_provider" ON "invoice_payments" USING btree ("provider_reference_id") WHERE "invoice_payments"."provider_reference_id" IS NOT NULL;--> statement-breakpoint
+CREATE INDEX "idx_cpm_customer_priority" ON "customer_payment_methods" USING btree ("customer_id","priority");--> statement-breakpoint
+CREATE UNIQUE INDEX "uniq_customer_provider_ref_active" ON "customer_payment_methods" ("customer_id","provider_ref") WHERE "status" = 'active' AND "provider_ref" IS NOT NULL;--> statement-breakpoint
+CREATE INDEX "idx_webhook_provider" ON "payment_webhook_events" USING btree ("provider_type","event_type");--> statement-breakpoint
+CREATE INDEX "idx_webhook_customer" ON "payment_webhook_events" USING btree ("customer_id") WHERE "payment_webhook_events"."customer_id" IS NOT NULL;--> statement-breakpoint
 CREATE INDEX "idx_cancellation_customer_service" ON "service_cancellation_history" USING btree ("customer_id","service_type");--> statement-breakpoint
 CREATE INDEX "idx_cancellation_cooldown" ON "service_cancellation_history" USING btree ("cooldown_expires_at");--> statement-breakpoint
 CREATE INDEX "idx_wallet" ON "customers" USING btree ("wallet_address");--> statement-breakpoint

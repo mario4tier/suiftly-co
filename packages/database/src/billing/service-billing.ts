@@ -20,7 +20,8 @@ import { issueCredit } from './credits';
 import { validateInvoiceBeforeCharging } from './validation';
 import { logValidationIssues } from './admin-notifications';
 import type { DBClock } from '@suiftly/shared/db-clock';
-import type { ISuiService } from '@suiftly/shared/sui-service';
+import type { PaymentServices } from './providers';
+import { getCustomerProviders } from './providers';
 import { getTierPriceUsdCents, ADDON_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
 import {
   TIER_TO_SUBSCRIPTION_ITEM,
@@ -57,7 +58,7 @@ export interface SubscriptionBillingResult {
  * @param serviceType Service type
  * @param tier Service tier
  * @param monthlyPriceUsdCents Monthly subscription price in cents
- * @param suiService Sui service for payment
+ * @param services Payment services (Sui, Stripe, etc.)
  * @param clock DBClock for timestamps
  * @returns Subscription billing result
  */
@@ -67,7 +68,7 @@ export async function handleSubscriptionBilling(
   serviceType: ServiceType,
   tier: string,
   monthlyPriceUsdCents: number,
-  suiService: ISuiService,
+  services: PaymentServices,
   clock: DBClock
 ): Promise<SubscriptionBillingResult> {
   return await withCustomerLock(db, customerId, async (tx) => {
@@ -77,7 +78,7 @@ export async function handleSubscriptionBilling(
       serviceType,
       tier,
       monthlyPriceUsdCents,
-      suiService,
+      services,
       clock
     );
   });
@@ -94,7 +95,7 @@ export async function handleSubscriptionBilling(
  * @param serviceType Service type
  * @param tier Service tier
  * @param monthlyPriceUsdCents Monthly subscription price in cents
- * @param suiService Sui service for payment
+ * @param services Payment services (Sui, Stripe, etc.)
  * @param clock DBClock for timestamps
  * @returns Subscription billing result
  */
@@ -104,7 +105,7 @@ export async function handleSubscriptionBillingLocked(
   serviceType: ServiceType,
   tier: string,
   monthlyPriceUsdCents: number,
-  suiService: ISuiService,
+  services: PaymentServices,
   clock: DBClock
 ): Promise<SubscriptionBillingResult> {
     // Create immediate invoice for first month (full rate)
@@ -130,11 +131,12 @@ export async function handleSubscriptionBillingLocked(
       clock
     );
 
-    // Attempt payment
+    // Build provider chain and attempt payment
+    const providers = await getCustomerProviders(customerId, services, tx, clock);
     const paymentResult = await processInvoicePayment(
       tx,
       invoiceId,
-      suiService,
+      providers,
       clock
     );
 
@@ -299,11 +301,11 @@ export async function recalculateDraftInvoice(
     });
 
     // Add-on charges (Seal keys, packages, API keys)
-    if (service.serviceType === 'seal' && service.config) {
-      const config = service.config as any;
+    if (service.serviceType === 'seal' && service.config && typeof service.config === 'object') {
+      const config = service.config as Record<string, unknown>;
 
       // Extra Seal keys
-      const purchasedKeys = config.purchasedSealKeys || 0;
+      const purchasedKeys = Number(config.purchasedSealKeys) || 0;
       if (purchasedKeys > 0) {
         await tx.insert(invoiceLineItems).values({
           billingRecordId: draftId,
@@ -316,7 +318,7 @@ export async function recalculateDraftInvoice(
       }
 
       // Extra packages
-      const purchasedPackages = config.purchasedPackages || 0;
+      const purchasedPackages = Number(config.purchasedPackages) || 0;
       if (purchasedPackages > 0) {
         await tx.insert(invoiceLineItems).values({
           billingRecordId: draftId,
@@ -329,7 +331,7 @@ export async function recalculateDraftInvoice(
       }
 
       // Extra API keys
-      const purchasedApiKeys = config.purchasedApiKeys || 0;
+      const purchasedApiKeys = Number(config.purchasedApiKeys) || 0;
       if (purchasedApiKeys > 0) {
         await tx.insert(invoiceLineItems).values({
           billingRecordId: draftId,

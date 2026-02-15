@@ -11,7 +11,9 @@
     "./db-clock": "./src/db-clock/index.ts",
     "./billing": "./src/billing/index.ts",
     "./sui-service": "./src/sui-service/index.ts",
-    "./pricing": "./src/pricing/index.ts"
+    "./pricing": "./src/pricing/index.ts",
+    "./payment-provider": "./src/payment-provider/index.ts",
+    "./stripe-service": "./src/stripe-service/index.ts"
   },
   "scripts": {
     "test": "vitest run",

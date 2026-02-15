@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, bigint, varchar, text, timestamp, index, check } from 'drizzle-orm/pg-core';
+import { pgTable, serial, integer, bigint, bigserial, varchar, text, timestamp, boolean, jsonb, index, check } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { customers } from './customers';
 import { billingRecords, escrowTransactions } from './escrow';
@@ -46,24 +46,26 @@ export const customerCredits = pgTable('customer_credits', {
  * Tracks multi-source payments applied to invoices.
  * Each row represents one payment application from one source.
  *
- * MVP supports:
- * - credit (customer_credits)
- * - escrow (escrow_transactions)
- *
- * Phase 3 will add:
- * - stripe (Stripe payment IDs)
+ * Supports:
+ * - credit (customer_credits) — local FK
+ * - escrow (escrow_transactions) — local FK
+ * - stripe (Stripe payment intent ID) — external reference
+ * - paypal (PayPal order ID) — external reference
  */
 export const invoicePayments = pgTable('invoice_payments', {
   paymentId: serial('payment_id').primaryKey(),
   billingRecordId: bigint('billing_record_id', { mode: 'number' }).notNull().references(() => billingRecords.id),
 
-  // Payment source (MVP: credit or escrow only)
-  sourceType: varchar('source_type', { length: 20 }).notNull(), // 'credit' | 'escrow' | 'stripe' (Phase 3)
+  // Payment source
+  sourceType: varchar('source_type', { length: 20 }).notNull(), // 'credit' | 'escrow' | 'stripe' | 'paypal'
 
-  // Foreign keys to payment sources (exactly one must be set based on sourceType)
+  // Local DB foreign keys (for sources with local tables)
   creditId: integer('credit_id').references(() => customerCredits.creditId),
   escrowTransactionId: bigint('escrow_transaction_id', { mode: 'number' }).references(() => escrowTransactions.txId),
-  // Phase 3: stripePaymentId: varchar('stripe_payment_id', { length: 100 })
+
+  // Generic reference for external providers (Stripe payment intent ID, PayPal order ID)
+  // External system is the source of record — no local FK needed
+  providerReferenceId: varchar('provider_reference_id', { length: 200 }),
 
   // Amount applied from this source
   amountUsdCents: bigint('amount_usd_cents', { mode: 'number' }).notNull(),
@@ -73,12 +75,92 @@ export const invoicePayments = pgTable('invoice_payments', {
   idxPaymentBillingRecord: index('idx_payment_billing_record').on(table.billingRecordId),
   idxPaymentCredit: index('idx_payment_credit').on(table.creditId).where(sql`${table.creditId} IS NOT NULL`),
   idxPaymentEscrow: index('idx_payment_escrow').on(table.escrowTransactionId).where(sql`${table.escrowTransactionId} IS NOT NULL`),
+  idxPaymentProvider: index('idx_payment_provider').on(table.providerReferenceId).where(sql`${table.providerReferenceId} IS NOT NULL`),
 
-  // Ensure only one reference is set based on source_type
+  // Constraint: sourceType must match exactly one reference column
+  // credit → creditId, escrow → escrowTransactionId, stripe/paypal → providerReferenceId
   checkSourceTypeMatch: check('check_source_type_match', sql`
-    (${table.sourceType} = 'credit' AND ${table.creditId} IS NOT NULL AND ${table.escrowTransactionId} IS NULL) OR
-    (${table.sourceType} = 'escrow' AND ${table.escrowTransactionId} IS NOT NULL AND ${table.creditId} IS NULL)
+    (${table.sourceType} = 'credit'
+      AND ${table.creditId} IS NOT NULL
+      AND ${table.escrowTransactionId} IS NULL
+      AND ${table.providerReferenceId} IS NULL) OR
+    (${table.sourceType} = 'escrow'
+      AND ${table.escrowTransactionId} IS NOT NULL
+      AND ${table.creditId} IS NULL
+      AND ${table.providerReferenceId} IS NULL) OR
+    (${table.sourceType} IN ('stripe', 'paypal')
+      AND ${table.providerReferenceId} IS NOT NULL
+      AND ${table.creditId} IS NULL
+      AND ${table.escrowTransactionId} IS NULL)
   `),
+}));
+
+/**
+ * Customer Payment Methods Table
+ *
+ * Stores which payment methods a customer has configured and their preferred order.
+ *
+ * Uniqueness: partial unique index on (customer_id, provider_ref) WHERE active AND NOT NULL.
+ * This prevents the same card/agreement from being added twice, while allowing multiple
+ * cards per provider type in the future. Escrow (providerRef=NULL) is limited to one
+ * per customer by application-level pre-check (not the DB index).
+ *
+ * Provider account IDs live on customers table (escrowContractId, stripeCustomerId),
+ * not here. This table tracks which methods are enabled and in what priority order.
+ *
+ * providerRef stores method-level references:
+ * - Escrow: NULL (uses customers.escrowContractId)
+ * - Stripe: payment method ID (e.g. 'pm_xxx') — set by webhook after card confirmation
+ * - PayPal: billing agreement ID
+ *
+ * providerConfig stores display/config data (JSONB):
+ * - Escrow: NULL (display info computed live from customers.currentBalanceUsdCents)
+ * - Stripe: { brand: 'visa', last4: '4242', expMonth: 12, expYear: 2027 }
+ * - PayPal: { email: 'user@example.com' }
+ */
+export const customerPaymentMethods = pgTable('customer_payment_methods', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  customerId: integer('customer_id').notNull().references(() => customers.customerId),
+  providerType: varchar('provider_type', { length: 20 }).notNull(), // 'escrow' | 'stripe' | 'paypal'
+  status: varchar('status', { length: 20 }).notNull().default('active'), // 'active' | 'suspended' | 'removed'
+  priority: integer('priority').notNull(), // User-defined order (1 = first tried, 2 = fallback, etc.)
+
+  providerRef: varchar('provider_ref', { length: 200 }),
+  providerConfig: jsonb('provider_config'),
+
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  idxCustomerPriority: index('idx_cpm_customer_priority').on(table.customerId, table.priority),
+}));
+// NOTE: Partial unique index (prevent duplicate provider_ref per customer)
+// created in migration SQL because Drizzle ORM unique() does not support WHERE clauses:
+//   CREATE UNIQUE INDEX uniq_customer_provider_ref_active
+//   ON customer_payment_methods (customer_id, provider_ref)
+//   WHERE status = 'active' AND provider_ref IS NOT NULL;
+// This allows multiple cards per provider type in the future. Escrow uniqueness
+// (providerRef=NULL) is enforced by application-level pre-check, not the DB index.
+
+/**
+ * Payment Webhook Events Table
+ *
+ * Webhook idempotency — prevents processing the same event twice.
+ * Shared across webhook-based providers (Stripe, PayPal).
+ * Not used for escrow — escrow charges are synchronous on-chain.
+ */
+export const paymentWebhookEvents = pgTable('payment_webhook_events', {
+  eventId: varchar('event_id', { length: 200 }).primaryKey(), // Provider's event ID
+  providerType: varchar('provider_type', { length: 20 }).notNull(), // 'stripe' | 'paypal'
+  eventType: varchar('event_type', { length: 100 }).notNull(),
+  processed: boolean('processed').notNull().default(false),
+  customerId: integer('customer_id').references(() => customers.customerId),
+  data: text('data'), // JSON-encoded event payload (for debugging/audit)
+
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  processedAt: timestamp('processed_at', { withTimezone: true }),
+}, (table) => ({
+  idxWebhookProvider: index('idx_webhook_provider').on(table.providerType, table.eventType),
+  idxWebhookCustomer: index('idx_webhook_customer').on(table.customerId).where(sql`${table.customerId} IS NOT NULL`),
 }));
 
 /**

@@ -35,7 +35,8 @@ import { recalculateDraftInvoice } from './service-billing';
 import { finalizeUsageChargesForBilling, syncUsageToDraft } from './usage-charges';
 import type { BillingProcessorConfig, CustomerBillingResult, BillingOperation } from './types';
 import type { DBClock } from '@suiftly/shared/db-clock';
-import type { ISuiService } from '@suiftly/shared/sui-service';
+import type { PaymentServices } from './providers';
+import { getCustomerProviders } from './providers';
 
 // How often to sync usage to DRAFT invoices (in milliseconds)
 const USAGE_SYNC_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
@@ -48,14 +49,14 @@ const USAGE_SYNC_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
  * @param db Database instance
  * @param customerId Customer ID to process
  * @param config Billing processor configuration
- * @param suiService Sui service for escrow operations
+ * @param services Sui service for escrow operations
  * @returns Result of billing operations
  */
 export async function processCustomerBilling(
   db: Database,
   customerId: number,
   config: BillingProcessorConfig,
-  suiService: ISuiService
+  services: PaymentServices
 ): Promise<CustomerBillingResult> {
   return await withCustomerLock(db, customerId, async (tx) => {
     const result: CustomerBillingResult = {
@@ -78,7 +79,7 @@ export async function processCustomerBilling(
         tx,
         customerId,
         config,
-        suiService
+        services
       );
       result.operations.push(...monthlyResult.operations);
       result.errors.push(...monthlyResult.errors);
@@ -89,7 +90,7 @@ export async function processCustomerBilling(
       tx,
       customerId,
       config,
-      suiService
+      services
     );
     result.operations.push(...retryResult.operations);
     result.errors.push(...retryResult.errors);
@@ -129,14 +130,14 @@ export async function processCustomerBilling(
  * @param tx Transaction handle (must have customer lock)
  * @param customerId Customer ID
  * @param config Billing processor configuration
- * @param suiService Sui service for escrow operations
+ * @param services Sui service for escrow operations
  * @returns Billing result
  */
 async function processMonthlyBilling(
   tx: LockedTransaction,
   customerId: number,
   config: BillingProcessorConfig,
-  suiService: ISuiService
+  services: PaymentServices
 ): Promise<CustomerBillingResult> {
   const result: CustomerBillingResult = {
     customerId,
@@ -241,11 +242,12 @@ async function processMonthlyBilling(
           .set({ status: 'pending' })
           .where(eq(billingRecords.id, invoice.id));
 
-        // Attempt payment
+        // Build provider chain and attempt payment
+        const providers = await getCustomerProviders(customerId, services, tx, config.clock);
         const paymentResult = await processInvoicePayment(
           tx,
           invoice.id,
-          suiService,
+          providers,
           config.clock
         );
 
@@ -327,14 +329,14 @@ async function processMonthlyBilling(
  * @param tx Transaction handle (must have customer lock)
  * @param customerId Customer ID
  * @param config Billing processor configuration
- * @param suiService Sui service for escrow operations
+ * @param services Sui service for escrow operations
  * @returns Billing result
  */
 async function retryFailedPayments(
   tx: LockedTransaction,
   customerId: number,
   config: BillingProcessorConfig,
-  suiService: ISuiService
+  services: PaymentServices
 ): Promise<CustomerBillingResult> {
   const result: CustomerBillingResult = {
     customerId,
@@ -366,11 +368,12 @@ async function retryFailedPayments(
       .set({ status: 'pending' })
       .where(eq(billingRecords.id, invoice.id));
 
-    // Attempt payment
+    // Build provider chain and attempt payment
+    const providers = await getCustomerProviders(customerId, services, tx, config.clock);
     const paymentResult = await processInvoicePayment(
       tx,
       invoice.id,
-      suiService,
+      providers,
       config.clock
     );
 
@@ -547,13 +550,13 @@ async function syncUsageToCustomerDraft(
  *
  * @param db Database instance
  * @param config Billing processor configuration
- * @param suiService Sui service for escrow operations
+ * @param services Sui service for escrow operations
  * @returns Array of billing results (one per customer)
  */
 export async function processBilling(
   db: Database,
   config: BillingProcessorConfig,
-  suiService: ISuiService
+  services: PaymentServices
 ): Promise<CustomerBillingResult[]> {
   // Get all active customers (we process all customers, even suspended ones, to handle payments)
   const allCustomers = await db
@@ -569,7 +572,7 @@ export async function processBilling(
         db,
         customer.customerId,
         config,
-        suiService
+        services
       );
       results.push(result);
     } catch (error) {

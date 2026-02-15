@@ -22,6 +22,9 @@ export const customers = pgTable('customers', {
   currentPeriodChargedUsdCents: bigint('current_period_charged_usd_cents', { mode: 'number' }).default(0), // Charged this 28-day period
   currentPeriodStart: date('current_period_start'), // Start of current 28-day period
 
+  // Stripe account (one per customer, set once — like escrowContractId)
+  stripeCustomerId: varchar('stripe_customer_id', { length: 100 }),
+
   // Billing state tracking (Phase 1A)
   paidOnce: boolean('paid_once').notNull().default(false), // Has customer ever paid anything?
   gracePeriodStart: date('grace_period_start'), // When grace period started (NULL = none)

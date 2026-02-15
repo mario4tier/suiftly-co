@@ -24,7 +24,8 @@ import { recalculateDraftInvoice, calculateProRatedUpgradeCharge } from './servi
 import { getTierPriceUsdCents, TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
 import { INVOICE_LINE_ITEM_TYPE, TIER_TO_SUBSCRIPTION_ITEM } from '@suiftly/shared/constants';
 import type { DBClock } from '@suiftly/shared/db-clock';
-import type { ISuiService } from '@suiftly/shared/sui-service';
+import type { PaymentServices } from './providers';
+import { getCustomerProviders } from './providers';
 import type { ServiceType, ServiceTier, ServiceState } from '../schema/enums';
 
 // ============================================================================
@@ -42,13 +43,15 @@ export interface TierUpgradeResult {
 export interface TierDowngradeResult {
   success: boolean;
   scheduledTier: ServiceTier;
-  effectiveDate: Date;
+  /** Set when success=true. Undefined on error. */
+  effectiveDate?: Date;
   error?: string;
 }
 
 export interface CancellationResult {
   success: boolean;
-  effectiveDate: Date;
+  /** Set when success=true. Undefined on error. */
+  effectiveDate?: Date;
   error?: string;
 }
 
@@ -110,7 +113,7 @@ export interface TierChangeOptions {
  * @param customerId Customer ID
  * @param serviceType Service type to upgrade
  * @param newTier New tier (must be higher than current)
- * @param suiService Sui service for payment
+ * @param services Sui service for payment
  * @param clock DBClock for timestamps
  * @returns Upgrade result
  */
@@ -119,7 +122,7 @@ export async function handleTierUpgradeLocked(
   customerId: number,
   serviceType: ServiceType,
   newTier: ServiceTier,
-  suiService: ISuiService,
+  services: PaymentServices,
   clock: DBClock
 ): Promise<TierUpgradeResult> {
   // 1. Get current service
@@ -267,11 +270,12 @@ export async function handleTierUpgradeLocked(
     clock
   );
 
-  // 6. Attempt payment
+  // 6. Build provider chain and attempt payment
+  const providers = await getCustomerProviders(customerId, services, tx, clock);
   const paymentResult = await processInvoicePayment(
     tx,
     invoiceId,
-    suiService,
+    providers,
     clock
   );
 
@@ -328,7 +332,7 @@ export async function handleTierUpgradeLocked(
 //
 // // Phase 2: Lock → pay → update tier
 // const result = await withCustomerLockForAPI(customerId, 'upgradeTier:phase2', (tx) =>
-//   executeTierUpgradePhase2Locked(tx, customerId, serviceType, newTier, phase1.currentTier, invoiceId, suiService, clock)
+//   executeTierUpgradePhase2Locked(tx, customerId, serviceType, newTier, phase1.currentTier, invoiceId, services, clock)
 // );
 // ============================================================================
 
@@ -502,7 +506,7 @@ export async function createUpgradeInvoiceCommitted(
  * @param newTier New tier
  * @param expectedCurrentTier Expected current tier (from Phase 1)
  * @param invoiceId Pre-created invoice ID
- * @param suiService Sui service for payment
+ * @param services Sui service for payment
  * @param clock DBClock for timestamps
  * @returns Upgrade result
  */
@@ -513,7 +517,7 @@ export async function executeTierUpgradePhase2Locked(
   newTier: ServiceTier,
   expectedCurrentTier: ServiceTier,
   invoiceId: number,
-  suiService: ISuiService,
+  services: PaymentServices,
   clock: DBClock
 ): Promise<TierUpgradeResult> {
   // Re-validate that tier hasn't changed since Phase 1
@@ -549,11 +553,12 @@ export async function executeTierUpgradePhase2Locked(
     };
   }
 
-  // Process payment on the pre-created invoice
+  // Build provider chain and process payment on the pre-created invoice
+  const providers = await getCustomerProviders(customerId, services, tx, clock);
   const paymentResult = await processInvoicePayment(
     tx,
     invoiceId,
-    suiService,
+    providers,
     clock
   );
 
@@ -635,7 +640,6 @@ export async function scheduleTierDowngradeLocked(
     return {
       success: false,
       scheduledTier: newTier,
-      effectiveDate: new Date(0),
       error: 'Service not found',
     };
   }
@@ -646,7 +650,6 @@ export async function scheduleTierDowngradeLocked(
     return {
       success: false,
       scheduledTier: newTier,
-      effectiveDate: new Date(0),
       error: 'Cannot change tier while cancellation is scheduled. Please undo the cancellation first.',
     };
   }
@@ -659,7 +662,6 @@ export async function scheduleTierDowngradeLocked(
     return {
       success: false,
       scheduledTier: newTier,
-      effectiveDate: new Date(0),
       error: 'New tier must have lower price than current tier. Use upgrade for higher tiers.',
     };
   }
@@ -724,7 +726,7 @@ export async function scheduleTierDowngradeLocked(
     .where(eq(serviceInstances.instanceId, service.instanceId));
 
   // 5. Update DRAFT invoice to reflect scheduled change
-  await recalculateDraftInvoiceWithScheduledTier(tx, customerId, clock);
+  await recalculateDraftInvoice(tx, customerId, clock);
 
   return {
     success: true,
@@ -816,7 +818,6 @@ export async function scheduleCancellationLocked(
   if (!service) {
     return {
       success: false,
-      effectiveDate: new Date(0),
       error: 'Service not found',
     };
   }
@@ -825,7 +826,6 @@ export async function scheduleCancellationLocked(
   if (service.state === 'not_provisioned' || service.state === 'cancellation_pending') {
     return {
       success: false,
-      effectiveDate: new Date(0),
       error: `Cannot cancel service in state: ${service.state}`,
     };
   }
@@ -869,7 +869,7 @@ export async function scheduleCancellationLocked(
     .where(eq(serviceInstances.instanceId, service.instanceId));
 
   // 5. Update DRAFT invoice to remove this service
-  await recalculateDraftInvoiceWithCancellation(tx, customerId, clock);
+  await recalculateDraftInvoice(tx, customerId, clock);
 
   return {
     success: true,
@@ -1308,38 +1308,6 @@ function getFirstOfNextMonth(clock: DBClock): Date {
   return new Date(Date.UTC(year, month + 1, 1, 0, 0, 0, 0));
 }
 
-/**
- * Recalculate DRAFT invoice accounting for scheduled tier change
- *
- * Uses scheduled_tier for billing amount if present.
- * Now delegates to main recalculateDraftInvoice which handles line items properly.
- */
-async function recalculateDraftInvoiceWithScheduledTier(
-  tx: LockedTransaction,
-  customerId: number,
-  clock: DBClock
-): Promise<void> {
-  // Delegate to main function which properly updates line items
-  // The main function already uses scheduledTier when present
-  await recalculateDraftInvoice(tx, customerId, clock);
-}
-
-/**
- * Recalculate DRAFT invoice accounting for scheduled cancellation
- *
- * Excludes services with cancellation_scheduled_for set.
- * Now delegates to main recalculateDraftInvoice which handles line items properly.
- */
-async function recalculateDraftInvoiceWithCancellation(
-  tx: LockedTransaction,
-  customerId: number,
-  clock: DBClock
-): Promise<void> {
-  // Delegate to main function which properly updates line items
-  // The main function already skips services with cancellationScheduledFor
-  await recalculateDraftInvoice(tx, customerId, clock);
-}
-
 // ============================================================================
 // Convenience Wrappers (acquire lock internally)
 // For testing and internal use. API routes should use withCustomerLockForAPI.
@@ -1353,11 +1321,11 @@ export async function handleTierUpgrade(
   customerId: number,
   serviceType: ServiceType,
   newTier: ServiceTier,
-  suiService: ISuiService,
+  services: PaymentServices,
   clock: DBClock
 ): Promise<TierUpgradeResult> {
   return await withCustomerLock(database, customerId, async (tx) => {
-    return await handleTierUpgradeLocked(tx, customerId, serviceType, newTier, suiService, clock);
+    return await handleTierUpgradeLocked(tx, customerId, serviceType, newTier, services, clock);
   });
 }
 

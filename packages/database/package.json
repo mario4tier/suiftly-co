@@ -10,7 +10,8 @@
     "./stats": "./src/stats/index.ts",
     "./sui-mock": "./src/sui-mock/index.ts",
     "./sui-seal": "./src/sui-seal/index.ts",
-    "./test-kv": "./src/test-kv/index.ts"
+    "./test-kv": "./src/test-kv/index.ts",
+    "./stripe-mock": "./src/stripe-mock/index.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json --noEmit",

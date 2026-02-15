@@ -3,37 +3,37 @@
  *
  * Handles multi-source payment application to invoices:
  * 1. Apply credits first (oldest expiring first)
- * 2. Charge remaining from escrow (on-chain)
+ * 2. Charge remaining via provider chain (user's priority order)
  *
- * Credits are NOT rolled back if escrow charge fails (see BILLING_DESIGN.md).
+ * Credits are NOT rolled back if provider charge fails (see BILLING_DESIGN.md).
  */
 
 import { eq, sql } from 'drizzle-orm';
-import type { Database, DatabaseOrTransaction } from '../db';
+import type { DatabaseOrTransaction } from '../db';
 import type { LockedTransaction } from './locking';
-import { billingRecords, invoicePayments, escrowTransactions, customers } from '../schema';
+import { billingRecords, invoicePayments } from '../schema';
 import { applyCreditsToInvoice } from './credits';
 import type { InvoicePaymentResult, BillingError } from './types';
 import type { DBClock } from '@suiftly/shared/db-clock';
-import type { ISuiService } from '@suiftly/shared/sui-service';
+import type { IPaymentProvider } from '@suiftly/shared/payment-provider';
 
 /**
- * Process payment for an invoice using credits + escrow
+ * Process payment for an invoice using credits + provider chain
  *
- * Payment order (per BILLING_DESIGN.md):
+ * Payment order (per PAYMENT_DESIGN.md):
  * 1. Credits (oldest expiring first) - off-chain, not rolled back
- * 2. Escrow (on-chain charge) - only for remaining amount
+ * 2. Provider chain in user's priority order - auto-fallback to next on failure
  *
  * @param tx Transaction handle (must have customer lock)
  * @param billingRecordId Invoice ID to pay
- * @param suiService Sui service for escrow charging
+ * @param providers Payment providers in user's priority order
  * @param clock DBClock for timestamps
  * @returns Payment result with success/failure details
  */
 export async function processInvoicePayment(
   tx: LockedTransaction,
   billingRecordId: number,
-  suiService: ISuiService,
+  providers: IPaymentProvider[],
   clock: DBClock
 ): Promise<InvoicePaymentResult> {
   // Get invoice details
@@ -104,107 +104,84 @@ export async function processInvoicePayment(
     .set({ amountPaidUsdCents: result.amountPaidCents })
     .where(eq(billingRecords.id, billingRecordId));
 
-  // Step 2: Charge escrow for remaining amount
+  // Step 2: Charge remaining via provider chain
   if (creditResult.remainingInvoiceAmountCents > 0) {
-    // Get customer wallet address
-    const [customer] = await tx
-      .select()
-      .from(customers)
-      .where(eq(customers.customerId, customerId))
-      .limit(1);
+    let charged = false;
+    let lastError: BillingError | undefined;
 
-    if (!customer) {
-      result.error = {
-        type: 'database_error',
-        message: 'Customer not found',
+    for (const provider of providers) {
+      if (!await provider.canPay(customerId, creditResult.remainingInvoiceAmountCents)) {
+        continue;
+      }
+
+      const chargeResult = await provider.charge({
         customerId,
-        invoiceId: billingRecordId,
-        retryable: false,
-      };
-      return result;
-    }
-
-    // Validate escrow account exists
-    if (!customer.escrowContractId) {
-      result.error = {
-        type: 'payment_failed',
-        message: 'No escrow account configured',
-        customerId,
-        invoiceId: billingRecordId,
-        retryable: false,
-      };
-      return result;
-    }
-
-    // Charge escrow
-    const chargeResult = await suiService.charge({
-      userAddress: customer.walletAddress,
-      amountUsdCents: creditResult.remainingInvoiceAmountCents,
-      description: `Invoice ${billingRecordId}`,
-      escrowAddress: customer.escrowContractId,
-    });
-
-    if (chargeResult.success && chargeResult.digest) {
-      // Record escrow transaction
-      const txDigest = Buffer.from(chargeResult.digest.replace(/^0x/, ''), 'hex');
-
-      const [escrowTx] = await tx
-        .insert(escrowTransactions)
-        .values({
-          customerId,
-          txDigest: txDigest, // Buffer is passed directly
-          txType: 'charge',
-          // IMPORTANT: escrow_transactions.amount is DECIMAL (dollars), not cents
-          // This matches blockchain format. All other billing tables use cents.
-          amount: String(creditResult.remainingInvoiceAmountCents / 100),
-          assetType: 'USDC',
-          timestamp: clock.now(),
-        })
-        .returning({ id: escrowTransactions.txId });
-
-      // Record invoice payment
-      await tx.insert(invoicePayments).values({
-        billingRecordId,
-        sourceType: 'escrow',
-        creditId: null,
-        escrowTransactionId: escrowTx.id, // bigint, not UUID
         amountUsdCents: creditResult.remainingInvoiceAmountCents,
+        invoiceId: billingRecordId,
+        description: `Invoice ${billingRecordId}`,
       });
 
-      result.paymentSources.push({
-        type: 'escrow',
-        amountCents: creditResult.remainingInvoiceAmountCents,
-        referenceId: String(escrowTx.id),
-      });
+      if (chargeResult.success) {
+        // Create invoice_payments row (processInvoicePayment's responsibility)
+        await tx.insert(invoicePayments).values({
+          billingRecordId,
+          sourceType: provider.type,
+          // For escrow: set escrowTransactionId from referenceId
+          // For stripe/paypal: set providerReferenceId from referenceId
+          ...(provider.type === 'escrow'
+            ? { escrowTransactionId: Number(chargeResult.referenceId), creditId: null, providerReferenceId: null }
+            : { providerReferenceId: chargeResult.referenceId, creditId: null, escrowTransactionId: null }),
+          amountUsdCents: creditResult.remainingInvoiceAmountCents,
+        });
 
-      result.amountPaidCents += creditResult.remainingInvoiceAmountCents;
-      result.fullyPaid = true;
+        result.paymentSources.push({
+          type: provider.type,
+          amountCents: creditResult.remainingInvoiceAmountCents,
+          referenceId: chargeResult.referenceId!,
+        });
 
-      // Update invoice as paid
-      await tx
-        .update(billingRecords)
-        .set({
-          amountPaidUsdCents: result.amountPaidCents,
-          status: 'paid',
-          txDigest: txDigest, // Buffer is passed directly
-        })
-        .where(eq(billingRecords.id, billingRecordId));
-    } else {
-      // Escrow charge failed - credits stay applied, invoice remains pending
-      result.error = {
+        result.amountPaidCents += creditResult.remainingInvoiceAmountCents;
+        result.fullyPaid = true;
+        charged = true;
+
+        // Update billing_records with status + txDigest (escrow-only, NULL for others)
+        await tx
+          .update(billingRecords)
+          .set({
+            amountPaidUsdCents: result.amountPaidCents,
+            status: 'paid',
+            txDigest: chargeResult.txDigest ?? null, // Only escrow sets this
+          })
+          .where(eq(billingRecords.id, billingRecordId));
+
+        break;
+      }
+
+      // Provider failed — record error, try next
+      lastError = {
         type: 'payment_failed',
-        message: chargeResult.error ?? 'Escrow charge failed',
+        message: chargeResult.error ?? `${provider.type} charge failed`,
         customerId,
         invoiceId: billingRecordId,
-        retryable: true,
+        retryable: chargeResult.retryable,
+      };
+    }
+
+    if (!charged) {
+      result.error = lastError ?? {
+        type: 'payment_failed',
+        message: 'No payment method available',
+        customerId,
+        invoiceId: billingRecordId,
+        retryable: false,
       };
 
-      // Update invoice status to failed with error details
+      // Update invoice status to failed
       await tx
         .update(billingRecords)
         .set({
           status: 'failed',
-          failureReason: chargeResult.error,
+          failureReason: result.error.message,
           retryCount: sql`COALESCE(${billingRecords.retryCount}, 0) + 1`,
           lastRetryAt: clock.now(),
         })

@@ -27,6 +27,18 @@ export {
   getInvoicePaidAmount,
 } from './payments';
 
+// Payment providers
+export {
+  getCustomerProviders,
+  EscrowPaymentProvider,
+  StripePaymentProvider,
+  PayPalPaymentProvider,
+} from './providers';
+
+export type {
+  PaymentServices,
+} from './providers';
+
 // Credit management
 export {
   applyCreditsToInvoice,

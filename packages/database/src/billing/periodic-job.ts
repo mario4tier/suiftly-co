@@ -27,7 +27,7 @@ import { cleanupIdempotencyRecords } from './idempotency';
 import { reconcileStuckInvoices, type ReconciliationResult } from './reconciliation';
 import type { BillingProcessorConfig, CustomerBillingResult } from './types';
 import type { DBClock } from '@suiftly/shared/db-clock';
-import type { ISuiService } from '@suiftly/shared/sui-service';
+import type { PaymentServices } from './providers';
 
 // ============================================================================
 // Types
@@ -73,13 +73,13 @@ export interface PeriodicJobResult {
  *
  * @param db Database instance
  * @param config Billing processor configuration (includes DBClock)
- * @param suiService Sui service for escrow operations
+ * @param services Sui service for escrow operations
  * @returns Comprehensive result of all phases
  */
 export async function runPeriodicBillingJob(
   db: Database,
   config: BillingProcessorConfig,
-  suiService: ISuiService
+  services: PaymentServices
 ): Promise<PeriodicJobResult> {
   const startTime = Date.now();
   const result: PeriodicJobResult = {
@@ -118,7 +118,7 @@ export async function runPeriodicBillingJob(
     //
     // Each customer is processed with customer-level locking to prevent race conditions.
 
-    const billingResults = await processBilling(db, config, suiService);
+    const billingResults = await processBilling(db, config, services);
     result.phases.billing.executed = true;
     result.phases.billing.customersProcessed = billingResults.length;
     result.phases.billing.results = billingResults;
@@ -203,14 +203,14 @@ export async function runPeriodicBillingJob(
  * @param db Database instance
  * @param customerId Customer ID to process
  * @param config Billing processor configuration
- * @param suiService Sui service for escrow operations
+ * @param services Sui service for escrow operations
  * @returns Result for the single customer
  */
 export async function runPeriodicJobForCustomer(
   db: Database,
   customerId: number,
   config: BillingProcessorConfig,
-  suiService: ISuiService
+  services: PaymentServices
 ): Promise<PeriodicJobResult> {
   const startTime = Date.now();
   const result: PeriodicJobResult = {
@@ -243,7 +243,7 @@ export async function runPeriodicJobForCustomer(
     const { processCustomerBilling } = await import('./processor');
 
     // Process single customer
-    const customerResult = await processCustomerBilling(db, customerId, config, suiService);
+    const customerResult = await processCustomerBilling(db, customerId, config, services);
     result.phases.billing.executed = true;
     result.phases.billing.customersProcessed = 1;
     result.phases.billing.results = [customerResult];
