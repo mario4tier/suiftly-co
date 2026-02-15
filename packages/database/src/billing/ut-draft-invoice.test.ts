@@ -18,11 +18,13 @@ import {
   billingIdempotency,
   adminNotifications,
   mockSuiTransactions,
+  customerPaymentMethods,
 } from '../schema';
 import { MockDBClock } from '@suiftly/shared/db-clock';
 import { handleSubscriptionBilling } from './service-billing';
 import { eq, and, sql } from 'drizzle-orm';
 import type { ISuiService, TransactionResult, ChargeParams } from '@suiftly/shared/sui-service';
+import { toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData } from './test-helpers';
 
 // Simple mock Sui service
 class TestMockSuiService implements ISuiService {
@@ -62,20 +64,9 @@ class TestMockSuiService implements ISuiService {
 describe('DRAFT Invoice Date and Credit Bugs', () => {
   const clock = new MockDBClock();
   const suiService = new TestMockSuiService();
+  const paymentServices = toPaymentServices(suiService);
   const testWalletAddress = '0xBUG4000567890abcdefABCDEF1234567890abcdefABCDEF1234567890abc';
   let testCustomerId: number;
-
-  beforeAll(async () => {
-    await db.execute(sql`TRUNCATE TABLE admin_notifications CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE billing_idempotency CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE invoice_payments CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE billing_records CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE customer_credits CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE service_instances CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE escrow_transactions CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE mock_sui_transactions CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE customers CASCADE`);
-  });
 
   beforeEach(async () => {
     // Set time to November 24, 2025 (7 days before end of month)
@@ -96,18 +87,13 @@ describe('DRAFT Invoice Date and Credit Bugs', () => {
     }).returning();
 
     testCustomerId = customer.customerId;
+
+    // Ensure escrow payment method exists for provider chain
+    await ensureEscrowPaymentMethod(db, testCustomerId);
   });
 
   afterEach(async () => {
-    await db.delete(adminNotifications);
-    await db.delete(billingIdempotency);
-    await db.delete(invoicePayments);
-    await db.delete(billingRecords);
-    await db.delete(customerCredits);
-    await db.delete(serviceInstances);
-    await db.delete(escrowTransactions);
-    await db.delete(mockSuiTransactions);
-    await db.delete(customers);
+    await cleanupCustomerData(db, testCustomerId);
   });
 
   describe('Bug 1: DRAFT Invoice Date', () => {
@@ -119,7 +105,7 @@ describe('DRAFT Invoice Date and Credit Bugs', () => {
         'seal',
         'pro',
         2900,
-        suiService,
+        paymentServices,
         clock
       );
 
@@ -156,7 +142,7 @@ describe('DRAFT Invoice Date and Credit Bugs', () => {
         'seal',
         'pro',
         2900, // $29.00
-        suiService,
+        paymentServices,
         clock
       );
 
@@ -194,7 +180,7 @@ describe('DRAFT Invoice Date and Credit Bugs', () => {
         'seal',
         'starter',
         900, // $9.00
-        suiService,
+        paymentServices,
         clock
       );
 
@@ -227,7 +213,7 @@ describe('DRAFT Invoice Date and Credit Bugs', () => {
         'seal',
         'pro',
         2900, // $29.00
-        suiService,
+        paymentServices,
         clock
       );
 

@@ -18,7 +18,7 @@ import {
   updateUsageChargesToDraft,
   type UsageChargeResult,
 } from './usage-charges';
-import { unsafeAsLockedTransaction } from './test-helpers';
+import { unsafeAsLockedTransaction, ensureEscrowPaymentMethod } from './test-helpers';
 
 // Test customer data
 const TEST_CUSTOMER_ID = 99902;
@@ -41,6 +41,9 @@ describe('Usage Charges', () => {
       VALUES (${TEST_CUSTOMER_ID}, 'seal', 'enabled', 'starter')
       ON CONFLICT (customer_id, service_type) DO NOTHING
     `);
+
+    // Ensure escrow payment method exists for provider chain
+    await ensureEscrowPaymentMethod(db, TEST_CUSTOMER_ID);
   });
 
   beforeEach(async () => {
@@ -77,6 +80,7 @@ describe('Usage Charges', () => {
     await db.execute(sql`DELETE FROM billing_records WHERE customer_id = ${TEST_CUSTOMER_ID}`);
     await db.execute(sql`DELETE FROM service_instances WHERE customer_id = ${TEST_CUSTOMER_ID}`);
     await db.execute(sql`DELETE FROM mock_sui_transactions WHERE customer_id = ${TEST_CUSTOMER_ID}`);
+    await db.execute(sql`DELETE FROM customer_payment_methods WHERE customer_id = ${TEST_CUSTOMER_ID}`);
     await db.execute(sql`DELETE FROM customers WHERE customer_id = ${TEST_CUSTOMER_ID}`);
   });
 

@@ -22,6 +22,7 @@ import {
   sealPackages,
   userActivityLogs,
   mockSuiTransactions,
+  customerPaymentMethods,
 } from '../schema';
 import { MockDBClock } from '@suiftly/shared/db-clock';
 import type { ISuiService, TransactionResult, ChargeParams } from '@suiftly/shared/sui-service';
@@ -37,7 +38,7 @@ import {
   applyScheduledTierChanges,
   processScheduledCancellations,
 } from './tier-changes';
-import { unsafeAsLockedTransaction } from './test-helpers';
+import { unsafeAsLockedTransaction, toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData } from './test-helpers';
 import { processCancellationCleanup } from './cancellation-cleanup';
 import { processCustomerBilling } from './processor';
 import type { BillingProcessorConfig } from './types';
@@ -110,26 +111,11 @@ class TestMockSuiService implements ISuiService {
 describe('Tier Change and Cancellation (Phase 1C)', () => {
   const clock = new MockDBClock();
   const suiService = new TestMockSuiService();
+  const paymentServices = toPaymentServices(suiService);
 
   const testWalletAddress = '0xTIER3000567890abcdefABCDEF1234567890abcdefABCDEF1234567890abc';
   let testCustomerId: number;
   let testInstanceId: number;
-
-  beforeAll(async () => {
-    await db.execute(sql`TRUNCATE TABLE user_activity_logs CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE service_cancellation_history CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE billing_idempotency CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE invoice_payments CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE billing_records CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE customer_credits CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE seal_packages CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE seal_keys CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE api_keys CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE service_instances CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE escrow_transactions CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE mock_sui_transactions CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE customers CASCADE`);
-  });
 
   beforeEach(async () => {
     // Reset mock service
@@ -168,23 +154,13 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
     }).returning();
 
     testInstanceId = service.instanceId;
+
+    // Ensure escrow payment method exists for provider chain
+    await ensureEscrowPaymentMethod(db, testCustomerId);
   });
 
   afterEach(async () => {
-    await db.delete(userActivityLogs);
-    await db.execute(sql`TRUNCATE TABLE service_cancellation_history CASCADE`);
-    await db.delete(billingIdempotency);
-    await db.delete(invoicePayments);
-    await db.delete(sealPackages);
-    await db.delete(sealKeys);
-    await db.delete(apiKeys);
-    // serviceInstances must be deleted before billingRecords due to FK on subPendingInvoiceId
-    await db.delete(serviceInstances);
-    await db.delete(billingRecords);
-    await db.delete(customerCredits);
-    await db.delete(escrowTransactions);
-    await db.delete(mockSuiTransactions);
-    await db.delete(customers);
+    await cleanupCustomerData(db, testCustomerId);
   });
 
   // ==========================================================================
@@ -200,7 +176,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         testCustomerId,
         'seal',
         'enterprise',
-        suiService,
+        paymentServices,
         clock
       );
 
@@ -227,7 +203,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         testCustomerId,
         'seal',
         'enterprise',
-        suiService,
+        paymentServices,
         clock
       );
 
@@ -250,7 +226,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         testCustomerId,
         'seal',
         'enterprise',
-        suiService,
+        paymentServices,
         clock
       );
 
@@ -270,7 +246,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         testCustomerId,
         'seal',
         'starter', // Lower tier
-        suiService,
+        paymentServices,
         clock
       );
 
@@ -293,7 +269,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         testCustomerId,
         'seal',
         'enterprise',
-        suiService,
+        paymentServices,
         clock
       );
 
@@ -321,7 +297,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         testCustomerId,
         'seal',
         'enterprise',
-        suiService,
+        paymentServices,
         clock
       );
 
@@ -355,9 +331,10 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       expect(result.scheduledTier).toBe('starter');
 
       // Effective date should be Feb 1, 2025
-      expect(result.effectiveDate.getUTCFullYear()).toBe(2025);
-      expect(result.effectiveDate.getUTCMonth()).toBe(1); // February
-      expect(result.effectiveDate.getUTCDate()).toBe(1);
+      expect(result.effectiveDate).toBeDefined();
+      expect(result.effectiveDate!.getUTCFullYear()).toBe(2025);
+      expect(result.effectiveDate!.getUTCMonth()).toBe(1); // February
+      expect(result.effectiveDate!.getUTCDate()).toBe(1);
 
       // Verify scheduled in database
       const service = await db.query.serviceInstances.findFirst({
@@ -479,7 +456,8 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       expect(result.success).toBe(true);
 
       // Effective date should be Jan 31, 2025 (end of month)
-      expect(result.effectiveDate.getUTCDate()).toBe(31);
+      expect(result.effectiveDate).toBeDefined();
+      expect(result.effectiveDate!.getUTCDate()).toBe(31);
 
       // Verify scheduled in database (service still active)
       const service = await db.query.serviceInstances.findFirst({
@@ -838,7 +816,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         db,
         testCustomerId,
         billingConfig,
-        suiService
+        paymentServices
       );
 
       // Verify the billing processor processed the cancellation
@@ -907,7 +885,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
           testCustomerId,
           'seal',
           'enterprise',
-          suiService,
+          paymentServices,
           clock
         );
 
@@ -936,8 +914,9 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         expect(result.scheduledTier).toBe('starter');
 
         // Effective date should be now (immediate)
+        expect(result.effectiveDate).toBeDefined();
         const now = clock.now();
-        expect(result.effectiveDate.getTime()).toBe(now.getTime());
+        expect(result.effectiveDate!.getTime()).toBe(now.getTime());
 
         // Verify tier was changed immediately (not scheduled)
         const service = await db.query.serviceInstances.findFirst({
@@ -961,8 +940,9 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         expect(result.success).toBe(true);
 
         // Effective date should be now (immediate)
+        expect(result.effectiveDate).toBeDefined();
         const now = clock.now();
-        expect(result.effectiveDate.getTime()).toBe(now.getTime());
+        expect(result.effectiveDate!.getTime()).toBe(now.getTime());
 
         // Verify service was DELETED (not scheduled for cancellation)
         const service = await db.query.serviceInstances.findFirst({
@@ -1134,7 +1114,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
           testCustomerId,
           'seal',
           'enterprise',
-          suiService,
+          paymentServices,
           clock
         );
         expect(result.success).toBe(true);
@@ -1156,7 +1136,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
           testCustomerId,
           'seal',
           'pro',
-          suiService,
+          paymentServices,
           clock
         );
         expect(result.success).toBe(true);
@@ -1177,7 +1157,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
           testCustomerId,
           'seal',
           'enterprise',
-          suiService,
+          paymentServices,
           clock
         );
 
@@ -1244,7 +1224,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
           testCustomerId,
           'seal',
           'enterprise',
-          suiService,
+          paymentServices,
           clock
         );
 

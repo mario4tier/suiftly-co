@@ -19,12 +19,14 @@ import {
   escrowTransactions,
   adminNotifications,
   mockSuiTransactions,
+  customerPaymentMethods,
 } from '../schema';
 import { MockDBClock } from '@suiftly/shared/db-clock';
 import { cleanupIdempotencyRecords } from './idempotency';
 import { calculateProRatedUpgradeCharge, handleSubscriptionBilling } from './service-billing';
 import { eq, sql } from 'drizzle-orm';
 import type { ISuiService, TransactionResult, ChargeParams } from '@suiftly/shared/sui-service';
+import { toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData } from './test-helpers';
 
 // Simple mock Sui service
 class TestMockSuiService implements ISuiService {
@@ -61,20 +63,9 @@ class TestMockSuiService implements ISuiService {
 describe('Billing Edge Cases', () => {
   const clock = new MockDBClock();
   const suiService = new TestMockSuiService();
+  const paymentServices = toPaymentServices(suiService);
   const testWalletAddress = '0xEDGE5000567890abcdefABCDEF1234567890abcdefABCDEF1234567890abc';
   let testCustomerId: number;
-
-  beforeAll(async () => {
-    await db.execute(sql`TRUNCATE TABLE admin_notifications CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE billing_idempotency CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE invoice_payments CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE billing_records CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE customer_credits CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE service_instances CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE escrow_transactions CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE mock_sui_transactions CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE customers CASCADE`);
-  });
 
   beforeEach(async () => {
     clock.setTime(new Date('2025-01-15T00:00:00Z'));
@@ -94,18 +85,13 @@ describe('Billing Edge Cases', () => {
     }).returning();
 
     testCustomerId = customer.customerId;
+
+    // Ensure escrow payment method exists for provider chain
+    await ensureEscrowPaymentMethod(db, testCustomerId);
   });
 
   afterEach(async () => {
-    await db.delete(adminNotifications);
-    await db.delete(billingIdempotency);
-    await db.delete(invoicePayments);
-    await db.delete(billingRecords);
-    await db.delete(customerCredits);
-    await db.delete(serviceInstances);
-    await db.delete(escrowTransactions);
-    await db.delete(mockSuiTransactions);
-    await db.delete(customers);
+    await cleanupCustomerData(db, testCustomerId);
   });
 
   describe('Idempotency Cleanup', () => {
@@ -202,7 +188,7 @@ describe('Billing Edge Cases', () => {
         'seal',
         'pro',
         2900,
-        suiService,
+        paymentServices,
         clock
       );
 
@@ -232,7 +218,7 @@ describe('Billing Edge Cases', () => {
         'seal',
         'starter',
         900,
-        suiService,
+        paymentServices,
         clock
       );
 

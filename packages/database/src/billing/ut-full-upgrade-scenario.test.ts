@@ -25,6 +25,7 @@ import {
   sealPackages,
   apiKeys,
   userActivityLogs,
+  customerPaymentMethods,
 } from '../schema';
 import { eq, and, sql, desc } from 'drizzle-orm';
 import { MockDBClock } from '@suiftly/shared/db-clock';
@@ -35,6 +36,7 @@ import {
 } from './tier-changes';
 import { handleSubscriptionBilling } from './service-billing';
 import { TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
+import { toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData } from './test-helpers';
 
 // ============================================================================
 // Mock SuiService with balance tracking
@@ -114,28 +116,15 @@ class FullScenarioMockSuiService implements ISuiService {
 describe('Full Upgrade Scenario: Deposit → Pro → Schedule Downgrade → Enterprise', () => {
   const clock = new MockDBClock();
   let suiService: FullScenarioMockSuiService;
+  let paymentServices: ReturnType<typeof toPaymentServices>;
 
   const testWalletAddress = '0xFULLSCENARIO890abcdefABCDEF1234567890abcdefABCDEF12345678901234';
   let testCustomerId: number;
 
-  beforeAll(async () => {
-    await db.execute(sql`TRUNCATE TABLE user_activity_logs CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE billing_idempotency CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE invoice_payments CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE billing_records CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE customer_credits CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE seal_packages CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE seal_keys CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE api_keys CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE service_instances CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE escrow_transactions CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE mock_sui_transactions CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE customers CASCADE`);
-  });
-
   beforeEach(async () => {
     // Start with $200 balance (20000 cents)
     suiService = new FullScenarioMockSuiService(20000);
+    paymentServices = toPaymentServices(suiService);
     clock.setTime(new Date('2025-12-02T00:00:00Z'));
 
     const [customer] = await db.insert(customers).values({
@@ -165,21 +154,13 @@ describe('Full Upgrade Scenario: Deposit → Pro → Schedule Downgrade → Ente
       paidOnce: false,
       config: {},
     });
+
+    // Ensure escrow payment method exists for provider chain
+    await ensureEscrowPaymentMethod(db, testCustomerId);
   });
 
   afterEach(async () => {
-    await db.delete(userActivityLogs);
-    await db.delete(billingIdempotency);
-    await db.delete(invoicePayments);
-    await db.delete(billingRecords);
-    await db.delete(customerCredits);
-    await db.delete(sealPackages);
-    await db.delete(sealKeys);
-    await db.delete(apiKeys);
-    await db.delete(serviceInstances);
-    await db.delete(escrowTransactions);
-    await db.delete(mockSuiTransactions);
-    await db.delete(customers);
+    await cleanupCustomerData(db, testCustomerId);
   });
 
   it('FULL SCENARIO: All billing records should be created and visible', async () => {
@@ -206,7 +187,7 @@ describe('Full Upgrade Scenario: Deposit → Pro → Schedule Downgrade → Ente
       'seal',
       'pro',
       TIER_PRICES_USD_CENTS.pro, // $29 = 2900 cents
-      suiService,
+      paymentServices,
       clock
     );
 
@@ -265,7 +246,7 @@ describe('Full Upgrade Scenario: Deposit → Pro → Schedule Downgrade → Ente
     // ========== STEP 5: Upgrade to Enterprise (while downgrade is scheduled) ==========
     console.log('\nSTEP 5: Upgrade to Enterprise (while Starter downgrade is scheduled)');
 
-    const upgradeResult = await handleTierUpgrade(db, testCustomerId, 'seal', 'enterprise', suiService, clock);
+    const upgradeResult = await handleTierUpgrade(db, testCustomerId, 'seal', 'enterprise', paymentServices, clock);
     console.log(`  Upgrade result: success=${upgradeResult.success}, newTier=${upgradeResult.newTier}`);
     console.log(`  Pro-rated charge: ${upgradeResult.chargeAmountUsdCents} cents ($${((upgradeResult.chargeAmountUsdCents || 0)/100).toFixed(2)})`);
     console.log(`  Mock escrow balance after: ${suiService.getBalance()} cents ($${(suiService.getBalance()/100).toFixed(2)})`);

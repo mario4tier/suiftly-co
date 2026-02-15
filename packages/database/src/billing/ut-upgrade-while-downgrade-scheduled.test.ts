@@ -34,6 +34,7 @@ import {
   sealPackages,
   apiKeys,
   userActivityLogs,
+  customerPaymentMethods,
 } from '../schema';
 import { eq, and, sql } from 'drizzle-orm';
 import { MockDBClock } from '@suiftly/shared/db-clock';
@@ -44,6 +45,7 @@ import {
   cancelScheduledTierChange,
 } from './tier-changes';
 import { TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
+import { toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData } from './test-helpers';
 
 // ============================================================================
 // Test Utilities
@@ -110,24 +112,10 @@ class TestMockSuiService implements ISuiService {
 describe('Bug: Upgrade while downgrade is scheduled', () => {
   const clock = new MockDBClock();
   const suiService = new TestMockSuiService();
+  const paymentServices = toPaymentServices(suiService);
 
   const testWalletAddress = '0xUPGRADEDOWNGRADE567890abcdefABCDEF1234567890abcdefABCDEF12345';
   let testCustomerId: number;
-
-  beforeAll(async () => {
-    await db.execute(sql`TRUNCATE TABLE user_activity_logs CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE billing_idempotency CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE invoice_payments CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE billing_records CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE customer_credits CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE seal_packages CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE seal_keys CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE api_keys CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE service_instances CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE escrow_transactions CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE mock_sui_transactions CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE customers CASCADE`);
-  });
 
   beforeEach(async () => {
     suiService.setFailure(false);
@@ -161,21 +149,13 @@ describe('Bug: Upgrade while downgrade is scheduled', () => {
       paidOnce: true,
       config: {},
     });
+
+    // Ensure escrow payment method exists for provider chain
+    await ensureEscrowPaymentMethod(db, testCustomerId);
   });
 
   afterEach(async () => {
-    await db.delete(userActivityLogs);
-    await db.delete(billingIdempotency);
-    await db.delete(invoicePayments);
-    await db.delete(billingRecords);
-    await db.delete(customerCredits);
-    await db.delete(sealPackages);
-    await db.delete(sealKeys);
-    await db.delete(apiKeys);
-    await db.delete(serviceInstances);
-    await db.delete(escrowTransactions);
-    await db.delete(mockSuiTransactions);
-    await db.delete(customers);
+    await cleanupCustomerData(db, testCustomerId);
   });
 
   it('SCENARIO: Schedule downgrade then upgrade - DRAFT should show Enterprise price', async () => {
@@ -215,7 +195,7 @@ describe('Bug: Upgrade while downgrade is scheduled', () => {
 
     // ========== STEP 3: Upgrade Pro → Enterprise (while Starter is scheduled) ==========
     console.log('\nSTEP 3: Upgrade Pro → Enterprise (while Starter is scheduled)');
-    const upgradeResult = await handleTierUpgrade(db, testCustomerId, 'seal', 'enterprise', suiService, clock);
+    const upgradeResult = await handleTierUpgrade(db, testCustomerId, 'seal', 'enterprise', paymentServices, clock);
     console.log(`  Result: success=${upgradeResult.success}, newTier=${upgradeResult.newTier}`);
     console.log(`  Charge amount: ${upgradeResult.chargeAmountUsdCents} cents`);
     expect(upgradeResult.success).toBe(true);
@@ -252,7 +232,7 @@ describe('Bug: Upgrade while downgrade is scheduled', () => {
   it('should show all billing records to help debug DRAFT state', async () => {
     // Setup: schedule downgrade then upgrade
     await scheduleTierDowngrade(db, testCustomerId, 'seal', 'starter', clock);
-    await handleTierUpgrade(db, testCustomerId, 'seal', 'enterprise', suiService, clock);
+    await handleTierUpgrade(db, testCustomerId, 'seal', 'enterprise', paymentServices, clock);
 
     // List ALL billing records
     const allRecords = await db.select().from(billingRecords).where(
@@ -313,7 +293,7 @@ describe('Bug: Upgrade while downgrade is scheduled', () => {
 
     // Step 3: Now upgrade
     console.log('\nUpgrading to Enterprise...');
-    const upgradeResult = await handleTierUpgrade(db, testCustomerId, 'seal', 'enterprise', suiService, clock);
+    const upgradeResult = await handleTierUpgrade(db, testCustomerId, 'seal', 'enterprise', paymentServices, clock);
     console.log(`  Upgrade result: success=${upgradeResult.success}`);
     expect(upgradeResult.success).toBe(true);
 

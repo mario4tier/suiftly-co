@@ -15,13 +15,14 @@ import {
   invoicePayments,
   escrowTransactions,
   mockSuiTransactions,
+  customerPaymentMethods,
 } from '../schema';
 import { MockDBClock } from '@suiftly/shared/db-clock';
 import { validateInvoiceBeforeCharging } from './validation';
 import { handleSubscriptionBilling, recalculateDraftInvoice } from './service-billing';
 import { issueCredit } from './credits';
 import { logInternalError } from './admin-notifications';
-import { unsafeAsLockedTransaction } from './test-helpers';
+import { unsafeAsLockedTransaction, toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData } from './test-helpers';
 import { eq, and, sql } from 'drizzle-orm';
 import type { ISuiService, TransactionResult, ChargeParams } from '@suiftly/shared/sui-service';
 import { adminNotifications } from '../schema/admin';
@@ -64,28 +65,17 @@ class TestMockSuiService implements ISuiService {
 describe('Invoice Validation', () => {
   const clock = new MockDBClock();
   const suiService = new TestMockSuiService();
-  const testWalletAddress = '0xVAL3000567890abcdefABCDEF1234567890abcdefABCDEF1234567890abc';
+  const paymentServices = toPaymentServices(suiService);
+  const testWalletAddress = '0xVAL3100567890abcdefABCDEF1234567890abcdefABCDEF1234567890abc';
   let testCustomerId: number;
-
-  beforeAll(async () => {
-    await db.execute(sql`TRUNCATE TABLE admin_notifications CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE billing_idempotency CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE invoice_payments CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE billing_records CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE customer_credits CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE service_instances CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE escrow_transactions CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE mock_sui_transactions CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE customers CASCADE`);
-  });
 
   beforeEach(async () => {
     clock.setTime(new Date('2025-01-15T00:00:00Z'));
 
     const [customer] = await db.insert(customers).values({
-      customerId: 3000,
+      customerId: 3100,
       walletAddress: testWalletAddress,
-      escrowContractId: '0xESCROW3000',
+      escrowContractId: '0xESCROW3100',
       status: 'active',
       currentBalanceUsdCents: 10000,
       spendingLimitUsdCents: 25000,
@@ -97,18 +87,13 @@ describe('Invoice Validation', () => {
     }).returning();
 
     testCustomerId = customer.customerId;
+
+    // Ensure escrow payment method exists for provider chain
+    await ensureEscrowPaymentMethod(db, testCustomerId);
   });
 
   afterEach(async () => {
-    await db.delete(adminNotifications);
-    await db.delete(billingIdempotency);
-    await db.delete(invoicePayments);
-    await db.delete(billingRecords);
-    await db.delete(customerCredits);
-    await db.delete(serviceInstances);
-    await db.delete(escrowTransactions);
-    await db.delete(mockSuiTransactions);
-    await db.delete(customers);
+    await cleanupCustomerData(db, testCustomerId);
   });
 
   describe('Negative Amount Detection', () => {
@@ -214,7 +199,7 @@ describe('Invoice Validation', () => {
         'seal',
         'pro',
         2900,
-        suiService,
+        paymentServices,
         clock
       );
 

@@ -15,6 +15,7 @@ import {
   escrowTransactions,
   billingIdempotency,
   mockSuiTransactions,
+  customerPaymentMethods,
 } from '../schema';
 import { MockDBClock } from '@suiftly/shared/db-clock';
 import type { ISuiService, TransactionResult, ChargeParams } from '@suiftly/shared/sui-service';
@@ -24,7 +25,7 @@ import {
   calculateProRatedUpgradeCharge,
 } from './service-billing';
 import { getOrCreateDraftInvoice } from './invoices';
-import { unsafeAsLockedTransaction } from './test-helpers';
+import { unsafeAsLockedTransaction, toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData } from './test-helpers';
 import { eq, and, sql } from 'drizzle-orm';
 
 // Simple mock Sui service for testing
@@ -73,20 +74,10 @@ class TestMockSuiService implements ISuiService {
 describe('Service Billing Integration (Phase 2)', () => {
   const clock = new MockDBClock();
   const suiService = new TestMockSuiService();
+  const paymentServices = toPaymentServices(suiService);
 
   const testWalletAddress = '0xSVC2000567890abcdefABCDEF1234567890abcdefABCDEF1234567890abc';
   let testCustomerId: number;
-
-  beforeAll(async () => {
-    await db.execute(sql`TRUNCATE TABLE billing_idempotency CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE invoice_payments CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE billing_records CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE customer_credits CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE service_instances CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE escrow_transactions CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE mock_sui_transactions CASCADE`);
-    await db.execute(sql`TRUNCATE TABLE customers CASCADE`);
-  });
 
   beforeEach(async () => {
     // Set time to Jan 15, 2025 (mid-month)
@@ -108,17 +99,13 @@ describe('Service Billing Integration (Phase 2)', () => {
     }).returning();
 
     testCustomerId = customer.customerId;
+
+    // Ensure escrow payment method exists for provider chain
+    await ensureEscrowPaymentMethod(db, testCustomerId);
   });
 
   afterEach(async () => {
-    await db.delete(billingIdempotency);
-    await db.delete(invoicePayments);
-    await db.delete(billingRecords);
-    await db.delete(customerCredits);
-    await db.delete(serviceInstances);
-    await db.delete(escrowTransactions);
-    await db.delete(mockSuiTransactions);
-    await db.delete(customers);
+    await cleanupCustomerData(db, testCustomerId);
   });
 
   describe('Subscription Billing (Prepay + Reconcile)', () => {
@@ -130,7 +117,7 @@ describe('Service Billing Integration (Phase 2)', () => {
         'seal',
         'pro',
         2900, // $29.00
-        suiService,
+        paymentServices,
         clock
       );
 
@@ -155,7 +142,7 @@ describe('Service Billing Integration (Phase 2)', () => {
         'seal',
         'pro',
         2900, // $29.00
-        suiService,
+        paymentServices,
         clock
       );
 
@@ -191,7 +178,7 @@ describe('Service Billing Integration (Phase 2)', () => {
         'seal',
         'pro',
         2900,
-        suiService,
+        paymentServices,
         clock
       );
 

@@ -30,6 +30,7 @@ import {
 import { runPeriodicJobForCustomer } from './periodic-job';
 import type { BillingProcessorConfig } from './types';
 import type { ISuiService, ChargeParams, TransactionResult } from '@suiftly/shared/sui-service';
+import { toPaymentServices, ensureEscrowPaymentMethod } from './test-helpers';
 
 // Test customer data - unique ID to avoid conflicts with other tests
 const TEST_CUSTOMER_ID = 99950;
@@ -99,11 +100,13 @@ async function cleanupTestData() {
   await db.execute(sql`DELETE FROM invoice_line_items WHERE billing_record_id IN (
     SELECT id FROM billing_records WHERE customer_id = ${TEST_CUSTOMER_ID}
   )`);
+  // serviceInstances must be deleted before billingRecords due to FK on subPendingInvoiceId
+  await db.execute(sql`DELETE FROM service_cancellation_history WHERE customer_id = ${TEST_CUSTOMER_ID}`);
+  await db.execute(sql`DELETE FROM service_instances WHERE customer_id = ${TEST_CUSTOMER_ID}`);
   await db.execute(sql`DELETE FROM billing_records WHERE customer_id = ${TEST_CUSTOMER_ID}`);
   await db.execute(sql`DELETE FROM escrow_transactions WHERE customer_id = ${TEST_CUSTOMER_ID}`);
   await db.execute(sql`DELETE FROM customer_credits WHERE customer_id = ${TEST_CUSTOMER_ID}`);
-  await db.execute(sql`DELETE FROM service_cancellation_history WHERE customer_id = ${TEST_CUSTOMER_ID}`);
-  await db.execute(sql`DELETE FROM service_instances WHERE customer_id = ${TEST_CUSTOMER_ID}`);
+  await db.execute(sql`DELETE FROM customer_payment_methods WHERE customer_id = ${TEST_CUSTOMER_ID}`);
   await db.execute(sql`DELETE FROM customers WHERE customer_id = ${TEST_CUSTOMER_ID}`);
 }
 
@@ -143,6 +146,7 @@ describe('JavaScript Date.UTC month underflow', () => {
 describe('Monthly Usage Billing - Month Boundary Bug', () => {
   const clock = new MockDBClock();
   const suiService = new TestMockSuiService();
+  const paymentServices = toPaymentServices(suiService);
 
   const config: BillingProcessorConfig = {
     clock,
@@ -185,6 +189,9 @@ describe('Monthly Usage Billing - Month Boundary Bug', () => {
       isUserEnabled: true,
       config: { tier: 'pro' },
     });
+
+    // Ensure escrow payment method exists for provider chain
+    await ensureEscrowPaymentMethod(db, TEST_CUSTOMER_ID);
   });
 
   afterEach(async () => {
@@ -231,7 +238,7 @@ describe('Monthly Usage Billing - Month Boundary Bug', () => {
     clock.setTime(new Date('2025-03-01T00:05:00Z')); // 5 min after midnight
 
     // Run the periodic job exactly as Global Manager would
-    const jobResult = await runPeriodicJobForCustomer(db, TEST_CUSTOMER_ID, config, suiService);
+    const jobResult = await runPeriodicJobForCustomer(db, TEST_CUSTOMER_ID, config, paymentServices);
 
     // Verify the job executed
     expect(jobResult.phases.billing.executed).toBe(true);
@@ -299,7 +306,7 @@ describe('Monthly Usage Billing - Month Boundary Bug', () => {
     // === SIMULATE PRODUCTION: March 1, 2024 ===
     clock.setTime(new Date('2024-03-01T00:05:00Z'));
 
-    const jobResult = await runPeriodicJobForCustomer(db, TEST_CUSTOMER_ID, config, suiService);
+    const jobResult = await runPeriodicJobForCustomer(db, TEST_CUSTOMER_ID, config, paymentServices);
 
     expect(jobResult.phases.billing.executed).toBe(true);
 
@@ -353,7 +360,7 @@ describe('Monthly Usage Billing - Month Boundary Bug', () => {
     // === SIMULATE PRODUCTION: January 1, 2025 (new year) ===
     clock.setTime(new Date('2025-01-01T00:05:00Z'));
 
-    const jobResult = await runPeriodicJobForCustomer(db, TEST_CUSTOMER_ID, config, suiService);
+    const jobResult = await runPeriodicJobForCustomer(db, TEST_CUSTOMER_ID, config, paymentServices);
 
     expect(jobResult.phases.billing.executed).toBe(true);
 
@@ -413,7 +420,7 @@ describe('Monthly Usage Billing - Month Boundary Bug', () => {
     // === SIMULATE PRODUCTION: Feb 1 at 1:00 AM ===
     clock.setTime(new Date('2025-02-01T01:00:00Z'));
 
-    const jobResult = await runPeriodicJobForCustomer(db, TEST_CUSTOMER_ID, config, suiService);
+    const jobResult = await runPeriodicJobForCustomer(db, TEST_CUSTOMER_ID, config, paymentServices);
 
     expect(jobResult.phases.billing.executed).toBe(true);
 
@@ -482,7 +489,7 @@ describe('Monthly Usage Billing - Month Boundary Bug', () => {
     // Let's simulate by directly calling the billing with the appropriate context
     clock.setTime(new Date('2025-02-01T00:05:00Z')); // Set to Feb 1 for proper monthly billing
 
-    const jobResult = await runPeriodicJobForCustomer(db, TEST_CUSTOMER_ID, config, suiService);
+    const jobResult = await runPeriodicJobForCustomer(db, TEST_CUSTOMER_ID, config, paymentServices);
 
     expect(jobResult.phases.billing.executed).toBe(true);
 
