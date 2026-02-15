@@ -519,13 +519,14 @@ export const customerPaymentMethods = pgTable('customer_payment_methods', {
   idxCustomerPriority: index('idx_cpm_customer_priority').on(table.customerId, table.priority),
 }));
 
-// NOTE: The unique constraint (one active method per provider type per customer) must be
-// created as a partial unique INDEX in the migration SQL, because Drizzle ORM's unique()
-// does not support WHERE clauses:
+// NOTE: Partial unique index (prevent duplicate provider_ref per customer) must be
+// created in migration SQL because Drizzle ORM's unique() does not support WHERE clauses:
 //
-//   CREATE UNIQUE INDEX uniq_customer_provider_active
-//   ON customer_payment_methods (customer_id, provider_type)
-//   WHERE status = 'active';
+//   CREATE UNIQUE INDEX uniq_customer_provider_ref_active
+//   ON customer_payment_methods (customer_id, provider_ref)
+//   WHERE status = 'active' AND provider_ref IS NOT NULL;
+// This allows multiple cards per provider type in the future. Escrow uniqueness
+// (providerRef=NULL) is enforced by application-level pre-check.
 ```
 
 ### invoicePayments table
@@ -1137,14 +1138,14 @@ Moving these to `customer_payment_methods` would require refactoring the entire 
 
 `customer_payment_methods` tracks **which methods are enabled and in what order**, not the provider account data.
 
-### One payment method per provider type
+### Payment method limits per provider type
 
-Intentional constraint for MVP simplicity:
-- **Escrow:** One escrow contract per customer (enforced by `findOrCreateCustomerWithEscrow()`)
-- **Stripe:** One default card per customer. Stripe itself supports multiple cards under one Customer, but we use the Stripe-side default. Users can replace their card (remove + re-add) via the Billing page.
-- **PayPal:** One billing agreement per customer
+Current application-level limits (can be relaxed without DB migration):
+- **Escrow:** One per customer (enforced by app-level pre-check; DB index skips NULL providerRef)
+- **Stripe:** One card per customer (enforced by app-level pre-check; DB index prevents duplicate `provider_ref` / same card added twice). Multiple cards supported at DB level — relax the app check when ready.
+- **PayPal:** One billing agreement per customer (app-level pre-check)
 
-This avoids complexity in the priority ordering UI and the charge flow. If needed later, the schema supports multiple entries per provider type by removing the partial unique index.
+The DB unique index is on `(customer_id, provider_ref) WHERE active AND NOT NULL`, so adding multi-card support later only requires changing the application code — no schema migration.
 
 ### `displayLabel` for escrow is computed live
 
