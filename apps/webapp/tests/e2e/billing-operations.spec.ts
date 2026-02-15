@@ -4,7 +4,7 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { resetCustomer, ensureTestBalance } from '../helpers/db';
+import { resetCustomer, ensureTestBalance, addCryptoPayment } from '../helpers/db';
 import { waitAfterMutation } from '../helpers/wait-utils';
 
 const MOCK_WALLET_ADDRESS = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
@@ -31,6 +31,9 @@ test.describe('Billing Operations', () => {
     // Navigate to billing page
     await page.click('text=Billing');
     await page.waitForURL('/billing', { timeout: 5000 });
+
+    // Add crypto payment method to reveal escrow card
+    await addCryptoPayment(page);
   });
 
   test('withdraw button is disabled when balance is zero', async ({ page }) => {
@@ -79,7 +82,7 @@ test.describe('Billing Operations', () => {
     await expect(page.locator('text=Deposit Funds')).not.toBeVisible();
 
     // Balance should update (Playwright auto-retries toContainText)
-    const balanceSection = page.locator('text=Balance').locator('..');
+    const balanceSection = page.getByText('Balance', { exact: true }).locator('..');
     await expect(balanceSection).toContainText('100');
 
     // After deposit, Withdraw button should now be enabled
@@ -356,6 +359,9 @@ test.describe('Billing Validation Edge Cases', () => {
     // Navigate to billing
     await page.click('text=Billing');
     await page.waitForURL('/billing', { timeout: 5000 });
+
+    // Add crypto payment method to reveal escrow card
+    await addCryptoPayment(page);
   });
 
   test('deposit - button correctly validates inputs', async ({ page }) => {
@@ -477,7 +483,7 @@ test.describe('Billing Validation Edge Cases', () => {
     await expect(page.locator('text=Deposit Funds')).not.toBeVisible();
 
     // Balance should update to $125.50 (100 + 25.50) - Playwright auto-retries
-    const balanceSection = page.locator('text=Balance').locator('..');
+    const balanceSection = page.getByText('Balance', { exact: true }).locator('..');
     await expect(balanceSection).toContainText('125.5');
 
     console.log('✅ Decimal amounts handled correctly');

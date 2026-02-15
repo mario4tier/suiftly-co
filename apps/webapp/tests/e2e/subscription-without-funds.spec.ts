@@ -8,6 +8,7 @@
  */
 
 import { test, expect } from '@playwright/test';
+import { addCryptoPayment } from '../helpers/db';
 import { getBanner } from '../helpers/locators';
 
 test.describe('Subscription Without Funds', () => {
@@ -109,13 +110,13 @@ test.describe('Subscription Without Funds', () => {
     // Try to enable service
     await toggle.click();
 
-    // Should show error toast about needing to deposit funds
-    await expect(page.locator('[data-sonner-toast]').filter({ hasText: /Insufficient funds.*Deposit/i })).toBeVisible({ timeout: 5000 });
+    // Should show error toast about needing a payment method
+    await expect(page.locator('[data-sonner-toast]').filter({ hasText: /No payment method configured/i })).toBeVisible({ timeout: 5000 });
 
     // Service should remain OFF
     await expect(toggle).not.toBeChecked();
 
-    console.log('✅ Cannot enable service without depositing funds');
+    console.log('✅ Cannot enable service without payment method');
   });
 
   test('Navigating away and back shows interactive form', async ({ page }) => {
@@ -139,7 +140,7 @@ test.describe('Subscription Without Funds', () => {
     console.log('✅ After navigating away and back, interactive form is shown');
   });
 
-  test('Billing page shows pending subscription notification with amount needed', async ({ page }) => {
+  test('Billing page shows pending subscription notification', async ({ page }) => {
     // Subscribe without funds (Pro tier defaults to $29/month)
     await page.locator('label:has-text("Agree to")').click();
     await page.locator('button:has-text("Subscribe to Service")').click();
@@ -155,20 +156,22 @@ test.describe('Subscription Without Funds', () => {
 
     // Notification should mention Seal service and Pro tier price
     await expect(notification).toContainText('Seal');
-    await expect(notification).toContainText('Pro'); // formatTierName() capitalizes tier names
+    await expect(notification).toContainText('Pro');
     await expect(notification).toContainText('$29.00');
 
-    // Should show how much to deposit
-    await expect(notification).toContainText(/Deposit at least.*\$29\.00/i);
+    // With no payment methods, should say to add a payment method
+    await expect(notification).toContainText('Add a payment method');
 
-    console.log('✅ Billing page shows pending subscription notification with correct amount');
+    console.log('✅ Billing page shows pending subscription notification');
   });
 
-  test('Next Scheduled Payment/Refund excludes services with pending subscription charges', async ({ page }) => {
-    // First, deposit $1 to create escrow account (so "Next Scheduled Payment/Refund" section is visible)
-    // Navigate to billing page
+  test('Next Scheduled Payment excludes services with pending subscription charges', async ({ page }) => {
+    // First, add crypto payment and deposit $1 so escrow card is visible
     await page.locator('nav').getByRole('link', { name: /Billing & Payments/i }).click();
     await page.waitForURL('/billing', { timeout: 5000 });
+
+    // Add crypto payment method (reveals escrow card)
+    await addCryptoPayment(page);
 
     // Deposit $1
     await page.locator('button:has-text("Deposit")').first().click();
@@ -190,25 +193,21 @@ test.describe('Subscription Without Funds', () => {
     await page.locator('nav').getByRole('link', { name: /Billing & Payments/i }).click();
     await page.waitForURL('/billing', { timeout: 5000 });
 
-    // Verify "Next Scheduled Payment/Refund" section shows $0.00
+    // Verify "Next Scheduled Payment" section shows $0.00
     const nextPaymentButton = page.locator('button').filter({ hasText: /Next Scheduled (Payment|Refund)/ });
     const nextPaymentSection = nextPaymentButton.locator('..');
     await expect(nextPaymentSection).toContainText('$0.00', { timeout: 5000 });
 
-    // Expand "Next Scheduled Payment/Refund" section
+    // Expand "Next Scheduled Payment" section
     await nextPaymentButton.click();
     await page.waitForTimeout(500);
 
-    // Within the expanded section, should NOT contain Seal service (because subscriptionChargePending is true)
-    // The expanded content is in a div that comes after the button
+    // Should show "No upcoming charges" (service is NOT included in DRAFT invoice)
     const expandedContent = nextPaymentButton.locator('../..');
-
-    // Should show "No upcoming charges" (the fallback message when there are no line items)
-    // This proves that Seal service is NOT included in the DRAFT invoice
     await expect(expandedContent).toContainText('No upcoming charges');
 
     console.log('  → Shows "No upcoming charges" (proves Seal is excluded from DRAFT invoice)');
-    console.log('✅ Next Scheduled Payment/Refund excludes pending subscription');
+    console.log('✅ Next Scheduled Payment excludes pending subscription');
   });
 
   test('Billing notification disappears after depositing sufficient funds', async ({ page, request }) => {
@@ -224,6 +223,9 @@ test.describe('Subscription Without Funds', () => {
     // Verify notification is shown
     const notification = page.locator('.bg-orange-50').filter({ hasText: 'Subscription payment pending' });
     await expect(notification).toBeVisible({ timeout: 5000 });
+
+    // Add crypto payment method first (reveals escrow card)
+    await addCryptoPayment(page);
 
     // Deposit funds ($30 to cover the $29 subscription)
     await page.locator('button:has-text("Deposit")').first().click();
@@ -242,10 +244,13 @@ test.describe('Subscription Without Funds', () => {
     console.log('✅ Notification disappears after depositing funds');
   });
 
-  test('Next Scheduled Payment/Refund updates immediately after deposit activates subscription', async ({ page }) => {
-    // First, create escrow account with small deposit so "Next Scheduled Payment/Refund" section is visible
+  test('Next Scheduled Payment updates immediately after deposit activates subscription', async ({ page }) => {
+    // First, add crypto payment and create escrow account with small deposit
     await page.locator('nav').getByRole('link', { name: /Billing & Payments/i }).click();
     await page.waitForURL('/billing', { timeout: 5000 });
+
+    // Add crypto payment method (reveals escrow card)
+    await addCryptoPayment(page);
 
     await page.locator('button:has-text("Deposit")').first().click();
     await page.fill('input#depositAmount', '1');
@@ -264,7 +269,7 @@ test.describe('Subscription Without Funds', () => {
     await page.locator('nav').getByRole('link', { name: /Billing & Payments/i }).click();
     await page.waitForURL('/billing', { timeout: 5000 });
 
-    // Verify Next Scheduled Payment/Refund shows $0.00 (service has pending charge)
+    // Verify Next Scheduled Payment shows $0.00 (service has pending charge)
     const nextPaymentSection = page.locator('button').filter({ hasText: /Next Scheduled (Payment|Refund)/ }).locator('..');
     await expect(nextPaymentSection).toContainText('$0.00', { timeout: 5000 });
 
@@ -277,22 +282,19 @@ test.describe('Subscription Without Funds', () => {
     await expect(page.locator('[data-sonner-toast]').filter({ hasText: /Deposited.*successfully/i })).toBeVisible({ timeout: 5000 });
 
     // Give time for the sync with GM to complete and React Query to invalidate/refetch
-    // The deposit now waits for GM sync, so the pending charge should already be processed
     await page.waitForTimeout(2000);
 
-    // Next Scheduled Payment/Refund should now be updated (no longer $0.00)
-    // The exact amount will be less than $29 due to proration credit for partial month
-    // WITHOUT needing to navigate away and come back
+    // Next Scheduled Payment should now be updated (no longer $0.00)
     await expect(nextPaymentSection).not.toContainText('$0.00', { timeout: 5000 });
 
     // Should contain a positive dollar amount (service is now in DRAFT invoice)
     const amountMatch = await nextPaymentSection.textContent();
     const hasPositiveAmount = amountMatch && /\$[1-9]\d*\.\d{2}/.test(amountMatch);
     if (!hasPositiveAmount) {
-      throw new Error('Expected Next Scheduled Payment/Refund to show a positive amount after subscription activation');
+      throw new Error('Expected Next Scheduled Payment to show a positive amount after subscription activation');
     }
 
-    console.log('  → Next Scheduled Payment/Refund updated from $0.00 to positive amount (includes proration credit)');
-    console.log('✅ Next Scheduled Payment/Refund updates immediately after subscription activation');
+    console.log('  → Next Scheduled Payment updated from $0.00 to positive amount');
+    console.log('✅ Next Scheduled Payment updates immediately after subscription activation');
   });
 });

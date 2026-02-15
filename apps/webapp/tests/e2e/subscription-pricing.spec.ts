@@ -5,6 +5,7 @@
  */
 
 import { test, expect } from '@playwright/test';
+import { addCryptoPayment } from '../helpers/db';
 import { getBanner, waitForToastsToDisappear } from '../helpers/locators';
 
 test.describe('Subscription Pricing Validation', () => {
@@ -107,6 +108,11 @@ test.describe('Subscription Pricing Validation', () => {
     await page.reload();
     await page.waitForURL('/dashboard', { timeout: 5000 });
 
+    // Add crypto payment method (required for escrow payment to work)
+    await page.click('text=Billing');
+    await page.waitForURL('/billing', { timeout: 5000 });
+    await addCryptoPayment(page);
+
     // Navigate to seal service page
     await page.click('text=Seal');
     await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
@@ -181,6 +187,11 @@ test.describe('Subscription Pricing Validation', () => {
     // Reload to clear React Query cache after database reset
     await page.reload();
     await page.waitForURL('/dashboard', { timeout: 5000 });
+
+    // Add crypto payment method (required for escrow payment to work)
+    await page.click('text=Billing');
+    await page.waitForURL('/billing', { timeout: 5000 });
+    await addCryptoPayment(page);
 
     // Navigate to seal service page
     await page.click('text=Seal');
@@ -257,6 +268,11 @@ test.describe('Subscription Pricing Validation', () => {
     // Reload to clear React Query cache after database reset
     await page.reload();
     await page.waitForURL('/dashboard', { timeout: 5000 });
+
+    // Add crypto payment method (required for escrow payment to work)
+    await page.click('text=Billing');
+    await page.waitForURL('/billing', { timeout: 5000 });
+    await addCryptoPayment(page);
 
     // Navigate to seal service page
     await page.click('text=Seal');

@@ -9,7 +9,7 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { resetCustomer } from '../helpers/db';
+import { resetCustomer, addCryptoPayment } from '../helpers/db';
 import { setMockClock, resetClock } from '../helpers/clock';
 
 const MOCK_WALLET_ADDRESS = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
@@ -42,6 +42,11 @@ test.describe('Subscription Billing - Bug Detection', () => {
     await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
 
+    // Add crypto payment method (required for escrow payment to work)
+    await page.click('text=Billing');
+    await page.waitForURL('/billing', { timeout: 5000 });
+    await addCryptoPayment(page);
+
     // Subscribe to Seal Pro
     await page.click('text=Seal');
     await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
@@ -49,9 +54,11 @@ test.describe('Subscription Billing - Bug Detection', () => {
     await page.locator('button:has-text("Subscribe to Service")').click();
     await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
 
-    // Navigate to billing page
+    // Navigate to billing page and reload for fresh draft data
     await page.click('text=Billing');
     await page.waitForURL('/billing', { timeout: 5000 });
+    await page.reload();
+    await page.waitForLoadState('networkidle');
 
     // Expand Next Scheduled Payment/Refund
     // Use text selector for regex pattern
@@ -111,6 +118,11 @@ test.describe('Subscription Billing - Bug Detection', () => {
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
+
+    // Add crypto payment method (required for escrow payment to work)
+    await page.click('text=Billing');
+    await page.waitForURL('/billing', { timeout: 5000 });
+    await addCryptoPayment(page);
 
     // Subscribe to Seal Pro
     await page.click('text=Seal');
@@ -175,6 +187,11 @@ test.describe('Month Boundary Edge Cases', () => {
     await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
 
+    // Add crypto payment method (required for escrow payment to work)
+    await page.click('text=Billing');
+    await page.waitForURL('/billing', { timeout: 5000 });
+    await addCryptoPayment(page);
+
     await page.click('text=Seal');
     await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
     await page.locator('label:has-text("Agree to")').click();
@@ -221,6 +238,11 @@ test.describe('Month Boundary Edge Cases', () => {
     await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
 
+    // Add crypto payment method (required for escrow payment to work)
+    await page.click('text=Billing');
+    await page.waitForURL('/billing', { timeout: 5000 });
+    await addCryptoPayment(page);
+
     await page.click('text=Seal');
     await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
     await page.locator('label:has-text("Agree to")').click();
@@ -264,6 +286,11 @@ test.describe('Month Boundary Edge Cases', () => {
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
+
+    // Add crypto payment method (required for escrow payment to work)
+    await page.click('text=Billing');
+    await page.waitForURL('/billing', { timeout: 5000 });
+    await addCryptoPayment(page);
 
     await page.click('text=Seal');
     await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
@@ -311,6 +338,11 @@ test.describe('Month Boundary Edge Cases', () => {
     await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
 
+    // Add crypto payment method (required for escrow payment to work)
+    await page.click('text=Billing');
+    await page.waitForURL('/billing', { timeout: 5000 });
+    await addCryptoPayment(page);
+
     await page.click('text=Seal');
     await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
     await page.locator('label:has-text("Agree to")').click();
@@ -357,6 +389,11 @@ test.describe('Month Boundary Edge Cases', () => {
     await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
 
+    // Add crypto payment method (required for escrow payment to work)
+    await page.click('text=Billing');
+    await page.waitForURL('/billing', { timeout: 5000 });
+    await addCryptoPayment(page);
+
     await page.click('text=Seal');
     await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
     await page.locator('label:has-text("Agree to")').click();
@@ -400,6 +437,11 @@ test.describe('Month Boundary Edge Cases', () => {
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
+
+    // Add crypto payment method (required for escrow payment to work)
+    await page.click('text=Billing');
+    await page.waitForURL('/billing', { timeout: 5000 });
+    await addCryptoPayment(page);
 
     await page.click('text=Seal');
     await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
@@ -453,6 +495,11 @@ test.describe('Scheduled Change Date Display', () => {
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
+
+    // Add crypto payment method (required for escrow payment to work)
+    await page.click('text=Billing');
+    await page.waitForURL('/billing', { timeout: 5000 });
+    await addCryptoPayment(page);
 
     // Subscribe to Enterprise tier first
     await page.click('text=Seal');
@@ -524,6 +571,11 @@ test.describe('Scheduled Change Date Display', () => {
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
+
+    // Add crypto payment method (required for escrow payment to work)
+    await page.click('text=Billing');
+    await page.waitForURL('/billing', { timeout: 5000 });
+    await addCryptoPayment(page);
 
     // Subscribe to Pro tier
     await page.click('text=Seal');

@@ -44,6 +44,10 @@ test.describe('API Key Creation on Subscription', () => {
 
     console.log('✅ Database reset and escrow account created with $10 balance');
 
+    // Reload to pick up reset state
+    await page.reload();
+    await page.waitForURL('/dashboard', { timeout: 5000 });
+
     // Navigate to Seal service page
     await page.click('text=Seal');
     await page.waitForURL(/\/services\/seal/, { timeout: 5000 });

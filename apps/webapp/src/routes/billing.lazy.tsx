@@ -15,7 +15,7 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/dialog';
-import { ChevronRight, ChevronDown, User, ArrowUpDown, ArrowDownUp, Shield, Building2, AlertCircle } from 'lucide-react';
+import { ChevronRight, ChevronDown, User, ArrowUpDown, ArrowDownUp, Shield, Building2, AlertCircle, CreditCard, Trash2, ArrowUp, ArrowDown, Wallet } from 'lucide-react';
 import { toast } from 'sonner';
 import { getTierPriceUsdCents } from '@suiftly/shared/pricing';
 import { SERVICE_TYPE, SPENDING_LIMIT } from '@suiftly/shared/constants';
@@ -57,6 +57,12 @@ function BillingPage() {
     { limit: 20, offset: 0 },
     { enabled: historyExpanded }
   );
+
+  // Payment Methods
+  const { data: paymentMethodsData, refetch: refetchPaymentMethods } = trpc.billing.getPaymentMethods.useQuery();
+  const addPaymentMethodMutation = trpc.billing.addPaymentMethod.useMutation();
+  const removePaymentMethodMutation = trpc.billing.removePaymentMethod.useMutation();
+  const reorderPaymentMethodsMutation = trpc.billing.reorderPaymentMethods.useMutation();
 
   // Mutations
   const depositMutation = trpc.billing.deposit.useMutation();
@@ -158,6 +164,59 @@ function BillingPage() {
     }
   };
 
+  // Handle add payment method (called directly by inline buttons)
+  const handleAddPaymentMethod = async (providerType: 'escrow' | 'stripe' | 'paypal') => {
+    try {
+      const result = await addPaymentMethodMutation.mutateAsync({ providerType });
+
+      if (result.success) {
+        const label = providerType === 'escrow' ? 'Crypto' : providerType === 'stripe' ? 'Credit Card' : 'PayPal';
+        toast.success(`${label} payment method added`);
+      }
+      refetchPaymentMethods();
+      refetchBalance();
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to add payment method');
+    }
+  };
+
+  // Handle remove payment method
+  const handleRemovePaymentMethod = async (methodId: number) => {
+    try {
+      await removePaymentMethodMutation.mutateAsync({ paymentMethodId: methodId });
+      toast.success('Payment method removed');
+      refetchPaymentMethods();
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to remove payment method');
+    }
+  };
+
+  // Handle reorder (move up/down)
+  const handleMoveMethod = async (methodId: number, direction: 'up' | 'down') => {
+    const methods = paymentMethodsData?.methods;
+    if (!methods || methods.length < 2) return;
+
+    const currentIndex = methods.findIndex((m: any) => m.id === methodId);
+    if (currentIndex === -1) return;
+
+    const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+    if (targetIndex < 0 || targetIndex >= methods.length) return;
+
+    // Build new order: swap priorities
+    const newOrder = methods.map((m: any, i: number) => {
+      if (i === currentIndex) return { id: m.id, priority: methods[targetIndex].priority };
+      if (i === targetIndex) return { id: m.id, priority: methods[currentIndex].priority };
+      return { id: m.id, priority: m.priority };
+    });
+
+    try {
+      await reorderPaymentMethodsMutation.mutateAsync({ order: newOrder });
+      refetchPaymentMethods();
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to reorder');
+    }
+  };
+
   if (balanceLoading) {
     return (
       <DashboardLayout>
@@ -186,6 +245,13 @@ function BillingPage() {
   }, 0);
   const shortfallUsd = Math.max(0, totalPendingUsd - balance);
 
+  // Determine which payment methods are already active
+  const activeMethods = paymentMethodsData?.methods ?? [];
+  const hasEscrowMethod = activeMethods.some((m: any) => m.providerType === 'escrow');
+  const hasStripeMethod = activeMethods.some((m: any) => m.providerType === 'stripe');
+  const hasPaypalMethod = activeMethods.some((m: any) => m.providerType === 'paypal');
+  const hasNonEscrowMethod = hasStripeMethod || hasPaypalMethod;
+
   return (
     <DashboardLayout>
       <div className="space-y-6">
@@ -211,13 +277,21 @@ function BillingPage() {
                     </>
                   )}
                   {' '}
-                  {shortfallUsd > 0 ? (
+                  {hasNonEscrowMethod ? (
+                    <>
+                      Payment will be attempted with your configured payment methods.
+                    </>
+                  ) : hasEscrowMethod && shortfallUsd > 0 ? (
                     <>
                       Deposit at least <span className="font-bold">${shortfallUsd.toFixed(2)}</span> to activate {pendingServices.length === 1 ? 'your service' : 'these services'}.
                     </>
-                  ) : (
+                  ) : hasEscrowMethod ? (
                     <>
                       You have sufficient balance. The charge will be processed automatically.
+                    </>
+                  ) : (
+                    <>
+                      Add a payment method below to activate {pendingServices.length === 1 ? 'your service' : 'these services'}.
                     </>
                   )}
                 </p>
@@ -302,156 +376,282 @@ function BillingPage() {
         )}
       </Card>
 
-      {/* Suiftly Escrow Account */}
+      {/* Payment Methods */}
       <Card className="p-6 mb-6">
-        <h2 className="text-lg font-semibold mb-4">Suiftly Escrow Account</h2>
+        <h2 className="text-lg font-semibold mb-2">Payment Methods</h2>
+        <p className="text-sm text-gray-500 mb-3">
+          Payment methods are tried in order. First method has highest priority.
+        </p>
 
-        <div className="grid grid-cols-2 gap-4 mb-6">
-          <div>
-            <div className="text-sm text-gray-500">Balance</div>
-            <div className="text-2xl font-bold">${balance.toFixed(2)}</div>
+        {/* Inline add buttons — only show for methods not yet added */}
+        <div className="flex flex-wrap gap-2 mb-4">
+          {!hasEscrowMethod && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => handleAddPaymentMethod('escrow')}
+              disabled={addPaymentMethodMutation.isPending}
+              data-testid="add-crypto-payment"
+            >
+              <Shield className="w-4 h-4 mr-1.5 text-blue-600" />
+              Add Crypto Payment
+            </Button>
+          )}
+          {!hasStripeMethod && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => handleAddPaymentMethod('stripe')}
+              disabled={addPaymentMethodMutation.isPending}
+              data-testid="add-credit-card"
+            >
+              <CreditCard className="w-4 h-4 mr-1.5 text-purple-600" />
+              Add Credit Card
+            </Button>
+          )}
+          {!hasPaypalMethod && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled
+              data-testid="add-paypal"
+              title="Coming soon"
+            >
+              <Wallet className="w-4 h-4 mr-1.5 text-gray-400" />
+              Add PayPal
+              <span className="ml-1 text-xs text-gray-400">(soon)</span>
+            </Button>
+          )}
+        </div>
+
+        {!paymentMethodsData?.methods?.length ? (
+          <div className="text-center py-6 text-gray-500">
+            No payment methods configured yet.
           </div>
+        ) : (
+          <div className="space-y-2">
+            {paymentMethodsData.methods.map((method: any, index: number) => (
+              <div
+                key={method.id}
+                data-testid="payment-method-row"
+                className="flex items-center justify-between p-3 border rounded-lg"
+              >
+                <div className="flex items-center gap-3">
+                  <span className="text-sm font-medium text-gray-400 w-6">{method.priority}</span>
+                  {method.providerType === 'escrow' ? (
+                    <Shield className="w-5 h-5 text-blue-600" />
+                  ) : (
+                    <CreditCard className="w-5 h-5 text-purple-600" />
+                  )}
+                  <div>
+                    <span className="text-sm font-medium">
+                      {method.providerType === 'escrow' ? 'Crypto' : method.providerType === 'stripe' ? 'Credit Card' : 'PayPal'}
+                    </span>
+                    {method.providerType === 'escrow' && method.info?.balanceUsdCents != null && (
+                      <span className="text-sm text-gray-500 ml-2">
+                        Balance: ${(method.info.balanceUsdCents / 100).toFixed(2)}
+                      </span>
+                    )}
+                    {method.providerType === 'stripe' && method.info && typeof method.info === 'string' && (() => {
+                      try {
+                        const card = JSON.parse(method.info);
+                        return (
+                          <span className="text-sm text-gray-500 ml-2">
+                            {card.brand?.charAt(0).toUpperCase() + card.brand?.slice(1)} ····{card.last4}
+                          </span>
+                        );
+                      } catch { return null; }
+                    })()}
+                    {method.providerType === 'stripe' && method.info && typeof method.info === 'object' && method.info !== null && (
+                      <span className="text-sm text-gray-500 ml-2">
+                        {(method.info as any).brand?.charAt(0).toUpperCase() + (method.info as any).brand?.slice(1)} ····{(method.info as any).last4}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={index === 0}
+                    onClick={() => handleMoveMethod(method.id, 'up')}
+                    aria-label="Move up"
+                  >
+                    <ArrowUp className="w-4 h-4" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={index === paymentMethodsData.methods.length - 1}
+                    onClick={() => handleMoveMethod(method.id, 'down')}
+                    aria-label="Move down"
+                  >
+                    <ArrowDown className="w-4 h-4" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => handleRemovePaymentMethod(method.id)}
+                    aria-label="Remove"
+                    className="text-red-500 hover:text-red-700"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      {/* Suiftly Escrow Account — only shown when crypto payment method is active */}
+      {hasEscrowMethod && (
+        <Card className="p-6 mb-6">
+          <h2 className="text-lg font-semibold mb-4">Suiftly Escrow Account</h2>
+
+          <div className="grid grid-cols-2 gap-4 mb-6">
+            <div>
+              <div className="text-sm text-gray-500">Balance</div>
+              <div className="text-2xl font-bold">${balance.toFixed(2)}</div>
+            </div>
+            <div>
+              <div className="text-sm text-gray-500">Spending Limit Protection</div>
+              <div className="text-2xl font-bold">
+                {spendingLimit == null ? (
+                  'Unlimited'
+                ) : (
+                  <>
+                    ${spendingLimit.toFixed(2)}{' '}
+                    <span className="text-sm font-normal">per 28-days</span>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex gap-3">
+            <ActionButton onClick={() => setDepositModalOpen(true)}>
+              Deposit
+            </ActionButton>
+            <ActionButton onClick={() => setWithdrawModalOpen(true)} disabled={balance === 0}>
+              Withdraw
+            </ActionButton>
+            <ActionButton onClick={() => {
+              // Pre-fill with current value (null/undefined means unlimited = 0)
+              setNewSpendingLimitInput(spendingLimit != null ? spendingLimit.toString() : '0');
+              setSpendingLimitModalOpen(true);
+            }}>
+              Adjust Spending Limit
+            </ActionButton>
+          </div>
+          <p className="text-xs text-gray-500 mt-3">
+            {!found
+              ? 'Note: Escrow account will be created on your first deposit'
+              : 'Note: Using mock wallet for testing. Real Sui wallet integration coming soon.'}
+          </p>
+        </Card>
+      )}
+
+      {/* Next Scheduled Payment */}
+      <Card className="p-4 mb-6">
+        <button
+          onClick={() => setNextPaymentExpanded(!nextPaymentExpanded)}
+          className="w-full flex items-center justify-between text-left"
+        >
           <div>
-            <div className="text-sm text-gray-500">Spending Limit Protection</div>
-            <div className="text-2xl font-bold">
-              {spendingLimit == null ? (
-                'Unlimited'
-              ) : (
+            <div className="font-medium">
+              {(nextPaymentData?.totalUsd ?? 0) < 0 ? 'Next Scheduled Refund' : 'Next Scheduled Payment'}
+            </div>
+            <div className="text-sm text-gray-500">
+              {nextPaymentData?.dueDate
+                ? new Date(nextPaymentData.dueDate).toLocaleDateString('en-US', {
+                    month: 'long',
+                    day: 'numeric',
+                    year: 'numeric',
+                    timeZone: 'UTC',
+                  })
+                : new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth() + 1, 1)).toLocaleDateString('en-US', {
+                    month: 'long',
+                    day: 'numeric',
+                    year: 'numeric',
+                    timeZone: 'UTC',
+                  })}
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="font-bold">
+              {nextPaymentLoading ? '...' : `$${(nextPaymentData?.totalUsd ?? 0).toFixed(2)}`}
+            </span>
+            {nextPaymentExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+          </div>
+        </button>
+
+        {nextPaymentExpanded && (
+          <div className="mt-4 pt-4 border-t space-y-2">
+            <div className="text-sm">
+              {nextPaymentData && 'lineItems' in nextPaymentData && nextPaymentData.lineItems.length > 0 ? (
                 <>
-                  ${spendingLimit.toFixed(2)}{' '}
-                  <span className="text-sm font-normal">per 28-days</span>
+                  {nextPaymentData.lineItems.map((item: InvoiceLineItem, index: number) => (
+                    <div
+                      key={index}
+                      className={`flex justify-between mb-1 ${item.amountUsd < 0 ? 'text-green-600' : 'text-gray-600'}`}
+                    >
+                      <span>{formatLineItemDescription(item)}</span>
+                      <span className="font-medium">
+                        {item.amountUsd < 0 ? '-' : ''}${Math.abs(item.amountUsd).toFixed(2)}
+                      </span>
+                    </div>
+                  ))}
+                  <div className="flex justify-between pt-2 border-t font-bold">
+                    <span>{(nextPaymentData?.totalUsd ?? 0) < 0 ? 'Total Refund:' : 'Total Charge:'}</span>
+                    <span>${(nextPaymentData?.totalUsd ?? 0).toFixed(2)}</span>
+                  </div>
                 </>
+              ) : (
+                <p className="text-gray-500">No upcoming charges</p>
               )}
             </div>
           </div>
-        </div>
-
-        <div className="flex gap-3">
-          <ActionButton onClick={() => setDepositModalOpen(true)}>
-            Deposit
-          </ActionButton>
-          <ActionButton onClick={() => setWithdrawModalOpen(true)} disabled={balance === 0}>
-            Withdraw
-          </ActionButton>
-          <ActionButton onClick={() => {
-            // Pre-fill with current value (null/undefined means unlimited = 0)
-            setNewSpendingLimitInput(spendingLimit != null ? spendingLimit.toString() : '0');
-            setSpendingLimitModalOpen(true);
-          }}>
-            Adjust Spending Limit
-          </ActionButton>
-        </div>
-        <p className="text-xs text-gray-500 mt-3">
-          {!found
-            ? 'Note: Escrow account will be created on your first deposit'
-            : 'Note: Using mock wallet for testing. Real Sui wallet integration coming soon.'}
-        </p>
+        )}
       </Card>
 
-      {/* Next Scheduled Payment */}
-      {found && (
-        <>
-          <Card className="p-4 mb-6">
-            <button
-              onClick={() => setNextPaymentExpanded(!nextPaymentExpanded)}
-              className="w-full flex items-center justify-between text-left"
-            >
+      {/* Billing History */}
+      <Card className="p-4">
+        <button
+          onClick={() => setHistoryExpanded(!historyExpanded)}
+          className="w-full flex items-center justify-between text-left mb-2"
+        >
+          <h2 className="text-lg font-semibold">Billing History</h2>
+          {historyExpanded ? <ChevronDown className="w-5 h-5" /> : <ChevronRight className="w-5 h-5" />}
+        </button>
+
+        {historyExpanded && (
+          <div className="mt-4">
+            {transactionsLoading ? (
+              <div className="text-center py-8 text-gray-500">Loading history...</div>
+            ) : !transactionsData || transactionsData.transactions.length === 0 ? (
+              <div className="text-center py-8 text-gray-500">No billing history yet</div>
+            ) : (
               <div>
-                <div className="font-medium">
-                  {(nextPaymentData?.totalUsd ?? 0) < 0 ? 'Next Scheduled Refund' : 'Next Scheduled Payment'}
-                </div>
-                <div className="text-sm text-gray-500">
-                  {nextPaymentData?.dueDate
-                    ? new Date(nextPaymentData.dueDate).toLocaleDateString('en-US', {
-                        month: 'long',
-                        day: 'numeric',
-                        year: 'numeric',
-                        timeZone: 'UTC', // Display UTC date as-is, no local conversion
-                      })
-                    : new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth() + 1, 1)).toLocaleDateString('en-US', {
-                        month: 'long',
-                        day: 'numeric',
-                        year: 'numeric',
-                        timeZone: 'UTC',
-                      })}
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="font-bold">
-                  {nextPaymentLoading ? '...' : `$${(nextPaymentData?.totalUsd ?? 0).toFixed(2)}`}
-                </span>
-                {nextPaymentExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-              </div>
-            </button>
+                {transactionsData?.transactions.map((tx) => (
+                  <TransactionItem key={tx.id} transaction={tx} />
+                ))}
 
-            {nextPaymentExpanded && (
-              <div className="mt-4 pt-4 border-t space-y-2">
-                <div className="text-sm">
-                  {nextPaymentData && 'lineItems' in nextPaymentData && nextPaymentData.lineItems.length > 0 ? (
-                    <>
-                      {nextPaymentData.lineItems.map((item: InvoiceLineItem, index: number) => (
-                        <div
-                          key={index}
-                          className={`flex justify-between mb-1 ${item.amountUsd < 0 ? 'text-green-600' : 'text-gray-600'}`}
-                        >
-                          <span>{formatLineItemDescription(item)}</span>
-                          <span className="font-medium">
-                            {item.amountUsd < 0 ? '-' : ''}${Math.abs(item.amountUsd).toFixed(2)}
-                          </span>
-                        </div>
-                      ))}
-                      <div className="flex justify-between pt-2 border-t font-bold">
-                        <span>{(nextPaymentData?.totalUsd ?? 0) < 0 ? 'Total Refund:' : 'Total Charge:'}</span>
-                        <span>${(nextPaymentData?.totalUsd ?? 0).toFixed(2)}</span>
-                      </div>
-                    </>
-                  ) : (
-                    <p className="text-gray-500">No upcoming charges</p>
-                  )}
-                </div>
-              </div>
-            )}
-          </Card>
-
-          {/* Billing History */}
-          <Card className="p-4">
-            <button
-              onClick={() => setHistoryExpanded(!historyExpanded)}
-              className="w-full flex items-center justify-between text-left mb-2"
-            >
-              <h2 className="text-lg font-semibold">Billing History</h2>
-              {historyExpanded ? <ChevronDown className="w-5 h-5" /> : <ChevronRight className="w-5 h-5" />}
-            </button>
-
-            {historyExpanded && (
-              <div className="mt-4">
-                {transactionsLoading ? (
-                  <div className="text-center py-8 text-gray-500">Loading history...</div>
-                ) : !transactionsData || transactionsData.transactions.length === 0 ? (
-                  <div className="text-center py-8 text-gray-500">No billing history yet</div>
-                ) : (
-                  <div>
-                    {transactionsData?.transactions.map((tx) => (
-                      <TransactionItem key={tx.id} transaction={tx} />
-                    ))}
-
-                    {transactionsData && transactionsData.total > 20 && (
-                      <div className="flex justify-between pt-4 mt-4 border-t">
-                        <Button variant="outline" size="sm" disabled>
-                          ← Previous
-                        </Button>
-                        <Button variant="outline" size="sm" disabled>
-                          Next →
-                        </Button>
-                      </div>
-                    )}
+                {transactionsData && transactionsData.total > 20 && (
+                  <div className="flex justify-between pt-4 mt-4 border-t">
+                    <Button variant="outline" size="sm" disabled>
+                      ← Previous
+                    </Button>
+                    <Button variant="outline" size="sm" disabled>
+                      Next →
+                    </Button>
                   </div>
                 )}
               </div>
             )}
-          </Card>
-        </>
-      )}
+          </div>
+        )}
+      </Card>
 
       {/* Deposit Modal */}
       <Dialog

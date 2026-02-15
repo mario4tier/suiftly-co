@@ -4,67 +4,87 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { resetCustomer } from '../helpers/db';
+import { resetCustomer, addCryptoPayment } from '../helpers/db';
+import { waitAfterMutation } from '../helpers/wait-utils';
 
 const MOCK_WALLET_ADDRESS = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const API_BASE = 'http://localhost:22700';
 
-// Test suite for "no escrow account" scenario (needs separate setup)
-test.describe('Billing Page - No Escrow Account', () => {
-  test('shows zero balance when no escrow account exists', async ({ page }) => {
-    // This test needs no escrow account - use clearEscrowAccount flag
+// Test suite for "no escrow payment method" scenario
+test.describe('Billing Page - No Payment Methods', () => {
+  test('shows add payment buttons when no methods configured', async ({ page }) => {
     await resetCustomer(page.request, {
       balanceUsdCents: 0,
       spendingLimitUsdCents: 0,
-      clearEscrowAccount: true, // Remove escrow account to test "no account" state
+      clearEscrowAccount: true,
     });
 
-    // Authenticate with mock wallet
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
 
-    // Navigate to billing page
     await page.click('text=Billing');
     await page.waitForURL('/billing', { timeout: 5000 });
 
     // Should show heading
     await expect(page.getByRole('heading', { name: 'Billing', exact: true })).toBeVisible();
 
+    // Escrow card should NOT be visible (no crypto payment method added)
+    await expect(page.locator('h2:has-text("Suiftly Escrow Account")')).not.toBeVisible();
+
+    // Should show add payment method buttons
+    await expect(page.locator('[data-testid="add-crypto-payment"]')).toBeVisible();
+    await expect(page.locator('[data-testid="add-credit-card"]')).toBeVisible();
+
+    console.log('✅ No payment methods state displayed correctly');
+  });
+
+  test('adding crypto payment reveals escrow card with zero balance', async ({ page }) => {
+    await resetCustomer(page.request, {
+      balanceUsdCents: 0,
+      spendingLimitUsdCents: 0,
+      clearEscrowAccount: true,
+    });
+
+    await page.goto('/');
+    await page.click('button:has-text("Mock Wallet 0")');
+    await page.waitForURL('/dashboard', { timeout: 10000 });
+
+    await page.click('text=Billing');
+    await page.waitForURL('/billing', { timeout: 5000 });
+
+    // Add crypto payment → escrow card appears
+    await addCryptoPayment(page);
+
     // Should show Suiftly Escrow Account section with zero balance
     await expect(page.locator('h2:has-text("Suiftly Escrow Account")')).toBeVisible();
-    await expect(page.locator('text=Balance')).toBeVisible();
+    await expect(page.getByText('Balance', { exact: true })).toBeVisible();
     await expect(page.locator('text=$0.00').first()).toBeVisible();
 
-    // Should show default spending limit of $250 (SPENDING_LIMIT_DEFAULT_USD)
+    // Should show default spending limit of $250
     await expect(page.locator('text=Spending Limit Protection')).toBeVisible();
-    // Check for both parts of the spending limit text
     await expect(page.locator('text=$250.00')).toBeVisible();
     await expect(page.locator('text=per 28-days')).toBeVisible();
 
     // Should show action buttons
     await expect(page.locator('button:has-text("Deposit")')).toBeVisible();
     await expect(page.locator('button:has-text("Deposit")')).toBeEnabled();
-
     await expect(page.locator('button:has-text("Withdraw")')).toBeVisible();
     await expect(page.locator('button:has-text("Withdraw")')).toBeDisabled(); // Disabled when balance is 0
-
     await expect(page.locator('button:has-text("Adjust Spending Limit")')).toBeVisible();
     await expect(page.locator('button:has-text("Adjust Spending Limit")')).toBeEnabled();
 
-    console.log('✅ Zero balance displayed correctly when no escrow account exists');
+    console.log('✅ Adding crypto payment reveals escrow card with zero balance');
   });
 });
 
 test.describe('Billing Page', () => {
   test.beforeEach(async ({ page }) => {
-    // Reset customer data (preserves escrow account for realistic testing)
     await resetCustomer(page.request, {
       balanceUsdCents: 0,
-      spendingLimitUsdCents: 0, // 0 = Unlimited
+      spendingLimitUsdCents: 0,
     });
 
-    // Authenticate with mock wallet
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
@@ -84,24 +104,18 @@ test.describe('Billing Page', () => {
     await page.click('text=Billing');
     await page.waitForURL('/billing', { timeout: 5000 });
 
+    // Add crypto payment to see escrow card
+    await addCryptoPayment(page);
+
     // Should show Suiftly Escrow Account section
     await expect(page.locator('h2:has-text("Suiftly Escrow Account")')).toBeVisible();
-
-    // Should show balance
-    await expect(page.locator('text=Balance')).toBeVisible();
+    await expect(page.getByText('Balance', { exact: true })).toBeVisible();
     await expect(page.locator('text=$100.00').first()).toBeVisible();
-
-    // Should show spending limit protection
     await expect(page.locator('text=Spending Limit Protection')).toBeVisible();
     await expect(page.locator('text=$250.00').first()).toBeVisible();
-
-    // Should show action buttons (disabled for now)
     await expect(page.locator('button:has-text("Deposit")')).toBeVisible();
     await expect(page.locator('button:has-text("Withdraw")')).toBeVisible();
     await expect(page.locator('button:has-text("Adjust Spending Limit")')).toBeVisible();
-
-    // Should show next scheduled payment/refund section
-    await expect(page.locator('text=/Next Scheduled (Payment|Refund)/')).toBeVisible();
 
     console.log('✅ Escrow account with balance displayed correctly');
   });
@@ -116,11 +130,10 @@ test.describe('Billing Page', () => {
       },
     });
 
-    // Navigate to billing page
     await page.click('text=Billing');
     await page.waitForURL('/billing', { timeout: 5000 });
 
-    // Billing History should be visible but collapsed
+    // Billing History should be visible (no longer gated by escrow)
     await expect(page.locator('h2:has-text("Billing History")')).toBeVisible();
 
     // Should NOT show transactions yet (lazy loading)
@@ -130,10 +143,8 @@ test.describe('Billing Page', () => {
     // Click to expand billing history
     await page.locator('h2:has-text("Billing History")').click();
 
-    // Wait a moment for the query to trigger and render
     await page.waitForTimeout(500);
 
-    // Should eventually show "No billing history yet" or transactions
     await expect(
       page.locator('text=No billing history yet')
     ).toBeVisible({ timeout: 5000 });
@@ -151,11 +162,10 @@ test.describe('Billing Page', () => {
       },
     });
 
-    // Navigate to billing page
     await page.click('text=Billing');
     await page.waitForURL('/billing', { timeout: 5000 });
 
-    // Next Scheduled Payment/Refund should be visible
+    // Next Scheduled Payment should be visible (no longer gated by escrow)
     await expect(page.locator('text=/Next Scheduled (Payment|Refund)/')).toBeVisible();
 
     // Should NOT show details initially
@@ -163,14 +173,10 @@ test.describe('Billing Page', () => {
 
     // Click to expand
     await page.locator('text=/Next Scheduled (Payment|Refund)/').click();
-
-    // Should now show details (no subscriptions = "No upcoming charges")
     await expect(page.locator('text=No upcoming charges')).toBeVisible();
 
     // Click again to collapse
     await page.locator('text=/Next Scheduled (Payment|Refund)/').click();
-
-    // Should hide details
     await expect(page.locator('text=No upcoming charges')).not.toBeVisible();
 
     console.log('✅ Next scheduled payment expandable works correctly');
@@ -186,11 +192,12 @@ test.describe('Billing Page', () => {
       },
     });
 
-    // Navigate to billing page
     await page.click('text=Billing');
     await page.waitForURL('/billing', { timeout: 5000 });
 
-    // Initial balance should be $200
+    // Add crypto payment to see escrow card
+    await addCryptoPayment(page);
+
     await expect(page.locator('text=$200.00').first()).toBeVisible();
 
     // Withdraw $50 via test API
@@ -201,10 +208,7 @@ test.describe('Billing Page', () => {
       },
     });
 
-    // Reload page
     await page.reload();
-
-    // Balance should now be $150
     await expect(page.locator('text=$150.00').first()).toBeVisible();
 
     console.log('✅ Balance updated correctly after withdrawal');
@@ -216,15 +220,16 @@ test.describe('Billing Page', () => {
       data: {
         walletAddress: MOCK_WALLET_ADDRESS,
         amountUsd: 100,
-        initialSpendingLimitUsd: 0, // Unlimited
+        initialSpendingLimitUsd: 0,
       },
     });
 
-    // Navigate to billing page
     await page.click('text=Billing');
     await page.waitForURL('/billing', { timeout: 5000 });
 
-    // Should show "Unlimited" for spending limit
+    // Add crypto payment to see escrow card
+    await addCryptoPayment(page);
+
     await expect(page.locator('text=Unlimited')).toBeVisible();
 
     console.log('✅ Unlimited spending limit displayed correctly');
@@ -240,36 +245,31 @@ test.describe('Billing Page', () => {
       },
     });
 
+    // Add crypto payment method (required for escrow payment to work)
+    await page.click('text=Billing');
+    await page.waitForURL('/billing', { timeout: 5000 });
+    await addCryptoPayment(page);
+
     // Subscribe to Seal Pro tier
     await page.click('text=Seal');
     await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
 
-    // Accept terms and subscribe
     await page.locator('label:has-text("Agree to")').click();
     const subscribeButton = page.locator('button:has-text("Subscribe to Service")');
     await subscribeButton.click();
-
-    // Wait for subscription success
     await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
 
-    // Navigate to billing page
+    // Navigate to billing page and reload to ensure fresh draft invoice data
     await page.click('text=Billing');
     await page.waitForURL('/billing', { timeout: 5000 });
+    await page.reload();
+    await page.waitForLoadState('networkidle');
 
-    // Expand Next Scheduled Payment/Refund section
+    // Expand Next Scheduled Payment section (no longer gated by escrow)
     await page.locator('text=/Next Scheduled (Payment|Refund)/').click();
-
-    // Should show line items for subscribed service (even if service is DISABLED)
-    // Billing rule: Subscriptions are charged regardless of isUserEnabled toggle state
-    // Should NOT show "No upcoming charges" - there should be a DRAFT invoice
     await expect(page.locator('text=No upcoming charges')).not.toBeVisible();
-
-    // Should show Pro tier line item
-    // Note: Don't check specific amounts - they vary by date (unless DBClock is set)
     await expect(page.locator('text=Seal Pro tier')).toBeVisible();
-    // Partial month credit may or may not appear depending on subscription date
-    // If subscribed near end of month, credit may be $0 and not displayed
-    // Credit format when present: "Seal partial month credit (Month)"
+
     const creditLocator = page.locator('text=/Seal partial month credit/i');
     const creditVisible = await creditLocator.isVisible().catch(() => false);
     if (creditVisible) {
@@ -278,7 +278,6 @@ test.describe('Billing Page', () => {
       console.log('  → No partial month credit (expected if subscribed near month end)');
     }
 
-    // Should show Total Charge/Refund label
     await expect(page.locator('text=/Total (Charge|Refund):/')).toBeVisible();
 
     console.log('✅ Next scheduled payment shows correct amount after subscription');

@@ -254,7 +254,7 @@ test.describe('Escrow Mock - Service Subscription Scenarios', () => {
 
     // Wait for balance to load and be displayed
     // Balance should be $100 - $29 = $71 (PRO tier charges immediately in mock)
-    await expect(page.locator('text=Balance').locator('..').locator('text=$71.00')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText('Balance', { exact: true }).locator('..').locator('text=$71.00')).toBeVisible({ timeout: 10000 });
 
     console.log('✅ Balance correctly displayed as $71.00 on billing page');
   });
@@ -415,7 +415,7 @@ test.describe('Subscription Charge Architecture - Critical Business Logic', () =
 
     // Verify balance decreased from $100 to $71
     // Look for balance in the Suiftly Escrow Account card
-    const balanceAfterFirst = await page.locator('text=Balance').locator('..').locator('text=/\\$\\d+\\.\\d{2}/').textContent();
+    const balanceAfterFirst = await page.getByText('Balance', { exact: true }).locator('..').locator('text=/\\$\\d+\\.\\d{2}/').textContent();
     expect(balanceAfterFirst).toBe('$71.00');
 
     // Try to subscribe again by navigating back to Seal
@@ -427,7 +427,7 @@ test.describe('Subscription Charge Architecture - Critical Business Logic', () =
     await page.waitForURL('/billing', { timeout: 5000 });
 
     // Verify balance stayed $71 (no double charge)
-    const balanceAfterRetry = await page.locator('text=Balance').locator('..').locator('text=/\\$\\d+\\.\\d{2}/').textContent();
+    const balanceAfterRetry = await page.getByText('Balance', { exact: true }).locator('..').locator('text=/\\$\\d+\\.\\d{2}/').textContent();
     expect(balanceAfterRetry).toBe('$71.00');
 
     console.log('✅ Idempotent subscription - no double charge on retry');

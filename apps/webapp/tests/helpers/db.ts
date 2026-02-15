@@ -8,6 +8,7 @@
 import type { APIRequestContext, Page } from '@playwright/test';
 import { expect } from '@playwright/test';
 import { PORT } from '@suiftly/shared/constants';
+import { waitAfterMutation } from './wait-utils';
 
 const API_BASE = `http://localhost:${PORT.API}`;
 
@@ -378,4 +379,42 @@ export async function authenticateWithMockWallet(page: Page): Promise<void> {
   await page.click('button:has-text("Mock Wallet 0")');
   // Wait for redirect away from login page (auth complete)
   await expect(page).not.toHaveURL(/\/login/, { timeout: 10000 });
+}
+
+/**
+ * Add crypto payment method on the billing page.
+ * Clicks "Add Crypto Payment" button and waits for the method to appear.
+ * Assumes the page is already on /billing.
+ */
+export async function addCryptoPayment(page: Page): Promise<void> {
+  // Check if escrow payment method already exists (e.g. auto-added by deposit endpoint).
+  // If the "Crypto" row is already in the list, the add button won't be rendered.
+  const cryptoRow = page.locator('text=/Crypto/i').first();
+  const addButton = page.locator('[data-testid="add-crypto-payment"]');
+
+  // Wait for the Payment Methods section to render (either the add button or an existing crypto row)
+  await expect(addButton.or(cryptoRow)).toBeVisible({ timeout: 5000 });
+
+  // Only click add if the button is present (escrow not yet added)
+  if (await addButton.isVisible()) {
+    await addButton.click();
+    await waitAfterMutation(page);
+  }
+
+  // Wait for the escrow card to appear (confirms payment method exists)
+  await expect(page.locator('h2:has-text("Suiftly Escrow Account")')).toBeVisible({ timeout: 5000 });
+}
+
+/**
+ * Add credit card (Stripe) payment method on the billing page.
+ * Clicks "Add Credit Card" button and waits for the method to appear.
+ * Assumes the page is already on /billing.
+ */
+export async function addCreditCardPayment(page: Page): Promise<void> {
+  const addButton = page.locator('[data-testid="add-credit-card"]');
+  await expect(addButton).toBeVisible({ timeout: 5000 });
+  await addButton.click();
+  await waitAfterMutation(page);
+  // Wait for method to appear in the list
+  await expect(page.locator('[data-testid="payment-method-row"]').filter({ hasText: 'Credit Card' })).toBeVisible({ timeout: 5000 });
 }
