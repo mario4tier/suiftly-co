@@ -14,6 +14,7 @@ import type { ValidationResult, ValidationError, ValidationWarning } from '@suif
 import { testDelayManager } from '../lib/test-delays';
 import { getTierPriceUsdCents } from '../lib/config-cache';
 import { getSuiService } from '@suiftly/database/sui-mock';
+import { getStripeService } from '@suiftly/database/stripe-mock';
 import { storeApiKey } from '../lib/api-keys';
 import {
   handleSubscriptionBilling,
@@ -28,6 +29,7 @@ import {
 } from '@suiftly/database/billing';
 import { dbClock } from '@suiftly/shared/db-clock';
 import { triggerVaultSync, markConfigChanged } from '../lib/gm-sync';
+import { retryPendingInvoice } from '../lib/payment-gates';
 
 // Zod schemas for input validation
 const serviceTypeSchema = z.enum([SERVICE_TYPE.SEAL, SERVICE_TYPE.GRPC, SERVICE_TYPE.GRAPHQL]);
@@ -176,7 +178,7 @@ export const servicesRouter = router({
 
       // Get tier price upfront (from in-memory cache - O(1) lookup, no database query)
       const priceUsdCents = getTierPriceUsdCents(input.tier);
-      const suiService = getSuiService();
+      const paymentServices = { suiService: getSuiService(), stripeService: getStripeService() };
 
       // Wrap entire operation in customer advisory lock
       // This prevents race conditions between concurrent API requests
@@ -272,7 +274,7 @@ export const servicesRouter = router({
             input.serviceType,
             input.tier,
             priceUsdCents,
-            suiService,
+            paymentServices,
             dbClock
           );
         } catch (billingError) {
@@ -435,41 +437,9 @@ export const servicesRouter = router({
           // Check if subscription charge is pending when trying to enable
           // Only validate funds when payment is still pending (not yet paid)
           if (service.subPendingInvoiceId !== null && input.enabled) {
-            // Get customer to check account status
-            const customer = await tx.query.customers.findFirst({
-              where: eq(customers.customerId, ctx.user!.customerId),
-            });
-
-            if (!customer) {
-              throw new TRPCError({
-                code: 'NOT_FOUND',
-                message: 'Customer not found',
-              });
-            }
-
-            // Check escrow account balance
-            const suiService = getSuiService();
-            const account = await suiService.getAccount(customer.walletAddress);
-            const tierPrice = getTierPriceUsdCents(service.tier);
-
-            console.log('[TOGGLE] Validating funds for pending charge - Account:', account ? {
-              balance: account.balanceUsdCents,
-              tierPrice,
-              hasAccount: !!account
-            } : 'null');
-
-            // If no account exists or insufficient balance, guide to deposit
-            if (!account || account.balanceUsdCents < tierPrice) {
-              throw new TRPCError({
-                code: 'BAD_REQUEST',
-                message: 'Insufficient funds. Deposit to proceed via Billing page.',
-              });
-            }
-
-            // Account exists with funds but charge still pending - something else went wrong
-            throw new TRPCError({
-              code: 'BAD_REQUEST',
-              message: 'Cannot enable service: subscription payment pending. Please contact support if this persists.',
+            await retryPendingInvoice(tx, ctx.user!.customerId, {
+              instanceId: service.instanceId,
+              subPendingInvoiceId: service.subPendingInvoiceId,
             });
           }
 
@@ -693,7 +663,7 @@ export const servicesRouter = router({
       // Apply test delay if configured
       await testDelayManager.applyDelay('tierChange');
 
-      const suiService = getSuiService();
+      const paymentServices = { suiService: getSuiService(), stripeService: getStripeService() };
 
       // Acquire customer lock at route level for consistency
       const result = await withCustomerLockForAPI(
@@ -705,7 +675,7 @@ export const servicesRouter = router({
             ctx.user!.customerId,
             input.serviceType as 'seal' | 'grpc' | 'graphql',
             input.newTier as 'starter' | 'pro' | 'enterprise',
-            suiService,
+            paymentServices,
             dbClock
           );
         },

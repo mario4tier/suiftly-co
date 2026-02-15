@@ -14,9 +14,9 @@ import { storeApiKey, getApiKeys, revokeApiKey, deleteApiKey, reEnableApiKey, ty
 import { parseIpAddressList, ipAllowlistUpdateSchema } from '@suiftly/shared/schemas';
 import { decryptSecret } from '../lib/encryption';
 import { generateSealKey } from '../lib/seal-key-generation';
-import { getTierPriceUsdCents } from '../lib/config-cache';
 import { dbClock } from '@suiftly/shared/db-clock';
 import { triggerVaultSync, markConfigChanged } from '../lib/gm-sync';
+import { retryPendingInvoice } from '../lib/payment-gates';
 import { getSealProcessGroup, isProduction } from '@mhaxbe/system-config';
 
 export const sealRouter = router({
@@ -880,41 +880,10 @@ export const sealRouter = router({
           }
 
           // Check if subscription charge is pending (payment gate logic)
-          // This is the same validation used when trying to enable the service
           if (service.subPendingInvoiceId !== null) {
-            // Get customer to check account status
-            const customer = await tx.query.customers.findFirst({
-              where: eq(customers.customerId, ctx.user!.customerId),
-            });
-
-            if (!customer) {
-              throw new TRPCError({
-                code: 'NOT_FOUND',
-                message: 'Customer not found',
-              });
-            }
-
-            // Check if escrow account exists
-            if (!customer.escrowContractId) {
-              throw new TRPCError({
-                code: 'PAYMENT_REQUIRED',
-                message: 'Subscription payment pending. Add funds via Billing.',
-              });
-            }
-
-            // Check if balance is sufficient for subscription
-            const monthlyPriceUsdCents = getTierPriceUsdCents(service.tier);
-            if ((customer.currentBalanceUsdCents ?? 0) < monthlyPriceUsdCents) {
-              throw new TRPCError({
-                code: 'PAYMENT_REQUIRED',
-                message: 'Insufficient funds. Deposit to proceed via Billing page.',
-              });
-            }
-
-            // Account exists with funds but charge still pending
-            throw new TRPCError({
-              code: 'BAD_REQUEST',
-              message: 'Subscription payment pending. Please contact support if this persists.',
+            await retryPendingInvoice(tx, ctx.user!.customerId, {
+              instanceId: service.instanceId,
+              subPendingInvoiceId: service.subPendingInvoiceId,
             });
           }
 

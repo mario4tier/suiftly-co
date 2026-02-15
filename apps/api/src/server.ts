@@ -12,6 +12,7 @@ import { fastifyTRPCPlugin } from '@trpc/server/adapters/fastify';
 import { createContext } from './lib/trpc';
 import { appRouter } from './routes';
 import { registerAuthRoutes } from './routes/rest-auth';
+import { registerStripeWebhook } from './routes/stripe-webhook';
 import { config, logConfig } from './lib/config';
 import { initializeFrontendConfig } from './lib/init-config';
 import { initializeConfigCache } from './lib/config-cache';
@@ -62,6 +63,9 @@ await server.register(cookie, {
 
 // REST Auth routes (internal endpoints)
 await registerAuthRoutes(server);
+
+// Stripe webhook (raw body — must be before tRPC which also parses JSON)
+await registerStripeWebhook(server);
 
 // tRPC API routes (internal endpoints)
 await server.register(fastifyTRPCPlugin, {
@@ -377,6 +381,9 @@ if (config.NODE_ENV !== 'production') {
   // Mock wallet control endpoints
   const { getSuiService } = await import('@suiftly/database/sui-mock');
   const suiService = getSuiService();
+  const { db } = await import('@suiftly/database');
+  const { customers, customerPaymentMethods } = await import('@suiftly/database/schema');
+  const { eq, and } = await import('drizzle-orm');
 
   // Get mock wallet balance
   server.get('/test/wallet/balance', {
@@ -433,6 +440,41 @@ if (config.NODE_ENV !== 'production') {
         ? Math.round(initialSpendingLimitUsd * 100)
         : undefined,
     });
+
+    // Auto-add escrow payment method if deposit succeeded and customer doesn't have one yet.
+    // This is a test convenience — in production, users add payment methods explicitly via the UI.
+    if (result.success) {
+      const customer = await db.query.customers.findFirst({
+        where: eq(customers.walletAddress, walletAddress),
+      });
+      if (customer) {
+        const existingEscrow = await db.query.customerPaymentMethods.findFirst({
+          where: and(
+            eq(customerPaymentMethods.customerId, customer.customerId),
+            eq(customerPaymentMethods.providerType, 'escrow'),
+            eq(customerPaymentMethods.status, 'active')
+          ),
+        });
+        if (!existingEscrow) {
+          const allMethods = await db.select()
+            .from(customerPaymentMethods)
+            .where(and(
+              eq(customerPaymentMethods.customerId, customer.customerId),
+              eq(customerPaymentMethods.status, 'active')
+            ));
+          const nextPriority = allMethods.length > 0
+            ? Math.max(...allMethods.map(m => m.priority)) + 1
+            : 1;
+          await db.insert(customerPaymentMethods).values({
+            customerId: customer.customerId,
+            providerType: 'escrow',
+            status: 'active',
+            priority: nextPriority,
+            providerRef: customer.escrowContractId,
+          });
+        }
+      }
+    }
 
     reply.send({
       success: result.success,
@@ -790,6 +832,62 @@ if (config.NODE_ENV !== 'production') {
   });
 
   // ========================================
+  // Stripe Mock Configuration Endpoints
+  // ========================================
+
+  const { stripeMockConfig } = await import('@suiftly/database/stripe-mock');
+
+  // Get current Stripe mock configuration
+  server.get('/test/stripe/config', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    reply.send({
+      enabled: stripeMockConfig.isEnabled(),
+      config: stripeMockConfig.getConfig(),
+    });
+  });
+
+  // Set Stripe mock configuration (delays, failures)
+  server.post('/test/stripe/config', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    const body = request.body as any;
+
+    const validKeys = [
+      'chargeDelayMs', 'createCustomerDelayMs', 'createSetupIntentDelayMs',
+      'forceChargeFailure', 'forceChargeFailureMessage', 'forceChargeRequiresAction',
+      'forceCardDeclined', 'forceInsufficientFunds',
+    ];
+
+    const invalidKeys = Object.keys(body).filter(k => !validKeys.includes(k));
+    if (invalidKeys.length > 0) {
+      reply.code(400).send({
+        success: false,
+        error: `Invalid config keys: ${invalidKeys.join(', ')}`,
+        validKeys,
+      });
+      return;
+    }
+
+    stripeMockConfig.setConfig(body);
+    reply.send({
+      success: true,
+      config: stripeMockConfig.getConfig(),
+    });
+  });
+
+  // Clear Stripe mock configuration
+  server.post('/test/stripe/config/clear', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    stripeMockConfig.clearConfig();
+    reply.send({
+      success: true,
+      config: stripeMockConfig.getConfig(),
+    });
+  });
+
+  // ========================================
   // Clock Test Endpoints - REMOVED
   // Clock management moved to Global Manager (GM) only
   // Tests should call GM's /api/test/clock/* endpoints
@@ -836,12 +934,13 @@ if (config.NODE_ENV !== 'production') {
       const { db } = await import('@suiftly/database');
       const { runPeriodicBillingJob, runPeriodicJobForCustomer } = await import('@suiftly/database/billing');
       const { getSuiService } = await import('@suiftly/database/sui-mock');
+      const { getStripeService } = await import('@suiftly/database/stripe-mock');
 
       // Sync clock from test_kv before use
       await dbClockProvider.syncFromTestKv();
 
       const clock = dbClockProvider.getClock();
-      const suiService = getSuiService();
+      const paymentServices = { suiService: getSuiService(), stripeService: getStripeService() };
 
       const billingConfig = {
         clock,
@@ -853,9 +952,9 @@ if (config.NODE_ENV !== 'production') {
 
       let result;
       if (customerId) {
-        result = await runPeriodicJobForCustomer(db, customerId, billingConfig, suiService);
+        result = await runPeriodicJobForCustomer(db, customerId, billingConfig, paymentServices);
       } else {
-        result = await runPeriodicBillingJob(db, billingConfig, suiService);
+        result = await runPeriodicBillingJob(db, billingConfig, paymentServices);
       }
 
       reply.send({

@@ -127,6 +127,18 @@ const envSchema = z.object({
 
   // Internal services
   GM_URL: z.string().default('http://localhost:22600'), // Global Manager URL
+
+  // Stripe (optional — empty string disables Stripe payments)
+  STRIPE_SECRET_KEY: z.string().default(''),
+  STRIPE_PUBLISHABLE_KEY: z.string().default(''),
+  STRIPE_WEBHOOK_SECRET: z.string().default(
+    process.env.NODE_ENV === 'production' ? '' : 'whsec_test_secret_for_development_only'
+  ),
+
+  // PayPal (optional — empty string disables PayPal payments)
+  PAYPAL_CLIENT_ID: z.string().default(''),
+  PAYPAL_CLIENT_SECRET: z.string().default(''),
+  PAYPAL_WEBHOOK_ID: z.string().default(''),
 });
 
 export const config = envSchema.parse(process.env);
@@ -153,17 +165,14 @@ process.env.RATE_LIMIT_MAX = config.RATE_LIMIT_MAX.toString();
 validateSecretSafety();
 
 function validateSecretSafety() {
-  const isDev = config.NODE_ENV === 'development';
-  const isTest = config.NODE_ENV === 'test';
-  const isProd = config.NODE_ENV === 'production';
-
   // Default test secrets used in development/testing (plaintext, will be base64-encoded in config)
   const DEFAULT_TEST_JWT_SECRET = 'dev-secret-for-testing-only!!!!!';
   const DEFAULT_TEST_ENCRYPTION_KEY = 'dev-encryption-key-test-only!!!!';
   const DEFAULT_TEST_COOKIE_SECRET = 'dev-cookie-secret-testing-only!!';
 
   // GUARD 1: Production must NOT use default/weak secrets
-  if (isProd || isProduction) {
+  // Uses system.conf (isProduction) as single source of truth per CLAUDE.md
+  if (isProduction) {
     // Check for exact match with default test secrets (decode config values to compare)
     try {
       const jwtDecoded = Buffer.from(config.JWT_SECRET, 'base64').toString('utf8');
@@ -294,6 +303,31 @@ function validateSecretSafety() {
         'Generate: python3 -c "import secrets; print(secrets.token_hex(32))"'
       );
     }
+
+    // Stripe: reject test keys in production
+    if (config.STRIPE_SECRET_KEY && config.STRIPE_SECRET_KEY.startsWith('sk_test_')) {
+      throw new Error(
+        'FATAL SECURITY ERROR: Production is using a Stripe TEST secret key (sk_test_*)!\n' +
+        'Use a live key (sk_live_*) in production.\n' +
+        'See https://dashboard.stripe.com/apikeys'
+      );
+    }
+    if (config.STRIPE_PUBLISHABLE_KEY && config.STRIPE_PUBLISHABLE_KEY.startsWith('pk_test_')) {
+      throw new Error(
+        'FATAL SECURITY ERROR: Production is using a Stripe TEST publishable key (pk_test_*)!\n' +
+        'Use a live key (pk_live_*) in production.\n' +
+        'See https://dashboard.stripe.com/apikeys'
+      );
+    }
+
+    // PayPal: reject sandbox credentials in production
+    if (config.PAYPAL_CLIENT_ID && config.PAYPAL_CLIENT_ID.startsWith('sb-')) {
+      throw new Error(
+        'FATAL SECURITY ERROR: Production is using a PayPal SANDBOX client ID (sb-*)!\n' +
+        'Use a live client ID in production.\n' +
+        'See https://developer.paypal.com/dashboard/applications/live'
+      );
+    }
   }
 
   // GUARD 2: Development/test should NOT use production-like secrets
@@ -302,7 +336,7 @@ function validateSecretSafety() {
   const jwtDecoded = Buffer.from(config.JWT_SECRET, 'base64').toString('utf8');
   const encKeyDecoded = Buffer.from(config.DB_APP_FIELDS_ENCRYPTION_KEY, 'base64').toString('utf8');
 
-  if ((isDev || isTest) && !jwtDecoded.includes('test') && !jwtDecoded.includes('dev')) {
+  if (!isProduction && !jwtDecoded.includes('test') && !jwtDecoded.includes('dev')) {
     console.warn(
       '⚠️  WARNING: JWT_SECRET does not contain "dev" or "test" marker.\n' +
       'If this is a production key, it should NOT be in dev/test environments.\n' +
@@ -311,7 +345,7 @@ function validateSecretSafety() {
     );
   }
 
-  if ((isDev || isTest) && !encKeyDecoded.includes('test') && !encKeyDecoded.includes('dev')) {
+  if (!isProduction && !encKeyDecoded.includes('test') && !encKeyDecoded.includes('dev')) {
     console.warn(
       '⚠️  WARNING: DB_APP_FIELDS_ENCRYPTION_KEY does not contain "dev" or "test" marker.\n' +
       'If this is a production key, it should NOT be in dev/test environments.\n' +

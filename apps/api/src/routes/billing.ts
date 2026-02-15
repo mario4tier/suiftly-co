@@ -7,9 +7,10 @@ import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import { router, protectedProcedure } from '../lib/trpc';
 import { getSuiService } from '@suiftly/database/sui-mock';
+import { getStripeService } from '@suiftly/database/stripe-mock';
 import { db, logActivity, findOrCreateCustomerWithEscrow } from '@suiftly/database';
-import { ledgerEntries, customers, billingRecords, invoiceLineItems } from '@suiftly/database/schema';
-import { eq, and, desc, sql } from 'drizzle-orm';
+import { ledgerEntries, customers, billingRecords, invoiceLineItems, customerPaymentMethods } from '@suiftly/database/schema';
+import { eq, and, desc, sql, asc } from 'drizzle-orm';
 import { SPENDING_LIMIT, INVOICE_LINE_ITEM_TYPE } from '@suiftly/shared/constants';
 import { config } from '../lib/config';
 import { buildDraftLineItems } from '../lib/invoice-formatter';
@@ -819,6 +820,346 @@ export const billingRouter = router({
       dueDate,
       invoiceId: draft.id,
       lastUpdatedAt,
+    };
+  }),
+
+  // ========================================================================
+  // Payment Method Management
+  // ========================================================================
+
+  /**
+   * Get all payment methods for the current user, ordered by priority.
+   * Escrow info is computed live from customer balance.
+   */
+  getPaymentMethods: protectedProcedure.query(async ({ ctx }) => {
+    if (!ctx.user) {
+      throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Not authenticated' });
+    }
+
+    const methods = await db.select()
+      .from(customerPaymentMethods)
+      .where(and(
+        eq(customerPaymentMethods.customerId, ctx.user.customerId),
+        eq(customerPaymentMethods.status, 'active')
+      ))
+      .orderBy(asc(customerPaymentMethods.priority));
+
+    // Enrich escrow methods with live balance
+    const enriched = await Promise.all(methods.map(async (m) => {
+      if (m.providerType === 'escrow') {
+        const customer = await db.query.customers.findFirst({
+          where: eq(customers.customerId, ctx.user!.customerId),
+        });
+        const suiService = getSuiService();
+        const account = customer ? await suiService.getAccount(customer.walletAddress) : null;
+        return {
+          id: m.id,
+          providerType: m.providerType,
+          priority: m.priority,
+          info: {
+            balanceUsdCents: account?.balanceUsdCents ?? 0,
+            walletAddress: customer?.walletAddress ?? null,
+            hasEscrowAccount: !!customer?.escrowContractId,
+          },
+        };
+      }
+
+      // Stripe / PayPal — return stored card/account info
+      return {
+        id: m.id,
+        providerType: m.providerType,
+        priority: m.priority,
+        info: m.providerConfig ?? null,
+        providerRef: m.providerRef,
+      };
+    }));
+
+    return { methods: enriched };
+  }),
+
+  /**
+   * Add a payment method.
+   * - escrow: Registers escrow as a payment method (escrow account created on first deposit)
+   * - stripe: Returns a Stripe SetupIntent clientSecret for frontend card collection
+   * - paypal: Stub — returns error
+   */
+  addPaymentMethod: protectedProcedure
+    .input(z.object({
+      providerType: z.enum(['escrow', 'stripe', 'paypal']),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.user) {
+        throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Not authenticated' });
+      }
+
+      const customerId = ctx.user.customerId;
+
+      // Check if this provider type is already active
+      const existing = await db.query.customerPaymentMethods.findFirst({
+        where: and(
+          eq(customerPaymentMethods.customerId, customerId),
+          eq(customerPaymentMethods.providerType, input.providerType),
+          eq(customerPaymentMethods.status, 'active')
+        ),
+      });
+
+      if (existing) {
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: `${input.providerType} payment method already active`,
+        });
+      }
+
+      // Get current max priority
+      const allMethods = await db.select()
+        .from(customerPaymentMethods)
+        .where(and(
+          eq(customerPaymentMethods.customerId, customerId),
+          eq(customerPaymentMethods.status, 'active')
+        ));
+      const nextPriority = allMethods.length > 0
+        ? Math.max(...allMethods.map(m => m.priority)) + 1
+        : 1;
+
+      if (input.providerType === 'escrow') {
+        // Look up customer to get escrow address if available (may be null if not deposited yet)
+        const customer = await db.query.customers.findFirst({
+          where: eq(customers.customerId, customerId),
+        });
+
+        try {
+          await db.insert(customerPaymentMethods).values({
+            customerId,
+            providerType: 'escrow',
+            status: 'active',
+            priority: nextPriority,
+            providerRef: customer?.escrowContractId ?? null,
+          });
+        } catch (err: unknown) {
+          // Partial unique index catches race between pre-check and insert
+          if (err instanceof Error && err.message.includes('uniq_customer_provider_ref_active')) {
+            throw new TRPCError({ code: 'CONFLICT', message: 'escrow payment method already active' });
+          }
+          throw err;
+        }
+
+        return { success: true, providerType: 'escrow' };
+      }
+
+      if (input.providerType === 'stripe') {
+        // Create Stripe customer if needed, then return SetupIntent
+        const customer = await db.query.customers.findFirst({
+          where: eq(customers.customerId, customerId),
+        });
+
+        if (!customer) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Customer not found' });
+        }
+
+        const stripeService = getStripeService();
+        let stripeCustomerId = customer.stripeCustomerId;
+
+        if (!stripeCustomerId) {
+          const result = await stripeService.createCustomer({
+            customerId,
+            walletAddress: customer.walletAddress,
+          });
+          stripeCustomerId = result.stripeCustomerId;
+
+          await db.update(customers)
+            .set({ stripeCustomerId })
+            .where(eq(customers.customerId, customerId));
+        }
+
+        const setupIntent = await stripeService.createSetupIntent(stripeCustomerId);
+
+        // Insert payment method row — providerRef set by webhook when card is confirmed.
+        // Store setupIntentId in providerConfig for webhook reconciliation.
+        try {
+          await db.insert(customerPaymentMethods).values({
+            customerId,
+            providerType: 'stripe',
+            status: 'active',
+            priority: nextPriority,
+            providerRef: null,
+            providerConfig: JSON.stringify({ setupIntentId: setupIntent.setupIntentId }),
+          });
+        } catch (err: unknown) {
+          if (err instanceof Error && err.message.includes('uniq_customer_provider_ref_active')) {
+            throw new TRPCError({ code: 'CONFLICT', message: 'stripe payment method already active' });
+          }
+          throw err;
+        }
+
+        return {
+          success: true,
+          providerType: 'stripe',
+          clientSecret: setupIntent.clientSecret,
+          setupIntentId: setupIntent.setupIntentId,
+        };
+      }
+
+      // PayPal — stub
+      throw new TRPCError({
+        code: 'NOT_IMPLEMENTED',
+        message: 'PayPal payment methods are not yet supported',
+      });
+    }),
+
+  /**
+   * Remove a payment method (soft delete — sets status to 'removed').
+   * Reorders remaining methods to close priority gaps.
+   */
+  removePaymentMethod: protectedProcedure
+    .input(z.object({
+      paymentMethodId: z.number(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.user) {
+        throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Not authenticated' });
+      }
+
+      const method = await db.query.customerPaymentMethods.findFirst({
+        where: and(
+          eq(customerPaymentMethods.id, input.paymentMethodId),
+          eq(customerPaymentMethods.customerId, ctx.user.customerId),
+          eq(customerPaymentMethods.status, 'active')
+        ),
+      });
+
+      if (!method) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Payment method not found' });
+      }
+
+      // Soft-delete
+      await db.update(customerPaymentMethods)
+        .set({ status: 'removed', updatedAt: new Date() })
+        .where(eq(customerPaymentMethods.id, method.id));
+
+      // If Stripe, also detach the payment method on Stripe's side
+      if (method.providerType === 'stripe' && method.providerRef) {
+        try {
+          const stripeService = getStripeService();
+          await stripeService.deletePaymentMethod(method.providerRef);
+        } catch (err) {
+          console.error('[Billing] Failed to detach Stripe payment method:', err);
+          // Non-fatal — the local record is already removed
+        }
+      }
+
+      // Reorder remaining active methods to close gaps
+      const remaining = await db.select()
+        .from(customerPaymentMethods)
+        .where(and(
+          eq(customerPaymentMethods.customerId, ctx.user.customerId),
+          eq(customerPaymentMethods.status, 'active')
+        ))
+        .orderBy(asc(customerPaymentMethods.priority));
+
+      for (let i = 0; i < remaining.length; i++) {
+        if (remaining[i].priority !== i + 1) {
+          await db.update(customerPaymentMethods)
+            .set({ priority: i + 1, updatedAt: new Date() })
+            .where(eq(customerPaymentMethods.id, remaining[i].id));
+        }
+      }
+
+      return { success: true };
+    }),
+
+  /**
+   * Reorder payment methods by setting new priority values.
+   * Input: array of { id, priority } pairs.
+   */
+  reorderPaymentMethods: protectedProcedure
+    .input(z.object({
+      order: z.array(z.object({
+        id: z.number(),
+        priority: z.number().int().positive(),
+      })),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.user) {
+        throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Not authenticated' });
+      }
+
+      // Verify all IDs belong to this customer and are active
+      const activeMethods = await db.select()
+        .from(customerPaymentMethods)
+        .where(and(
+          eq(customerPaymentMethods.customerId, ctx.user.customerId),
+          eq(customerPaymentMethods.status, 'active')
+        ));
+
+      const activeIds = new Set(activeMethods.map(m => m.id));
+
+      for (const item of input.order) {
+        if (!activeIds.has(item.id)) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: `Payment method ${item.id} not found or not active`,
+          });
+        }
+      }
+
+      // Check for duplicate priorities
+      const priorities = input.order.map(o => o.priority);
+      if (new Set(priorities).size !== priorities.length) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Duplicate priority values',
+        });
+      }
+
+      // Update priorities
+      for (const item of input.order) {
+        await db.update(customerPaymentMethods)
+          .set({ priority: item.priority, updatedAt: new Date() })
+          .where(eq(customerPaymentMethods.id, item.id));
+      }
+
+      return { success: true };
+    }),
+
+  /**
+   * Create a Stripe SetupIntent for card collection.
+   * Creates a Stripe Customer if one doesn't exist.
+   * Returns clientSecret for frontend Stripe.js confirmation.
+   */
+  createStripeSetupIntent: protectedProcedure.mutation(async ({ ctx }) => {
+    if (!ctx.user) {
+      throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Not authenticated' });
+    }
+
+    const customer = await db.query.customers.findFirst({
+      where: eq(customers.customerId, ctx.user.customerId),
+    });
+
+    if (!customer) {
+      throw new TRPCError({ code: 'NOT_FOUND', message: 'Customer not found' });
+    }
+
+    const stripeService = getStripeService();
+    let stripeCustomerId = customer.stripeCustomerId;
+
+    if (!stripeCustomerId) {
+      const result = await stripeService.createCustomer({
+        customerId: customer.customerId,
+        walletAddress: customer.walletAddress,
+      });
+      stripeCustomerId = result.stripeCustomerId;
+
+      await db.update(customers)
+        .set({ stripeCustomerId })
+        .where(eq(customers.customerId, customer.customerId));
+    }
+
+    const setupIntent = await stripeService.createSetupIntent(stripeCustomerId);
+
+    return {
+      clientSecret: setupIntent.clientSecret,
+      setupIntentId: setupIntent.setupIntentId,
+      stripeCustomerId,
     };
   }),
 });

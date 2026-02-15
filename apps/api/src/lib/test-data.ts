@@ -12,11 +12,13 @@ import {
   refreshTokens, billingRecords, escrowTransactions, usageRecords,
   haproxyRawLogs, userActivityLogs, mockSuiTransactions,
   invoicePayments, customerCredits, billingIdempotency, adminNotifications,
+  customerPaymentMethods, paymentWebhookEvents,
   systemControl,
 } from '@suiftly/database/schema';
-import { eq, sql } from 'drizzle-orm';
+import { eq, and, sql } from 'drizzle-orm';
 import { decryptSecret } from './encryption';
 import { suiMockConfig } from '@suiftly/database/sui-mock';
+import { stripeMockConfig, mockStripeService } from '@suiftly/database/stripe-mock';
 import { dbClock } from '@suiftly/shared/db-clock';
 
 // =============================================================================
@@ -175,6 +177,8 @@ export async function resetCustomerTestData(options: TestDataResetOptions = {}) 
         await tx.delete(billingIdempotency); // No customer_id column, delete all for simplicity
         await tx.delete(invoicePayments); // References billing_records, so delete first
         await tx.delete(customerCredits).where(eq(customerCredits.customerId, customerId));
+        await tx.delete(customerPaymentMethods).where(eq(customerPaymentMethods.customerId, customerId));
+        await tx.delete(paymentWebhookEvents).where(eq(paymentWebhookEvents.customerId, customerId));
 
         // Original tables
         await tx.delete(ledgerEntries).where(eq(ledgerEntries.customerId, customerId));
@@ -186,8 +190,10 @@ export async function resetCustomerTestData(options: TestDataResetOptions = {}) 
         await tx.delete(userActivityLogs).where(eq(userActivityLogs.customerId, customerId));
         await tx.delete(mockSuiTransactions).where(eq(mockSuiTransactions.customerId, customerId));
 
-        // 7. Clear Sui mock config (reset delays and failure injections)
+        // 7. Clear mock configs (reset delays and failure injections)
         suiMockConfig.clearConfig();
+        stripeMockConfig.clearConfig();
+        mockStripeService.reset();
 
         // 8. Reset customer to clean state with specified balance
         // (Keep customer to preserve wallet address association)
@@ -196,9 +202,27 @@ export async function resetCustomerTestData(options: TestDataResetOptions = {}) 
             currentBalanceUsdCents: balanceUsdCents,
             spendingLimitUsdCents: spendingLimitUsdCents,
             currentPeriodChargedUsdCents: 0,
+            stripeCustomerId: null,
             ...(clearEscrowAccount ? { escrowContractId: null } : {}),
           })
           .where(eq(customers.customerId, customerId));
+
+        // 9. Auto-add escrow payment method when balance > 0
+        // (mirrors /test/wallet/deposit behavior — tests need a payment method to charge)
+        if (balanceUsdCents > 0 && !clearEscrowAccount) {
+          const updatedCustomer = await tx.query.customers.findFirst({
+            where: eq(customers.customerId, customerId),
+          });
+          if (updatedCustomer?.escrowContractId) {
+            await tx.insert(customerPaymentMethods).values({
+              customerId,
+              providerType: 'escrow',
+              status: 'active',
+              priority: 1,
+              providerRef: updatedCustomer.escrowContractId,
+            });
+          }
+        }
 
         console.log(`[TEST DATA] Reset customer ${customerId}:`);
         console.log(`  - Deleted ${deletedServices.length} service instances`);
@@ -617,13 +641,16 @@ export async function getServiceInstanceTestData(
   }
 
   const service = await db.query.serviceInstances.findFirst({
-    where: eq(serviceInstances.customerId, customer.customerId),
+    where: and(
+      eq(serviceInstances.customerId, customer.customerId),
+      eq(serviceInstances.serviceType, serviceType as 'seal' | 'grpc' | 'graphql'),
+    ),
   });
 
   if (!service) {
     return {
       found: false,
-      message: `Service not found for customer ${customer.customerId}`,
+      message: `Service '${serviceType}' not found for customer ${customer.customerId}`,
     };
   }
 

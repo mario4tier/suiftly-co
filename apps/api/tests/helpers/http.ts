@@ -263,6 +263,7 @@ export async function subscribeAndEnable(
   accessToken: string
 ): Promise<{ paymentPending: boolean; tier: string; [key: string]: any }> {
   // Subscribe to service
+  // Subscription is allowed without payment — creates service + API key
   const subscribeResult = await trpcMutation<any>(
     'services.subscribe',
     { serviceType, tier },
@@ -283,11 +284,6 @@ export async function subscribeAndEnable(
     throw new Error(`Subscribe returned wrong tier: expected ${tier}, got ${data.tier}`);
   }
 
-  // Validate: Payment should have succeeded (sufficient balance expected)
-  if (data.paymentPending) {
-    throw new Error(`Subscribe payment pending - ensure sufficient balance before calling subscribeAndEnable`);
-  }
-
   // Validate: Service should start in DISABLED state (business rule)
   // New subscriptions must be manually enabled by the user
   if (data.state !== 'disabled') {
@@ -297,7 +293,22 @@ export async function subscribeAndEnable(
     throw new Error(`Subscribe should return isUserEnabled=false, got: ${data.isUserEnabled}`);
   }
 
+  // If payment is pending (no payment method or insufficient funds at subscribe time),
+  // add escrow payment method so that enable can retry the pending invoice
+  if (data.paymentPending) {
+    const addMethodResult = await trpcMutation<any>(
+      'billing.addPaymentMethod',
+      { providerType: 'escrow' },
+      accessToken
+    );
+    // Ignore CONFLICT (already exists) — only fail on unexpected errors
+    if (addMethodResult.error && addMethodResult.error.data?.code !== 'CONFLICT') {
+      throw new Error(`Failed to add escrow payment method: ${JSON.stringify(addMethodResult.error)}`);
+    }
+  }
+
   // Enable the service
+  // If there was a pending invoice, toggleService retries payment via provider chain
   const toggleResult = await trpcMutation<any>(
     'services.toggleService',
     { serviceType, enabled: true },

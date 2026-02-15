@@ -27,6 +27,7 @@
 import { db, adminNotifications } from '@suiftly/database';
 import { runPeriodicBillingJob } from '@suiftly/database/billing';
 import { getSuiService } from '@suiftly/database/sui-mock';
+import { getStripeService } from '@suiftly/database/stripe-mock';
 import { getMockClockState, setMockClockState } from '@suiftly/database/test-kv';
 import { dbClockProvider } from '@suiftly/shared/db-clock';
 import { reconcilePayments } from './reconcile-payments.js';
@@ -538,7 +539,7 @@ async function executeSyncAll(): Promise<void> {
   await dbClockProvider.syncFromTestKv();
 
   const clock = dbClockProvider.getClock();
-  const suiService = getSuiService();
+  const paymentServices = { suiService: getSuiService(), stripeService: getStripeService() };
 
   const billingConfig = {
     clock,
@@ -548,7 +549,7 @@ async function executeSyncAll(): Promise<void> {
     usageChargeThresholdCents: 500, // $5 threshold
   };
 
-  const result = await runPeriodicBillingJob(db, billingConfig, suiService);
+  const result = await runPeriodicBillingJob(db, billingConfig, paymentServices);
 
   if (result.errors.length > 0) {
     console.warn(`[SYNC] sync-all completed with errors: ${result.errors.join(', ')}`);
