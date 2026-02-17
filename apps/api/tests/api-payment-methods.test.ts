@@ -64,15 +64,8 @@ describe('API: Payment Method CRUD', () => {
     });
 
     it('should return escrow method with balance info', async () => {
-      // Setup: create escrow account + add escrow payment method
+      // ensureTestBalance auto-creates escrow payment method via /test/wallet/deposit
       await ensureTestBalance(100, { walletAddress: TEST_WALLET });
-
-      const addResult = await trpcMutation<any>(
-        'billing.addPaymentMethod',
-        { providerType: 'escrow' },
-        accessToken
-      );
-      expect(addResult.result?.data?.success).toBe(true);
 
       // Query methods
       const result = await trpcQuery<any>(
@@ -124,8 +117,22 @@ describe('API: Payment Method CRUD', () => {
   // =========================================================================
   describe('addPaymentMethod - escrow', () => {
     it('should succeed when escrow account exists', async () => {
-      // Create escrow account via deposit
+      // Create escrow account via deposit (this auto-creates an escrow payment method)
       await ensureTestBalance(100, { walletAddress: TEST_WALLET });
+
+      // Remove the auto-created escrow payment method so we can test addPaymentMethod explicitly
+      const autoCreated = await db.query.customerPaymentMethods.findFirst({
+        where: and(
+          eq(customerPaymentMethods.customerId, customerId),
+          eq(customerPaymentMethods.providerType, 'escrow'),
+          eq(customerPaymentMethods.status, 'active')
+        ),
+      });
+      if (autoCreated) {
+        await db.update(customerPaymentMethods)
+          .set({ status: 'removed' })
+          .where(eq(customerPaymentMethods.id, autoCreated.id));
+      }
 
       const result = await trpcMutation<any>(
         'billing.addPaymentMethod',
