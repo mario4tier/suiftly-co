@@ -33,6 +33,6 @@
   "devDependencies": {
     "@types/pg": "^8.11.10",
     "drizzle-kit": "^0.31.6",
-    "vitest": "^2.0.0"
+    "vitest": "^4.0.0"
   }
 }

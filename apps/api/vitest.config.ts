@@ -10,10 +10,7 @@ export default defineConfig({
     // Run tests sequentially to avoid database conflicts (like E2E tests)
     // All tests share the same database and may use the same wallet addresses
     pool: 'forks',
-    poolOptions: {
-      forks: {
-        singleFork: true,
-      },
-    },
+    maxWorkers: 1,
+    isolate: false,
   },
 });

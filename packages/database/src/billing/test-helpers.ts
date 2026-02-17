@@ -53,9 +53,11 @@ export async function ensureEscrowPaymentMethod(
 ): Promise<void> {
   await db.execute(sql`
     INSERT INTO customer_payment_methods (customer_id, provider_type, status, priority)
-    VALUES (${customerId}, 'escrow', 'active', 1)
-    ON CONFLICT (customer_id, provider_type) WHERE status = 'active'
-    DO NOTHING
+    SELECT ${customerId}, 'escrow', 'active', 1
+    WHERE NOT EXISTS (
+      SELECT 1 FROM customer_payment_methods
+      WHERE customer_id = ${customerId} AND provider_type = 'escrow' AND status = 'active'
+    )
   `);
 }
 
