@@ -79,9 +79,9 @@ test.describe('Payment Methods', () => {
     await expect(methodRows.first()).toContainText('Credit Card');
   });
 
-  test('should remove method from list', async ({ page }) => {
-    await addCryptoPayment(page);
-    await expect(page.locator('[data-testid="payment-method-row"]').filter({ hasText: 'Crypto' })).toBeVisible();
+  test('should remove credit card from list', async ({ page }) => {
+    await addCreditCardPayment(page);
+    await expect(page.locator('[data-testid="payment-method-row"]').filter({ hasText: 'Credit Card' })).toBeVisible();
 
     // Click remove button
     const removeButton = page.locator('button[aria-label="Remove"]');
@@ -91,11 +91,16 @@ test.describe('Payment Methods', () => {
     // Should show empty state again
     await expect(page.locator('text=No payment methods configured yet.')).toBeVisible();
 
-    // Escrow card should be hidden again
-    await expect(page.locator('h2:has-text("Suiftly Escrow Account")')).not.toBeVisible();
+    // Add Credit Card button should reappear
+    await expect(page.locator('[data-testid="add-credit-card"]')).toBeVisible();
+  });
 
-    // Add Crypto Payment button should reappear
-    await expect(page.locator('[data-testid="add-crypto-payment"]')).toBeVisible();
+  test('should not show remove button for escrow method', async ({ page }) => {
+    await addCryptoPayment(page);
+    await expect(page.locator('[data-testid="payment-method-row"]').filter({ hasText: 'Crypto' })).toBeVisible();
+
+    // No remove button should be visible for escrow
+    await expect(page.locator('button[aria-label="Remove"]')).not.toBeVisible();
   });
 
   test('should show escrow balance in payment method list', async ({ page }) => {

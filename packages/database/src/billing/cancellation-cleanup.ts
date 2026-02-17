@@ -13,7 +13,7 @@
  * Run frequency: Hourly (or more frequently for timely cleanup)
  */
 
-import { eq, and, lte, sql } from 'drizzle-orm';
+import { eq, and, lte, sql, inArray } from 'drizzle-orm';
 import type { Database, DatabaseOrTransaction } from '../db';
 import {
   serviceInstances,
@@ -176,11 +176,12 @@ async function processServiceDeletion(
         .from(sealKeys)
         .where(eq(sealKeys.customerId, customerId));
 
-      // Delete packages for each seal key
-      for (const key of customerSealKeys) {
+      // Delete packages for all seal keys in one query
+      if (customerSealKeys.length > 0) {
+        const sealKeyIds = customerSealKeys.map(k => k.sealKeyId);
         await tx
           .delete(sealPackages)
-          .where(eq(sealPackages.sealKeyId, key.sealKeyId));
+          .where(inArray(sealPackages.sealKeyId, sealKeyIds));
       }
 
       // Delete seal keys

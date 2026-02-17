@@ -927,12 +927,22 @@ export const billingRouter = router({
           where: eq(customers.customerId, customerId),
         });
 
+        // Escrow always gets top priority — bump existing methods down in one atomic update
+        if (allMethods.length > 0) {
+          await db.update(customerPaymentMethods)
+            .set({ priority: sql`${customerPaymentMethods.priority} + 1`, updatedAt: new Date() })
+            .where(and(
+              eq(customerPaymentMethods.customerId, customerId),
+              eq(customerPaymentMethods.status, 'active')
+            ));
+        }
+
         try {
           await db.insert(customerPaymentMethods).values({
             customerId,
             providerType: 'escrow',
             status: 'active',
-            priority: nextPriority,
+            priority: 1,
             providerRef: customer?.escrowContractId ?? null,
           });
         } catch (err: unknown) {

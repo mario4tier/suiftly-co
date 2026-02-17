@@ -300,82 +300,6 @@ function BillingPage() {
           </div>
         )}
 
-      {/* How It Works - Collapsible */}
-      <Card className="p-4 mb-6">
-        <button
-          onClick={() => setHowItWorksExpanded(!howItWorksExpanded)}
-          className="w-full flex items-center justify-between text-left"
-        >
-          <h3 className="text-base font-semibold">How It Works?</h3>
-          {howItWorksExpanded ? <ChevronDown className="w-5 h-5" /> : <ChevronRight className="w-5 h-5" />}
-        </button>
-
-        {howItWorksExpanded && (
-          <div className="mt-6 pt-4 border-t space-y-4">
-            {/* Escrow Explanation */}
-            <div className="flex items-start gap-3 p-4 bg-blue-50 border-l-4 border-blue-600 rounded-r">
-              <Shield className="w-5 h-5 text-blue-600 mt-0.5 flex-shrink-0" />
-              <p className="text-sm text-gray-700">
-                <span className="font-semibold">Sui on-chain protection:</span> You deposit to an escrow smart contract. Suiftly charges for usage without accessing your wallet and can't exceed your spending limit.
-              </p>
-            </div>
-
-            {/* Escrow Account Flow Diagram - Horizontal */}
-            <div className="p-6 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg border border-blue-200">
-              <div className="flex items-center justify-between gap-4 max-w-4xl mx-auto">
-                {/* User */}
-                <div className="flex flex-col items-center gap-2">
-                  <div className="w-16 h-16 rounded-full bg-blue-600 flex items-center justify-center shadow-lg">
-                    <User className="w-8 h-8 text-white" />
-                  </div>
-                  <div className="text-sm font-semibold text-gray-700">You</div>
-                </div>
-
-                {/* Arrows: Deposit/Withdraw + Control */}
-                <div className="flex flex-col gap-1">
-                  <div className="flex items-center gap-1">
-                    <ArrowUpDown className="w-5 h-5 text-green-600" />
-                    <span className="text-xs text-gray-600 font-medium">Deposit / Withdraw</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <Shield className="w-5 h-5 text-blue-600" />
-                    <span className="text-xs text-gray-600 font-medium">Control Spending Limit (28-days)</span>
-                  </div>
-                </div>
-
-                {/* Escrow Account */}
-                <div className="flex flex-col items-center gap-2">
-                  <div className="w-24 h-20 rounded-lg bg-gradient-to-br from-indigo-600 to-purple-600 flex items-center justify-center shadow-xl">
-                    <div className="text-center">
-                      <Shield className="w-10 h-10 text-white mx-auto" />
-                      <div className="text-xs text-white font-semibold mt-1">Escrow</div>
-                    </div>
-                  </div>
-                  <div className="text-sm font-semibold text-gray-700 text-center">
-                    Suiftly Escrow Account
-                    <div className="text-xs text-gray-500 font-normal">(On-Chain)</div>
-                  </div>
-                </div>
-
-                {/* Arrows: Charge/Refund */}
-                <div className="flex items-center gap-1">
-                  <ArrowDownUp className="w-5 h-5 text-orange-600" />
-                  <span className="text-xs text-gray-600 font-medium">Charge / Refund</span>
-                </div>
-
-                {/* Suiftly */}
-                <div className="flex flex-col items-center gap-2">
-                  <div className="w-16 h-16 rounded-full bg-indigo-600 flex items-center justify-center shadow-lg">
-                    <Building2 className="w-8 h-8 text-white" />
-                  </div>
-                  <div className="text-sm font-semibold text-gray-700">Suiftly</div>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-      </Card>
-
       {/* Payment Methods */}
       <Card className="p-6 mb-6">
         <h2 className="text-lg font-semibold mb-2">Payment Methods</h2>
@@ -384,43 +308,52 @@ function BillingPage() {
         </p>
 
         {/* Inline add buttons — only show for methods not yet added */}
-        <div className="flex flex-wrap gap-2 mb-4">
+        <div className="flex flex-wrap gap-2 mb-4 items-end">
           {!hasEscrowMethod && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => handleAddPaymentMethod('escrow')}
-              disabled={addPaymentMethodMutation.isPending}
-              data-testid="add-crypto-payment"
-            >
-              <Shield className="w-4 h-4 mr-1.5 text-blue-600" />
-              Add Crypto Payment
-            </Button>
-          )}
-          {!hasStripeMethod && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => handleAddPaymentMethod('stripe')}
-              disabled={addPaymentMethodMutation.isPending}
-              data-testid="add-credit-card"
-            >
-              <CreditCard className="w-4 h-4 mr-1.5 text-purple-600" />
-              Add Credit Card
-            </Button>
+            <div className="flex flex-col items-center gap-0.5">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handleAddPaymentMethod('escrow')}
+                disabled={addPaymentMethodMutation.isPending}
+                data-testid="add-crypto-payment"
+              >
+                <Shield className="w-4 h-4 mr-1.5 text-blue-600" />
+                Add Crypto Payment
+              </Button>
+              <span className="text-[10px] text-gray-400">Powered by Sui</span>
+            </div>
           )}
           {!hasPaypalMethod && (
-            <Button
-              variant="outline"
-              size="sm"
-              disabled
-              data-testid="add-paypal"
-              title="Coming soon"
-            >
-              <Wallet className="w-4 h-4 mr-1.5 text-gray-400" />
-              Add PayPal
-              <span className="ml-1 text-xs text-gray-400">(soon)</span>
-            </Button>
+            <div className="flex flex-col items-center gap-0.5">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled
+                data-testid="add-paypal"
+                title="Coming soon"
+              >
+                <Wallet className="w-4 h-4 mr-1.5 text-gray-400" />
+                Add PayPal
+                <span className="ml-1 text-xs text-gray-400">(soon)</span>
+              </Button>
+              <span className="text-[10px] invisible">placeholder</span>
+            </div>
+          )}
+          {!hasStripeMethod && (
+            <div className="flex flex-col items-center gap-0.5">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handleAddPaymentMethod('stripe')}
+                disabled={addPaymentMethodMutation.isPending}
+                data-testid="add-credit-card"
+              >
+                <CreditCard className="w-4 h-4 mr-1.5 text-purple-600" />
+                Add Credit Card
+              </Button>
+              <span className="text-[10px] text-gray-400">Powered by Stripe</span>
+            </div>
           )}
         </div>
 
@@ -488,15 +421,21 @@ function BillingPage() {
                   >
                     <ArrowDown className="w-4 h-4" />
                   </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => handleRemovePaymentMethod(method.id)}
-                    aria-label="Remove"
-                    className="text-red-500 hover:text-red-700"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </Button>
+                  {method.providerType !== 'escrow' ? (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleRemovePaymentMethod(method.id)}
+                      aria-label="Remove"
+                      className="text-red-500 hover:text-red-700"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
+                  ) : (
+                    <Button variant="ghost" size="sm" className="invisible">
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
+                  )}
                 </div>
               </div>
             ))}
@@ -549,6 +488,82 @@ function BillingPage() {
               ? 'Note: Escrow account will be created on your first deposit'
               : 'Note: Using mock wallet for testing. Real Sui wallet integration coming soon.'}
           </p>
+
+          {/* How It Works - Collapsible */}
+          <div className="mt-6 pt-4 border-t">
+            <button
+              onClick={() => setHowItWorksExpanded(!howItWorksExpanded)}
+              className="w-full flex items-center justify-between text-left"
+            >
+              <h3 className="text-base font-semibold">How It Works?</h3>
+              {howItWorksExpanded ? <ChevronDown className="w-5 h-5" /> : <ChevronRight className="w-5 h-5" />}
+            </button>
+
+            {howItWorksExpanded && (
+              <div className="mt-4 space-y-4">
+                {/* Escrow Explanation */}
+                <div className="flex items-start gap-3 p-4 bg-blue-50 border-l-4 border-blue-600 rounded-r">
+                  <Shield className="w-5 h-5 text-blue-600 mt-0.5 flex-shrink-0" />
+                  <p className="text-sm text-gray-700">
+                    <span className="font-semibold">Sui on-chain protection:</span> You deposit to an escrow smart contract. Suiftly charges for usage without accessing your wallet and can't exceed your spending limit.
+                  </p>
+                </div>
+
+                {/* Escrow Account Flow Diagram - Horizontal */}
+                <div className="p-6 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg border border-blue-200">
+                  <div className="flex items-center justify-between gap-4 max-w-4xl mx-auto">
+                    {/* User */}
+                    <div className="flex flex-col items-center gap-2">
+                      <div className="w-16 h-16 rounded-full bg-blue-600 flex items-center justify-center shadow-lg">
+                        <User className="w-8 h-8 text-white" />
+                      </div>
+                      <div className="text-sm font-semibold text-gray-700">You</div>
+                    </div>
+
+                    {/* Arrows: Deposit/Withdraw + Control */}
+                    <div className="flex flex-col gap-1">
+                      <div className="flex items-center gap-1">
+                        <ArrowUpDown className="w-5 h-5 text-green-600" />
+                        <span className="text-xs text-gray-600 font-medium">Deposit / Withdraw</span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <Shield className="w-5 h-5 text-blue-600" />
+                        <span className="text-xs text-gray-600 font-medium">Control Spending Limit (28-days)</span>
+                      </div>
+                    </div>
+
+                    {/* Escrow Account */}
+                    <div className="flex flex-col items-center gap-2">
+                      <div className="w-24 h-20 rounded-lg bg-gradient-to-br from-indigo-600 to-purple-600 flex items-center justify-center shadow-xl">
+                        <div className="text-center">
+                          <Shield className="w-10 h-10 text-white mx-auto" />
+                          <div className="text-xs text-white font-semibold mt-1">Escrow</div>
+                        </div>
+                      </div>
+                      <div className="text-sm font-semibold text-gray-700 text-center">
+                        Suiftly Escrow Account
+                        <div className="text-xs text-gray-500 font-normal">(On-Chain)</div>
+                      </div>
+                    </div>
+
+                    {/* Arrows: Charge/Refund */}
+                    <div className="flex items-center gap-1">
+                      <ArrowDownUp className="w-5 h-5 text-orange-600" />
+                      <span className="text-xs text-gray-600 font-medium">Charge / Refund</span>
+                    </div>
+
+                    {/* Suiftly */}
+                    <div className="flex flex-col items-center gap-2">
+                      <div className="w-16 h-16 rounded-full bg-indigo-600 flex items-center justify-center shadow-lg">
+                        <Building2 className="w-8 h-8 text-white" />
+                      </div>
+                      <div className="text-sm font-semibold text-gray-700">Suiftly</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
         </Card>
       )}
 

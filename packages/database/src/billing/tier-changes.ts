@@ -10,7 +10,7 @@
  * - Idempotent operations where possible
  */
 
-import { eq, and, lte, gt, isNotNull, sql } from 'drizzle-orm';
+import { eq, and, lte, gt, isNotNull, sql, inArray } from 'drizzle-orm';
 import type { Database } from '../db';
 import { serviceInstances, serviceCancellationHistory, billingRecords, invoiceLineItems } from '../schema';
 import { withCustomerLock, type LockedTransaction } from './locking';
@@ -1263,7 +1263,8 @@ export async function processScheduledCancellations(
   // Calculate cancellation effective date (7 days from now)
   const cancellationEffectiveAt = clock.addDays(7);
 
-  for (const service of cancelledServices) {
+  if (cancelledServices.length > 0) {
+    const instanceIds = cancelledServices.map(s => s.instanceId);
     await tx
       .update(serviceInstances)
       .set({
@@ -1272,7 +1273,7 @@ export async function processScheduledCancellations(
         cancellationScheduledFor: null,
         cancellationEffectiveAt,
       })
-      .where(eq(serviceInstances.instanceId, service.instanceId));
+      .where(inArray(serviceInstances.instanceId, instanceIds));
   }
 
   return cancelledServices.length;

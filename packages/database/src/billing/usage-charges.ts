@@ -602,9 +602,10 @@ export async function syncUsageToDraft(
   const now = clock.now();
 
   let totalUsageChargesCents = 0;
-  let lineItemsCount = 0;
 
-  // 6. Process each active service - always create line item for transparency
+  // 6. Process each active service - collect line items for bulk insert
+  const lineItemValues: (typeof invoiceLineItems.$inferInsert)[] = [];
+
   for (const service of activeServices) {
     const serviceTypeName = service.serviceType as ServiceType;
     const serviceTypeNum = SERVICE_TYPE_NUMBER[serviceTypeName];
@@ -630,7 +631,7 @@ export async function syncUsageToDraft(
     // Unit price: cents per 1000 requests (stored for precision)
     const unitPriceCents = pricePer1000;
 
-    await tx.insert(invoiceLineItems).values({
+    lineItemValues.push({
       billingRecordId: invoiceId,
       itemType: INVOICE_LINE_ITEM_TYPE.REQUESTS,
       serviceType: serviceTypeName,
@@ -640,8 +641,13 @@ export async function syncUsageToDraft(
     });
 
     totalUsageChargesCents += chargeCents;
-    lineItemsCount++;
   }
+
+  // Bulk insert all line items in one query
+  if (lineItemValues.length > 0) {
+    await tx.insert(invoiceLineItems).values(lineItemValues);
+  }
+  const lineItemsCount = lineItemValues.length;
 
   // 10. Update invoice total if there was a change
   const usageDelta = totalUsageChargesCents - existingUsageTotal;

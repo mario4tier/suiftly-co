@@ -89,12 +89,12 @@ export async function initializeFrontendConfig(): Promise<void> {
     // Insert missing keys
     console.log(`[Config Init] Inserting ${missingKeys.length} missing config keys:`, missingKeys);
 
-    for (const key of missingKeys) {
-      await db.insert(configGlobal).values({
+    await db.insert(configGlobal).values(
+      missingKeys.map(key => ({
         key,
         value: DEFAULT_FRONTEND_CONFIG[key],
-      }).onConflictDoNothing();
-    }
+      }))
+    ).onConflictDoNothing();
 
     console.log('[Config Init] Frontend configuration initialized successfully ✓');
   } catch (error) {
