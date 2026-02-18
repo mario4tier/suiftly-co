@@ -3,6 +3,7 @@ import { bytea } from '../types/bytea';
 import { relations, sql } from 'drizzle-orm';
 import { customers } from './customers';
 import { serviceInstances } from './services';
+import { sealOpTypeEnum, sealOpStatusEnum } from './enums';
 import { FIELD_LIMITS } from '@suiftly/shared/constants';
 
 /**
@@ -174,8 +175,8 @@ export const sealRegistrationOps = pgTable('seal_registration_ops', {
   network: text('network').notNull(),  // 'mainnet' | 'testnet'
 
   // Operation type and status
-  opType: text('op_type').notNull(),   // 'register' | 'update'
-  status: text('status').notNull(),    // 'queued' | 'processing' | 'completed'
+  opType: sealOpTypeEnum('op_type').notNull(),
+  status: sealOpStatusEnum('status').notNull(),
 
   // Package version at the time this op was created
   // Used to detect if more changes occurred during processing

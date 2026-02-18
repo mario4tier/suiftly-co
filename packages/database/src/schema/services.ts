@@ -46,6 +46,9 @@ export const serviceInstances = pgTable('service_instances', {
   // Currently only sma (seal mainnet api) vault is used
   smaConfigChangeVaultSeq: integer('sma_config_change_vault_seq').default(0),
 
+  // General-purpose update timestamp for cache invalidation and delta syncs
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+
   // Control-plane enabled: true once service has been provisioned to gateways
   // Transitions to true when: isUserEnabled=true AND has seal key with package
   // Once true, stays true (gateways keep config even if user disables service)

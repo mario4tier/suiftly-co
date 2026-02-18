@@ -15,7 +15,7 @@
  * - Real Sui service implementation ignores these tables entirely
  */
 
-import { pgTable, bigserial, integer, varchar, bigint, timestamp, text } from 'drizzle-orm/pg-core';
+import { pgTable, bigserial, integer, varchar, bigint, timestamp, text, boolean } from 'drizzle-orm/pg-core';
 import { customers } from './customers';
 
 /**
@@ -50,7 +50,7 @@ export const mockSuiTransactions = pgTable('mock_sui_transactions', {
   description: text('description'),
 
   /** Whether transaction succeeded */
-  success: varchar('success', { length: 5 }).notNull().default('true').$type<'true' | 'false'>(),
+  success: boolean('success').notNull().default(true),
 
   /** Error message if failed */
   errorMessage: text('error_message'),

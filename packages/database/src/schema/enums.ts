@@ -68,6 +68,56 @@ export const billingTypeEnum = pgEnum('billing_type', [
   'scheduled'  // Monthly billing (from DRAFT) - retry until paid
 ]);
 
+// Billing record type (what kind of billing record/invoice this is)
+// Narrower than transactionTypeEnum — invoices are charges or credits, never deposits/withdrawals
+export const billingRecordTypeEnum = pgEnum('billing_record_type', [
+  'charge',    // Customer owes money (subscription, usage, upgrades)
+  'credit'     // Credit note (refund, adjustment)
+]);
+
+// Payment source type (where a payment came from)
+export const paymentSourceTypeEnum = pgEnum('payment_source_type', [
+  'credit',    // Applied from customer credits
+  'escrow',    // Paid from on-chain escrow
+  'stripe',    // Paid via Stripe
+  'paypal'     // Paid via PayPal
+]);
+
+// Payment provider type (payment method provider)
+export const paymentProviderTypeEnum = pgEnum('payment_provider_type', [
+  'escrow',    // On-chain escrow
+  'stripe',    // Stripe credit card
+  'paypal'     // PayPal billing agreement
+]);
+
+// Payment method status
+export const paymentMethodStatusEnum = pgEnum('payment_method_status', [
+  'active',     // Available for use
+  'suspended',  // Temporarily disabled
+  'removed'     // Soft-deleted
+]);
+
+// Credit reason (why a credit was issued)
+export const creditReasonEnum = pgEnum('credit_reason', [
+  'outage',          // Service outage compensation
+  'promo',           // Promotional credit
+  'goodwill',        // Customer goodwill gesture
+  'reconciliation'   // Billing reconciliation adjustment
+]);
+
+// Seal registration operation type
+export const sealOpTypeEnum = pgEnum('seal_op_type', [
+  'register',  // Initial KeyServer object creation
+  'update'     // Re-registration when packages change
+]);
+
+// Seal registration operation status
+export const sealOpStatusEnum = pgEnum('seal_op_status', [
+  'queued',      // Waiting to be processed
+  'processing',  // Currently being processed by GM
+  'completed'    // Successfully completed
+]);
+
 // Invoice line item types (semantic categorization of invoice charges)
 // Used for structured billing display instead of string descriptions
 export const invoiceLineItemTypeEnum = pgEnum('invoice_line_item_type', [
@@ -107,3 +157,10 @@ export type TransactionType = typeof transactionTypeEnum.enumValues[number];
 export type BillingStatus = typeof billingStatusEnum.enumValues[number];
 export type BillingType = typeof billingTypeEnum.enumValues[number];
 export type InvoiceLineItemType = typeof invoiceLineItemTypeEnum.enumValues[number];
+export type BillingRecordType = typeof billingRecordTypeEnum.enumValues[number];
+export type PaymentSourceType = typeof paymentSourceTypeEnum.enumValues[number];
+export type PaymentProviderType = typeof paymentProviderTypeEnum.enumValues[number];
+export type PaymentMethodStatus = typeof paymentMethodStatusEnum.enumValues[number];
+export type CreditReason = typeof creditReasonEnum.enumValues[number];
+export type SealOpType = typeof sealOpTypeEnum.enumValues[number];
+export type SealOpStatus = typeof sealOpStatusEnum.enumValues[number];

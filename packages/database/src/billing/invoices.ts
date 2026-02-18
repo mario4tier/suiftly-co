@@ -35,7 +35,7 @@ export interface InvoiceLineItem {
 export interface CreateInvoiceParams {
   customerId: number;
   amountUsdCents: number;
-  type: 'charge' | 'credit' | 'deposit' | 'withdraw';
+  type: 'charge' | 'credit';
   status: 'draft' | 'pending';
   description: string; // Kept for logging/debugging
   billingPeriodStart?: Date;

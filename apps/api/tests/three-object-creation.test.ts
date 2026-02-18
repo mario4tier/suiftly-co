@@ -306,14 +306,14 @@ describe('Three-Object Creation Pattern', () => {
       expect(trackingObjects).toHaveLength(2);
 
       // Initially not reconciled
-      expect(trackingObjects[0].reconciled).toBe('false');
-      expect(trackingObjects[1].reconciled).toBe('false');
+      expect(trackingObjects[0].reconciled).toBe(false);
+      expect(trackingObjects[1].reconciled).toBe(false);
 
       // Simulate reconciliation process
       for (const tracking of trackingObjects) {
         await db.update(mockTrackingObjects)
           .set({
-            reconciled: 'true',
+            reconciled: true,
             reconciledAt: new Date(),
           })
           .where(eq(mockTrackingObjects.id, tracking.id));
@@ -324,9 +324,9 @@ describe('Three-Object Creation Pattern', () => {
         .from(mockTrackingObjects)
         .where(eq(mockTrackingObjects.userAddress, testWalletAddress));
 
-      expect(reconciledObjects[0].reconciled).toBe('true');
+      expect(reconciledObjects[0].reconciled).toBe(true);
       expect(reconciledObjects[0].reconciledAt).not.toBeNull();
-      expect(reconciledObjects[1].reconciled).toBe('true');
+      expect(reconciledObjects[1].reconciled).toBe(true);
       expect(reconciledObjects[1].reconciledAt).not.toBeNull();
     });
   });

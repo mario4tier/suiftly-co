@@ -1,5 +1,5 @@
 {
-  "id": "0de8fe04-1085-4b4f-9f59-e109bcc2da8a",
+  "id": "3cff9090-ddab-4d6c-918f-72aa49a3ce3b",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -547,7 +547,8 @@
         },
         "reason": {
           "name": "reason",
-          "type": "varchar(50)",
+          "type": "credit_reason",
+          "typeSchema": "public",
           "primaryKey": false,
           "notNull": true
         },
@@ -658,13 +659,15 @@
         },
         "provider_type": {
           "name": "provider_type",
-          "type": "varchar(20)",
+          "type": "payment_provider_type",
+          "typeSchema": "public",
           "primaryKey": false,
           "notNull": true
         },
         "status": {
           "name": "status",
-          "type": "varchar(20)",
+          "type": "payment_method_status",
+          "typeSchema": "public",
           "primaryKey": false,
           "notNull": true,
           "default": "'active'"
@@ -871,7 +874,8 @@
         },
         "source_type": {
           "name": "source_type",
-          "type": "varchar(20)",
+          "type": "payment_source_type",
+          "typeSchema": "public",
           "primaryKey": false,
           "notNull": true
         },
@@ -1036,7 +1040,8 @@
         },
         "provider_type": {
           "name": "provider_type",
-          "type": "varchar(20)",
+          "type": "payment_provider_type",
+          "typeSchema": "public",
           "primaryKey": false,
           "notNull": true
         },
@@ -1440,7 +1445,7 @@
         },
         "type": {
           "name": "type",
-          "type": "transaction_type",
+          "type": "billing_record_type",
           "typeSchema": "public",
           "primaryKey": false,
           "notNull": true
@@ -1960,6 +1965,13 @@
           "notNull": false,
           "default": 0
         },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
         "cp_enabled": {
           "name": "cp_enabled",
           "type": "boolean",
@@ -2472,13 +2484,15 @@
         },
         "op_type": {
           "name": "op_type",
-          "type": "text",
+          "type": "seal_op_type",
+          "typeSchema": "public",
           "primaryKey": false,
           "notNull": true
         },
         "status": {
           "name": "status",
-          "type": "text",
+          "type": "seal_op_status",
+          "typeSchema": "public",
           "primaryKey": false,
           "notNull": true
         },
@@ -3659,10 +3673,10 @@
         },
         "success": {
           "name": "success",
-          "type": "varchar(5)",
+          "type": "boolean",
           "primaryKey": false,
           "notNull": true,
-          "default": "'true'"
+          "default": true
         },
         "error_message": {
           "name": "error_message",
@@ -3773,10 +3787,10 @@
         },
         "reconciled": {
           "name": "reconciled",
-          "type": "varchar(5)",
+          "type": "boolean",
           "primaryKey": false,
           "notNull": true,
-          "default": "'false'"
+          "default": false
         },
         "reconciled_at": {
           "name": "reconciled_at",
@@ -3835,6 +3849,14 @@
     }
   },
   "enums": {
+    "public.billing_record_type": {
+      "name": "billing_record_type",
+      "schema": "public",
+      "values": [
+        "charge",
+        "credit"
+      ]
+    },
     "public.billing_status": {
       "name": "billing_status",
       "schema": "public",
@@ -3852,6 +3874,16 @@
       "values": [
         "immediate",
         "scheduled"
+      ]
+    },
+    "public.credit_reason": {
+      "name": "credit_reason",
+      "schema": "public",
+      "values": [
+        "outage",
+        "promo",
+        "goodwill",
+        "reconciliation"
       ]
     },
     "public.customer_status": {
@@ -3878,6 +3910,51 @@
         "extra_packages",
         "credit",
         "tax"
+      ]
+    },
+    "public.payment_method_status": {
+      "name": "payment_method_status",
+      "schema": "public",
+      "values": [
+        "active",
+        "suspended",
+        "removed"
+      ]
+    },
+    "public.payment_provider_type": {
+      "name": "payment_provider_type",
+      "schema": "public",
+      "values": [
+        "escrow",
+        "stripe",
+        "paypal"
+      ]
+    },
+    "public.payment_source_type": {
+      "name": "payment_source_type",
+      "schema": "public",
+      "values": [
+        "credit",
+        "escrow",
+        "stripe",
+        "paypal"
+      ]
+    },
+    "public.seal_op_status": {
+      "name": "seal_op_status",
+      "schema": "public",
+      "values": [
+        "queued",
+        "processing",
+        "completed"
+      ]
+    },
+    "public.seal_op_type": {
+      "name": "seal_op_type",
+      "schema": "public",
+      "values": [
+        "register",
+        "update"
       ]
     },
     "public.service_state": {

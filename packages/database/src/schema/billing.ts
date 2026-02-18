@@ -2,7 +2,7 @@ import { pgTable, serial, integer, bigint, bigserial, varchar, text, timestamp, 
 import { sql } from 'drizzle-orm';
 import { customers } from './customers';
 import { billingRecords, escrowTransactions } from './escrow';
-import { serviceTypeEnum, invoiceLineItemTypeEnum } from './enums';
+import { serviceTypeEnum, invoiceLineItemTypeEnum, paymentSourceTypeEnum, paymentProviderTypeEnum, paymentMethodStatusEnum, creditReasonEnum } from './enums';
 import { FIELD_LIMITS } from '@suiftly/shared/constants';
 
 /**
@@ -25,7 +25,7 @@ export const customerCredits = pgTable('customer_credits', {
   remainingAmountUsdCents: bigint('remaining_amount_usd_cents', { mode: 'number' }).notNull(),
 
   // Metadata
-  reason: varchar('reason', { length: 50 }).notNull(), // 'outage' | 'promo' | 'goodwill' | 'reconciliation'
+  reason: creditReasonEnum('reason').notNull(),
   description: text('description'),
   campaignId: varchar('campaign_id', { length: 50 }),
 
@@ -57,7 +57,7 @@ export const invoicePayments = pgTable('invoice_payments', {
   billingRecordId: bigint('billing_record_id', { mode: 'number' }).notNull().references(() => billingRecords.id),
 
   // Payment source
-  sourceType: varchar('source_type', { length: 20 }).notNull(), // 'credit' | 'escrow' | 'stripe' | 'paypal'
+  sourceType: paymentSourceTypeEnum('source_type').notNull(),
 
   // Local DB foreign keys (for sources with local tables)
   creditId: integer('credit_id').references(() => customerCredits.creditId),
@@ -121,8 +121,8 @@ export const invoicePayments = pgTable('invoice_payments', {
 export const customerPaymentMethods = pgTable('customer_payment_methods', {
   id: bigserial('id', { mode: 'number' }).primaryKey(),
   customerId: integer('customer_id').notNull().references(() => customers.customerId),
-  providerType: varchar('provider_type', { length: 20 }).notNull(), // 'escrow' | 'stripe' | 'paypal'
-  status: varchar('status', { length: 20 }).notNull().default('active'), // 'active' | 'suspended' | 'removed'
+  providerType: paymentProviderTypeEnum('provider_type').notNull(),
+  status: paymentMethodStatusEnum('status').notNull().default('active'),
   priority: integer('priority').notNull(), // User-defined order (1 = first tried, 2 = fallback, etc.)
 
   providerRef: varchar('provider_ref', { length: 200 }),
@@ -150,7 +150,7 @@ export const customerPaymentMethods = pgTable('customer_payment_methods', {
  */
 export const paymentWebhookEvents = pgTable('payment_webhook_events', {
   eventId: varchar('event_id', { length: 200 }).primaryKey(), // Provider's event ID
-  providerType: varchar('provider_type', { length: 20 }).notNull(), // 'stripe' | 'paypal'
+  providerType: paymentProviderTypeEnum('provider_type').notNull(),
   eventType: varchar('event_type', { length: 100 }).notNull(),
   processed: boolean('processed').notNull().default(false),
   customerId: integer('customer_id').references(() => customers.customerId),

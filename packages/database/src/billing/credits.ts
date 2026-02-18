@@ -14,6 +14,7 @@ import type { Database, DatabaseOrTransaction } from '../db';
 import type { LockedTransaction } from './locking';
 import { customerCredits, invoicePayments } from '../schema';
 import type { CreditApplicationResult } from './types';
+import type { CreditReason } from '../schema/enums';
 import type { DBClock } from '@suiftly/shared/db-clock';
 
 /**
@@ -129,7 +130,7 @@ export async function issueCredit(
   tx: DatabaseOrTransaction,
   customerId: number,
   amountCents: number,
-  reason: string,
+  reason: CreditReason,
   description: string,
   expiresAt: Date | null = null,
   campaignId: string | null = null

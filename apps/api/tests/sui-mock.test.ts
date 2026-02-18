@@ -100,7 +100,7 @@ describe('Sui Mock Interface', () => {
       expect(transactions).toHaveLength(1);
       expect(transactions[0].txType).toBe('deposit');
       expect(transactions[0].amountUsdCents).toBe(5000);
-      expect(transactions[0].success).toBe('true');
+      expect(transactions[0].success).toBe(true);
       expect(transactions[0].balanceAfterUsdCents).toBe(5000);
     });
 
@@ -139,7 +139,7 @@ describe('Sui Mock Interface', () => {
 
       expect(transactions).toHaveLength(1);
       expect(transactions[0].amountUsdCents).toBe(3000);
-      expect(transactions[0].success).toBe('true');
+      expect(transactions[0].success).toBe(true);
       expect(transactions[0].balanceAfterUsdCents).toBe(7000);
     });
 
@@ -173,7 +173,7 @@ describe('Sui Mock Interface', () => {
         ));
 
       expect(transactions).toHaveLength(1);
-      expect(transactions[0].success).toBe('false');
+      expect(transactions[0].success).toBe(false);
       expect(transactions[0].errorMessage).toContain('Insufficient balance');
     });
 

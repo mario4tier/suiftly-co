@@ -1,7 +1,14 @@
+CREATE TYPE "public"."billing_record_type" AS ENUM('charge', 'credit');--> statement-breakpoint
 CREATE TYPE "public"."billing_status" AS ENUM('draft', 'pending', 'paid', 'failed', 'voided');--> statement-breakpoint
 CREATE TYPE "public"."billing_type" AS ENUM('immediate', 'scheduled');--> statement-breakpoint
+CREATE TYPE "public"."credit_reason" AS ENUM('outage', 'promo', 'goodwill', 'reconciliation');--> statement-breakpoint
 CREATE TYPE "public"."customer_status" AS ENUM('active', 'suspended', 'closed');--> statement-breakpoint
 CREATE TYPE "public"."invoice_line_item_type" AS ENUM('subscription_starter', 'subscription_pro', 'subscription_enterprise', 'tier_upgrade', 'requests', 'extra_api_keys', 'extra_seal_keys', 'extra_allowlist_ips', 'extra_packages', 'credit', 'tax');--> statement-breakpoint
+CREATE TYPE "public"."payment_method_status" AS ENUM('active', 'suspended', 'removed');--> statement-breakpoint
+CREATE TYPE "public"."payment_provider_type" AS ENUM('escrow', 'stripe', 'paypal');--> statement-breakpoint
+CREATE TYPE "public"."payment_source_type" AS ENUM('credit', 'escrow', 'stripe', 'paypal');--> statement-breakpoint
+CREATE TYPE "public"."seal_op_status" AS ENUM('queued', 'processing', 'completed');--> statement-breakpoint
+CREATE TYPE "public"."seal_op_type" AS ENUM('register', 'update');--> statement-breakpoint
 CREATE TYPE "public"."service_state" AS ENUM('not_provisioned', 'provisioning', 'disabled', 'enabled', 'suspended_maintenance', 'suspended_no_payment', 'cancellation_pending');--> statement-breakpoint
 CREATE TYPE "public"."service_tier" AS ENUM('starter', 'pro', 'enterprise');--> statement-breakpoint
 CREATE TYPE "public"."service_type" AS ENUM('seal', 'grpc', 'graphql');--> statement-breakpoint
@@ -62,7 +69,7 @@ CREATE TABLE "customer_credits" (
 	"customer_id" integer NOT NULL,
 	"original_amount_usd_cents" bigint NOT NULL,
 	"remaining_amount_usd_cents" bigint NOT NULL,
-	"reason" varchar(50) NOT NULL,
+	"reason" "credit_reason" NOT NULL,
 	"description" text,
 	"campaign_id" varchar(50),
 	"expires_at" timestamp with time zone,
@@ -74,8 +81,8 @@ CREATE TABLE "customer_credits" (
 CREATE TABLE "customer_payment_methods" (
 	"id" bigserial PRIMARY KEY NOT NULL,
 	"customer_id" integer NOT NULL,
-	"provider_type" varchar(20) NOT NULL,
-	"status" varchar(20) DEFAULT 'active' NOT NULL,
+	"provider_type" "payment_provider_type" NOT NULL,
+	"status" "payment_method_status" DEFAULT 'active' NOT NULL,
 	"priority" integer NOT NULL,
 	"provider_ref" varchar(200),
 	"provider_config" jsonb,
@@ -99,7 +106,7 @@ CREATE TABLE "invoice_line_items" (
 CREATE TABLE "invoice_payments" (
 	"payment_id" serial PRIMARY KEY NOT NULL,
 	"billing_record_id" bigint NOT NULL,
-	"source_type" varchar(20) NOT NULL,
+	"source_type" "payment_source_type" NOT NULL,
 	"credit_id" integer,
 	"escrow_transaction_id" bigint,
 	"provider_reference_id" varchar(200),
@@ -123,7 +130,7 @@ CREATE TABLE "invoice_payments" (
 --> statement-breakpoint
 CREATE TABLE "payment_webhook_events" (
 	"event_id" varchar(200) PRIMARY KEY NOT NULL,
-	"provider_type" varchar(20) NOT NULL,
+	"provider_type" "payment_provider_type" NOT NULL,
 	"event_type" varchar(100) NOT NULL,
 	"processed" boolean DEFAULT false NOT NULL,
 	"customer_id" integer,
@@ -168,7 +175,7 @@ CREATE TABLE "billing_records" (
 	"billing_period_start" timestamp NOT NULL,
 	"billing_period_end" timestamp NOT NULL,
 	"amount_usd_cents" bigint NOT NULL,
-	"type" "transaction_type" NOT NULL,
+	"type" "billing_record_type" NOT NULL,
 	"status" "billing_status" NOT NULL,
 	"tx_digest" "bytea",
 	"due_date" timestamp with time zone,
@@ -226,6 +233,7 @@ CREATE TABLE "service_instances" (
 	"cancellation_effective_at" timestamp with time zone,
 	"last_billed_timestamp" timestamp,
 	"sma_config_change_vault_seq" integer DEFAULT 0,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"cp_enabled" boolean DEFAULT false NOT NULL,
 	CONSTRAINT "service_instances_customer_id_service_type_unique" UNIQUE("customer_id","service_type")
 );
@@ -275,8 +283,8 @@ CREATE TABLE "seal_registration_ops" (
 	"seal_key_id" integer NOT NULL,
 	"customer_id" integer NOT NULL,
 	"network" text NOT NULL,
-	"op_type" text NOT NULL,
-	"status" text NOT NULL,
+	"op_type" "seal_op_type" NOT NULL,
+	"status" "seal_op_status" NOT NULL,
 	"packages_version_at_op" integer NOT NULL,
 	"attempt_count" integer DEFAULT 0 NOT NULL,
 	"next_retry_at" timestamp,
@@ -418,7 +426,7 @@ CREATE TABLE "mock_sui_transactions" (
 	"tx_type" varchar(20) NOT NULL,
 	"amount_usd_cents" bigint NOT NULL,
 	"description" text,
-	"success" varchar(5) DEFAULT 'true' NOT NULL,
+	"success" boolean DEFAULT true NOT NULL,
 	"error_message" text,
 	"checkpoint" bigint,
 	"balance_after_usd_cents" bigint,
@@ -435,7 +443,7 @@ CREATE TABLE "mock_tracking_objects" (
 	"escrow_address" varchar(66) NOT NULL,
 	"created_by_tx" varchar(66) NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
-	"reconciled" varchar(5) DEFAULT 'false' NOT NULL,
+	"reconciled" boolean DEFAULT false NOT NULL,
 	"reconciled_at" timestamp with time zone,
 	CONSTRAINT "mock_tracking_objects_tracking_address_unique" UNIQUE("tracking_address")
 );

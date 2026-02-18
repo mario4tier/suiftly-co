@@ -17,7 +17,7 @@
  * IMPORTANT: This table is for MOCK ONLY, not used in production
  */
 
-import { pgTable, bigserial, varchar, timestamp } from 'drizzle-orm/pg-core';
+import { pgTable, bigserial, varchar, timestamp, boolean } from 'drizzle-orm/pg-core';
 
 /**
  * Mock Tracking Objects
@@ -49,7 +49,7 @@ export const mockTrackingObjects = pgTable('mock_tracking_objects', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 
   /** Whether this has been reconciled into the main database */
-  reconciled: varchar('reconciled', { length: 5 }).notNull().default('false').$type<'true' | 'false'>(),
+  reconciled: boolean('reconciled').notNull().default(false),
 
   /** When it was reconciled (if applicable) */
   reconciledAt: timestamp('reconciled_at', { withTimezone: true }),

@@ -3,7 +3,7 @@ import { bytea } from '../types/bytea';
 import { sql } from 'drizzle-orm';
 import { customers } from './customers';
 import { FIELD_LIMITS } from '@suiftly/shared/constants';
-import { transactionTypeEnum, billingStatusEnum, billingTypeEnum } from './enums';
+import { transactionTypeEnum, billingRecordTypeEnum, billingStatusEnum, billingTypeEnum } from './enums';
 
 /**
  * First invoice ID - billing_records sequence starts at this value.
@@ -48,7 +48,7 @@ export const billingRecords = pgTable('billing_records', {
   billingPeriodStart: timestamp('billing_period_start').notNull(),
   billingPeriodEnd: timestamp('billing_period_end').notNull(),
   amountUsdCents: bigint('amount_usd_cents', { mode: 'number' }).notNull(),
-  type: transactionTypeEnum('type').notNull(),
+  type: billingRecordTypeEnum('type').notNull(),
   status: billingStatusEnum('status').notNull(),
   txDigest: bytea('tx_digest'),
 

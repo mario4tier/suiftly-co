@@ -5,6 +5,7 @@
  */
 
 import type { DBClock } from '@suiftly/shared/db-clock';
+import type { PaymentSourceType } from '../schema/enums';
 
 /**
  * Result of processing billing for a single customer
@@ -78,7 +79,7 @@ export interface InvoicePaymentResult {
   amountPaidCents: number;
   fullyPaid: boolean;
   paymentSources: Array<{
-    type: 'credit' | 'escrow' | 'stripe' | 'paypal';
+    type: PaymentSourceType;
     amountCents: number;
     referenceId: string; // credit_id, escrow_transaction_id, Stripe PI ID, or PayPal order ID
   }>;

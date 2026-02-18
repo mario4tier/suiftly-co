@@ -56,10 +56,14 @@ fi
 cd meta
 META_FILE=$(ls 0000_*.json 2>/dev/null | head -1)
 if [ -n "$META_FILE" ]; then
-  # Update the tag field in JSON
-  sed -i 's/"tag": "[^"]*"/"tag": "0000_initial_schema"/' "$META_FILE"
   mv "$META_FILE" "0000_snapshot.json"
-  echo "   ✅ Updated meta file"
+  echo "   ✅ Updated snapshot file"
+fi
+
+# Update the tag in _journal.json so migrator finds the renamed SQL file
+if [ -f "_journal.json" ]; then
+  sed -i 's/"tag": "[^"]*"/"tag": "0000_initial_schema"/' "_journal.json"
+  echo "   ✅ Updated journal tag"
 fi
 
 cd ../../..
