@@ -1,5 +1,5 @@
 {
-  "id": "8a98d260-c1cc-4455-bb30-390fb6d67154",
+  "id": "0de8fe04-1085-4b4f-9f59-e109bcc2da8a",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -46,13 +46,13 @@
         },
         "customer_id": {
           "name": "customer_id",
-          "type": "varchar(50)",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false
         },
         "invoice_id": {
           "name": "invoice_id",
-          "type": "varchar(100)",
+          "type": "bigint",
           "primaryKey": false,
           "notNull": false
         },
@@ -162,7 +162,21 @@
           "with": {}
         }
       },
-      "foreignKeys": {},
+      "foreignKeys": {
+        "admin_notifications_customer_id_customers_customer_id_fk": {
+          "name": "admin_notifications_customer_id_customers_customer_id_fk",
+          "tableFrom": "admin_notifications",
+          "tableTo": "customers",
+          "columnsFrom": [
+            "customer_id"
+          ],
+          "columnsTo": [
+            "customer_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
@@ -626,6 +640,112 @@
       },
       "isRLSEnabled": false
     },
+    "public.customer_payment_methods": {
+      "name": "customer_payment_methods",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "bigserial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "customer_id": {
+          "name": "customer_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider_type": {
+          "name": "provider_type",
+          "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'active'"
+        },
+        "priority": {
+          "name": "priority",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider_ref": {
+          "name": "provider_ref",
+          "type": "varchar(200)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "provider_config": {
+          "name": "provider_config",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "idx_cpm_customer_priority": {
+          "name": "idx_cpm_customer_priority",
+          "columns": [
+            {
+              "expression": "customer_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "priority",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "customer_payment_methods_customer_id_customers_customer_id_fk": {
+          "name": "customer_payment_methods_customer_id_customers_customer_id_fk",
+          "tableFrom": "customer_payment_methods",
+          "tableTo": "customers",
+          "columnsFrom": [
+            "customer_id"
+          ],
+          "columnsTo": [
+            "customer_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.invoice_line_items": {
       "name": "invoice_line_items",
       "schema": "",
@@ -767,6 +887,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "provider_reference_id": {
+          "name": "provider_reference_id",
+          "type": "varchar(200)",
+          "primaryKey": false,
+          "notNull": false
+        },
         "amount_usd_cents": {
           "name": "amount_usd_cents",
           "type": "bigint",
@@ -828,6 +954,22 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "idx_payment_provider": {
+          "name": "idx_payment_provider",
+          "columns": [
+            {
+              "expression": "provider_reference_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"invoice_payments\".\"provider_reference_id\" IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -877,9 +1019,124 @@
       "checkConstraints": {
         "check_source_type_match": {
           "name": "check_source_type_match",
-          "value": "\n    (\"invoice_payments\".\"source_type\" = 'credit' AND \"invoice_payments\".\"credit_id\" IS NOT NULL AND \"invoice_payments\".\"escrow_transaction_id\" IS NULL) OR\n    (\"invoice_payments\".\"source_type\" = 'escrow' AND \"invoice_payments\".\"escrow_transaction_id\" IS NOT NULL AND \"invoice_payments\".\"credit_id\" IS NULL)\n  "
+          "value": "\n    (\"invoice_payments\".\"source_type\" = 'credit'\n      AND \"invoice_payments\".\"credit_id\" IS NOT NULL\n      AND \"invoice_payments\".\"escrow_transaction_id\" IS NULL\n      AND \"invoice_payments\".\"provider_reference_id\" IS NULL) OR\n    (\"invoice_payments\".\"source_type\" = 'escrow'\n      AND \"invoice_payments\".\"escrow_transaction_id\" IS NOT NULL\n      AND \"invoice_payments\".\"credit_id\" IS NULL\n      AND \"invoice_payments\".\"provider_reference_id\" IS NULL) OR\n    (\"invoice_payments\".\"source_type\" IN ('stripe', 'paypal')\n      AND \"invoice_payments\".\"provider_reference_id\" IS NOT NULL\n      AND \"invoice_payments\".\"credit_id\" IS NULL\n      AND \"invoice_payments\".\"escrow_transaction_id\" IS NULL)\n  "
         }
       },
+      "isRLSEnabled": false
+    },
+    "public.payment_webhook_events": {
+      "name": "payment_webhook_events",
+      "schema": "",
+      "columns": {
+        "event_id": {
+          "name": "event_id",
+          "type": "varchar(200)",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "provider_type": {
+          "name": "provider_type",
+          "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "event_type": {
+          "name": "event_type",
+          "type": "varchar(100)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "processed": {
+          "name": "processed",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "customer_id": {
+          "name": "customer_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "data": {
+          "name": "data",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "processed_at": {
+          "name": "processed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "idx_webhook_provider": {
+          "name": "idx_webhook_provider",
+          "columns": [
+            {
+              "expression": "provider_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "event_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_webhook_customer": {
+          "name": "idx_webhook_customer",
+          "columns": [
+            {
+              "expression": "customer_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"payment_webhook_events\".\"customer_id\" IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "payment_webhook_events_customer_id_customers_customer_id_fk": {
+          "name": "payment_webhook_events_customer_id_customers_customer_id_fk",
+          "tableFrom": "payment_webhook_events",
+          "tableTo": "customers",
+          "columnsFrom": [
+            "customer_id"
+          ],
+          "columnsTo": [
+            "customer_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
       "isRLSEnabled": false
     },
     "public.service_cancellation_history": {
@@ -1051,6 +1308,12 @@
         "current_period_start": {
           "name": "current_period_start",
           "type": "date",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "stripe_customer_id": {
+          "name": "stripe_customer_id",
+          "type": "varchar(100)",
           "primaryKey": false,
           "notNull": false
         },
@@ -2487,7 +2750,7 @@
         },
         "customer_id": {
           "name": "customer_id",
-          "type": "bigint",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false
         },

@@ -5,8 +5,9 @@
  * Used for billing validation failures, system errors, etc.
  */
 
-import { pgTable, serial, varchar, text, timestamp, index, boolean } from 'drizzle-orm/pg-core';
+import { pgTable, serial, integer, bigint, varchar, text, timestamp, index, boolean } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
+import { customers } from './customers';
 
 export const adminNotifications = pgTable('admin_notifications', {
   notificationId: serial('notification_id').primaryKey(),
@@ -21,8 +22,8 @@ export const adminNotifications = pgTable('admin_notifications', {
   details: text('details'), // JSON-encoded details
 
   // Context
-  customerId: varchar('customer_id', { length: 50 }), // May be null for system errors
-  invoiceId: varchar('invoice_id', { length: 100 }), // May be null
+  customerId: integer('customer_id').references(() => customers.customerId), // May be null for system errors
+  invoiceId: bigint('invoice_id', { mode: 'number' }), // References billing_records.id (may be null)
 
   // Status tracking
   acknowledged: boolean('acknowledged').notNull().default(false),

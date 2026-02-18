@@ -20,15 +20,16 @@ import {
 } from './usage-charges';
 import { unsafeAsLockedTransaction, ensureEscrowPaymentMethod } from './test-helpers';
 
-// Test customer data
+// Test customer data — wallet must be unique across ALL test files
 const TEST_CUSTOMER_ID = 99902;
-const TEST_WALLET = '0x' + 'b'.repeat(64);
+const TEST_WALLET = '0x' + 'b'.repeat(62) + '02';
 
 describe('Usage Charges', () => {
   let testInvoiceId: number;
 
   beforeAll(async () => {
-    // Create test customer
+    // Clean up any stale data from previous runs, then create test customer
+    await db.execute(sql`DELETE FROM customers WHERE wallet_address = ${TEST_WALLET} AND customer_id != ${TEST_CUSTOMER_ID}`);
     await db.execute(sql`
       INSERT INTO customers (customer_id, wallet_address, status)
       VALUES (${TEST_CUSTOMER_ID}, ${TEST_WALLET}, 'active')

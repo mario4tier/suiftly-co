@@ -19,8 +19,8 @@ export const haproxyRawLogs = pgTable('haproxy_raw_logs', {
   timestamp: timestamp('timestamp', { withTimezone: true }).notNull(),
 
   // Customer context (NULL if unauthenticated)
-  // Note: bigint for unsigned 32-bit values, no FK since logs may contain invalid/test IDs
-  customerId: bigint('customer_id', { mode: 'number' }),
+  // No FK: logs may contain invalid/test customer IDs and must never fail to insert
+  customerId: integer('customer_id'),
   pathPrefix: text('path_prefix'),
   configHex: bigint('config_hex', { mode: 'number' }),
 

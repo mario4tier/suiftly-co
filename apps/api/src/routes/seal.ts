@@ -906,7 +906,7 @@ export const sealRouter = router({
             // Check if we already have an unacknowledged notification for this customer
             const existingNotification = await tx.query.adminNotifications.findFirst({
               where: and(
-                eq(adminNotifications.customerId, String(ctx.user!.customerId)),
+                eq(adminNotifications.customerId, ctx.user!.customerId),
                 eq(adminNotifications.code, 'SEAL_KEY_HARD_LIMIT_REACHED'),
                 eq(adminNotifications.acknowledged, false)
               ),
@@ -925,7 +925,7 @@ export const sealRouter = router({
                   hardLimit: SEAL_LIMITS.HARD_LIMIT_KEYS_PER_CUSTOMER,
                   timestamp: new Date().toISOString(),
                 }),
-                customerId: String(ctx.user!.customerId),
+                customerId: ctx.user!.customerId,
               });
             }
 

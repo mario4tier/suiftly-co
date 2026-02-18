@@ -173,7 +173,7 @@ export async function resetCustomerTestData(options: TestDataResetOptions = {}) 
 
         // 6. Delete all other related data (in correct order for foreign keys)
         // New billing tables (Phase 1A/2) - delete before billing_records
-        await tx.delete(adminNotifications).where(eq(adminNotifications.customerId, String(customerId)));
+        await tx.delete(adminNotifications).where(eq(adminNotifications.customerId, customerId));
         await tx.delete(billingIdempotency); // No customer_id column, delete all for simplicity
         await tx.delete(invoicePayments); // References billing_records, so delete first
         await tx.delete(customerCredits).where(eq(customerCredits.customerId, customerId));

@@ -764,6 +764,7 @@ async function createFailureNotification(
         error: error instanceof Error ? error.message : String(error),
         timestamp: new Date().toISOString(),
       }),
+      customerId: customerId ?? null,
     });
   } catch (notifyError) {
     console.error('[QUEUE] Failed to create failure notification:', notifyError);

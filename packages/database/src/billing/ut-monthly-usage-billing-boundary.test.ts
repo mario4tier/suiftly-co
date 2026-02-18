@@ -32,9 +32,9 @@ import type { BillingProcessorConfig } from './types';
 import type { ISuiService, ChargeParams, TransactionResult } from '@suiftly/shared/sui-service';
 import { toPaymentServices, ensureEscrowPaymentMethod } from './test-helpers';
 
-// Test customer data - unique ID to avoid conflicts with other tests
+// Test customer data — wallet must be unique across ALL test files
 const TEST_CUSTOMER_ID = 99950;
-const TEST_WALLET = '0x' + 'c'.repeat(64);
+const TEST_WALLET = '0x' + 'c'.repeat(62) + '50';
 
 /**
  * Simple mock Sui service for testing
@@ -108,6 +108,8 @@ async function cleanupTestData() {
   await db.execute(sql`DELETE FROM customer_credits WHERE customer_id = ${TEST_CUSTOMER_ID}`);
   await db.execute(sql`DELETE FROM customer_payment_methods WHERE customer_id = ${TEST_CUSTOMER_ID}`);
   await db.execute(sql`DELETE FROM customers WHERE customer_id = ${TEST_CUSTOMER_ID}`);
+  // Also clean up any stale customer with same wallet but different ID (from other test suites)
+  await db.execute(sql`DELETE FROM customers WHERE wallet_address = ${TEST_WALLET} AND customer_id != ${TEST_CUSTOMER_ID}`);
 }
 
 /**

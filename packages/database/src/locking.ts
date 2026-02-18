@@ -135,7 +135,7 @@ async function logLockContention(
         threshold: severity === 'error' ? LOCK_TIMEOUT_MS : LOCK_WARNING_THRESHOLD_MS,
         ...details,
       }),
-      customerId: String(customerId),
+      customerId,
     });
   } catch (logError) {
     // Don't fail the operation if logging fails - just console log

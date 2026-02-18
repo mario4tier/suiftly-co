@@ -25,16 +25,16 @@ import {
   type ResponseTimeDataPoint,
 } from './queries';
 
-// Test customer data
+// Test customer data — wallet must be unique across ALL test files (not just API tests)
 const TEST_CUSTOMER_ID = 99901;
-// Use unique wallet to avoid conflicts with API tests that use 0xaaa...
-const TEST_WALLET = '0x' + 'b'.repeat(64);
+const TEST_WALLET = '0x' + 'b'.repeat(62) + '01';
 
 describe('Stats Queries', () => {
   let clock: MockDBClock;
 
   beforeAll(async () => {
-    // Create test customer if not exists
+    // Clean up any stale data from previous runs, then create test customer
+    await db.execute(sql`DELETE FROM customers WHERE wallet_address = ${TEST_WALLET} AND customer_id != ${TEST_CUSTOMER_ID}`);
     await db.execute(sql`
       INSERT INTO customers (customer_id, wallet_address, status)
       VALUES (${TEST_CUSTOMER_ID}, ${TEST_WALLET}, 'active')

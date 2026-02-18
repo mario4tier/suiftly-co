@@ -200,7 +200,7 @@ async function createHardLimitNotification(
   // Check if we already have an unacknowledged notification for this customer
   const existingNotification = await db.query.adminNotifications.findFirst({
     where: and(
-      eq(adminNotifications.customerId, String(customerId)),
+      eq(adminNotifications.customerId, customerId),
       eq(adminNotifications.code, 'SEAL_KEY_HARD_LIMIT_REACHED'),
       eq(adminNotifications.acknowledged, false)
     ),
@@ -220,7 +220,7 @@ async function createHardLimitNotification(
       totalKeysCreated: totalKeys,
       hardLimit: HARD_LIMIT_KEYS_PER_CUSTOMER,
     }),
-    customerId: String(customerId),
+    customerId,
   }).returning();
 
   testNotificationIds.push(notification.notificationId);
@@ -410,7 +410,7 @@ describe('Seal Key Limits', () => {
       expect(notification!.severity).toBe('warning');
       expect(notification!.category).toBe('security');
       expect(notification!.code).toBe('SEAL_KEY_HARD_LIMIT_REACHED');
-      expect(notification!.customerId).toBe(String(customer.customerId));
+      expect(notification!.customerId).toBe(customer.customerId);
       expect(notification!.acknowledged).toBe(false);
     });
 
@@ -428,7 +428,7 @@ describe('Seal Key Limits', () => {
       // Verify only one notification exists
       const notifications = await db.query.adminNotifications.findMany({
         where: and(
-          eq(adminNotifications.customerId, String(customer.customerId)),
+          eq(adminNotifications.customerId, customer.customerId),
           eq(adminNotifications.code, 'SEAL_KEY_HARD_LIMIT_REACHED')
         ),
       });

@@ -273,7 +273,7 @@ describe('Invoice Validation', () => {
 
       // Verify notification was logged
       const notifications = await db.select().from(adminNotifications)
-        .where(eq(adminNotifications.customerId, String(testCustomerId)));
+        .where(eq(adminNotifications.customerId, testCustomerId));
 
       expect(notifications).toHaveLength(1);
       expect(notifications[0].severity).toBe('error');

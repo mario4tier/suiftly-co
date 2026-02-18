@@ -22,7 +22,7 @@ export interface LogInternalErrorParams {
   code: string; // Error code
   message: string; // Human-readable message
   details?: any; // Additional context (will be JSON-stringified)
-  customerId?: number | string;
+  customerId?: number;
   invoiceId?: number;
 }
 
@@ -45,7 +45,7 @@ export interface LogInternalErrorParams {
  *   message: 'DRAFT invoice amount doesn't match enabled services',
  *   details: { draftAmount: 29, expectedAmount: 9 },
  *   customerId: 12345,
- *   invoiceId: 'uuid-here',
+ *   invoiceId: 103405,
  * });
  * ```
  */
@@ -71,8 +71,8 @@ export async function logInternalError(
       code: params.code,
       message: params.message,
       details: params.details ? JSON.stringify(params.details, null, 2) : null,
-      customerId: params.customerId ? String(params.customerId) : null,
-      invoiceId: params.invoiceId != null ? String(params.invoiceId) : null,
+      customerId: params.customerId ?? null,
+      invoiceId: params.invoiceId ?? null,
     })
     .returning({ notificationId: adminNotifications.notificationId });
 
