@@ -286,37 +286,7 @@ API keys authenticate service requests and map to customer accounts for billing 
 
 ### API Key Fingerprint Storage
 
-The `api_key_fp` field stores 32-bit unsigned fingerprints in PostgreSQL's signed INTEGER type:
-
-**Unsigned to Signed Conversion:**
-```javascript
-// JavaScript: 32-bit unsigned → signed (for PostgreSQL storage)
-function toSigned32(unsigned) {
-  return unsigned > 0x7FFFFFFF ? unsigned - 0x100000000 : unsigned;
-}
-
-// Example:
-// Unsigned: 3,000,000,000 (0xB2D05E00)
-// Signed:  -1,294,967,296 (stored in PostgreSQL)
-```
-
-**Signed to Unsigned Conversion:**
-```javascript
-// PostgreSQL → JavaScript: signed → 32-bit unsigned
-function toUnsigned32(signed) {
-  return signed < 0 ? signed + 0x100000000 : signed;
-}
-
-// Example:
-// Signed:  -1,294,967,296 (from PostgreSQL)
-// Unsigned: 3,000,000,000 (0xB2D05E00)
-```
-
-**In Practice:**
-- Fingerprints are generated from first 7 Base32 characters of API key
-- Values >= 2^31 (2,147,483,648) are stored as negative numbers in PostgreSQL
-- Application code handles conversion transparently
-- Collision retry generates new API key (with different fingerprint) on conflict
+The `api_key_fp` column is a 64-bit BIGINT primary key (matches `haproxy_raw_logs.api_key_fp`). Fingerprints are derived from the first 7 Base32 characters of the API key (35 bits), well within BIGINT range — no signed/unsigned conversion needed. Collision retry generates a new API key on conflict.
 
 
 ## Seal Service Specifics
