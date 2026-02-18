@@ -35,8 +35,7 @@ customers (wallet_address)
 │
 ├── service_instances (0 or more)
 │   ├── Seal: service_type='seal'
-│   │   ├── seal_keys (derived from pool or imported)
-│   │   │   ├── seal_key_pool → seal_keys (assignment)
+│   │   ├── seal_keys (derived or imported)
 │   │   │   └── seal_packages (package addresses per key)
 │   │   └── api_keys (service_type='seal')
 │   │
@@ -372,42 +371,41 @@ Schema uses **nullable `derivation_index`** to distinguish key types (no explici
 
 **Creation Flow (Derive or Import):**
 
-**Option 1: Derive New Seal Key from Pool (Recommended)**
+**Option 1: Derive New Seal Key (Recommended)**
 
-**SECURITY: Key derivation is handled by a privileged script with mm-reader access. The API server NEVER has access to mm vault or MASTER_SEED.**
+**SECURITY: The API server stores only the `derivation_index`. Keyservers derive private keys at runtime from `MASTER_SEED` (loaded from `~/.suiftly.env`). The API server NEVER has access to master seeds.**
 
-**Production uses a pre-populated Seal Key Pool to ensure instant customer assignment without Sui network delays.**
-
-1. **Pool Management** (Background Job - Privileged Script with mm-reader + postgres access):
-   - Maintains pool of 100 pre-derived and pre-registered seal keys
-   - Script atomically increments global `derivation_index` sequence (in database transaction)
-   - Reads `MASTER_SEED` from mm vault (privileged operation)
-   - Derives BLS12-381 key pair using `derivation_index`: `seal-cli derive-key --seed <MASTER_SEED> --index <INDEX>`
-   - Registers key on-chain: `sui client call --function create_and_transfer_v1 ... --args <PUBKEY>`
-   - Stores in pool table: `derivation_index`, `public_key` (48 bytes mpk), `object_id`, `register_txn_digest`
-   - **No encrypted_private_key stored** - can regenerate on demand from seed + index
-   - Transaction ensures atomicity: if any step fails, `derivation_index` sequence rolls back (no gaps)
-   - Continuously refills pool as keys are assigned to customers
-
-2. **Customer Request** (API Server):
+1. **Key Creation** (API Server — `apps/api/src/routes/seal.ts`):
    - Customer initiates Seal key request through dashboard
-   - API server validates: authentication, service subscription, payment, key limits
-   - **Atomically assigns a key from pool** (single transaction):
-     - Removes one pre-registered key from pool
-     - Creates `seal_keys` record linked to customer
-     - Returns immediately with `object_id` and `public_key`
-   - **Instant response** - no waiting for on-chain registration
+   - API validates: authentication, service subscription, payment, key limits
+   - **Atomically allocates derivation index** via `UPDATE system_control SET next_seal_derivation_index_pg{N} = next_seal_derivation_index_pg{N} + 1 RETURNING` (per process group)
+   - Generates BLS12-381 key pair (mock in dev, `seal-cli` in production)
+   - Inserts `seal_keys` record with `registration_status = 'registering'`
+   - Queues `seal_registration_ops` entry (`opType: 'register'`, `status: 'queued'`)
+   - Returns immediately with `public_key` — key is usable for encryption before on-chain registration completes
 
-3. **Response** (API Server):
-   - Customer receives `object_id` and `public_key` (mpk) for encryption operations
-   - Key is ready to use immediately (already registered on-chain)
+2. **On-Chain Registration** (Global Manager — `services/global-manager/src/tasks/process-seal-registrations.ts`):
+   - GM polls `seal_registration_ops` for queued ops ready to process
+   - Creates KeyServer object on Sui: `create_and_transfer_v1(name, url, key_type, pk)`
+   - On success: sets `registration_status = 'registered'`, stores `object_id` and `register_txn_digest`
+   - On failure: exponential backoff (0s, 5s, 15s, 45s, 2m15s, 5m max) — retries until success
+   - Self-healing: stale ops stuck in 'processing' for >10 min are recovered to 'queued'
+   - Idempotent: checks for existing KeyServer by `object_id` or `public_key` before creating
 
-**Global Derivation Index Sequence:**
-- `derivation_index` is **global across all customers** (scoped per `proc_index`, currently always 1)
-- Sequence managed in `seal_key_sequences` table with atomic increment
+3. **Package Changes During Registration:**
+   - Each package add/update/delete/toggle increments `seal_keys.packagesVersion`
+   - If key is already `registered`, an `update` op is queued with the current `packagesVersionAtOp`
+   - If key is still `registering`/`updating`, no extra op is queued — the post-registration check handles it
+   - After successful registration, GM checks if `packagesVersion > registeredPackagesVersion`
+   - If yes: marks key as `updating` and queues a new `update` op — **guarantees eventual consistency**
+
+**Per-PG Derivation Index Counters:**
+- `derivation_index` is **global across all customers**, scoped per process group (PG 1 = production, PG 2 = development)
+- Counters stored in `system_control.next_seal_derivation_index_pg1` and `pg2`
+- Atomic `UPDATE...RETURNING` prevents race conditions
 - Each derived key gets a unique sequential index: 0, 1, 2, 3...
-- Indices are NEVER reused (even if key is deleted)
-- Transaction-safe: failed derivations don't waste indices
+- Indices are NEVER reused (even if key is soft-deleted)
+- Transaction-safe: index allocation is part of the key creation transaction
 
 **Option 2: Import Existing Seal Key** (Future)
 1. Customer provides existing BLS12-381 private key (32 bytes, hex-encoded) and Sui `object_id`
@@ -422,60 +420,27 @@ Schema uses **nullable `derivation_index`** to distinguish key types (no explici
 8. **derivation_index is NULL** - indicates imported key that cannot be regenerated
 9. Update on-chain object with Suiftly's key server URL (now possible since Suiftly owns object)
 
-**Seal Key Pool** (MVP Requirement)
-
-**Production deployment requires a pre-populated pool** to ensure instant customer key assignment without Sui network delays.
-
-**Pool Design:**
-- Maintains pool of 100 pre-derived and pre-registered seal keys
-- Pool keys are fully registered on-chain with known `object_id` and `public_key`
-- Customer requests receive instant assignment from pool (atomic database transaction)
-- Background job continuously refills pool using privileged derivation script
-- Pool managed by `seal_key_pool` table (schema below)
-
-**Pool Table Schema:**
-```sql
-CREATE TABLE seal_key_pool (
-  pool_key_id SERIAL PRIMARY KEY,
-  derivation_index INTEGER NOT NULL UNIQUE,
-  public_key BYTEA NOT NULL CHECK (LENGTH(public_key) IN (48, 96)),
-  object_id BYTEA NOT NULL CHECK (LENGTH(object_id) = 32),
-  register_txn_digest BYTEA NOT NULL CHECK (LENGTH(register_txn_digest) = 32),
-  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-
-  INDEX idx_pool_ready (created_at)  -- Oldest keys assigned first (FIFO)
-);
-```
-
-**Implementation:**
-- Privileged TypeScript script: `scripts/seal-keys/pool-manager.ts`
-- Script requires mm-reader + postgres access (NOT the API server)
-- Background job runs continuously to maintain pool at 100 keys
-- **Testing mode**: Reuse first 11 keys (indices 0-10) for development without depleting pool
-
 **Key Ownership:**
 - All registered Seal keys are owned by a Sui address controlled by Suiftly
 - Owner's private key stored in mm vault: `objects_owner_sk`
-- Keys transferred to customer wallets after payment validation
 
 **Related mm vault keys:**
-- `master_key`: Seed used for BLS12-381 key derivation (global MASTER_SEED)
+- `master_key`: Seed used for BLS12-381 key derivation (MASTER_SEED per PG)
 - `objects_owner_id`: Sui address owning all seal key objects
 - `objects_owner_sk`: Private key for the owner address (used for on-chain registration)
 
-**Script Requirements:**
-- Must run with mm-reader permissions (access to mm vault)
-- Must have postgres database access (read/write seal_keys table)
-- API server NEVER has mm-reader access (security boundary)
-
 **Seal Key States**
-- `is_user_enabled`: Indicates the user intent of having the key served by our key servers. This is independent of the seal_key_state.
-- `seal_key_state` is one of `not_provisioned` (start state), `registering`, `active`, `suspended`, `tobedeleted`.
-- The object_id have conditional uniqueness constraints while in active/suspended state.
-When transitioning to enabled state, the object_id must be set and can never be changed afterwards.
-- `registering` state includes multiple validations: payment done, packages are valid. In case of imported, validate that the user provided information is matching and the object_id ownership has been transferred to Suiftly.
-- `suspended` effect is equivalent to is_user_enabled = false, except that this is controlled from suiftly side (say for failed payment). `suspended` keys still have an entry in the key_server map.
-- `tobedeleted` removes the key from the key_server map and have no effect on other keys (say for uniqueness of object_id checks). Reaching this state would be done manually by a suiftly admin.
+
+Registration status (`registration_status` pgEnum):
+- `registering`: Initial on-chain registration in progress (KeyServer object being created)
+- `registered`: Successfully registered on-chain (`object_id` is set)
+- `updating`: Re-registration in progress (packages changed while registered)
+
+No 'failed' state — unlimited auto-retry with exponential backoff ensures eventual registration.
+
+Independent controls:
+- `is_user_enabled`: User toggle for key serving (independent of registration status)
+- `deletedAt`: Soft delete timestamp (blocked in production — derivation indices are non-renewable)
 
 **Additional Seal Keys:**
 
@@ -533,7 +498,7 @@ The Drizzle schema files are the authoritative reference for all table definitio
 | `schema/services.ts` | `service_instances` |
 | `schema/escrow.ts` | `billing_records`, `escrow_transactions`, `mock_sui_transactions` |
 | `schema/billing.ts` | `invoice_line_items`, `invoice_payments`, `customer_credits`, `billing_idempotency` |
-| `schema/seal.ts` | `seal_keys`, `seal_packages`, `seal_key_sequences`, `seal_key_pool` |
+| `schema/seal.ts` | `seal_keys`, `seal_packages`, `seal_registration_ops` |
 | `schema/api-keys.ts` | `api_keys` |
 | `schema/enums.ts` | PostgreSQL ENUM type definitions |
 
@@ -565,9 +530,9 @@ The Drizzle schema files are the authoritative reference for all table definitio
 - Extend service_instances and api_keys tables
 
 ### Security Considerations
-- **CRITICAL: API server NEVER has mm-reader access** - seal key derivation in privileged scripts only
-- **Privilege separation**: Only TypeScript scripts in `scripts/seal-keys/` can read MASTER_SEED from mm vault
-- **Global sequence atomicity**: Database transaction ensures no race conditions or gaps in derivation_index
+- **CRITICAL: API server NEVER has access to master seeds** — keyservers load `SEAL_MASTER_SEED_*` from `~/.suiftly.env` at runtime
+- **Privilege separation**: API stores `derivation_index` only; private keys are derived at runtime by keyservers from master seed + index
+- **Per-PG counter atomicity**: `system_control.next_seal_derivation_index_pg{1,2}` uses atomic `UPDATE...RETURNING` — no race conditions or gaps
 - Never log full API keys (log only key_id or prefix)
 - Encrypt imported Seal private keys with customer's wallet (derived keys store only index)
 - Rate limit authentication endpoints (prevent brute force)
@@ -583,10 +548,15 @@ The Drizzle schema files are the authoritative reference for all table definitio
 
 ---
 
-**Document Version**: 2.0
-**Last Updated**: 2026-02-13
+**Document Version**: 2.1
+**Last Updated**: 2026-02-18
 
 **Changelog:**
+- v2.1: Removed stale seal key pool/sequence design, updated to match implemented counter-based derivation:
+  - **Removed `seal_key_pool` and `seal_key_sequences`** — replaced with per-PG counters in `system_control`
+  - **Rewrote Seal Key Creation Flow** — now documents the actual async registration flow (API creates key → GM registers on-chain)
+  - **Updated Seal Key States** — replaced stale states with actual `registrationStatusEnum` (`registering`, `registered`, `updating`)
+  - **Updated schema file reference** — `seal.ts` contains `seal_keys`, `seal_packages`, `seal_registration_ops`
 - v2.0: Major cleanup — removed stale SQL schema, aligned with implemented billing/payment design:
   - **Removed inline SQL schema** — Drizzle schema (`packages/database/src/schema/`) is the source of truth
   - **Added Database Schema section** with schema file reference table and key relationships
@@ -595,7 +565,7 @@ The Drizzle schema files are the authoritative reference for all table definitio
   - **Updated Balance & Spending Limit Validation** for multi-provider model (service gate checks payment method existence, not just escrow balance)
   - **Added cross-references** to BILLING_DESIGN.md and PAYMENT_DESIGN.md throughout
 - v1.17: Consolidated financial tables and clarified billing/ledger relationship
-- v1.16: Added global derivation index sequence, seal key pool, and security architecture
+- v1.16: Added per-PG derivation index counters and security architecture
 - v1.15: Added user-defined names to seal_keys and seal_packages
 - v1.14: Simplified seal_keys schema based on Boneh-Franklin IBE research
 - v1.13: Enhanced seal_keys schema for BLS12-381 IBE and derived/imported keys
