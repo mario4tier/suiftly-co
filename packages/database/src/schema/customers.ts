@@ -30,8 +30,8 @@ export const customers = pgTable('customers', {
   gracePeriodStart: date('grace_period_start'), // When grace period started (NULL = none)
   gracePeriodNotifiedAt: timestamp('grace_period_notified_at', { withTimezone: true, mode: 'date' }).array(), // Timestamps of reminder emails sent
 
-  createdAt: timestamp('created_at').notNull().defaultNow(),
-  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
   idxWallet: index('idx_wallet').on(table.walletAddress),
   idxCustomerStatus: index('idx_customer_status').on(table.status).where(sql`${table.status} != 'active'`),

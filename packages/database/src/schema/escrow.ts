@@ -16,9 +16,11 @@ export const escrowTransactions = pgTable('escrow_transactions', {
   customerId: integer('customer_id').notNull().references(() => customers.customerId),
   txDigest: bytea('tx_digest').notNull().unique(),
   txType: transactionTypeEnum('tx_type').notNull(),
-  amount: decimal('amount', { precision: 20, scale: 8 }).notNull(),
+  // USD dollar amount (USDC on-chain). Stored as dollars, not cents,
+  // because it represents the on-chain USDC transfer amount.
+  amountUsd: decimal('amount_usd', { precision: 20, scale: 8 }).notNull(),
   assetType: varchar('asset_type', { length: FIELD_LIMITS.SUI_ADDRESS }),
-  timestamp: timestamp('timestamp').notNull(),
+  timestamp: timestamp('timestamp', { withTimezone: true }).notNull(),
 }, (table) => ({
   idxEscrowCustomer: index('idx_escrow_customer').on(table.customerId),
   idxEscrowTxDigest: index('idx_escrow_tx_digest').on(table.txDigest),
@@ -45,8 +47,8 @@ export const ledgerEntries = pgTable('ledger_entries', {
 export const billingRecords = pgTable('billing_records', {
   id: bigserial('id', { mode: 'number' }).primaryKey(),
   customerId: integer('customer_id').notNull().references(() => customers.customerId),
-  billingPeriodStart: timestamp('billing_period_start').notNull(),
-  billingPeriodEnd: timestamp('billing_period_end').notNull(),
+  billingPeriodStart: timestamp('billing_period_start', { withTimezone: true }).notNull(),
+  billingPeriodEnd: timestamp('billing_period_end', { withTimezone: true }).notNull(),
   amountUsdCents: bigint('amount_usd_cents', { mode: 'number' }).notNull(),
   type: billingRecordTypeEnum('type').notNull(),
   status: billingStatusEnum('status').notNull(),
@@ -69,12 +71,12 @@ export const billingRecords = pgTable('billing_records', {
   lastRetryAt: timestamp('last_retry_at', { withTimezone: true }),
   failureReason: text('failure_reason'),
 
-  createdAt: timestamp('created_at').notNull().defaultNow(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 
   // Tracks when DRAFT invoice was last checked/synced (usage sync, config changes)
   // Used to display "Updated X ago" in UI
   // Updated even if no changes were found (confirms data is fresh)
-  lastUpdatedAt: timestamp('last_updated_at'),
+  lastUpdatedAt: timestamp('last_updated_at', { withTimezone: true }),
 }, (table) => ({
   idxCustomerPeriod: index('idx_customer_period').on(table.customerId, table.billingPeriodStart),
   idxBillingStatus: index('idx_billing_status').on(table.status).where(sql`${table.status} != 'paid'`),

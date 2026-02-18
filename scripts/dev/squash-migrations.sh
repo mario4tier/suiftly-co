@@ -45,9 +45,11 @@ echo "   ✅ New migration generated"
 echo "4️⃣  Renaming migration..."
 cd migrations
 GENERATED_FILE=$(ls 0000_*.sql 2>/dev/null | head -1)
-if [ -n "$GENERATED_FILE" ]; then
+if [ -n "$GENERATED_FILE" ] && [ "$GENERATED_FILE" != "0000_initial_schema.sql" ]; then
   mv "$GENERATED_FILE" "0000_initial_schema.sql"
   echo "   ✅ Renamed to: 0000_initial_schema.sql"
+elif [ -n "$GENERATED_FILE" ]; then
+  echo "   ✅ Migration file already named correctly"
 else
   echo "   ⚠️  Warning: Could not find generated migration file"
 fi
@@ -55,9 +57,11 @@ fi
 # Step 5: Update meta.json
 cd meta
 META_FILE=$(ls 0000_*.json 2>/dev/null | head -1)
-if [ -n "$META_FILE" ]; then
+if [ -n "$META_FILE" ] && [ "$META_FILE" != "0000_snapshot.json" ]; then
   mv "$META_FILE" "0000_snapshot.json"
   echo "   ✅ Updated snapshot file"
+else
+  echo "   ✅ Snapshot file already named correctly"
 fi
 
 # Update the tag in _journal.json so migrator finds the renamed SQL file

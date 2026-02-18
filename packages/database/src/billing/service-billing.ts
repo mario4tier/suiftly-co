@@ -150,7 +150,7 @@ export async function handleSubscriptionBillingLocked(
         .where(
           and(
             eq(serviceInstances.customerId, customerId),
-            eq(serviceInstances.serviceType, serviceType as any)
+            eq(serviceInstances.serviceType, serviceType)
           )
         );
 

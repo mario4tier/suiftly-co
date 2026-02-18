@@ -14,13 +14,13 @@ import { sql } from 'drizzle-orm';
 export const configGlobal = pgTable('config_global', {
   key: text('key').primaryKey(),
   value: text('value').notNull(),
-  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
 export const processingState = pgTable('processing_state', {
   key: text('key').primaryKey(),
   value: text('value').notNull(),
-  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
 export const systemControl = pgTable('system_control', {
@@ -87,7 +87,7 @@ export const systemControl = pgTable('system_control', {
 
   lastMonthlyReset: date('last_monthly_reset'),
   maintenanceMode: boolean('maintenance_mode').default(false),
-  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
   checkSingleton: check('check_singleton', sql`${table.id} = 1`),
 }));
@@ -120,16 +120,16 @@ export const lmStatus = pgTable('lm_status', {
   appliedSeq: integer('applied_seq').default(0), // vaults[].applied.seq (null if no vault applied yet)
   processingSeq: integer('processing_seq'), // vaults[].processing.seq (for visibility, not used in sync logic)
 
-  // Entry count from vault
-  entries: integer('customer_count').default(0),
+  // Entry count from vault (number of KV pairs in the applied vault)
+  entries: integer('entries').default(0),
 
   // Connection status - derived from response availability
-  lastSeenAt: timestamp('last_seen_at'),
-  lastErrorAt: timestamp('last_error_at'),
+  lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
+  lastErrorAt: timestamp('last_error_at', { withTimezone: true }),
   lastError: text('last_error'),
 
-  createdAt: timestamp('created_at').notNull().defaultNow(),
-  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
   pk: primaryKey({ columns: [table.lmId, table.vaultType] }),
 }));

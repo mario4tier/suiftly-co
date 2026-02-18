@@ -111,7 +111,7 @@ export async function updateUsageChargesToDraft(
     SELECT COALESCE(SUM(amount_usd_cents), 0) as total
     FROM invoice_line_items
     WHERE billing_record_id = ${invoiceId}
-      AND item_type = 'requests'
+      AND item_type = ${INVOICE_LINE_ITEM_TYPE.REQUESTS}
   `);
   const existingUsageTotal = Number(existingUsageResult.rows[0]?.total ?? 0);
 
@@ -120,7 +120,7 @@ export async function updateUsageChargesToDraft(
   await tx.execute(sql`
     DELETE FROM invoice_line_items
     WHERE billing_record_id = ${invoiceId}
-      AND item_type = 'requests'
+      AND item_type = ${INVOICE_LINE_ITEM_TYPE.REQUESTS}
   `);
 
   // 4. Get all service instances for this customer
@@ -375,7 +375,7 @@ export async function finalizeUsageChargesForBilling(
     SELECT COALESCE(SUM(amount_usd_cents), 0) as total
     FROM invoice_line_items
     WHERE billing_record_id = ${invoiceId}
-      AND item_type = 'requests'
+      AND item_type = ${INVOICE_LINE_ITEM_TYPE.REQUESTS}
   `);
   const existingUsageTotal = Number(existingUsageResult.rows[0]?.total ?? 0);
 
@@ -383,7 +383,7 @@ export async function finalizeUsageChargesForBilling(
   await tx.execute(sql`
     DELETE FROM invoice_line_items
     WHERE billing_record_id = ${invoiceId}
-      AND item_type = 'requests'
+      AND item_type = ${INVOICE_LINE_ITEM_TYPE.REQUESTS}
   `);
 
   // 4. Get all service instances for this customer
@@ -573,7 +573,7 @@ export async function syncUsageToDraft(
     SELECT COALESCE(SUM(amount_usd_cents), 0) as total
     FROM invoice_line_items
     WHERE billing_record_id = ${invoiceId}
-      AND item_type = 'requests'
+      AND item_type = ${INVOICE_LINE_ITEM_TYPE.REQUESTS}
   `);
   const existingUsageTotal = Number(existingUsageResult.rows[0]?.total ?? 0);
 
@@ -582,7 +582,7 @@ export async function syncUsageToDraft(
   await tx.execute(sql`
     DELETE FROM invoice_line_items
     WHERE billing_record_id = ${invoiceId}
-      AND item_type = 'requests'
+      AND item_type = ${INVOICE_LINE_ITEM_TYPE.REQUESTS}
   `);
 
   // 4. Get all subscribed services for this customer

@@ -1121,10 +1121,17 @@ export const billingRouter = router({
         });
       }
 
-      // Update priorities
+      // Update priorities in two passes to avoid unique constraint violation during swap.
+      // Pass 1: Set all to negative temporary values (no conflict possible)
       for (const item of input.order) {
         await db.update(customerPaymentMethods)
-          .set({ priority: item.priority, updatedAt: new Date() })
+          .set({ priority: -item.priority, updatedAt: new Date() })
+          .where(eq(customerPaymentMethods.id, item.id));
+      }
+      // Pass 2: Set to final positive values
+      for (const item of input.order) {
+        await db.update(customerPaymentMethods)
+          .set({ priority: item.priority })
           .where(eq(customerPaymentMethods.id, item.id));
       }
 

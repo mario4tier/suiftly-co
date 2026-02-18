@@ -21,7 +21,7 @@ export const escrowTransactionSchema = z.object({
     TRANSACTION_TYPE.CHARGE,
     TRANSACTION_TYPE.CREDIT,
   ]),
-  amount: z.string().regex(/^\d+(\.\d{1,8})?$/), // Decimal with up to 8 decimals
+  amountUsd: z.string().regex(/^\d+(\.\d{1,8})?$/), // USD dollar amount (USDC on-chain), up to 8 decimals
   assetType: z.string().optional().nullable(),
   timestamp: z.date().or(z.string().datetime()),
 });

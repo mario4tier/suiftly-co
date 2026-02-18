@@ -76,11 +76,11 @@ export const sealKeys = pgTable('seal_keys', {
     .default(0),
 
   // When the last registration attempt started
-  lastRegistrationAttemptAt: timestamp('last_registration_attempt_at'),
+  lastRegistrationAttemptAt: timestamp('last_registration_attempt_at', { withTimezone: true }),
 
   // When to retry registration (exponential backoff)
   // NULL = immediate retry allowed, non-NULL = wait until this time
-  nextRetryAt: timestamp('next_retry_at'),
+  nextRetryAt: timestamp('next_retry_at', { withTimezone: true }),
 
   // Version counter for package changes (incremented when packages added/removed)
   // Used to detect if packages changed during registration
@@ -94,12 +94,12 @@ export const sealKeys = pgTable('seal_keys', {
   registeredPackagesVersion: integer('registered_packages_version'),
 
   isUserEnabled: boolean('is_user_enabled').notNull().default(true),
-  createdAt: timestamp('created_at').notNull().defaultNow(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 
   // Soft delete timestamp - derivation indices are NEVER recycled
   // Even "deleted" keys retain their index to prevent index reuse
   // NULL = active, non-NULL = soft deleted
-  deletedAt: timestamp('deleted_at'),
+  deletedAt: timestamp('deleted_at', { withTimezone: true }),
 }, (table) => ({
   idxSealCustomer: index('idx_seal_customer').on(table.customerId),
   idxSealInstance: index('idx_seal_instance').on(table.instanceId),
@@ -137,7 +137,7 @@ export const sealPackages = pgTable('seal_packages', {
   name: text('name'),
 
   isUserEnabled: boolean('is_user_enabled').notNull().default(true),
-  createdAt: timestamp('created_at').notNull().defaultNow(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
   idxPackageSealKey: index('idx_package_seal_key').on(table.sealKeyId),
   idxPackageAddress: index('idx_package_address').on(table.packageAddress),
@@ -184,7 +184,7 @@ export const sealRegistrationOps = pgTable('seal_registration_ops', {
 
   // Retry tracking (exponential backoff)
   attemptCount: integer('attempt_count').notNull().default(0),
-  nextRetryAt: timestamp('next_retry_at'),  // NULL = immediate retry OK
+  nextRetryAt: timestamp('next_retry_at', { withTimezone: true }),  // NULL = immediate retry OK
 
   // Results (set on completion)
   txDigest: bytea('tx_digest'),     // Sui transaction digest (32 bytes)
@@ -192,9 +192,9 @@ export const sealRegistrationOps = pgTable('seal_registration_ops', {
   errorMessage: text('error_message'),
 
   // Timestamps
-  createdAt: timestamp('created_at').notNull().defaultNow(),
-  startedAt: timestamp('started_at'),      // When processing began
-  completedAt: timestamp('completed_at'),  // When completed (success or final state)
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  startedAt: timestamp('started_at', { withTimezone: true }),      // When processing began
+  completedAt: timestamp('completed_at', { withTimezone: true }),  // When completed (success or final state)
 }, (table) => ({
   // Index for efficient GM polling: find queued ops ready to process
   idxRegOpsQueued: index('idx_seal_reg_ops_queued')

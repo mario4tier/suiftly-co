@@ -23,8 +23,8 @@ export const serviceInstances = pgTable('service_instances', {
   subPendingInvoiceId: bigint('sub_pending_invoice_id', { mode: 'number' }).references(() => billingRecords.id),
   paidOnce: boolean('paid_once').notNull().default(false), // Has this service ever had a successful payment?
   config: jsonb('config'),
-  enabledAt: timestamp('enabled_at'),
-  disabledAt: timestamp('disabled_at'),
+  enabledAt: timestamp('enabled_at', { withTimezone: true }),
+  disabledAt: timestamp('disabled_at', { withTimezone: true }),
 
   // Phase 1C: Tier change scheduling (BILLING_DESIGN.md R13.2)
   // For scheduled downgrades - takes effect on 1st of next month
@@ -38,7 +38,7 @@ export const serviceInstances = pgTable('service_instances', {
   cancellationEffectiveAt: timestamp('cancellation_effective_at', { withTimezone: true }),
 
   // Usage billing: tracks last billed timestamp to prevent double-billing (STATS_DESIGN.md D3)
-  lastBilledTimestamp: timestamp('last_billed_timestamp'),
+  lastBilledTimestamp: timestamp('last_billed_timestamp', { withTimezone: true }),
 
   // Vault sync tracking per vault type: records the vault seq that will contain this service's config
   // 0 = no pending changes (synced), >0 = waiting for LMs to reach this seq

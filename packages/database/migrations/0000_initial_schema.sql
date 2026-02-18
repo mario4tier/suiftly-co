@@ -30,30 +30,30 @@ CREATE TABLE "admin_notifications" (
 );
 --> statement-breakpoint
 CREATE TABLE "api_keys" (
-	"api_key_fp" integer PRIMARY KEY NOT NULL,
+	"api_key_fp" bigint PRIMARY KEY NOT NULL,
 	"api_key_id" varchar(150) NOT NULL,
 	"customer_id" integer NOT NULL,
 	"service_type" "service_type" NOT NULL,
 	"metadata" jsonb DEFAULT '{}'::jsonb NOT NULL,
 	"is_user_enabled" boolean DEFAULT true NOT NULL,
-	"created_at" timestamp DEFAULT now() NOT NULL,
-	"revoked_at" timestamp,
-	"deleted_at" timestamp,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"revoked_at" timestamp with time zone,
+	"deleted_at" timestamp with time zone,
 	CONSTRAINT "api_keys_api_key_id_unique" UNIQUE("api_key_id")
 );
 --> statement-breakpoint
 CREATE TABLE "auth_nonces" (
 	"address" varchar(66) PRIMARY KEY NOT NULL,
 	"nonce" varchar(64) NOT NULL,
-	"created_at" timestamp DEFAULT now() NOT NULL
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE "refresh_tokens" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"customer_id" integer NOT NULL,
 	"token_hash" varchar(64) NOT NULL,
-	"expires_at" timestamp NOT NULL,
-	"created_at" timestamp DEFAULT now() NOT NULL,
+	"expires_at" timestamp with time zone NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "refresh_tokens_token_hash_unique" UNIQUE("token_hash")
 );
 --> statement-breakpoint
@@ -163,8 +163,8 @@ CREATE TABLE "customers" (
 	"paid_once" boolean DEFAULT false NOT NULL,
 	"grace_period_start" date,
 	"grace_period_notified_at" timestamp with time zone[],
-	"created_at" timestamp DEFAULT now() NOT NULL,
-	"updated_at" timestamp DEFAULT now() NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "customers_wallet_address_unique" UNIQUE("wallet_address"),
 	CONSTRAINT "check_customer_id" CHECK ("customers"."customer_id" != 0)
 );
@@ -172,8 +172,8 @@ CREATE TABLE "customers" (
 CREATE TABLE "billing_records" (
 	"id" bigserial PRIMARY KEY NOT NULL,
 	"customer_id" integer NOT NULL,
-	"billing_period_start" timestamp NOT NULL,
-	"billing_period_end" timestamp NOT NULL,
+	"billing_period_start" timestamp with time zone NOT NULL,
+	"billing_period_end" timestamp with time zone NOT NULL,
 	"amount_usd_cents" bigint NOT NULL,
 	"type" "billing_record_type" NOT NULL,
 	"status" "billing_status" NOT NULL,
@@ -184,8 +184,8 @@ CREATE TABLE "billing_records" (
 	"retry_count" integer DEFAULT 0,
 	"last_retry_at" timestamp with time zone,
 	"failure_reason" text,
-	"created_at" timestamp DEFAULT now() NOT NULL,
-	"last_updated_at" timestamp,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"last_updated_at" timestamp with time zone,
 	CONSTRAINT "check_tx_digest_length" CHECK ("billing_records"."tx_digest" IS NULL OR LENGTH("billing_records"."tx_digest") = 32)
 );
 --> statement-breakpoint
@@ -194,9 +194,9 @@ CREATE TABLE "escrow_transactions" (
 	"customer_id" integer NOT NULL,
 	"tx_digest" "bytea" NOT NULL,
 	"tx_type" "transaction_type" NOT NULL,
-	"amount" numeric(20, 8) NOT NULL,
+	"amount_usd" numeric(20, 8) NOT NULL,
 	"asset_type" varchar(66),
-	"timestamp" timestamp NOT NULL,
+	"timestamp" timestamp with time zone NOT NULL,
 	CONSTRAINT "escrow_transactions_tx_digest_unique" UNIQUE("tx_digest"),
 	CONSTRAINT "check_tx_digest_length" CHECK (LENGTH("escrow_transactions"."tx_digest") = 32)
 );
@@ -225,13 +225,13 @@ CREATE TABLE "service_instances" (
 	"sub_pending_invoice_id" bigint,
 	"paid_once" boolean DEFAULT false NOT NULL,
 	"config" jsonb,
-	"enabled_at" timestamp,
-	"disabled_at" timestamp,
+	"enabled_at" timestamp with time zone,
+	"disabled_at" timestamp with time zone,
 	"scheduled_tier" "service_tier",
 	"scheduled_tier_effective_date" date,
 	"cancellation_scheduled_for" date,
 	"cancellation_effective_at" timestamp with time zone,
-	"last_billed_timestamp" timestamp,
+	"last_billed_timestamp" timestamp with time zone,
 	"sma_config_change_vault_seq" integer DEFAULT 0,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"cp_enabled" boolean DEFAULT false NOT NULL,
@@ -252,13 +252,13 @@ CREATE TABLE "seal_keys" (
 	"registration_status" "seal_registration_status" DEFAULT 'registering' NOT NULL,
 	"registration_error" text,
 	"registration_attempts" integer DEFAULT 0 NOT NULL,
-	"last_registration_attempt_at" timestamp,
-	"next_retry_at" timestamp,
+	"last_registration_attempt_at" timestamp with time zone,
+	"next_retry_at" timestamp with time zone,
 	"packages_version" integer DEFAULT 0 NOT NULL,
 	"registered_packages_version" integer,
 	"is_user_enabled" boolean DEFAULT true NOT NULL,
-	"created_at" timestamp DEFAULT now() NOT NULL,
-	"deleted_at" timestamp,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"deleted_at" timestamp with time zone,
 	CONSTRAINT "check_name_length" CHECK ("seal_keys"."name" IS NULL OR LENGTH("seal_keys"."name") <= 64),
 	CONSTRAINT "check_public_key_length" CHECK (LENGTH("seal_keys"."public_key") IN (48, 96)),
 	CONSTRAINT "check_object_id_length" CHECK ("seal_keys"."object_id" IS NULL OR LENGTH("seal_keys"."object_id") = 32),
@@ -273,7 +273,7 @@ CREATE TABLE "seal_packages" (
 	"package_address" "bytea" NOT NULL,
 	"name" text,
 	"is_user_enabled" boolean DEFAULT true NOT NULL,
-	"created_at" timestamp DEFAULT now() NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "check_package_address_length" CHECK (LENGTH("seal_packages"."package_address") = 32),
 	CONSTRAINT "check_name_length" CHECK ("seal_packages"."name" IS NULL OR LENGTH("seal_packages"."name") <= 64)
 );
@@ -287,13 +287,13 @@ CREATE TABLE "seal_registration_ops" (
 	"status" "seal_op_status" NOT NULL,
 	"packages_version_at_op" integer NOT NULL,
 	"attempt_count" integer DEFAULT 0 NOT NULL,
-	"next_retry_at" timestamp,
+	"next_retry_at" timestamp with time zone,
 	"tx_digest" "bytea",
 	"object_id" "bytea",
 	"error_message" text,
-	"created_at" timestamp DEFAULT now() NOT NULL,
-	"started_at" timestamp,
-	"completed_at" timestamp,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"started_at" timestamp with time zone,
+	"completed_at" timestamp with time zone,
 	CONSTRAINT "check_tx_digest_length" CHECK ("seal_registration_ops"."tx_digest" IS NULL OR LENGTH("seal_registration_ops"."tx_digest") = 32),
 	CONSTRAINT "check_op_object_id_length" CHECK ("seal_registration_ops"."object_id" IS NULL OR LENGTH("seal_registration_ops"."object_id") = 32)
 );
@@ -304,8 +304,8 @@ CREATE TABLE "usage_records" (
 	"service_type" "service_type" NOT NULL,
 	"request_count" bigint NOT NULL,
 	"bytes_transferred" bigint,
-	"window_start" timestamp NOT NULL,
-	"window_end" timestamp NOT NULL,
+	"window_start" timestamp with time zone NOT NULL,
+	"window_end" timestamp with time zone NOT NULL,
 	"charged_amount" numeric(20, 8)
 );
 --> statement-breakpoint
@@ -353,7 +353,7 @@ CREATE TABLE "user_activity_logs" (
 CREATE TABLE "config_global" (
 	"key" text PRIMARY KEY NOT NULL,
 	"value" text NOT NULL,
-	"updated_at" timestamp DEFAULT now() NOT NULL
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE "lm_status" (
@@ -364,19 +364,19 @@ CREATE TABLE "lm_status" (
 	"vault_type" varchar(8) NOT NULL,
 	"applied_seq" integer DEFAULT 0,
 	"processing_seq" integer,
-	"customer_count" integer DEFAULT 0,
-	"last_seen_at" timestamp,
-	"last_error_at" timestamp,
+	"entries" integer DEFAULT 0,
+	"last_seen_at" timestamp with time zone,
+	"last_error_at" timestamp with time zone,
 	"last_error" text,
-	"created_at" timestamp DEFAULT now() NOT NULL,
-	"updated_at" timestamp DEFAULT now() NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "lm_status_lm_id_vault_type_pk" PRIMARY KEY("lm_id","vault_type")
 );
 --> statement-breakpoint
 CREATE TABLE "processing_state" (
 	"key" text PRIMARY KEY NOT NULL,
 	"value" text NOT NULL,
-	"updated_at" timestamp DEFAULT now() NOT NULL
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE "system_control" (
@@ -415,7 +415,7 @@ CREATE TABLE "system_control" (
 	"next_seal_derivation_index_pg2" integer DEFAULT 1 NOT NULL,
 	"last_monthly_reset" date,
 	"maintenance_mode" boolean DEFAULT false,
-	"updated_at" timestamp DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "check_singleton" CHECK ("system_control"."id" = 1)
 );
 --> statement-breakpoint
@@ -531,4 +531,6 @@ CREATE INDEX "idx_logs_event_type" ON "haproxy_raw_logs" USING btree ("event_typ
 CREATE INDEX "idx_logs_status_code" ON "haproxy_raw_logs" USING btree ("status_code","timestamp" DESC NULLS LAST);--> statement-breakpoint
 CREATE INDEX "idx_logs_api_key_fp" ON "haproxy_raw_logs" USING btree ("api_key_fp","timestamp" DESC NULLS LAST) WHERE "haproxy_raw_logs"."api_key_fp" != 0;--> statement-breakpoint
 CREATE INDEX "idx_system_server_time" ON "haproxy_system_logs" USING btree ("server_id","timestamp" DESC NULLS LAST);--> statement-breakpoint
-CREATE INDEX "idx_activity_customer_time" ON "user_activity_logs" USING btree ("customer_id","timestamp" DESC NULLS LAST);
+CREATE INDEX "idx_activity_customer_time" ON "user_activity_logs" USING btree ("customer_id","timestamp" DESC NULLS LAST);--> statement-breakpoint
+CREATE UNIQUE INDEX "uniq_customer_provider_ref_active" ON "customer_payment_methods" ("customer_id", "provider_ref") WHERE status = 'active' AND provider_ref IS NOT NULL;--> statement-breakpoint
+CREATE UNIQUE INDEX "uniq_customer_priority_active" ON "customer_payment_methods" ("customer_id", "priority") WHERE status = 'active';

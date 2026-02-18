@@ -140,7 +140,7 @@ export async function reconcilePayments(customerId: number): Promise<ReconcileRe
               customerId,
               txDigest: txDigest,
               txType: 'charge',
-              amount: String(priceUsdCents / 100),
+              amountUsd: String(priceUsdCents / 100),
               assetType: 'USDC',
               timestamp: dbClock.now(),
             })

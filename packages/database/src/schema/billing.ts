@@ -140,6 +140,13 @@ export const customerPaymentMethods = pgTable('customer_payment_methods', {
 //   WHERE status = 'active' AND provider_ref IS NOT NULL;
 // This allows multiple cards per provider type in the future. Escrow uniqueness
 // (providerRef=NULL) is enforced by application-level pre-check, not the DB index.
+//
+// NOTE: Partial unique index (prevent duplicate priority per customer)
+// created in migration SQL because Drizzle ORM unique() does not support WHERE clauses:
+//   CREATE UNIQUE INDEX uniq_customer_priority_active
+//   ON customer_payment_methods (customer_id, priority)
+//   WHERE status = 'active';
+// This ensures deterministic provider chain ordering in getCustomerProviders().
 
 /**
  * Payment Webhook Events Table
@@ -210,6 +217,9 @@ export const invoiceLineItems = pgTable('invoice_line_items', {
   serviceType: serviceTypeEnum('service_type'),
 
   // Quantity and pricing
+  // NOTE: For 'requests' items, unitPriceUsdCents is cents per 1000 requests (not per 1).
+  // So quantity * unitPriceUsdCents != amountUsdCents. The authoritative charge is amountUsdCents,
+  // computed as: Math.floor(quantity * unitPriceUsdCents / 1000).
   quantity: bigint('quantity', { mode: 'number' }).notNull().default(1),
   unitPriceUsdCents: bigint('unit_price_usd_cents', { mode: 'number' }).notNull(),
   amountUsdCents: bigint('amount_usd_cents', { mode: 'number' }).notNull(),

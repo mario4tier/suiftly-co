@@ -9,8 +9,8 @@ export const usageRecords = pgTable('usage_records', {
   serviceType: serviceTypeEnum('service_type').notNull(),
   requestCount: bigint('request_count', { mode: 'number' }).notNull(),
   bytesTransferred: bigint('bytes_transferred', { mode: 'number' }),
-  windowStart: timestamp('window_start').notNull(),
-  windowEnd: timestamp('window_end').notNull(),
+  windowStart: timestamp('window_start', { withTimezone: true }).notNull(),
+  windowEnd: timestamp('window_end', { withTimezone: true }).notNull(),
   chargedAmount: decimal('charged_amount', { precision: 20, scale: 8 }),
 }, (table) => ({
   idxCustomerTime: index('idx_customer_time').on(table.customerId, table.windowStart),

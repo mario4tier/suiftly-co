@@ -72,9 +72,7 @@ export class EscrowPaymentProvider implements IPaymentProvider {
         customerId: params.customerId,
         txDigest,
         txType: 'charge',
-        // IMPORTANT: escrow_transactions.amount is DECIMAL (dollars), not cents
-        // This matches blockchain format. All other billing tables use cents.
-        amount: String(params.amountUsdCents / 100),
+        amountUsd: String(params.amountUsdCents / 100),
         assetType: 'USDC',
         timestamp: this.clock.now(),
       })

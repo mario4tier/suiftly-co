@@ -122,6 +122,10 @@ export async function processInvoicePayment(
       });
 
       if (chargeResult.success) {
+        if (!chargeResult.referenceId) {
+          throw new Error(`Provider ${provider.type} returned success without referenceId for invoice ${billingRecordId}`);
+        }
+
         // Create invoice_payments row (processInvoicePayment's responsibility)
         await tx.insert(invoicePayments).values({
           billingRecordId,
@@ -137,7 +141,7 @@ export async function processInvoicePayment(
         result.paymentSources.push({
           type: provider.type,
           amountCents: creditResult.remainingInvoiceAmountCents,
-          referenceId: chargeResult.referenceId!,
+          referenceId: chargeResult.referenceId,
         });
 
         result.amountPaidCents += creditResult.remainingInvoiceAmountCents;
