@@ -25,9 +25,9 @@ Infrastructure (HAProxy, Seal servers, Local Manager) handled by **mhaxbe** proj
 
 ### Frontend (SPA)
 
-**Framework:** Vite 7 + React 19
+**Framework:** Vite 6 + React 19
 **Routing:** TanStack Router v1 (type-safe, page navigation)
-**Styling:** Tailwind CSS + shadcn/ui
+**Styling:** Tailwind CSS v4 + shadcn/ui
 **State:**
 - Server state: TanStack Query v5 (via tRPC)
 - Global UI state: Zustand (auth, theme, sidebar, preferences)
@@ -35,12 +35,12 @@ Infrastructure (HAProxy, Seal servers, Local Manager) handled by **mhaxbe** proj
 - Route state: URL params
 
 **Forms:** React Hook Form + Zod
-**Web3:** @mysten/sui.js + @mysten/dapp-kit (wallet widget component)
+**Web3:** @mysten/sui v2 + @mysten/dapp-kit-react (wallet widget component)
 
 ### Backend (API)
 
 **Runtime:** Node.js 22 LTS with TypeScript 5.9
-**Framework:** Fastify 5 (v4 EOL June 2025)
+**Framework:** Fastify 5
 **API:** tRPC v11 (end-to-end type safety, SSE subscriptions)
 **Validation:** Zod (shared schemas with frontend)
 **Auth:** Wallet-based authentication (sign-in with Sui) → JWT via jose
@@ -939,7 +939,7 @@ process.on('SIGTERM', async () => {
 **Installation:** See [.claude/mcp-setup.md](.claude/mcp-setup.md) for step-by-step setup guide.
 
 **Essential MCPs (Installed):**
-1. **context7** - Live documentation for third-party packages (prevents outdated API suggestions for React 19, Vite 7, tRPC v11, Drizzle, @mysten/sui.js)
+1. **context7** - Live documentation for third-party packages (prevents outdated API suggestions for React 19, Vite 6, tRPC v11, Drizzle, @mysten/sui)
 
 **Optional MCPs (Add When Needed):**
 2. **@modelcontextprotocol/server-postgres** - Database schema inspection (add when database exists)
@@ -1019,7 +1019,7 @@ See [.claude/commands/g.md](.claude/commands/g.md) for command definition.
 
 ## Testing Strategy
 
-**Test Infrastructure (Vitest + Playwright):**
+**Test Infrastructure (Vitest 4 + Playwright):**
 
 Fast, low-maintenance testing for rapid bug isolation during Claude Code-assisted development.
 
