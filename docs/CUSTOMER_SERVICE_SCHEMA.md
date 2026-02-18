@@ -27,6 +27,8 @@ customers (wallet_address)
 │
 ├── escrow_transactions (on-chain charge/credit records)
 │
+├── ledger_entries (all financial movements: charges, credits, deposits)
+│
 ├── customer_credits (non-withdrawable, applied first in payment order)
 │
 ├── billing_records (invoices: draft/pending/paid/failed/voided)
@@ -45,8 +47,9 @@ customers (wallet_address)
 │   └── GraphQL: service_type='graphql' (future)
 │       └── api_keys (service_type='graphql')
 │
-└── usage_records (billing and metering)
-    └── haproxy_raw_logs (TimescaleDB: request logs)
+├── usage_records (billing and metering)
+│
+└── haproxy_raw_logs (request logs, independent of usage_records)
 ```
 
 See [BILLING_DESIGN.md](./BILLING_DESIGN.md) for invoice lifecycle and [PAYMENT_DESIGN.md](./PAYMENT_DESIGN.md) for payment provider abstraction.
@@ -465,20 +468,32 @@ The Drizzle schema files are the authoritative reference for all table definitio
 | File | Tables |
 |------|--------|
 | `schema/customers.ts` | `customers` |
+| `schema/auth.ts` | `auth_nonces`, `refresh_tokens` |
 | `schema/services.ts` | `service_instances` |
-| `schema/escrow.ts` | `billing_records`, `escrow_transactions`, `mock_sui_transactions` |
-| `schema/billing.ts` | `invoice_line_items`, `invoice_payments`, `customer_credits`, `billing_idempotency` |
+| `schema/escrow.ts` | `escrow_transactions`, `ledger_entries`, `billing_records` |
+| `schema/billing.ts` | `invoice_line_items`, `invoice_payments`, `customer_credits`, `customer_payment_methods`, `billing_idempotency` |
 | `schema/seal.ts` | `seal_keys`, `seal_packages`, `seal_registration_ops` |
-| `schema/api-keys.ts` | `api_keys` |
+| `schema/api_keys.ts` | `api_keys` |
+| `schema/usage.ts` | `usage_records` |
+| `schema/logs.ts` | `user_activity_logs`, `haproxy_raw_logs`, `haproxy_system_logs` |
+| `schema/system.ts` | `config_global`, `processing_state`, `system_control`, `lm_status` |
+| `schema/admin.ts` | `admin_notifications` |
+| `schema/cancellation-history.ts` | `service_cancellation_history` |
 | `schema/enums.ts` | PostgreSQL ENUM type definitions |
+| `schema/mock.ts` | `mock_sui_transactions` (dev/test only) |
+| `schema/mock-tracking.ts` | `mock_tracking_objects` (dev/test only) |
+| `schema/test-kv.ts` | `test_kv` (dev/test only) |
 
 **Key relationships:**
 
 - `customers` 1:N `service_instances` (one instance per service type per customer)
 - `customers` 1:N `billing_records` (invoices: draft/pending/paid/failed/voided)
+- `customers` 1:N `ledger_entries` (all financial movements)
+- `customers` 1:N `escrow_transactions` (on-chain charge/credit records)
 - `billing_records` 1:N `invoice_line_items` (itemized charges)
 - `billing_records` 1:N `invoice_payments` (multi-source payment tracking)
 - `service_instances` 1:N `seal_keys` 1:N `seal_packages`
+- `seal_keys` 1:N `seal_registration_ops` (async on-chain registration queue)
 - `service_instances` has `sub_pending_invoice_id` FK → `billing_records` (payment gate)
 
 **For billing/payment schema details**, see [BILLING_DESIGN.md](./BILLING_DESIGN.md) and [PAYMENT_DESIGN.md](./PAYMENT_DESIGN.md).
@@ -508,7 +523,7 @@ The Drizzle schema files are the authoritative reference for all table definitio
 - Rate limit authentication endpoints (prevent brute force)
 - Implement API key rotation reminders
 - Monitor for suspicious patterns (rapid key creation)
-- Unique constraint on derivation_index prevents duplicate key derivation
+- Atomic per-PG counter allocation prevents duplicate derivation indices (no DB unique constraint — uniqueness enforced by `system_control` counter)
 
 ### Performance Targets
 - API key lookup: <1ms (cached), <10ms (DB)
