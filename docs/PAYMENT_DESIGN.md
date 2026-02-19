@@ -187,7 +187,7 @@ export class EscrowPaymentProvider implements IPaymentProvider {
 
 File: `packages/database/src/billing/providers/stripe-provider.ts`
 
-Uses Stripe Payment Intents API with `off_session` for background charges:
+Uses Stripe Invoices API for background charges (Stripe creates PaymentIntents internally):
 
 ```typescript
 export class StripePaymentProvider implements IPaymentProvider {
@@ -212,10 +212,12 @@ export class StripePaymentProvider implements IPaymentProvider {
 
   async charge(params: ProviderChargeParams): Promise<ProviderChargeResult> {
     // 1. Get customer's stripeCustomerId from customers table
-    // 2. Create PaymentIntent with off_session: true, confirm: true
-    // 3. Handle 'requires_action' → return { success: false, retryable: false }
+    // 2. Create Stripe Invoice with automatic_tax: { enabled: false }
+    // 3. Add InvoiceItem with amount and description
+    // 4. Finalize and pay the invoice (Stripe creates PaymentIntent internally)
+    // 5. Handle 'requires_action' → return { success: false, retryable: false }
     //    (see 3DS/SCA section below)
-    // 4. Return { referenceId: paymentIntentId }
+    // 6. Return { referenceId: stripeInvoiceId }
     //    NOTE: Does NOT create invoice_payments — caller does that
   }
 
@@ -617,29 +619,30 @@ export const paymentWebhookEvents = pgTable('payment_webhook_events', {
 ### SDK & Approach
 
 - **Package:** `stripe` npm (server-side only)
-- **API:** Payment Intents API (not Checkout Sessions) — keeps UX in-app
-- **Card storage:** SetupIntent to save card -> PaymentIntent with `off_session: true, confirm: true` for charges
+- **API:** Invoices API (not Checkout Sessions or raw Payment Intents) — server-side billing with tax-ready path
+- **Card storage:** SetupIntent to save card, then Invoices for charges (Stripe creates PaymentIntents internally)
+- **Tax:** `automatic_tax: { enabled: false }` from day one — flip to `true` when nexus is reached (no code/schema changes)
 - **Currency:** USD cents (matches existing billing system)
 
 ### 3DS / SCA Handling
 
-**Problem:** European cards (and increasingly others) require 3D Secure (3DS) authentication under SCA regulation. Server-side charges with `confirm: true` will return `requires_action` instead of completing.
+**Problem:** European cards (and increasingly others) require 3D Secure (3DS) authentication under SCA regulation. Invoice payment may fail with `requires_action` if the underlying PaymentIntent needs authentication.
 
-**Approach:** Use `off_session: true` to indicate the charge is merchant-initiated:
+**Approach:** SetupIntent collects 3DS consent upfront; Invoices leverage this for merchant-initiated charges:
 
 1. During card setup (SetupIntent), Stripe collects 3DS consent for future charges
-2. Background charges use `off_session: true` — Stripe applies exemptions where possible
-3. If 3DS is still required (exemption denied), the charge fails with `requires_action`
+2. Invoice payment uses the saved payment method — Stripe applies SCA exemptions where possible
+3. If 3DS is still required (exemption denied), the invoice remains `open` with `requires_action`
 
 **When `requires_action` occurs:**
 - `StripePaymentProvider.charge()` returns `{ success: false, retryable: false, error: 'Card requires authentication' }`
 - The provider chain falls through to the next provider (if any)
-- If no provider succeeds, the invoice enters the normal retry/grace period flow
+- If no provider succeeds, the billing invoice enters the normal retry/grace period flow
 - The dashboard shows a "Complete payment" prompt linking to a Stripe-hosted 3DS page
-- After the user completes 3DS, the webhook confirms payment and updates the invoice
+- After the user completes 3DS, the `invoice.paid` webhook confirms payment
 
 **This is acceptable because:**
-- `off_session` with prior SetupIntent consent succeeds for most charges
+- SetupIntent consent succeeds for most merchant-initiated charges
 - The fallback to other providers handles the common case
 - The manual completion path handles the edge case
 - This matches how AWS/DigitalOcean handle 3DS failures
@@ -672,7 +675,9 @@ export interface IStripeService {
   }>;
 
   /**
-   * Charge a saved payment method (off_session, merchant-initiated).
+   * Charge via Stripe Invoice (merchant-initiated).
+   * Creates Invoice + InvoiceItem, finalizes, and pays.
+   * automatic_tax: { enabled: false } for now — flip to true when nexus reached.
    * May return requires_action if 3DS exemption is denied.
    */
   charge(params: {
@@ -682,10 +687,10 @@ export interface IStripeService {
     idempotencyKey: string;
   }): Promise<{
     success: boolean;
-    paymentIntentId?: string;
+    stripeInvoiceId?: string;
     error?: string;
     requiresAction?: boolean; // True if 3DS needed — card authentication required
-    clientSecret?: string;    // For frontend 3DS completion (if requiresAction)
+    hostedInvoiceUrl?: string; // Stripe-hosted page for 3DS completion (if requiresAction)
     retryable: boolean;
   }>;
 
@@ -720,9 +725,10 @@ Same pattern as `MockSuiService` — stores state in DB, supports failure inject
 ```typescript
 export class MockStripeService implements IStripeService {
   // In-memory storage (or new mock_stripe table)
-  // Generates deterministic IDs: pi_mock_xxx, cus_mock_xxx, seti_mock_xxx
+  // Generates deterministic IDs: in_mock_xxx, cus_mock_xxx, seti_mock_xxx
   // Configurable delays and failure scenarios (matching suiMockConfig pattern)
   // Can simulate requires_action for 3DS testing
+  // Creates mock invoices (not real Stripe Invoices) for unit test assertions
 }
 
 export const mockStripeService = new MockStripeService();
@@ -753,8 +759,8 @@ export async function stripeWebhookRoute(server: FastifyInstance) {
     // 1. Verify webhook signature
     // 2. Check payment_webhook_events table for idempotency
     // 3. Handle event types:
-    //    - payment_intent.succeeded: Update invoice status to PAID
-    //    - payment_intent.payment_failed: Mark invoice failed, trigger retry
+    //    - invoice.paid: Update billing invoice status to PAID
+    //    - invoice.payment_failed: Mark billing invoice failed, trigger retry
     //    - setup_intent.succeeded: Update customer_payment_methods.providerConfig with card details
     // 4. Mark event as processed in payment_webhook_events
     // 5. Return 200 (always — Stripe retries on non-2xx)
@@ -1023,7 +1029,7 @@ addPaymentMethod: protectedProcedure
 |------|---------|
 | `packages/shared/src/payment-provider/types.ts` | `IPaymentProvider` interface |
 | `packages/database/src/billing/providers/escrow-provider.ts` | Wraps `ISuiService` |
-| `packages/database/src/billing/providers/stripe-provider.ts` | Stripe Payment Intents |
+| `packages/database/src/billing/providers/stripe-provider.ts` | Stripe Invoices |
 | `packages/database/src/billing/providers/paypal-provider.ts` | PayPal Orders |
 | `packages/database/src/billing/providers/index.ts` | Provider resolution (reads customer priority) |
 | `packages/database/src/stripe/index.ts` | `IStripeService` interface |
@@ -1035,35 +1041,61 @@ addPaymentMethod: protectedProcedure
 
 ## 10. Testing
 
-### MockStripeService
+### MockStripeService (Unit/Integration Tests)
 
 Follows the `MockSuiService` pattern (`packages/database/src/sui-mock/mock.ts`):
-- In-memory state with deterministic IDs (`cus_mock_1`, `pi_mock_1`, etc.)
+- In-memory state with deterministic IDs (`cus_mock_1`, `in_mock_1`, etc.)
 - Configurable failure injection via `stripeMockConfig` (same API as `suiMockConfig`)
 - Configurable delays for UI testing
 - Can simulate `requires_action` for 3DS testing
-- Records transactions for audit trail assertions
+- Records invoices for audit trail assertions
+
+**Used for:** TDD, unit tests, CI pipeline — fast, deterministic, no external dependency.
+
+### Stripe Sandbox (Integration Tests)
+
+Use Stripe's test mode (`sk_test_...`) for integration tests that verify actual API behavior:
+
+- **Test cards:** `4242 4242 4242 4242` (success), `4000 0000 0000 0002` (decline), `4000 0027 6000 3184` (3DS required)
+- **Test clocks:** Advance time to simulate monthly billing cycles without waiting 30 days
+- **Invoice lifecycle:** Create → Finalize → Pay → `invoice.paid` webhook — verified end-to-end
+- **Webhook testing:** Use `stripe listen --forward-to localhost:PORT/stripe/webhook` (Stripe CLI) during development
+- **Tax dry run:** Test `automatic_tax: { enabled: true }` with test-mode tax calculations (no 0.5% fee in test mode)
+
+**CI strategy:**
+| Suite | Runs on | Uses | Speed |
+|-------|---------|------|-------|
+| Unit tests (MockStripeService) | Every commit | Mock | Fast (~seconds) |
+| Sandbox integration tests | Nightly + pre-release | Stripe test mode | Slower (~30s) |
+
+Sandbox tests are safe for CI — Stripe's test mode is rate-limited at 25 req/s (sufficient for testing), has no costs, and is highly available. The nightly cadence catches API changes or regressions without slowing down the main CI pipeline. For pre-release, sandbox tests provide confidence that the actual Stripe integration works before deploying.
+
+**Sandbox test keys:** Stored as CI secrets (`STRIPE_TEST_SECRET_KEY`, `STRIPE_TEST_WEBHOOK_SECRET`). These are test-mode keys — no risk of real charges.
 
 ### Test Coverage
 
-| Test | What it verifies |
-|------|-----------------|
-| Provider chain — credits only | Full payment with credits, no provider called |
-| Provider chain — credits + first provider | Partial credits, remainder charged to first-priority provider |
-| Provider chain — first provider fails, fallback | First provider fails, falls through to second |
-| Provider chain — all fail | Credits applied, all providers fail, invoice FAILED |
-| Provider chain — priority order respected | Providers called in customer's priority order |
-| Stripe charge — success | PaymentIntent created, invoice_payment recorded |
-| Stripe charge — card declined | Retryable error, correct error message |
-| Stripe charge — requires_action (3DS) | Non-retryable, falls through to next provider |
-| Stripe charge — idempotency | Same idempotency key returns cached result |
-| Webhook — payment_intent.succeeded | Invoice updated to PAID |
-| Webhook — duplicate event | payment_webhook_events idempotency prevents double-processing |
-| Webhook — invalid signature | Rejected with 400 |
-| Payment methods — add/remove/reorder | customer_payment_methods CRUD |
-| Service gate — no methods, pending invoice | Enabling blocked |
-| Service gate — method exists, pending invoice | Retries payment via provider chain |
-| Service gate — no pending invoice | Normal enable flow |
+| Test | What it verifies | Suite |
+|------|-----------------|-------|
+| Provider chain — credits only | Full payment with credits, no provider called | Unit |
+| Provider chain — credits + first provider | Partial credits, remainder charged to first-priority provider | Unit |
+| Provider chain — first provider fails, fallback | First provider fails, falls through to second | Unit |
+| Provider chain — all fail | Credits applied, all providers fail, invoice FAILED | Unit |
+| Provider chain — priority order respected | Providers called in customer's priority order | Unit |
+| Stripe charge — success | Invoice created + paid, invoice_payment recorded | Unit |
+| Stripe charge — card declined | Retryable error, correct error message | Unit |
+| Stripe charge — requires_action (3DS) | Non-retryable, falls through to next provider | Unit |
+| Stripe charge — idempotency | Same idempotency key returns cached result | Unit |
+| Webhook — invoice.paid | Billing invoice updated to PAID | Unit |
+| Webhook — duplicate event | payment_webhook_events idempotency prevents double-processing | Unit |
+| Webhook — invalid signature | Rejected with 400 | Unit |
+| Payment methods — add/remove/reorder | customer_payment_methods CRUD | Unit |
+| Service gate — no methods, pending invoice | Enabling blocked | Unit |
+| Service gate — method exists, pending invoice | Retries payment via provider chain | Unit |
+| Service gate — no pending invoice | Normal enable flow | Unit |
+| SetupIntent → Invoice → paid webhook | Full lifecycle with real Stripe API | Sandbox |
+| Invoice with automatic_tax | Tax calculation returns valid amounts | Sandbox |
+| Card decline + retry with new card | Full recovery flow | Sandbox |
+| Test clock — monthly billing cycle | Simulated 30-day cycle, invoice auto-created | Sandbox |
 
 ### Update existing tests
 
@@ -1112,13 +1144,14 @@ Update the sudob `/api/test/reset-all` endpoint to also clear payment-related da
 
 ## 12. Non-Goals (Out of Scope)
 
-- **Stripe Checkout Sessions** — We use Payment Intents to keep UX in-app
-- **Stripe Subscriptions** — We manage subscriptions ourselves (billing processor)
+- **Stripe Checkout Sessions** — We use Invoices API to keep UX in-app and control billing ourselves
+- **Stripe Subscriptions** — We manage subscriptions ourselves (billing processor); Stripe Invoices are used only as the charge mechanism
+- **Raw Payment Intents** — Invoices API creates PaymentIntents internally; we don't use the PaymentIntents API directly. This gives us tax-ready invoices and compliant invoice documents from day one
 - **Multi-currency** — USD only (matches existing billing system)
 - **Partial charges across providers** — One provider pays the full remaining amount
 - **Multiple methods per provider type** — One Stripe card, one escrow, one PayPal per customer (see Design Decisions)
 - **Frontend changes** — Covered in a separate UI design doc
-- **Tax compliance** — Post-MVP (see BILLING_DESIGN.md)
+- **Tax collection (for now)** — `automatic_tax: { enabled: false }` ships day one. When nexus is reached, flip to `true` — no code or schema changes needed. Stripe Tax handles calculation, collection, and reporting at 0.5% per transaction
 - **Stripe Connect** — Not needed (we're the merchant)
 - **Refunds / chargebacks** — Handled via existing credits system for now; Stripe/PayPal dispute handling is post-MVP
 
@@ -1168,5 +1201,5 @@ This prevents the scenario where a user bypasses a pending invoice just by addin
 
 ---
 
-**Version:** 3.0
-**Last Updated:** 2026-02-13
+**Version:** 4.0
+**Last Updated:** 2026-02-19
