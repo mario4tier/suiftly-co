@@ -106,6 +106,45 @@ if ! command -v stripe &>/dev/null; then
 fi
 
 # ============================================================================
+# Start Stripe webhook listener (captures whsec_ for API server)
+# ============================================================================
+echo "Starting Stripe webhook listener..."
+
+# Kill any existing stripe listen process
+pkill -f "stripe listen" 2>/dev/null || true
+sleep 1
+
+# Start stripe listen in background, capturing output to extract whsec_
+STRIPE_LOG="/tmp/suiftly-stripe-listen.log"
+stripe listen --forward-to localhost:22700/stripe/webhook > "$STRIPE_LOG" 2>&1 &
+STRIPE_PID=$!
+echo "$STRIPE_PID" > /tmp/suiftly-stripe-listen.pid
+
+# Wait for the whsec_ secret to appear in output (stripe prints it on startup)
+STRIPE_WEBHOOK_SECRET=""
+for i in {1..15}; do
+  sleep 1
+  if [ -f "$STRIPE_LOG" ]; then
+    STRIPE_WEBHOOK_SECRET=$(grep -o 'whsec_[a-zA-Z0-9]*' "$STRIPE_LOG" | head -1)
+    if [ -n "$STRIPE_WEBHOOK_SECRET" ]; then
+      break
+    fi
+  fi
+  echo "  Waiting for Stripe CLI... ($i/15)"
+done
+
+if [ -z "$STRIPE_WEBHOOK_SECRET" ]; then
+  echo "WARNING: Could not capture Stripe webhook secret"
+  echo "  stripe listen may need re-authentication: stripe login"
+  echo "  Continuing without webhook forwarding..."
+  kill $STRIPE_PID 2>/dev/null || true
+  rm -f /tmp/suiftly-stripe-listen.pid
+else
+  echo "  Stripe webhook listener started (PID: $STRIPE_PID)"
+  echo "  Webhook secret: ${STRIPE_WEBHOOK_SECRET:0:12}..."
+fi
+
+# ============================================================================
 # Check sudob is running (required for managing systemd services)
 # ============================================================================
 if ! curl -sf "$SUDOB_URL/api/health" >/dev/null 2>&1; then
@@ -316,7 +355,19 @@ fi
 # ============================================================================
 echo "Starting API server (MOCK_AUTH=true)..."
 cd /home/olet/suiftly-co
+
+# Load Stripe keys from ~/.suiftly.env
+STRIPE_SK=""
+STRIPE_PK=""
+if [ -f "$HOME/.suiftly.env" ]; then
+  STRIPE_SK=$(grep '^STRIPE_SECRET_KEY=' "$HOME/.suiftly.env" | cut -d= -f2-)
+  STRIPE_PK=$(grep '^STRIPE_PUBLISHABLE_KEY=' "$HOME/.suiftly.env" | cut -d= -f2-)
+fi
+
 MOCK_AUTH=true DATABASE_URL="postgresql://deploy:deploy_password_change_me@localhost/suiftly_dev" \
+  STRIPE_SECRET_KEY="${STRIPE_SK}" \
+  STRIPE_PUBLISHABLE_KEY="${STRIPE_PK}" \
+  STRIPE_WEBHOOK_SECRET="${STRIPE_WEBHOOK_SECRET}" \
   npx tsx apps/api/src/server.ts > /tmp/suiftly-api.log 2>&1 &
 API_PID=$!
 echo "$API_PID" > /tmp/suiftly-api.pid
@@ -367,6 +418,12 @@ FLUENTD_LM_STATUS="stopped"
 is_service_running "fluentd-gm" && FLUENTD_GM_STATUS="running"
 is_service_running "fluentd-lm" && FLUENTD_LM_STATUS="running"
 
+# Check Stripe listen status for summary
+STRIPE_STATUS="stopped"
+if [ -f /tmp/suiftly-stripe-listen.pid ] && kill -0 $(cat /tmp/suiftly-stripe-listen.pid) 2>/dev/null; then
+  STRIPE_STATUS="running"
+fi
+
 echo ""
 echo "========================================"
 echo "Dev servers running!"
@@ -378,6 +435,7 @@ echo "fluentd-gm: $FLUENTD_GM_STATUS (systemd)"
 echo "fluentd-lm: $FLUENTD_LM_STATUS (systemd)"
 echo "API:        http://localhost:22700 (PID: $API_PID)"
 echo "Webapp:     http://localhost:22710 (PID: $WEBAPP_PID)"
+echo "Stripe:     $STRIPE_STATUS (webhook → localhost:22700/stripe/webhook)"
 echo ""
 echo "Logs:"
 echo "  GM:         sudo journalctl -u suiftly-gm -f"
@@ -387,6 +445,7 @@ echo "  fluentd-lm: sudo journalctl -u fluentd-lm -f"
 echo "  Admin:      /tmp/suiftly-admin.log"
 echo "  API:        /tmp/suiftly-api.log"
 echo "  Webapp:     /tmp/suiftly-webapp.log"
+echo "  Stripe:     /tmp/suiftly-stripe-listen.log"
 echo ""
 echo "To stop: ./scripts/dev/stop-dev.sh"
 echo "========================================"

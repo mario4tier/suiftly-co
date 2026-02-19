@@ -87,6 +87,17 @@ else
 fi
 
 # ============================================================================
+# Stop Stripe webhook listener
+# ============================================================================
+if [ -f /tmp/suiftly-stripe-listen.pid ]; then
+  STRIPE_PID=$(cat /tmp/suiftly-stripe-listen.pid)
+  echo "  Stopping Stripe webhook listener (PID $STRIPE_PID)..."
+  kill $STRIPE_PID 2>/dev/null || true
+  rm /tmp/suiftly-stripe-listen.pid
+fi
+pkill -f "stripe listen" 2>/dev/null || true
+
+# ============================================================================
 # Stop non-systemd processes by PID
 # ============================================================================
 if [ -f /tmp/suiftly-admin.pid ]; then
