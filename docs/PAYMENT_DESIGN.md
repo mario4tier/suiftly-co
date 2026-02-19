@@ -34,6 +34,7 @@ All payment methods are equal at the priority/ordering layer — none gets hardc
 - **Service gate** (already implemented for escrow): tier selection and configuration are always allowed, but **enabling** a service or adding keys is blocked until:
   1. A payment method is configured, AND
   2. Any pending subscription invoice (`subPendingInvoiceId`) is resolved
+  3. `paidOnce` is set on the service (proven ability to pay — see [BILLING_DESIGN.md](./BILLING_DESIGN.md) for how `paidOnce` controls tier change semantics, cancellation policy, key operations, and grace period eligibility)
 
 ---
 
@@ -104,11 +105,16 @@ export interface ProviderChargeParams {
   amountUsdCents: number;
   invoiceId: number;
   description: string;
+  /** Idempotency key — prevents duplicate charges on retry.
+   *  Constructed by caller as `invoice-${billingRecordId}-${providerType}`.
+   *  Escrow: used for local dedup. Stripe: passed as Stripe-Idempotency-Key header.
+   *  PayPal: passed as PayPal-Request-Id header. */
+  idempotencyKey: string;
 }
 
 export interface ProviderChargeResult {
   success: boolean;
-  /** Reference ID for invoice_payments (escrow tx ID, Stripe payment intent ID, PayPal order ID) */
+  /** Reference ID for invoice_payments (escrow tx ID, Stripe invoice ID, PayPal order ID) */
   referenceId?: string;
   /**
    * Provider-specific transaction digest (escrow only).
@@ -212,9 +218,13 @@ export class StripePaymentProvider implements IPaymentProvider {
 
   async charge(params: ProviderChargeParams): Promise<ProviderChargeResult> {
     // 1. Get customer's stripeCustomerId from customers table
-    // 2. Create Stripe Invoice with automatic_tax: { enabled: false }
+    // 2. Create Stripe Invoice with:
+    //    - metadata: { billing_record_id: params.invoiceId } (for webhook→billing record correlation)
+    //    - auto_advance: false (we control finalization; prevents Stripe auto-collecting on its own schedule)
+    //    - payment_settings: { payment_method_types: ['card'] } (prevent Stripe offering bank transfers etc.)
     // 3. Add InvoiceItem with amount and description
     // 4. Finalize and pay the invoice (Stripe creates PaymentIntent internally)
+    //    - Pass params.idempotencyKey as Stripe-Idempotency-Key header
     // 5. Handle 'requires_action' → return { success: false, retryable: false }
     //    (see 3DS/SCA section below)
     // 6. Return { referenceId: stripeInvoiceId }
@@ -345,25 +355,53 @@ This keeps providers focused on their own domain while `processInvoicePayment()`
 ### New Body (pseudocode)
 
 ```typescript
-// Step 1: Apply credits (unchanged - applyCreditsToInvoice())
-const creditResult = await applyCreditsToInvoice(tx, customerId, billingRecordId, remainingAmount, clock);
-// ... record credit payment sources in invoice_payments (unchanged) ...
+// Guard: If already paid (e.g., concurrent retry from API + periodic job), return immediately.
+// This is the primary double-charge protection — checked under customer advisory lock.
+const billingRecord = await tx.select().from(billingRecords)
+  .where(eq(billingRecords.id, billingRecordId)).limit(1);
+if (billingRecord[0].status === 'paid') {
+  return { fullyPaid: true, amountPaidCents: billingRecord[0].amountPaidUsdCents, paymentSources: [] };
+}
+
+// Compute remaining amount from what's already been paid (handles retry after partial credit application).
+// On first attempt: amountPaidUsdCents = 0.
+// On retry after credits-only partial payment: amountPaidUsdCents = credits already applied.
+const totalAmountCents = billingRecord[0].amountUsdCents;
+let remainingAmount = totalAmountCents - (billingRecord[0].amountPaidUsdCents ?? 0);
+
+// Step 1: Apply credits ONLY if not already applied (prevents double credit application on retry).
+// Check existing invoice_payments for this billing record — if credits are already recorded, skip.
+const existingCreditPayments = await tx.select().from(invoicePayments)
+  .where(and(
+    eq(invoicePayments.billingRecordId, billingRecordId),
+    eq(invoicePayments.sourceType, 'credit')
+  ));
+
+if (existingCreditPayments.length === 0 && remainingAmount > 0) {
+  const creditResult = await applyCreditsToInvoice(tx, customerId, billingRecordId, remainingAmount, clock);
+  // ... record credit payment sources in invoice_payments (unchanged) ...
+  remainingAmount = creditResult.remainingInvoiceAmountCents;
+  result.amountPaidCents += (totalAmountCents - remainingAmount);
+} else {
+  // Credits already applied in a previous attempt — skip, use remaining from billing record
+}
 
 // Step 2: For remaining amount, iterate providers in user's priority order
-if (creditResult.remainingInvoiceAmountCents > 0) {
+if (remainingAmount > 0) {
   let charged = false;
   let lastError: BillingError | undefined;
 
   for (const provider of providers) {
-    if (!await provider.canPay(customerId, creditResult.remainingInvoiceAmountCents)) {
+    if (!await provider.canPay(customerId, remainingAmount)) {
       continue;
     }
 
     const chargeResult = await provider.charge({
       customerId,
-      amountUsdCents: creditResult.remainingInvoiceAmountCents,
+      amountUsdCents: remainingAmount,
       invoiceId: billingRecordId,
       description: `Invoice ${billingRecordId}`,
+      idempotencyKey: `invoice-${billingRecordId}-${provider.type}`,
     });
 
     if (chargeResult.success) {
@@ -373,20 +411,18 @@ if (creditResult.remainingInvoiceAmountCents > 0) {
         sourceType: provider.type,
         // For escrow: set escrowTransactionId from referenceId
         // For stripe/paypal: set providerReferenceId from referenceId
-        ...(provider.type === 'credit'
-          ? { creditId: Number(chargeResult.referenceId) }
-          : provider.type === 'escrow'
+        ...(provider.type === 'escrow'
             ? { escrowTransactionId: Number(chargeResult.referenceId) }
             : { providerReferenceId: chargeResult.referenceId }),
-        amountUsdCents: creditResult.remainingInvoiceAmountCents,
+        amountUsdCents: remainingAmount,
       });
 
       result.paymentSources.push({
         type: provider.type,
-        amountCents: creditResult.remainingInvoiceAmountCents,
+        amountCents: remainingAmount,
         referenceId: chargeResult.referenceId!,
       });
-      result.amountPaidCents += creditResult.remainingInvoiceAmountCents;
+      result.amountPaidCents += remainingAmount;
       result.fullyPaid = true;
       charged = true;
 
@@ -411,6 +447,12 @@ if (creditResult.remainingInvoiceAmountCents > 0) {
   }
 
   if (!charged) {
+    // Update billing_records to failed status (enables periodic job retry)
+    await tx.update(billingRecords).set({
+      amountPaidUsdCents: result.amountPaidCents, // May include credit portion
+      status: 'failed',
+    }).where(eq(billingRecords.id, billingRecordId));
+
     result.error = lastError ?? {
       type: 'payment_failed',
       message: 'No payment method available',
@@ -546,7 +588,7 @@ export const invoicePayments = pgTable('invoice_payments', {
   creditId: integer('credit_id').references(() => customerCredits.creditId),
   escrowTransactionId: bigint('escrow_transaction_id', { mode: 'number' }).references(() => escrowTransactions.txId),
 
-  // Generic reference for external providers (Stripe payment intent ID, PayPal order ID)
+  // Generic reference for external providers (Stripe invoice ID, PayPal order ID)
   // External system is the source of record — no local FK needed
   providerReferenceId: varchar('provider_reference_id', { length: 200 }),
 
@@ -558,6 +600,16 @@ export const invoicePayments = pgTable('invoice_payments', {
   idxPaymentCredit: index('idx_payment_credit').on(table.creditId).where(sql`${table.creditId} IS NOT NULL`),
   idxPaymentEscrow: index('idx_payment_escrow').on(table.escrowTransactionId).where(sql`${table.escrowTransactionId} IS NOT NULL`),
   idxPaymentProvider: index('idx_payment_provider').on(table.providerReferenceId).where(sql`${table.providerReferenceId} IS NOT NULL`),
+
+  // NOTE: Unique constraint on providerReferenceId must be created in migration SQL
+  // because Drizzle ORM's unique() does not support WHERE clauses:
+  //
+  //   CREATE UNIQUE INDEX uniq_provider_reference_id
+  //   ON invoice_payments (provider_reference_id)
+  //   WHERE provider_reference_id IS NOT NULL;
+  //
+  // This prevents the same Stripe Invoice ID or PayPal Order ID from being recorded
+  // twice (e.g., race between synchronous charge path and async webhook).
 
   // Constraint: sourceType must match exactly one reference column
   // credit → creditId, escrow → escrowTransactionId, stripe/paypal → providerReferenceId
@@ -620,8 +672,11 @@ export const paymentWebhookEvents = pgTable('payment_webhook_events', {
 
 - **Package:** `stripe` npm (server-side only)
 - **API:** Invoices API (not Checkout Sessions or raw Payment Intents) — server-side billing with tax-ready path
-- **Card storage:** SetupIntent to save card, then Invoices for charges (Stripe creates PaymentIntents internally)
+- **Card storage:** SetupIntent (`usage: 'off_session'`) to save card with 3DS consent for future merchant-initiated charges, then Invoices for charges (Stripe creates PaymentIntents internally)
+- **Invoice settings:** `auto_advance: false` (we control finalization and payment timing — prevents Stripe auto-collecting on its own schedule, which would conflict with our retry logic), `payment_settings: { payment_method_types: ['card'] }` (prevents Stripe from offering alternate payment methods on the hosted invoice page, which would bypass our provider priority logic)
 - **Tax:** `automatic_tax: { enabled: false }` from day one — flip to `true` when nexus is reached (no code/schema changes)
+- **Metadata:** Every Stripe Invoice carries `metadata: { billing_record_id: <id> }` so webhooks can correlate back to our `billing_records` table
+- **Idempotency:** Every Stripe API call that creates or pays an invoice passes an idempotency key (`invoice-{billingRecordId}-stripe`) via the `Stripe-Idempotency-Key` header — prevents duplicate charges on network retries
 - **Currency:** USD cents (matches existing billing system)
 
 ### 3DS / SCA Handling
@@ -667,6 +722,7 @@ export interface IStripeService {
   /**
    * Create a SetupIntent for saving a card.
    * The SetupIntent collects 3DS consent for future off_session charges.
+   * Must set: usage: 'off_session' (enables merchant-initiated transactions).
    * Returns client_secret for frontend confirmation.
    */
   createSetupIntent(stripeCustomerId: string): Promise<{
@@ -756,12 +812,31 @@ export async function stripeWebhookRoute(server: FastifyInstance) {
       rawBody: true,  // Fastify raw body for signature verification
     },
   }, async (request, reply) => {
-    // 1. Verify webhook signature
-    // 2. Check payment_webhook_events table for idempotency
+    // 1. Verify webhook signature (reject with 400 if invalid)
+    // 2. Check payment_webhook_events table for idempotency (skip if already processed)
     // 3. Handle event types:
-    //    - invoice.paid: Update billing invoice status to PAID
-    //    - invoice.payment_failed: Mark billing invoice failed, trigger retry
-    //    - setup_intent.succeeded: Update customer_payment_methods.providerConfig with card details
+    //
+    //    invoice.paid:
+    //      a. Extract billing_record_id from invoice.metadata.billing_record_id
+    //         (set by StripePaymentProvider.charge() at invoice creation time)
+    //      b. Acquire customer advisory lock (withCustomerLock) — prevents race
+    //         with concurrent processInvoicePayment() or periodic job
+    //      c. Check billing_records.status — if already 'paid', acknowledge and skip
+    //         (the synchronous charge() path already marked it paid; this is the
+    //         normal case — webhook arrives after charge() returned success)
+    //      d. If still 'pending'/'failed': update to 'paid', create invoice_payments
+    //         row with providerReferenceId = stripeInvoiceId
+    //         (this handles the async 3DS completion case where charge() returned
+    //         requires_action and the user later completed authentication)
+    //
+    //    invoice.payment_failed:
+    //      a. Extract billing_record_id from metadata
+    //      b. Mark billing invoice failed (if not already), trigger retry
+    //
+    //    setup_intent.succeeded:
+    //      a. Update customer_payment_methods.providerConfig with card details
+    //      b. No customer lock needed (no billing state mutation)
+    //
     // 4. Mark event as processed in payment_webhook_events
     // 5. Return 200 (always — Stripe retries on non-2xx)
   });
@@ -826,17 +901,21 @@ if (service.subPendingInvoiceId !== null && input.enabled) {
     });
   }
 
-  // Payment succeeded — clear pending invoice
+  // Payment succeeded — clear pending invoice + set paidOnce
   await tx.update(serviceInstances)
-    .set({ subPendingInvoiceId: null })
+    .set({ subPendingInvoiceId: null, paidOnce: true })
     .where(eq(serviceInstances.instanceId, service.instanceId));
+  await tx.update(customers)
+    .set({ paidOnce: true })
+    .where(eq(customers.customerId, customer.customerId));
 }
 ```
 
 **Key points:**
 - `subPendingInvoiceId` logic is PRESERVED — this was missing in v2.0
 - The gate now retries payment using the provider chain instead of just checking escrow balance
-- If the retry succeeds (via any provider), the pending invoice is cleared
+- If the retry succeeds (via any provider), the pending invoice is cleared and `paidOnce` is set
+- `paidOnce` is set at both service and customer level (see [BILLING_DESIGN.md](./BILLING_DESIGN.md) for how it controls tier change semantics, cancellation policy, key operations, and grace period eligibility)
 - If it fails, the user gets a clear error message
 
 ### Subscription validation warnings (services.ts validateSubscription)
@@ -866,6 +945,8 @@ if (activePaymentMethods.length === 0) {
 
 ## 6. Config & Secrets
 
+**Secrets:** Stored in `~/.suiftly.env` — see [APP_SECURITY_DESIGN.md](./APP_SECURITY_DESIGN.md) for storage, format, and production safety validation.
+
 **File:** `apps/api/src/lib/config.ts`
 
 Add to Zod schema:
@@ -884,31 +965,6 @@ const envSchema = z.object({
   PAYPAL_CLIENT_SECRET: z.string().default(''),
   PAYPAL_WEBHOOK_ID: z.string().default(''),
 });
-```
-
-**Storage:** `~/.suiftly.env` (same pattern as existing secrets)
-
-```bash
-# Add to ~/.suiftly.env
-STRIPE_SECRET_KEY=sk_test_xxx
-STRIPE_WEBHOOK_SECRET=whsec_xxx
-STRIPE_PUBLISHABLE_KEY=pk_test_xxx
-PAYPAL_CLIENT_ID=xxx
-PAYPAL_CLIENT_SECRET=xxx
-PAYPAL_WEBHOOK_ID=xxx
-```
-
-**Production safety** (add to `validateSecretSafety()`):
-
-```typescript
-if (isProd || isProduction) {
-  if (config.STRIPE_SECRET_KEY.startsWith('sk_test_')) {
-    throw new Error('FATAL: Production using Stripe TEST key! Use sk_live_xxx.');
-  }
-  if (config.PAYPAL_CLIENT_ID.startsWith('sb-')) {
-    throw new Error('FATAL: Production using PayPal SANDBOX key!');
-  }
-}
 ```
 
 ---
@@ -1191,15 +1247,30 @@ Escrow balance changes with every deposit/withdrawal/charge. Caching it in `cust
 
 Local payment sources (credits, escrow) keep typed foreign keys for referential integrity. External providers (Stripe, PayPal) use a generic `providerReferenceId` varchar — the external system is the source of record. This scales to new providers without schema changes.
 
-### Service gate preserves `subPendingInvoiceId`
+### Service gate preserves `subPendingInvoiceId` and sets `paidOnce`
 
 The `subPendingInvoiceId` mechanism on `service_instances` is preserved. The gate logic is:
 1. If `subPendingInvoiceId` is NULL → normal enable flow (no payment gate)
-2. If `subPendingInvoiceId` is set → must have at least one active payment method → retry payment via provider chain → clear on success
+2. If `subPendingInvoiceId` is set → must have at least one active payment method → retry payment via provider chain → clear on success → set `paidOnce` on both service and customer
 
 This prevents the scenario where a user bypasses a pending invoice just by adding any payment method.
 
+**`paidOnce` is set by the payment gate and `handleSubscriptionBilling()`** — not by payment method setup. It proves the customer can actually pay (not just that they configured a method). See [BILLING_DESIGN.md](./BILLING_DESIGN.md) for how `paidOnce` controls tier change semantics (immediate vs. scheduled), cancellation policy (immediate delete vs. end-of-period), key operations (blocked until paid), and grace period eligibility.
+
+### Webhook–charge race protection
+
+When a Stripe Invoice is paid synchronously (no 3DS), two paths converge:
+1. `StripePaymentProvider.charge()` returns success → `processInvoicePayment()` marks billing record `paid`
+2. Stripe fires `invoice.paid` webhook → webhook handler also tries to mark it `paid`
+
+**Protection (three layers):**
+1. **Billing record status check:** The webhook handler checks `billing_records.status` under customer advisory lock. If already `paid`, it acknowledges the webhook but skips processing (no-op).
+2. **`providerReferenceId` UNIQUE constraint:** The `invoice_payments` table has a unique index on `provider_reference_id WHERE NOT NULL`. If both paths try to insert the same Stripe Invoice ID, the second insert fails at the DB level.
+3. **`payment_webhook_events` idempotency:** The webhook event ID is recorded before processing. Duplicate webhook deliveries from Stripe are rejected.
+
+The webhook handler is essential for the **async 3DS case**: when `charge()` returned `requires_action` and the user later completes authentication on the Stripe-hosted page, the `invoice.paid` webhook is the only signal that payment succeeded.
+
 ---
 
-**Version:** 4.0
+**Version:** 4.1
 **Last Updated:** 2026-02-19

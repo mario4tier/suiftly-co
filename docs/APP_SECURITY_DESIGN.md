@@ -18,11 +18,22 @@ FLUENTD_DB_PASSWORD=<random-password>
 # SEAL_MASTER_SEED_*: For keyserver nodes only (derives customer keys)
 SEAL_MASTER_SEED_MAINNET=<0x + 64-hex-chars>
 SEAL_MASTER_SEED_TESTNET=<0x + 64-hex-chars>
+# Stripe (API server only - test keys for dev, live keys for prod)
+STRIPE_SECRET_KEY=sk_live_xxx
+STRIPE_PUBLISHABLE_KEY=pk_live_xxx
+STRIPE_WEBHOOK_SECRET=whsec_xxx
+# PayPal (API server only - sandbox for dev, live for prod)
+PAYPAL_CLIENT_ID=<client-id>
+PAYPAL_CLIENT_SECRET=<client-secret>
+PAYPAL_WEBHOOK_ID=<webhook-id>
 
 # Generate base64 secrets: openssl rand -base64 32
 # Generate X_API_KEY_SECRET: python3 -c "import secrets; print(secrets.token_hex(32))"
 # Generate FLUENTD_DB_PASSWORD: python3 -c "import secrets; print(secrets.token_urlsafe(24))"
 # Generate SEAL_MASTER_SEED: python3 -c "import secrets; print('0x' + secrets.token_hex(32))"
+# Stripe keys: Copy from Stripe Dashboard (https://dashboard.stripe.com/apikeys)
+# Stripe webhook secret: Copy from Dashboard webhook endpoint config (production) or 'stripe listen' output (dev)
+# PayPal keys: Copy from PayPal Developer Dashboard (https://developer.paypal.com/dashboard/applications)
 # Backup to password manager BEFORE using in production
 # CRITICAL: X_API_KEY_SECRET must be copied to all HAProxy nodes
 # CRITICAL: SEAL_MASTER_SEED_* must be identical across all keyservers for the same network
@@ -43,6 +54,15 @@ FLUENTD_DB_PASSWORD=fluentd_dev_password
 # SEAL_MASTER_SEED_*: Test seeds for development (NEVER use in production!)
 SEAL_MASTER_SEED_MAINNET=0x5d175fc5977e9a65c199a43025988a3219e1f3e2efe7c2688c0a4a9427b8e216
 SEAL_MASTER_SEED_TESTNET=0xf045c830cd9940bc2f367609dc25c946fdbfa325b958bfd850b1691d5376e6ce
+# Stripe (test mode keys - from 'stripe config --list' or Dashboard)
+STRIPE_SECRET_KEY=sk_test_xxx
+STRIPE_PUBLISHABLE_KEY=pk_test_xxx
+# STRIPE_WEBHOOK_SECRET: Set from 'stripe listen' output (changes each session)
+STRIPE_WEBHOOK_SECRET=
+# PayPal (sandbox keys - from PayPal Developer Dashboard)
+PAYPAL_CLIENT_ID=sb-xxx
+PAYPAL_CLIENT_SECRET=xxx
+PAYPAL_WEBHOOK_ID=
 ```
 
 ---
@@ -70,6 +90,12 @@ SEAL_MASTER_SEED_TESTNET=0xf045c830cd9940bc2f367609dc25c946fdbfa325b958bfd850b16
 | `FLUENTD_DB_PASSWORD` | fluentd-gm PostgreSQL user password | URL-safe string | Copied to /etc/fluentd/fluentd.env |
 | `SEAL_MASTER_SEED_MAINNET` | Seal key derivation (mainnet keyservers) | 66 hex chars (0x + 32 bytes) | Keyserver nodes only |
 | `SEAL_MASTER_SEED_TESTNET` | Seal key derivation (testnet keyservers) | 66 hex chars (0x + 32 bytes) | Keyserver nodes only |
+| `STRIPE_SECRET_KEY` | Stripe API calls (create invoices, customers) | `sk_test_...` / `sk_live_...` | API server only |
+| `STRIPE_PUBLISHABLE_KEY` | Sent to frontend for SetupIntent card collection | `pk_test_...` / `pk_live_...` | API server only |
+| `STRIPE_WEBHOOK_SECRET` | Verify Stripe webhook signatures | `whsec_...` | API server only |
+| `PAYPAL_CLIENT_ID` | PayPal API calls (create orders, agreements) | `sb-...` (sandbox) / live ID | API server only |
+| `PAYPAL_CLIENT_SECRET` | PayPal API authentication | String | API server only |
+| `PAYPAL_WEBHOOK_ID` | Verify PayPal webhook signatures | String | API server only |
 
 ### X_API_KEY_SECRET (Special Case)
 
@@ -265,10 +291,17 @@ const plaintext = decryptSecret(record.keyEncrypted);
 - Have `~/.suiftly.env` file (no environment variable fallback)
 - NOT contain "dev", "test", "DEV", "TEST" in secrets
 - NOT match default test secrets from docs
+- `STRIPE_SECRET_KEY` must start with `sk_live_` (not `sk_test_`)
+- `STRIPE_PUBLISHABLE_KEY` must start with `pk_live_` (not `pk_test_`)
+- `PAYPAL_CLIENT_ID` must NOT start with `sb-` (PayPal sandbox prefix)
 
 **Dev/Test SHOULD:**
 - Include "DEV" or "TEST" marker in secrets
 - Warn if production-like secret detected
+- Stripe keys should use test mode (`sk_test_`, `pk_test_`)
+- PayPal keys should use sandbox mode (`sb-` prefix for client ID)
+
+**Implementation:** These rules are enforced in `validateSecretSafety()` in `apps/api/src/lib/config.ts`. The function runs at startup and crashes if any rule is violated in production.
 
 ---
 

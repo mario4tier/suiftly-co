@@ -46,14 +46,25 @@ Supported providers: Crypto (escrow), Stripe (credit/debit card), PayPal.
 
 See [PAYMENT_DESIGN.md](./PAYMENT_DESIGN.md) for provider abstraction, charge flow, and schema.
 
-## Insufficient Balance Handling
+## `paidOnce` — Payment Verification Flag
 
-| Condition | Behavior |
-|-----------|----------|
-| `paid_once = FALSE` | Per-service handling only, no grace period |
-| `paid_once = TRUE` | 14-day grace period → account suspension |
+**Set when:** A charge succeeds — either via the service gate retry (`retryPendingInvoice()`) or via `handleSubscriptionBilling()`. Set on both `service_instances.paid_once` (per-service) and `customers.paid_once` (per-customer).
+
+**NOT set by:** Adding a payment method, creating an escrow, or any configuration action. Only an actual successful charge sets this flag.
+
+**What it controls:**
+
+| Behavior | `paidOnce = FALSE` | `paidOnce = TRUE` |
+|----------|-------------------|-------------------|
+| **Tier upgrade** | Immediate, $0 charge | Pro-rated charge, payment required |
+| **Tier downgrade** | Immediate, no scheduling | Scheduled for 1st of next month |
+| **Cancellation** | Immediate deletion, no cooldown | End-of-period, 7-day `cancellation_pending`, 7-day cooldown |
+| **Key operations** (Seal) | Blocked | Allowed |
+| **Grace period** (non-payment) | None — per-service handling only | 14-day grace period → account suspension |
 
 Grace period tracked via `customers.grace_period_start`.
+
+**Business rationale:** `paidOnce` proves the customer can pay, not just that they configured a method. Unpaid customers get lenient billing (free changes, instant cancellation) to reduce friction. Paying customers get revenue-protecting billing (pro-rated charges, scheduled downgrades, cooldown periods).
 
 ---
 
@@ -77,20 +88,19 @@ DRAFT → PENDING → PAID/FAILED/VOIDED
 
 ## Tier Changes & Cancellation
 
-### Upgrade (Immediate)
-- Pro-rated charge for remaining days
-- Payment required for activation
+### Upgrade
+- **`paidOnce = TRUE`:** Pro-rated charge for remaining days, payment required for activation
+- **`paidOnce = FALSE`:** Immediate, $0 charge (user hasn't proven ability to pay)
 - Function: `handleTierUpgrade()`
 
-### Downgrade (Scheduled)
-- Takes effect 1st of next month
-- Reversible via `cancelScheduledTierChange()`
+### Downgrade
+- **`paidOnce = TRUE`:** Scheduled for 1st of next month, reversible via `cancelScheduledTierChange()`
+- **`paidOnce = FALSE`:** Immediate, no scheduling
 - Fields: `scheduled_tier`, `scheduled_tier_effective_date`
 
 ### Cancellation
-- Service continues until period end
-- 7-day `cancellation_pending` state after period ends
-- 7-day cooldown before re-provisioning allowed
+- **`paidOnce = TRUE`:** Service continues until period end, 7-day `cancellation_pending` state, 7-day cooldown before re-provisioning
+- **`paidOnce = FALSE`:** Immediate deletion, no cooldown, pending invoice voided
 - Function: `scheduleCancellation()`, `undoCancellation()`
 
 ### Service Gate (Payment Blocking)
@@ -200,7 +210,7 @@ async function updateInvoiceInternal(tx: LockedTransaction, invoiceId: string): 
 See [PAYMENT_DESIGN.md](./PAYMENT_DESIGN.md) for payment-related schema details.
 
 ### Key Fields on `customers`
-- `paid_once` - Grace period eligibility
+- `paid_once` - Payment verification flag (controls grace period, tier change semantics — see above)
 - `grace_period_start` - When grace period started
 - `spending_limit_usd_cents` - 28-day cap
 - `current_balance_usd_cents` - Escrow balance (synced from blockchain)
@@ -208,7 +218,7 @@ See [PAYMENT_DESIGN.md](./PAYMENT_DESIGN.md) for payment-related schema details.
 - `stripe_customer_id` - Stripe Customer object ID
 
 ### Key Fields on `service_instances`
-- `paid_once` - Service-level payment tracking
+- `paid_once` - Service-level payment verification (controls key ops, tier change behavior — see above)
 - `sub_pending_invoice_id` - Pending subscription invoice (blocks service enabling until paid)
 - `scheduled_tier`, `scheduled_tier_effective_date` - Downgrade
 - `cancellation_scheduled_for`, `cancellation_effective_at` - Cancellation
@@ -269,5 +279,5 @@ See [PAYMENT_DESIGN.md](./PAYMENT_DESIGN.md) for payment-related schema details.
 
 ---
 
-**Version:** 3.1
-**Last Updated:** 2026-02-13
+**Version:** 3.2
+**Last Updated:** 2026-02-19
