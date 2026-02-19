@@ -11,8 +11,8 @@ Summary File Protocol:
   Format: JSON with status, phases, and summary fields
 
 Usage:
-  ./scripts/run-all.py           # Run all tests
-  python3 scripts/run-all.py     # Alternative
+  ./scripts/run-all-tests.py           # Run all tests
+  python3 scripts/run-all-tests.py     # Alternative
 
 Exit Codes:
   0 - All tests passed
