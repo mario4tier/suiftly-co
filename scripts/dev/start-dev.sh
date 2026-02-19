@@ -88,6 +88,24 @@ if [ -d "$SUIFTLY_DIR/node_modules/@playwright" ]; then
 fi
 
 # ============================================================================
+# Check Stripe CLI is installed (required for webhook forwarding in dev)
+# ============================================================================
+if ! command -v stripe &>/dev/null; then
+  echo ""
+  echo "ERROR: Stripe CLI is not installed!"
+  echo ""
+  echo "  Install it with:"
+  echo ""
+  echo "    curl -s https://packages.stripe.dev/api/security/keypair/stripe-cli-gpg/public | gpg --dearmor | sudo tee /usr/share/keyrings/stripe.gpg >/dev/null"
+  echo "    echo 'deb [signed-by=/usr/share/keyrings/stripe.gpg] https://packages.stripe.dev/stripe-cli-debian-local stable main' | sudo tee /etc/apt/sources.list.d/stripe.list"
+  echo "    sudo apt update && sudo apt install -y stripe"
+  echo ""
+  echo "  Then authenticate: stripe login"
+  echo ""
+  exit 1
+fi
+
+# ============================================================================
 # Check sudob is running (required for managing systemd services)
 # ============================================================================
 if ! curl -sf "$SUDOB_URL/api/health" >/dev/null 2>&1; then
