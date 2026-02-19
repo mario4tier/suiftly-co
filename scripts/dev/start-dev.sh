@@ -34,6 +34,60 @@ if [ ! -f "$SYSTEM_CONF" ]; then
 fi
 
 # ============================================================================
+# Check workspace packages are built (required by sudob, GM, LM)
+# ============================================================================
+MHAXBE_DIR="$HOME/mhaxbe"
+MISSING_BUILDS=""
+
+# Check mhaxbe packages that export from dist/
+if [ -d "$MHAXBE_DIR/packages" ]; then
+  for pkg_dir in "$MHAXBE_DIR"/packages/*/; do
+    [ -d "$pkg_dir" ] || continue
+    if grep -q '"./dist/' "$pkg_dir/package.json" 2>/dev/null && [ ! -d "$pkg_dir/dist" ]; then
+      MISSING_BUILDS="$MISSING_BUILDS $(basename "$pkg_dir")"
+    fi
+  done
+fi
+
+# Check suiftly-co services that export from dist/
+for svc_dir in "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"/services/*/; do
+  [ -d "$svc_dir" ] || continue
+  if grep -q '"./dist/' "$svc_dir/package.json" 2>/dev/null && [ ! -d "$svc_dir/dist" ]; then
+    MISSING_BUILDS="$MISSING_BUILDS $(basename "$svc_dir")"
+  fi
+done
+
+if [ -n "$MISSING_BUILDS" ]; then
+  echo ""
+  echo "ERROR: Workspace packages/services not built (missing dist/:$MISSING_BUILDS)"
+  echo ""
+  echo "  Run the following to build everything:"
+  echo "    sudo ~/mhaxbe/scripts/setup-user.py mwalrus"
+  echo "    ~/suiftly-co/scripts/update-all.sh"
+  echo ""
+  exit 1
+fi
+
+# ============================================================================
+# Ensure Playwright browsers are installed (required for E2E tests)
+# Idempotent: fast no-op when browsers are already at the correct version
+# ============================================================================
+SUIFTLY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+if [ -d "$SUIFTLY_DIR/node_modules/@playwright" ]; then
+  PW_OUTPUT=$(cd "$SUIFTLY_DIR" && npx playwright install 2>&1)
+  PW_EXIT=$?
+  if [ $PW_EXIT -ne 0 ]; then
+    echo ""
+    echo "WARNING: Failed to install Playwright browsers"
+    echo "  E2E tests will not work. Install manually:"
+    echo "    cd $SUIFTLY_DIR && npx playwright install"
+    echo ""
+  elif echo "$PW_OUTPUT" | grep -q "Downloading"; then
+    echo "Playwright browsers installed"
+  fi
+fi
+
+# ============================================================================
 # Check sudob is running (required for managing systemd services)
 # ============================================================================
 if ! curl -sf "$SUDOB_URL/api/health" >/dev/null 2>&1; then
