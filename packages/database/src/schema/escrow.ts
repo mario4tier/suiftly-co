@@ -73,6 +73,11 @@ export const billingRecords = pgTable('billing_records', {
 
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 
+  // Stripe-hosted invoice URL for 3DS completion (set when charge returns requires_action).
+  // Dashboard reads this to render a "Complete payment" prompt.
+  // Cleared on invoice.paid webhook, void, or card replacement.
+  paymentActionUrl: varchar('payment_action_url', { length: 500 }),
+
   // Tracks when DRAFT invoice was last checked/synced (usage sync, config changes)
   // Used to display "Updated X ago" in UI
   // Updated even if no changes were found (confirms data is fresh)

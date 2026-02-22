@@ -102,7 +102,8 @@ export const creditReasonEnum = pgEnum('credit_reason', [
   'outage',          // Service outage compensation
   'promo',           // Promotional credit
   'goodwill',        // Customer goodwill gesture
-  'reconciliation'   // Billing reconciliation adjustment
+  'reconciliation',  // Billing reconciliation adjustment
+  'refund'           // Excess credit refunded to payment provider
 ]);
 
 // Seal registration operation type
