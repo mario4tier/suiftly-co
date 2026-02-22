@@ -42,9 +42,13 @@ describe('API: Payment Method CRUD', () => {
       throw new Error('Test customer not found after login');
     }
     customerId = customer.customerId;
+
+    // Force mock Stripe service (even if STRIPE_SECRET_KEY is configured)
+    await restCall('POST', '/test/stripe/force-mock', { enabled: true });
   });
 
   afterEach(async () => {
+    await restCall('POST', '/test/stripe/force-mock', { enabled: false });
     await resetTestData(TEST_WALLET);
   });
 

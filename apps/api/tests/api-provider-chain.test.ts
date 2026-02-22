@@ -39,6 +39,8 @@ describe('API: Provider Chain & Service Gates', () => {
     if (!customer) throw new Error('Test customer not found');
     customerId = customer.customerId;
 
+    // Force mock Stripe service (even if STRIPE_SECRET_KEY is configured)
+    await restCall('POST', '/test/stripe/force-mock', { enabled: true });
     // Clear stripe mock config
     await restCall('POST', '/test/stripe/config/clear');
   });
@@ -46,6 +48,7 @@ describe('API: Provider Chain & Service Gates', () => {
   afterEach(async () => {
     await resetClock();
     await restCall('POST', '/test/stripe/config/clear');
+    await restCall('POST', '/test/stripe/force-mock', { enabled: false });
     await resetTestData(TEST_WALLET);
   });
 
