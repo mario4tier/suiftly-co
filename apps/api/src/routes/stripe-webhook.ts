@@ -13,9 +13,22 @@
 import type { FastifyInstance } from 'fastify';
 import crypto from 'crypto';
 import { db } from '@suiftly/database';
-import { paymentWebhookEvents, customerPaymentMethods, customers } from '@suiftly/database/schema';
-import { eq, and } from 'drizzle-orm';
+import { withCustomerLock, issueCredit, recalculateDraftInvoice, clearGracePeriod, logInternalError, logInternalErrorOnce } from '@suiftly/database/billing';
+import { paymentWebhookEvents, customerPaymentMethods, customers, billingRecords, serviceInstances, invoicePayments } from '@suiftly/database/schema';
+import { eq, and, inArray } from 'drizzle-orm';
+import { dbClockProvider } from '@suiftly/shared/db-clock';
 import { config } from '../lib/config';
+
+/**
+ * Webhook secret override for tests.
+ * When set, this takes priority over config.STRIPE_WEBHOOK_SECRET.
+ * Set via POST /test/stripe/webhook-secret endpoint.
+ */
+export let webhookSecretOverride: string | null = null;
+
+export function setWebhookSecretOverride(secret: string | null): void {
+  webhookSecretOverride = secret;
+}
 
 /**
  * Verify Stripe webhook signature (v1 scheme).
@@ -70,6 +83,8 @@ function verifyStripeSignature(
 
 export async function registerStripeWebhook(server: FastifyInstance) {
   // Skip registration if Stripe is not configured
+  // Note: webhookSecretOverride may be set later by tests, so we still register
+  // if the default config secret exists
   if (!config.STRIPE_WEBHOOK_SECRET) {
     console.log('[Stripe Webhook] Skipped — STRIPE_WEBHOOK_SECRET not configured');
     return;
@@ -93,10 +108,11 @@ export async function registerStripeWebhook(server: FastifyInstance) {
     const signatureHeader = request.headers['stripe-signature'] as string;
 
     // 1. Verify webhook signature
+    const secret = webhookSecretOverride ?? config.STRIPE_WEBHOOK_SECRET;
     const verification = verifyStripeSignature(
       rawBody,
       signatureHeader,
-      config.STRIPE_WEBHOOK_SECRET
+      secret
     );
 
     if (!verification.valid) {
@@ -147,6 +163,10 @@ export async function registerStripeWebhook(server: FastifyInstance) {
       }
 
       switch (event.type) {
+        case 'invoice.paid':
+          await handleInvoicePaid(event.data.object);
+          break;
+
         case 'payment_intent.succeeded':
           await handlePaymentIntentSucceeded(event.data.object);
           break;
@@ -169,17 +189,272 @@ export async function registerStripeWebhook(server: FastifyInstance) {
         .where(eq(paymentWebhookEvents.eventId, event.id));
 
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const stack = error instanceof Error ? error.stack : undefined;
       console.error(`[Stripe Webhook] Error processing event ${event.id}:`, error);
-      // Still return 200 to prevent Stripe retries — the event is recorded
-      // and can be reprocessed manually if needed
+
+      // Notify admin with stack trace. Stripe will retry (we return 500),
+      // but persistent failures need human investigation.
+      try {
+        await logInternalError(db, {
+          severity: 'error',
+          category: 'billing',
+          code: 'WEBHOOK_PROCESSING_ERROR',
+          message: `Failed to process Stripe webhook event ${event.id} (${event.type}): ${message}`,
+          details: { eventId: event.id, eventType: event.type, stack },
+        });
+      } catch {
+        // Don't let notification failure affect the 500 response
+      }
+
+      // Return 500 so Stripe retries delivery. The idempotency check at the top
+      // (existing?.processed) ensures re-delivery of already-processed events is
+      // a no-op. Unprocessed events (processed=false) will be retried correctly.
+      return reply.status(500).send({ error: 'Internal error processing webhook event' });
     }
 
-    // 5. Always return 200 (Stripe retries on non-2xx)
+    // 5. Return 200 on success (Stripe retries on non-2xx)
     return reply.status(200).send({ received: true });
     });
   }); // end stripePlugin
 
   console.log('[Stripe Webhook] Registered POST /stripe/webhook');
+}
+
+/**
+ * Handle invoice.paid
+ *
+ * Fires when a Stripe invoice is paid — either immediately (synchronous charge)
+ * or after the user completes 3DS on the Stripe-hosted invoice page.
+ *
+ * Full reconciliation:
+ * 1. Create invoice_payments row (sourceType='stripe')
+ * 2. Update billing_records: status='paid', amountPaidUsdCents, paymentActionUrl=null
+ * 3. Clear subPendingInvoiceId on matching service_instances
+ * 4. Set paidOnce on service_instances and customers
+ * 5. Issue reconciliation credit (partial month pro-rata)
+ * 6. Recalculate DRAFT invoice
+ *
+ * Uses metadata.billing_record_id (set by StripePaymentProvider) to find the
+ * matching billing_records row.
+ */
+async function handleInvoicePaid(invoice: Record<string, unknown>) {
+  const stripeInvoiceId = invoice.id as string;
+  const metadata = invoice.metadata as Record<string, string> | null;
+  const billingRecordId = metadata?.billing_record_id
+    ? parseInt(metadata.billing_record_id, 10)
+    : undefined;
+  const amountPaid = typeof invoice.amount_paid === 'number'
+    ? invoice.amount_paid
+    : undefined;
+
+  console.log(`[Stripe Webhook] invoice.paid: ${stripeInvoiceId}, billingRecordId: ${billingRecordId}, amountPaid: ${amountPaid}`);
+
+  if (!billingRecordId || isNaN(billingRecordId)) {
+    console.log(`[Stripe Webhook] invoice.paid: no billing_record_id in metadata, skipping`);
+    // A paid Stripe invoice has no matching billing record — could be a manual charge,
+    // metadata drift, or a bug. Notify admin so they can investigate.
+    await logInternalError(db, {
+      severity: 'warning',
+      category: 'billing',
+      code: 'WEBHOOK_INVOICE_NO_BILLING_RECORD',
+      message: `Stripe invoice ${stripeInvoiceId} paid but has no billing_record_id in metadata`,
+      details: { stripeInvoiceId, amountPaid, metadata },
+    });
+    return;
+  }
+
+  // Find the billing record
+  const record = await db.query.billingRecords.findFirst({
+    where: eq(billingRecords.id, billingRecordId),
+  });
+
+  if (!record) {
+    console.log(`[Stripe Webhook] invoice.paid: billing record ${billingRecordId} not found, skipping`);
+    await logInternalError(db, {
+      severity: 'error',
+      category: 'billing',
+      code: 'WEBHOOK_INVOICE_RECORD_NOT_FOUND',
+      message: `Stripe invoice ${stripeInvoiceId} references billing record ${billingRecordId} which does not exist`,
+      details: { stripeInvoiceId, billingRecordId, amountPaid },
+      invoiceId: billingRecordId,
+    });
+    return;
+  }
+
+  // Skip if already paid — but notify admin since Stripe charged an already-settled invoice.
+  // This can happen if the provider chain fell through to escrow (which succeeded) but the
+  // customer later completes 3DS on the stale Stripe-hosted page, causing a double charge.
+  if (record.status === 'paid') {
+    console.log(`[Stripe Webhook] invoice.paid: billing record ${billingRecordId} already paid, skipping`);
+    await logInternalError(db, {
+      severity: 'warning',
+      category: 'billing',
+      code: 'WEBHOOK_INVOICE_ALREADY_PAID',
+      message: `Stripe invoice ${stripeInvoiceId} paid but billing record ${billingRecordId} was already paid — possible double charge`,
+      details: { stripeInvoiceId, billingRecordId, amountPaid, existingStatus: record.status },
+      customerId: record.customerId,
+      invoiceId: billingRecordId,
+    });
+    return;
+  }
+
+  const customerId = record.customerId;
+  const invoiceAmount = amountPaid ?? Number(record.amountUsdCents);
+
+  // Alert admin if Stripe's amount_paid differs from our expected amount.
+  // Could indicate Stripe-side adjustments (coupons, tax, partial payment).
+  // We still proceed with Stripe's amount as authoritative, but flag for review.
+  // Uses logInternalErrorOnce — this runs before the lock, so if reconciliation
+  // throws (500 → Stripe retries), we don't create duplicate notifications.
+  if (amountPaid != null && amountPaid !== Number(record.amountUsdCents)) {
+    await logInternalErrorOnce(db, {
+      severity: 'warning',
+      category: 'billing',
+      code: 'WEBHOOK_AMOUNT_MISMATCH',
+      message: `Stripe invoice ${stripeInvoiceId} amount_paid (${amountPaid}) differs from billing record ${billingRecordId} amount (${record.amountUsdCents})`,
+      details: {
+        stripeInvoiceId,
+        stripeAmountPaid: amountPaid,
+        expectedAmountCents: Number(record.amountUsdCents),
+        difference: amountPaid - Number(record.amountUsdCents),
+      },
+      customerId,
+      invoiceId: billingRecordId,
+    });
+  }
+
+  // Sync clock from test_kv before use (ensures correct time in test environments)
+  await dbClockProvider.syncFromTestKv();
+  const clock = dbClockProvider.getClock();
+
+  // Acquire customer lock and perform all reconciliation atomically
+  await withCustomerLock(db, customerId, async (tx) => {
+    // Re-check billing record status after acquiring lock (double-check)
+    const [freshRecord] = await tx
+      .select()
+      .from(billingRecords)
+      .where(eq(billingRecords.id, billingRecordId))
+      .limit(1);
+
+    if (!freshRecord || freshRecord.status === 'paid') {
+      console.log(`[Stripe Webhook] invoice.paid: billing record ${billingRecordId} already paid (after lock), skipping`);
+      return;
+    }
+
+    // 1. Create invoice_payments row
+    await tx.insert(invoicePayments).values({
+      billingRecordId,
+      sourceType: 'stripe',
+      providerReferenceId: stripeInvoiceId,
+      creditId: null,
+      escrowTransactionId: null,
+      amountUsdCents: invoiceAmount,
+    });
+
+    // 2. Update billing_records: status='paid', amount, clear stale failure metadata.
+    //    Keep retryCount as audit trail (how many attempts before success).
+    //    Clear failureReason/lastRetryAt/paymentActionUrl so they don't leak into
+    //    UI, alerts, or retry heuristics for what is now a paid invoice.
+    await tx
+      .update(billingRecords)
+      .set({
+        status: 'paid',
+        amountPaidUsdCents: invoiceAmount,
+        paymentActionUrl: null,
+        failureReason: null,
+        lastRetryAt: null,
+      })
+      .where(eq(billingRecords.id, billingRecordId));
+
+    // 3. Clear subPendingInvoiceId on service_instances that reference this invoice,
+    //    and set paidOnce ONLY on those specific services (not all customer services).
+    const pendingServices = await tx
+      .select({ instanceId: serviceInstances.instanceId, serviceType: serviceInstances.serviceType })
+      .from(serviceInstances)
+      .where(
+        and(
+          eq(serviceInstances.customerId, customerId),
+          eq(serviceInstances.subPendingInvoiceId, billingRecordId)
+        )
+      );
+
+    if (pendingServices.length > 0) {
+      const instanceIds = pendingServices.map(s => s.instanceId);
+      await tx
+        .update(serviceInstances)
+        .set({ subPendingInvoiceId: null, paidOnce: true })
+        .where(inArray(serviceInstances.instanceId, instanceIds));
+    }
+
+    // 4. Set paidOnce on customer and clear grace period.
+    //    If the customer entered grace period due to the failed 3DS charge,
+    //    completing 3DS should lift the grace period (just like retryFailedPayments does).
+    await tx
+      .update(customers)
+      .set({ paidOnce: true })
+      .where(eq(customers.customerId, customerId));
+    await clearGracePeriod(tx, customerId);
+
+    // 5. Issue reconciliation credit for partial month.
+    //    Use the billing record's period start date (when the subscription was created),
+    //    NOT clock.today(). For 3DS completions, the webhook can fire days/weeks after
+    //    the original charge attempt, and using today would give the wrong credit amount.
+    const subscriptionDate = new Date(freshRecord.billingPeriodStart);
+    const daysInMonth = getDaysInMonth(subscriptionDate.getUTCFullYear(), subscriptionDate.getUTCMonth() + 1);
+    const dayOfMonth = subscriptionDate.getUTCDate();
+    const daysUsed = daysInMonth - dayOfMonth + 1; // +1 because subscription day is included
+    const daysNotUsed = daysInMonth - daysUsed;
+
+    // Use the invoice amount as the monthly price for reconciliation
+    const monthlyPrice = Number(freshRecord.amountUsdCents);
+    const reconciliationCreditCents = Math.floor(
+      (monthlyPrice * daysNotUsed) / daysInMonth
+    );
+
+    if (reconciliationCreditCents > 0) {
+      // Use the service type from the pending service if available
+      const serviceType = pendingServices[0]?.serviceType ?? 'unknown';
+
+      await issueCredit(
+        tx,
+        customerId,
+        reconciliationCreditCents,
+        'reconciliation',
+        `Partial month credit for ${serviceType} (${daysNotUsed}/${daysInMonth} days unused)`,
+        null // Never expires
+      );
+    }
+
+    // 6. Recalculate DRAFT invoice
+    try {
+      await recalculateDraftInvoice(tx, customerId, clock);
+    } catch (err) {
+      // Non-fatal: DRAFT recalculation failure shouldn't block payment reconciliation.
+      // But notify admin — a stale DRAFT could go unnoticed for a full billing cycle.
+      console.error(`[Stripe Webhook] invoice.paid: failed to recalculate DRAFT for customer ${customerId}:`, err);
+      try {
+        await logInternalError(tx, {
+          severity: 'warning',
+          category: 'billing',
+          code: 'WEBHOOK_DRAFT_RECALC_FAILED',
+          message: `DRAFT recalculation failed after webhook reconciliation for customer ${customerId}`,
+          details: { error: err instanceof Error ? err.message : String(err), billingRecordId },
+          customerId,
+          invoiceId: billingRecordId,
+        });
+      } catch { /* don't let notification failure break reconciliation */ }
+    }
+
+    console.log(`[Stripe Webhook] invoice.paid: fully reconciled billing record ${billingRecordId} for customer ${customerId}`);
+  });
+}
+
+/**
+ * Get number of days in a month (UTC-based)
+ */
+function getDaysInMonth(year: number, month: number): number {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
 }
 
 /**
@@ -198,8 +473,12 @@ export async function registerStripeWebhook(server: FastifyInstance) {
 async function handlePaymentIntentSucceeded(paymentIntent: Record<string, unknown>) {
   const intentId = paymentIntent.id as string;
   const stripeCustomerId = paymentIntent.customer as string | null;
+  const metadata = paymentIntent.metadata as Record<string, string> | null;
+  const billingRecordId = metadata?.billing_record_id;
 
-  console.log(`[Stripe Webhook] payment_intent.succeeded: ${intentId}, customer: ${stripeCustomerId}`);
+  console.log(`[Stripe Webhook] payment_intent.succeeded: ${intentId}, customer: ${stripeCustomerId}, billingRecord: ${billingRecordId}`);
+  // Reconciliation is handled by invoice.paid webhook (not here).
+  // PaymentIntents are created internally by Stripe Invoices API.
 }
 
 /**
@@ -233,7 +512,7 @@ async function handleSetupIntentSucceeded(setupIntent: Record<string, unknown>) 
     return;
   }
 
-  // Find the customer by stripeCustomerId
+  // Find the customer by stripeCustomerId (outside lock — read-only, no race)
   const customer = await db.query.customers.findFirst({
     where: eq(customers.stripeCustomerId, stripeCustomerId),
   });
@@ -243,56 +522,61 @@ async function handleSetupIntentSucceeded(setupIntent: Record<string, unknown>) 
     return;
   }
 
-  // Upsert the payment method details into customer_payment_methods
-  // The row may already exist from billing.addPaymentMethod — update providerRef + providerConfig
-  // First try by providerRef (idempotent re-delivery), then by customerId + providerType
-  let existingMethod = await db.query.customerPaymentMethods.findFirst({
-    where: eq(customerPaymentMethods.providerRef, paymentMethodId),
-  });
-
-  if (!existingMethod) {
-    // addPaymentMethod('stripe') creates the row with providerRef=null —
-    // find it by customerId + providerType + active status
-    existingMethod = await db.query.customerPaymentMethods.findFirst({
-      where: and(
-        eq(customerPaymentMethods.customerId, customer.customerId),
-        eq(customerPaymentMethods.providerType, 'stripe'),
-        eq(customerPaymentMethods.status, 'active'),
-      ),
+  // Acquire customer lock to prevent race conditions with concurrent payment method
+  // additions (e.g., user adding via API while webhook fires simultaneously).
+  // Without the lock, both could read the same maxPriority and insert at the same priority.
+  await withCustomerLock(db, customer.customerId, async (tx) => {
+    // Upsert the payment method details into customer_payment_methods
+    // The row may already exist from billing.addPaymentMethod — update providerRef + providerConfig
+    // First try by providerRef (idempotent re-delivery), then by customerId + providerType
+    let existingMethod = await tx.query.customerPaymentMethods.findFirst({
+      where: eq(customerPaymentMethods.providerRef, paymentMethodId),
     });
-  }
 
-  const cardDetails = metadata?.card_brand && metadata?.card_last4
-    ? { brand: metadata.card_brand, last4: metadata.card_last4 }
-    : null;
+    if (!existingMethod) {
+      // addPaymentMethod('stripe') creates the row with providerRef=null —
+      // find it by customerId + providerType + active status
+      existingMethod = await tx.query.customerPaymentMethods.findFirst({
+        where: and(
+          eq(customerPaymentMethods.customerId, customer.customerId),
+          eq(customerPaymentMethods.providerType, 'stripe'),
+          eq(customerPaymentMethods.status, 'active'),
+        ),
+      });
+    }
 
-  if (existingMethod) {
-    // Update with confirmed card details + providerRef (may be null from addPaymentMethod)
-    await db.update(customerPaymentMethods)
-      .set({
+    const cardDetails = metadata?.card_brand && metadata?.card_last4
+      ? { brand: metadata.card_brand, last4: metadata.card_last4 }
+      : null;
+
+    if (existingMethod) {
+      // Update with confirmed card details + providerRef (may be null from addPaymentMethod)
+      await tx.update(customerPaymentMethods)
+        .set({
+          status: 'active',
+          providerRef: paymentMethodId,
+          providerConfig: cardDetails ? JSON.stringify(cardDetails) : existingMethod.providerConfig,
+          updatedAt: new Date(),
+        })
+        .where(eq(customerPaymentMethods.id, existingMethod.id));
+    } else {
+      // Determine next priority for this customer
+      const existingMethods = await tx.select()
+        .from(customerPaymentMethods)
+        .where(eq(customerPaymentMethods.customerId, customer.customerId));
+
+      const maxPriority = existingMethods.reduce((max, m) => Math.max(max, m.priority), 0);
+
+      await tx.insert(customerPaymentMethods).values({
+        customerId: customer.customerId,
+        providerType: 'stripe',
         status: 'active',
+        priority: maxPriority + 1,
         providerRef: paymentMethodId,
-        providerConfig: cardDetails ? JSON.stringify(cardDetails) : existingMethod.providerConfig,
-        updatedAt: new Date(),
-      })
-      .where(eq(customerPaymentMethods.id, existingMethod.id));
-  } else {
-    // Determine next priority for this customer
-    const existingMethods = await db.select()
-      .from(customerPaymentMethods)
-      .where(eq(customerPaymentMethods.customerId, customer.customerId));
+        providerConfig: cardDetails ? JSON.stringify(cardDetails) : null,
+      });
+    }
 
-    const maxPriority = existingMethods.reduce((max, m) => Math.max(max, m.priority), 0);
-
-    await db.insert(customerPaymentMethods).values({
-      customerId: customer.customerId,
-      providerType: 'stripe',
-      status: 'active',
-      priority: maxPriority + 1,
-      providerRef: paymentMethodId,
-      providerConfig: cardDetails ? JSON.stringify(cardDetails) : null,
-    });
-  }
-
-  console.log(`[Stripe Webhook] Payment method ${paymentMethodId} saved for customer ${customer.customerId}`);
+    console.log(`[Stripe Webhook] Payment method ${paymentMethodId} saved for customer ${customer.customerId}`);
+  });
 }

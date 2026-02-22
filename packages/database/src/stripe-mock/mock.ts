@@ -17,6 +17,8 @@ import type {
   StripeChargeParams,
   StripeChargeResult,
   StripePaymentMethod,
+  StripeRefundParams,
+  StripeRefundResult,
 } from '@suiftly/shared/stripe-service';
 import { stripeMockConfig } from './mock-config.js';
 import { randomBytes } from 'crypto';
@@ -48,14 +50,25 @@ interface MockPaymentIntent {
   createdAt: Date;
 }
 
+/** Recorded refund for test verification */
+interface MockRefund {
+  refundId: string;
+  stripeInvoiceId: string;
+  amountUsdCents: number;
+  reason?: string;
+  createdAt: Date;
+}
+
 export class MockStripeService implements IStripeService {
   private customers = new Map<string, MockStripeCustomer>();
   private paymentIntents = new Map<string, MockPaymentIntent>();
   private idempotencyCache = new Map<string, StripeChargeResult>();
+  private refunds: MockRefund[] = [];
   private nextCustomerIndex = 1;
   private nextPaymentIntentIndex = 1;
   private nextSetupIntentIndex = 1;
   private nextPaymentMethodIndex = 1;
+  private nextRefundIndex = 1;
 
   async createCustomer(params: {
     customerId: number;
@@ -129,7 +142,8 @@ export class MockStripeService implements IStripeService {
       const result: StripeChargeResult = {
         success: false,
         error: failureMessage,
-        retryable: true,
+        errorCode: stripeMockConfig.getFailureErrorCode(),
+        retryable: stripeMockConfig.isFailureRetryable(),
       };
       this.idempotencyCache.set(params.idempotencyKey, result);
       return result;
@@ -139,6 +153,7 @@ export class MockStripeService implements IStripeService {
     if (stripeMockConfig.shouldRequireAction()) {
       const paymentIntentId = `pi_mock_${this.nextPaymentIntentIndex++}`;
       const clientSecret = `${paymentIntentId}_secret_${randomBytes(8).toString('hex')}`;
+      const stripeInvoiceId = `in_mock_${this.nextPaymentIntentIndex}`;
 
       this.paymentIntents.set(paymentIntentId, {
         id: paymentIntentId,
@@ -151,9 +166,12 @@ export class MockStripeService implements IStripeService {
       const result: StripeChargeResult = {
         success: false,
         paymentIntentId,
+        stripeInvoiceId,
         error: 'Card requires authentication',
+        errorCode: 'requires_action',
         requiresAction: true,
         clientSecret,
+        hostedInvoiceUrl: `https://invoice.stripe.com/i/mock/${stripeInvoiceId}`,
         retryable: false,
       };
       this.idempotencyCache.set(params.idempotencyKey, result);
@@ -185,6 +203,7 @@ export class MockStripeService implements IStripeService {
 
     // Success
     const paymentIntentId = `pi_mock_${this.nextPaymentIntentIndex++}`;
+    const stripeInvoiceId = `in_mock_${this.nextPaymentIntentIndex}`;
 
     this.paymentIntents.set(paymentIntentId, {
       id: paymentIntentId,
@@ -197,6 +216,7 @@ export class MockStripeService implements IStripeService {
     const result: StripeChargeResult = {
       success: true,
       paymentIntentId,
+      stripeInvoiceId,
       retryable: false,
     };
     this.idempotencyCache.set(params.idempotencyKey, result);
@@ -232,6 +252,25 @@ export class MockStripeService implements IStripeService {
     }
   }
 
+  async refund(params: StripeRefundParams): Promise<StripeRefundResult> {
+    const refundId = `re_mock_${this.nextRefundIndex++}`;
+
+    this.refunds.push({
+      refundId,
+      stripeInvoiceId: params.stripeInvoiceId,
+      amountUsdCents: params.amountUsdCents,
+      reason: params.reason,
+      createdAt: new Date(),
+    });
+
+    return { success: true, refundId };
+  }
+
+  /** Get recorded refunds (for test verification) */
+  getRefunds(): MockRefund[] {
+    return [...this.refunds];
+  }
+
   isMock(): boolean {
     return true;
   }
@@ -241,10 +280,12 @@ export class MockStripeService implements IStripeService {
     this.customers.clear();
     this.paymentIntents.clear();
     this.idempotencyCache.clear();
+    this.refunds = [];
     this.nextCustomerIndex = 1;
     this.nextPaymentIntentIndex = 1;
     this.nextSetupIntentIndex = 1;
     this.nextPaymentMethodIndex = 1;
+    this.nextRefundIndex = 1;
   }
 }
 

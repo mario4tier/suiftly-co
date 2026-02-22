@@ -84,6 +84,33 @@ class StripeMockConfigManager {
     return undefined;
   }
 
+  /**
+   * Get error code for the current failure mode (if any).
+   * Returns 'card_declined' for forceCardDeclined/forceInsufficientFunds.
+   */
+  getFailureErrorCode(): string | undefined {
+    if (!this.enabled) return undefined;
+    if (this.config.forceCardDeclined || this.config.forceInsufficientFunds) {
+      return 'card_declined';
+    }
+    return undefined;
+  }
+
+  /**
+   * Whether the current failure mode is retryable.
+   * Card declines and insufficient funds are NOT retryable (matches real Stripe behavior).
+   * Generic forced failures are retryable (simulates transient errors).
+   */
+  isFailureRetryable(): boolean {
+    if (!this.enabled) return false;
+    // Card-level errors are not retryable (same as real StripeCardError)
+    if (this.config.forceCardDeclined || this.config.forceInsufficientFunds) {
+      return false;
+    }
+    // Generic charge failure = retryable (simulates StripeAPIError/StripeConnectionError)
+    return true;
+  }
+
   shouldRequireAction(): boolean {
     if (!this.enabled) return false;
     return this.config.forceChargeRequiresAction === true;

@@ -832,10 +832,25 @@ if (config.NODE_ENV !== 'production') {
   });
 
   // ========================================
+  // Stripe Webhook Secret Override (for tests)
+  // ========================================
+
+  const { setWebhookSecretOverride } = await import('./routes/stripe-webhook.js');
+
+  server.post('/test/stripe/webhook-secret', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    const body = request.body as any;
+    const secret = body?.secret ?? null;
+    setWebhookSecretOverride(secret);
+    reply.send({ success: true, hasOverride: secret !== null });
+  });
+
+  // ========================================
   // Stripe Mock Configuration Endpoints
   // ========================================
 
-  const { stripeMockConfig } = await import('@suiftly/database/stripe-mock');
+  const { stripeMockConfig, setStripeForceMock } = await import('@suiftly/database/stripe-mock');
 
   // Get current Stripe mock configuration
   server.get('/test/stripe/config', {
@@ -885,6 +900,16 @@ if (config.NODE_ENV !== 'production') {
       success: true,
       config: stripeMockConfig.getConfig(),
     });
+  });
+
+  // Force mock mode (override real Stripe even when STRIPE_SECRET_KEY is set)
+  server.post('/test/stripe/force-mock', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    const body = request.body as any;
+    const enabled = body?.enabled !== false; // default true
+    setStripeForceMock(enabled);
+    reply.send({ success: true, forceMock: enabled });
   });
 
   // ========================================
