@@ -42,7 +42,7 @@ export class StripePaymentProvider implements IPaymentProvider {
   async charge(params: ProviderChargeParams): Promise<ProviderChargeResult> {
     const customer = await this.getCustomer(params.customerId);
     if (!customer?.stripeCustomerId) {
-      return { success: false, error: 'No Stripe customer configured', retryable: false };
+      return { success: false, error: 'No Stripe customer configured', errorCode: 'account_not_configured', retryable: false };
     }
 
     const result = await this.stripeService.charge({
@@ -50,20 +50,30 @@ export class StripePaymentProvider implements IPaymentProvider {
       amountUsdCents: params.amountUsdCents,
       description: params.description,
       idempotencyKey: `inv_${params.invoiceId}_stripe`,
+      billingRecordId: params.invoiceId,
     });
 
     if (result.success && result.paymentIntentId) {
       return {
         success: true,
-        referenceId: result.paymentIntentId,
+        // Prefer stripeInvoiceId for refund correlation; fall back to paymentIntentId
+        referenceId: result.stripeInvoiceId ?? result.paymentIntentId,
         retryable: false,
       };
     }
 
     // requires_action (3DS) or other failure — not retryable via provider chain
+    const errorCode = result.requiresAction
+      ? 'requires_action' as const
+      : result.errorCode === 'card_declined'
+        ? 'card_declined' as const
+        : undefined;
+
     return {
       success: false,
       error: result.error ?? 'Stripe charge failed',
+      errorCode,
+      hostedInvoiceUrl: result.hostedInvoiceUrl,
       retryable: result.retryable,
     };
   }

@@ -149,16 +149,28 @@ export async function processInvoicePayment(
         charged = true;
 
         // Update billing_records with status + txDigest (escrow-only, NULL for others)
+        // Clear paymentActionUrl: if a previous provider (e.g. Stripe) returned a 3DS URL
+        // but failed, and this provider succeeded, the stale URL must be cleared to prevent
+        // the customer from completing 3DS and being double-charged.
         await tx
           .update(billingRecords)
           .set({
             amountPaidUsdCents: result.amountPaidCents,
             status: 'paid',
             txDigest: chargeResult.txDigest ?? null, // Only escrow sets this
+            paymentActionUrl: null,
           })
           .where(eq(billingRecords.id, billingRecordId));
 
         break;
+      }
+
+      // Persist paymentActionUrl if provider returned a hosted invoice URL (3DS)
+      if (chargeResult.hostedInvoiceUrl) {
+        await tx
+          .update(billingRecords)
+          .set({ paymentActionUrl: chargeResult.hostedInvoiceUrl })
+          .where(eq(billingRecords.id, billingRecordId));
       }
 
       // Provider failed — record error, try next
@@ -168,6 +180,7 @@ export async function processInvoicePayment(
         customerId,
         invoiceId: billingRecordId,
         retryable: chargeResult.retryable,
+        errorCode: chargeResult.errorCode,
       };
     }
 

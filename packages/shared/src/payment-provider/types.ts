@@ -72,6 +72,14 @@ export interface ProviderChargeResult {
    */
   txDigest?: Buffer;
   error?: string;
+  /** Provider-specific error code for targeted UI guidance */
+  errorCode?: 'insufficient_escrow' | 'card_declined' | 'requires_action' | 'account_not_configured';
+  /**
+   * Stripe-hosted invoice URL for 3DS completion (Stripe only).
+   * Set when charge returns requires_action — the user must visit this URL
+   * to complete authentication. Stored on billing_records.paymentActionUrl.
+   */
+  hostedInvoiceUrl?: string;
   retryable: boolean;
 }
 

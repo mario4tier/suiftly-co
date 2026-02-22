@@ -15,11 +15,12 @@
  * IMPORTANT: All operations use customer-level locking to prevent race conditions.
  */
 
-import { eq, and, sql, inArray } from 'drizzle-orm';
-import { billingRecords, customers, serviceInstances } from '../schema';
+import { eq, and, sql, inArray, desc, gt } from 'drizzle-orm';
+import { billingRecords, customers, serviceInstances, invoicePayments, customerCredits } from '../schema';
 import type { Database } from '../db';
 import { withCustomerLock, type LockedTransaction } from './locking';
 import { processInvoicePayment } from './payments';
+import { getAvailableCredits } from './credits';
 import {
   startGracePeriod,
   clearGracePeriod,
@@ -30,6 +31,7 @@ import {
 import { withIdempotency, generateMonthlyBillingKey } from './idempotency';
 import { ensureInvoiceValid } from './validation';
 import { ValidationError } from './errors';
+import { logInternalError, logInternalErrorOnce } from './admin-notifications';
 import { applyScheduledTierChanges, processScheduledCancellations } from './tier-changes';
 import { recalculateDraftInvoice } from './service-billing';
 import { finalizeUsageChargesForBilling, syncUsageToDraft } from './usage-charges';
@@ -37,6 +39,8 @@ import type { BillingProcessorConfig, CustomerBillingResult, BillingOperation } 
 import type { DBClock } from '@suiftly/shared/db-clock';
 import type { PaymentServices } from './providers';
 import { getCustomerProviders } from './providers';
+import { getTierPriceUsdCents } from '@suiftly/shared/pricing';
+import type { ServiceTier } from '@suiftly/shared/constants';
 
 // How often to sync usage to DRAFT invoices (in milliseconds)
 const USAGE_SYNC_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
@@ -305,6 +309,18 @@ async function processMonthlyBilling(
         }
       }
 
+      // Process excess credit refunds when tier downgrade was applied
+      if (tierChangesApplied > 0) {
+        const refundResult = await processExcessCreditRefunds(
+          tx,
+          customerId,
+          config,
+          services
+        );
+        result.operations.push(...refundResult.operations);
+        result.errors.push(...refundResult.errors);
+      }
+
       return { processed: true, invoiceCount: draftInvoices.length };
     }
   );
@@ -317,6 +333,212 @@ async function processMonthlyBilling(
       success: true,
     });
   }
+
+  return result;
+}
+
+/**
+ * Process excess credit refunds after tier downgrade
+ *
+ * When a customer downgrades (e.g., Enterprise $185 → Starter $9), the reconciliation
+ * credit from the original tier can vastly exceed future charges. This function refunds
+ * the excess back to the original Stripe payment.
+ *
+ * Key constraints:
+ * - Only reconciliation credits are considered (not promo/goodwill/outage)
+ * - Refund amount is capped at the original Stripe charge amount
+ * - Refund is matched to the specific Stripe charge for traceability
+ * - Leaves 1 month of subscription cost as credit buffer
+ *
+ * Conditions (all must be true):
+ * - Customer has remaining reconciliation credits > current monthly subscription cost
+ * - Original payment was via Stripe (has invoice_payments with sourceType='stripe')
+ *
+ * Retry safety: Stripe idempotency key (keyed on invoice+amount) prevents double-refund
+ * if this function runs again after a partial failure. The DB transaction ensures credit
+ * deduction and billing record creation are atomic with the refund.
+ *
+ * @param tx Transaction handle (must have customer lock)
+ * @param customerId Customer ID
+ * @param config Billing processor configuration
+ * @param services Payment services
+ * @returns Billing result with refund operations
+ */
+async function processExcessCreditRefunds(
+  tx: LockedTransaction,
+  customerId: number,
+  config: BillingProcessorConfig,
+  services: PaymentServices
+): Promise<CustomerBillingResult> {
+  const result: CustomerBillingResult = {
+    customerId,
+    success: true,
+    operations: [],
+    errors: [],
+  };
+
+  const now = config.clock.now();
+
+  // Get remaining RECONCILIATION credits only (not promo/goodwill/outage).
+  // This must match the credit type we deduct from below.
+  const reconciliationCredits = await tx
+    .select()
+    .from(customerCredits)
+    .where(
+      and(
+        eq(customerCredits.customerId, customerId),
+        gt(customerCredits.remainingAmountUsdCents, 0),
+        sql`(${customerCredits.expiresAt} IS NULL OR ${customerCredits.expiresAt} > ${now})`,
+        eq(customerCredits.reason, 'reconciliation')
+      )
+    )
+    .orderBy(sql`${customerCredits.expiresAt} NULLS LAST`);
+
+  const availableReconciliationCredits = reconciliationCredits.reduce(
+    (sum, c) => sum + Number(c.remainingAmountUsdCents), 0
+  );
+
+  if (availableReconciliationCredits <= 0) {
+    return result;
+  }
+
+  // Get current monthly subscription cost
+  const activeServices = await tx
+    .select()
+    .from(serviceInstances)
+    .where(eq(serviceInstances.customerId, customerId));
+
+  let monthlyCostCents = 0;
+  for (const svc of activeServices) {
+    if (!svc.cancellationScheduledFor) {
+      monthlyCostCents += getTierPriceUsdCents(svc.tier as ServiceTier);
+    }
+  }
+
+  // Only refund if reconciliation credits exceed monthly cost (leave 1 month buffer)
+  if (availableReconciliationCredits <= monthlyCostCents) {
+    return result;
+  }
+
+  // Find the most recent Stripe payment for this customer (the charge to refund against)
+  const [stripePayment] = await tx
+    .select()
+    .from(invoicePayments)
+    .innerJoin(billingRecords, eq(invoicePayments.billingRecordId, billingRecords.id))
+    .where(
+      and(
+        eq(billingRecords.customerId, customerId),
+        eq(invoicePayments.sourceType, 'stripe'),
+      )
+    )
+    .orderBy(desc(invoicePayments.createdAt))
+    .limit(1);
+
+  if (!stripePayment) {
+    return result; // No Stripe payment found — nothing to refund to
+  }
+
+  const stripeInvoiceId = stripePayment.invoice_payments.providerReferenceId;
+  if (!stripeInvoiceId) {
+    return result;
+  }
+
+  // Cap refund at the original Stripe charge amount — Stripe rejects refunds
+  // exceeding the original charge. This also prevents refunding promo credits
+  // that weren't paid via Stripe.
+  const originalChargeAmountCents = Number(stripePayment.invoice_payments.amountUsdCents);
+  const originalBillingRecordId = stripePayment.invoice_payments.billingRecordId;
+  const excessCreditCents = availableReconciliationCredits - monthlyCostCents;
+  const refundAmountCents = Math.min(excessCreditCents, originalChargeAmountCents);
+
+  if (refundAmountCents <= 0) {
+    return result;
+  }
+
+  // Issue refund via Stripe
+  const stripeService = services.stripeService;
+  const refundResult = await stripeService.refund({
+    stripeInvoiceId,
+    amountUsdCents: refundAmountCents,
+    reason: `Excess credit refund after tier downgrade (original invoice #${originalBillingRecordId})`,
+  });
+
+  if (!refundResult.success) {
+    result.errors.push({
+      type: 'payment_failed',
+      message: refundResult.error ?? 'Stripe refund failed',
+      customerId,
+      retryable: false, // Not retried — tier change trigger won't fire again; admin handles via STRIPE_REFUND_FAILED notification
+    });
+
+    // Notify admin — refund won't be retried next cycle (tier change already applied),
+    // so the customer loses excess credit permanently without human intervention.
+    await logInternalErrorOnce(tx, {
+      severity: 'error',
+      category: 'billing',
+      code: 'STRIPE_REFUND_FAILED',
+      message: `Stripe refund of $${(refundAmountCents / 100).toFixed(2)} failed for customer ${customerId}`,
+      details: {
+        refundAmountCents,
+        stripeInvoiceId,
+        originalBillingRecordId,
+        error: refundResult.error,
+      },
+      customerId,
+      invoiceId: originalBillingRecordId,
+    });
+
+    return result;
+  }
+
+  // Deduct refunded amount from reconciliation credits (oldest expiring first)
+  let remaining = refundAmountCents;
+  for (const credit of reconciliationCredits) {
+    if (remaining <= 0) break;
+    const deduction = Math.min(remaining, Number(credit.remainingAmountUsdCents));
+    await tx
+      .update(customerCredits)
+      .set({ remainingAmountUsdCents: Number(credit.remainingAmountUsdCents) - deduction })
+      .where(eq(customerCredits.creditId, credit.creditId));
+    remaining -= deduction;
+  }
+
+  // Create a billing record documenting the refund, with traceability to original charge.
+  // failureReason field is repurposed to store the refund→charge association for audit trail.
+  const [refundRecord] = await tx
+    .insert(billingRecords)
+    .values({
+      customerId,
+      billingPeriodStart: now,
+      billingPeriodEnd: now,
+      amountUsdCents: refundAmountCents,
+      amountPaidUsdCents: refundAmountCents,
+      type: 'credit',
+      status: 'paid',
+      billingType: 'immediate',
+      failureReason: `refund_of:${originalBillingRecordId}`,
+    })
+    .returning({ id: billingRecords.id });
+
+  // Create invoice_payments row linking the refund to the original Stripe invoice.
+  // providerReferenceId stores the Stripe refund ID (re_xxx) for Stripe-side correlation.
+  await tx.insert(invoicePayments).values({
+    billingRecordId: refundRecord.id,
+    sourceType: 'stripe',
+    providerReferenceId: refundResult.refundId ?? stripeInvoiceId,
+    creditId: null,
+    escrowTransactionId: null,
+    amountUsdCents: refundAmountCents,
+  });
+
+  result.operations.push({
+    type: 'reconciliation',
+    timestamp: now,
+    amountUsdCents: refundAmountCents,
+    invoiceId: refundRecord.id,
+    description: `Refunded $${(refundAmountCents / 100).toFixed(2)} excess credit to Stripe (against invoice #${originalBillingRecordId})`,
+    success: true,
+  });
 
   return result;
 }
@@ -413,6 +635,33 @@ async function retryFailedPayments(
 
       if (paymentResult.error) {
         result.errors.push(paymentResult.error);
+      }
+
+      // Notify admin when retries are exhausted (at most once per invoice).
+      // retryCount was incremented by processInvoicePayment on failure.
+      // Wrapped in try-catch: notification failure must not abort the billing run
+      // (payment status is already updated, and subsequent operations like grace
+      // period checks still need to run).
+      const currentRetryCount = Number(invoice.retryCount ?? 0) + 1; // +1 for the attempt that just failed
+      if (currentRetryCount >= config.maxRetryAttempts) {
+        try {
+          await logInternalErrorOnce(tx, {
+            severity: 'error',
+            category: 'billing',
+            code: 'PAYMENT_RETRIES_EXHAUSTED',
+            message: `All ${config.maxRetryAttempts} payment retries exhausted for invoice ${invoice.id}`,
+            details: {
+              lastError: paymentResult.error?.message,
+              errorCode: paymentResult.error?.errorCode,
+              amountUsdCents: Number(invoice.amountUsdCents),
+              retryCount: currentRetryCount,
+            },
+            customerId,
+            invoiceId: invoice.id,
+          });
+        } catch (notifErr) {
+          console.error(`[Billing] Failed to create retry-exhausted notification for invoice ${invoice.id}:`, notifErr);
+        }
       }
     }
   }
@@ -576,6 +825,9 @@ export async function processBilling(
       );
       results.push(result);
     } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      const stack = error instanceof Error ? error.stack : undefined;
+
       // Log error but continue processing other customers
       results.push({
         customerId: customer.customerId,
@@ -584,12 +836,31 @@ export async function processBilling(
         errors: [
           {
             type: 'database_error',
-            message: error instanceof Error ? error.message : 'Unknown error',
+            message,
             customerId: customer.customerId,
             retryable: true,
           },
         ],
       });
+
+      // Notify admin with stack trace for debugging.
+      // Uses logInternalError (not Once) since there's no specific invoiceId,
+      // but billing runs every 5 minutes so repeated errors for the same customer
+      // will create multiple notifications. This is acceptable — persistent errors
+      // SHOULD be noisy.
+      try {
+        await logInternalError(db, {
+          severity: 'error',
+          category: 'billing',
+          code: 'BILLING_PROCESSOR_EXCEPTION',
+          message: `Billing processor crashed for customer ${customer.customerId}: ${message}`,
+          details: { stack },
+          customerId: customer.customerId,
+        });
+      } catch {
+        // Don't let notification failure prevent processing other customers
+        console.error(`[Billing] Failed to create admin notification for customer ${customer.customerId}`);
+      }
     }
   }
 

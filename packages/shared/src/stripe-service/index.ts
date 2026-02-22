@@ -9,4 +9,6 @@ export type {
   StripeChargeParams,
   StripeChargeResult,
   StripePaymentMethod,
+  StripeRefundParams,
+  StripeRefundResult,
 } from './types';

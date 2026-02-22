@@ -49,6 +49,12 @@ export interface IStripeService {
    */
   deletePaymentMethod(paymentMethodId: string): Promise<void>;
 
+  /**
+   * Issue a partial or full refund against a Stripe invoice.
+   * Looks up the charge/payment_intent from the invoice and refunds.
+   */
+  refund(params: StripeRefundParams): Promise<StripeRefundResult>;
+
   /** Is this the mock implementation? */
   isMock(): boolean;
 }
@@ -58,17 +64,38 @@ export interface StripeChargeParams {
   amountUsdCents: number;
   description: string;
   idempotencyKey: string;
+  /** Our billing_records.id — stored in Stripe Invoice metadata for webhook correlation */
+  billingRecordId?: number;
 }
 
 export interface StripeChargeResult {
   success: boolean;
   paymentIntentId?: string;
   error?: string;
+  /** Provider-specific error code (e.g. 'card_declined') */
+  errorCode?: string;
   /** True if 3DS needed — card authentication required */
   requiresAction?: boolean;
   /** For frontend 3DS completion (if requiresAction) */
   clientSecret?: string;
+  /** Stripe-hosted invoice page for 3DS completion (if requiresAction) */
+  hostedInvoiceUrl?: string;
+  /** Stripe Invoice ID (in_xxx) — set on both success and requires_action */
+  stripeInvoiceId?: string;
   retryable: boolean;
+}
+
+export interface StripeRefundParams {
+  /** Stripe Invoice ID (in_xxx) — we look up the charge from it */
+  stripeInvoiceId: string;
+  amountUsdCents: number;
+  reason?: string;
+}
+
+export interface StripeRefundResult {
+  success: boolean;
+  refundId?: string;
+  error?: string;
 }
 
 export interface StripePaymentMethod {

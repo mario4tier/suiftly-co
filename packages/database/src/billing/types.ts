@@ -37,6 +37,8 @@ export interface BillingError {
   message: string;
   customerId: number;
   invoiceId?: number;
+  /** Provider-specific error code for targeted UI guidance */
+  errorCode?: 'insufficient_escrow' | 'card_declined' | 'requires_action' | 'account_not_configured';
   retryable: boolean;
 }
 

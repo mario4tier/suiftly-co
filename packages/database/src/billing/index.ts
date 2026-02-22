@@ -194,6 +194,7 @@ export type {
 // Admin notifications (internal error logging)
 export {
   logInternalError,
+  logInternalErrorOnce,
   logValidationIssues,
 } from './admin-notifications';
 

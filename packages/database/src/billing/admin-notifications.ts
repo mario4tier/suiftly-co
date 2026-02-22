@@ -5,6 +5,7 @@
  * Used for billing validation failures, system errors, etc.
  */
 
+import { eq, and } from 'drizzle-orm';
 import type { Database, DatabaseOrTransaction } from '../db';
 import { adminNotifications } from '../schema/admin';
 
@@ -106,4 +107,39 @@ export async function logValidationIssues(
       invoiceId,
     });
   }
+}
+
+/**
+ * Log an admin notification with at-most-one dedup per invoiceId + code.
+ *
+ * If an unacknowledged notification already exists for the same invoiceId and code,
+ * this is a no-op (returns null). This prevents notification spam from periodic
+ * billing retries while ensuring at least one notification reaches the admin.
+ *
+ * @param tx Transaction handle (or db instance)
+ * @param params Error details (must include invoiceId for dedup)
+ * @returns Notification ID if created, null if deduplicated
+ */
+export async function logInternalErrorOnce(
+  tx: DatabaseOrTransaction,
+  params: LogInternalErrorParams & { invoiceId: number }
+): Promise<number | null> {
+  // Check for existing unacknowledged notification with same invoiceId + code
+  const existing = await tx
+    .select({ notificationId: adminNotifications.notificationId })
+    .from(adminNotifications)
+    .where(
+      and(
+        eq(adminNotifications.invoiceId, params.invoiceId),
+        eq(adminNotifications.code, params.code),
+        eq(adminNotifications.acknowledged, false)
+      )
+    )
+    .limit(1);
+
+  if (existing.length > 0) {
+    return null; // Already notified for this invoice+code
+  }
+
+  return await logInternalError(tx, params);
 }

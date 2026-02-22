@@ -7,7 +7,7 @@
  */
 
 import { TRPCError } from '@trpc/server';
-import { serviceInstances, customers } from '@suiftly/database/schema';
+import { serviceInstances, customers, billingRecords } from '@suiftly/database/schema';
 import { eq } from 'drizzle-orm';
 import { getSuiService } from '@suiftly/database/sui-mock';
 import { getStripeService } from '@suiftly/database/stripe-mock';
@@ -41,9 +41,24 @@ export async function retryPendingInvoice(
   const result = await processInvoicePayment(tx, service.subPendingInvoiceId, providers, dbClock);
 
   if (!result.fullyPaid) {
+    // Fetch paymentActionUrl if it was set (3DS requires_action)
+    let paymentActionUrl: string | undefined;
+    const [record] = await tx
+      .select({ paymentActionUrl: billingRecords.paymentActionUrl })
+      .from(billingRecords)
+      .where(eq(billingRecords.id, service.subPendingInvoiceId))
+      .limit(1);
+    paymentActionUrl = record?.paymentActionUrl ?? undefined;
+
     throw new TRPCError({
       code: 'PRECONDITION_FAILED',
-      message: 'Payment failed. Check your payment methods via Billing page.',
+      message: paymentActionUrl
+        ? 'Payment requires authentication. Complete 3D Secure verification to continue.'
+        : 'Payment failed. Check your payment methods via Billing page.',
+      cause: {
+        errorCode: result.error?.errorCode,
+        paymentActionUrl,
+      },
     });
   }
 
