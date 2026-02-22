@@ -9,9 +9,9 @@ import Fastify from 'fastify';
 import { z } from 'zod';
 import type { VaultType } from '@mhaxbe/vault-codec';
 import { getGlobalVaultTypes } from '@mhaxbe/server-configs';
-import { db, adminNotifications, systemControl } from '@suiftly/database';
+import { db, adminNotifications, systemControl, billingRecords, customers, customerPaymentMethods, invoicePayments, invoiceLineItems } from '@suiftly/database';
 import { getMockClockState, setMockClockState } from '@suiftly/database/test-kv';
-import { desc, eq, and } from 'drizzle-orm';
+import { desc, eq, and, sql, gte, lte, lt, isNotNull, isNull } from 'drizzle-orm';
 import { dbClock } from '@suiftly/shared/db-clock';
 import { isTestDeployment } from './config/lm-config.js';
 import {
@@ -48,7 +48,16 @@ const customerIdParamSchema = z.object({
 // Notification schemas
 const notificationListQuerySchema = z.object({
   acknowledged: z.enum(['true', 'false']).optional(),
+  category: z.string().min(1).max(100).optional(),
   limit: z.string().regex(/^\d+$/).transform(Number).pipe(z.number().min(1).max(500)).optional(),
+});
+
+const alarmQuerySchema = z.object({
+  category: z.string().min(1).max(100).optional(),
+});
+
+const acknowledgeAllQuerySchema = z.object({
+  category: z.string().min(1).max(100).optional(),
 });
 
 // Queue schemas
@@ -150,34 +159,30 @@ server.get('/api/health', healthResponse);
 // ============================================================================
 
 // List all notifications (most recent first)
+// Optional filters: ?acknowledged=true|false&category=billing
 server.get('/api/notifications', async (request, reply) => {
   const query = validate(notificationListQuerySchema, request.query, reply);
   if (!query) return;
 
   const limit = query.limit ?? 100;
 
-  let notifications;
+  // Build WHERE conditions
+  const conditions = [];
   if (query.acknowledged === 'false') {
-    notifications = await db
-      .select()
-      .from(adminNotifications)
-      .where(eq(adminNotifications.acknowledged, false))
-      .orderBy(desc(adminNotifications.createdAt))
-      .limit(limit);
+    conditions.push(eq(adminNotifications.acknowledged, false));
   } else if (query.acknowledged === 'true') {
-    notifications = await db
-      .select()
-      .from(adminNotifications)
-      .where(eq(adminNotifications.acknowledged, true))
-      .orderBy(desc(adminNotifications.createdAt))
-      .limit(limit);
-  } else {
-    notifications = await db
-      .select()
-      .from(adminNotifications)
-      .orderBy(desc(adminNotifications.createdAt))
-      .limit(limit);
+    conditions.push(eq(adminNotifications.acknowledged, true));
   }
+  if (query.category) {
+    conditions.push(eq(adminNotifications.category, query.category));
+  }
+
+  const notifications = await db
+    .select()
+    .from(adminNotifications)
+    .where(conditions.length > 0 ? and(...conditions) : undefined)
+    .orderBy(desc(adminNotifications.createdAt))
+    .limit(limit);
 
   return {
     notifications: notifications.map((n) => ({
@@ -188,24 +193,36 @@ server.get('/api/notifications', async (request, reply) => {
   };
 });
 
-// Get notification counts by severity
+// Get notification counts by severity and category (unacknowledged only)
 server.get('/api/notifications/counts', async () => {
   const notifications = await db
-    .select()
+    .select({
+      severity: adminNotifications.severity,
+      category: adminNotifications.category,
+    })
     .from(adminNotifications)
     .where(eq(adminNotifications.acknowledged, false));
 
-  const counts = {
+  const counts: {
+    total: number;
+    error: number;
+    warning: number;
+    info: number;
+    byCategory: Record<string, number>;
+  } = {
     total: notifications.length,
     error: 0,
     warning: 0,
     info: 0,
+    byCategory: {},
   };
 
   for (const n of notifications) {
     if (n.severity === 'error') counts.error++;
     else if (n.severity === 'warning') counts.warning++;
     else if (n.severity === 'info') counts.info++;
+
+    counts.byCategory[n.category] = (counts.byCategory[n.category] ?? 0) + 1;
   }
 
   return counts;
@@ -233,8 +250,16 @@ server.post('/api/notifications/:id/acknowledge', async (request, reply) => {
   return { success: true, notification: updated };
 });
 
-// Acknowledge all unacknowledged notifications
-server.post('/api/notifications/acknowledge-all', async () => {
+// Acknowledge all unacknowledged notifications (optionally scoped to a category)
+server.post('/api/notifications/acknowledge-all', async (request, reply) => {
+  const query = validate(acknowledgeAllQuerySchema, request.query, reply);
+  if (!query) return;
+
+  const conditions = [eq(adminNotifications.acknowledged, false)];
+  if (query.category) {
+    conditions.push(eq(adminNotifications.category, query.category));
+  }
+
   const result = await db
     .update(adminNotifications)
     .set({
@@ -242,7 +267,7 @@ server.post('/api/notifications/acknowledge-all', async () => {
       acknowledgedAt: new Date(),
       acknowledgedBy: 'admin',
     })
-    .where(eq(adminNotifications.acknowledged, false))
+    .where(and(...conditions))
     .returning({ notificationId: adminNotifications.notificationId });
 
   return { success: true, acknowledgedCount: result.length };
@@ -1401,6 +1426,602 @@ server.get('/api/infra/errors', async (request, reply) => {
 
   return { services };
 });
+
+// ============================================================================
+// Billing Monitor API (for Admin Dashboard BillingMonitor page)
+// ============================================================================
+
+// Zod schemas for billing endpoints
+const billingMonthQuerySchema = z.object({
+  month: z.string().regex(/^\d{4}-\d{2}$/, 'Month must be YYYY-MM format').optional(),
+  status: z.enum(['all', 'paid', 'pending', 'failed', 'draft', 'voided']).optional().default('all'),
+  limit: z.string().regex(/^\d+$/).transform(Number).pipe(z.number().min(1).max(500)).optional(),
+  offset: z.string().regex(/^\d+$/).transform(Number).optional(),
+});
+
+/**
+ * Classify a billing record into a display bin for the admin UI.
+ * Maps DB status + sub-conditions to a human-readable category.
+ */
+function classifyInvoiceBin(record: {
+  status: string;
+  paymentActionUrl: string | null;
+  retryCount: number | null;
+}): { displayBin: string; color: string } {
+  switch (record.status) {
+    case 'draft':
+      return { displayBin: 'Projected', color: 'gray' };
+    case 'pending':
+      if (record.paymentActionUrl) {
+        return { displayBin: 'Awaiting 3DS', color: 'amber' };
+      }
+      return { displayBin: 'Processing', color: 'blue' };
+    case 'failed': {
+      const retries = record.retryCount ?? 0;
+      if (retries >= 3) {
+        return { displayBin: 'Failed (exhausted)', color: 'red' };
+      }
+      return { displayBin: 'Retrying', color: 'amber' };
+    }
+    case 'paid':
+      return { displayBin: 'Paid', color: 'green' };
+    case 'void':
+    case 'cancelled':
+      return { displayBin: 'Voided', color: 'gray' };
+    default:
+      return { displayBin: record.status, color: 'gray' };
+  }
+}
+
+/**
+ * Get the start/end timestamps for a billing month (YYYY-MM).
+ * Returns UTC boundaries for the month.
+ */
+function getMonthBounds(monthStr: string): { start: Date; end: Date } {
+  const [yearStr, monStr] = monthStr.split('-');
+  const year = parseInt(yearStr, 10);
+  const month = parseInt(monStr, 10); // 1-indexed
+  const start = new Date(Date.UTC(year, month - 1, 1));
+  const end = new Date(Date.UTC(year, month, 1)); // first day of next month
+  return { start, end };
+}
+
+/**
+ * Get the current billing month as YYYY-MM string (UTC).
+ */
+function getCurrentMonth(): string {
+  const now = new Date();
+  const year = now.getUTCFullYear();
+  const month = String(now.getUTCMonth() + 1).padStart(2, '0');
+  return `${year}-${month}`;
+}
+
+/**
+ * Get the previous billing month as YYYY-MM string (UTC).
+ */
+function getPreviousMonth(): string {
+  const now = new Date();
+  const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
+  const year = d.getUTCFullYear();
+  const month = String(d.getUTCMonth() + 1).padStart(2, '0');
+  return `${year}-${month}`;
+}
+
+// Helper to aggregate billing records into status bins
+async function aggregateMonthBins(monthStr: string) {
+  const { start, end } = getMonthBounds(monthStr);
+
+  const records = await db
+    .select({
+      status: billingRecords.status,
+      retryCount: billingRecords.retryCount,
+      paymentActionUrl: billingRecords.paymentActionUrl,
+      amountUsdCents: billingRecords.amountUsdCents,
+    })
+    .from(billingRecords)
+    .where(
+      and(
+        gte(billingRecords.billingPeriodStart, start),
+        lt(billingRecords.billingPeriodStart, end)
+      )
+    );
+
+  const bins = {
+    paid: { count: 0, totalCents: 0 },
+    pending: { count: 0, totalCents: 0 },
+    retrying: { count: 0, totalCents: 0 },
+    failedExhausted: { count: 0, totalCents: 0 },
+    awaiting3ds: { count: 0, totalCents: 0 },
+    draft: { count: 0, totalCents: 0 },
+    voided: { count: 0, totalCents: 0 },
+  };
+
+  for (const r of records) {
+    const { displayBin } = classifyInvoiceBin(r);
+    const amount = Number(r.amountUsdCents);
+    switch (displayBin) {
+      case 'Paid': bins.paid.count++; bins.paid.totalCents += amount; break;
+      case 'Processing': bins.pending.count++; bins.pending.totalCents += amount; break;
+      case 'Retrying': bins.retrying.count++; bins.retrying.totalCents += amount; break;
+      case 'Failed (exhausted)': bins.failedExhausted.count++; bins.failedExhausted.totalCents += amount; break;
+      case 'Awaiting 3DS': bins.awaiting3ds.count++; bins.awaiting3ds.totalCents += amount; break;
+      case 'Projected': bins.draft.count++; bins.draft.totalCents += amount; break;
+      case 'Voided': bins.voided.count++; bins.voided.totalCents += amount; break;
+    }
+  }
+
+  return bins;
+}
+
+// GET /api/billing/overview — Summary statistics for billing health
+server.get('/api/billing/overview', async (_request, reply) => {
+  try {
+    const currentMonth = getCurrentMonth();
+    const previousMonth = getPreviousMonth();
+
+    // Aggregate bins for both months in parallel
+    const [currentBins, previousBins] = await Promise.all([
+      aggregateMonthBins(currentMonth),
+      aggregateMonthBins(previousMonth),
+    ]);
+
+    // Customer statistics
+    const allCustomers = await db
+      .select({
+        customerId: customers.customerId,
+        status: customers.status,
+        gracePeriodStart: customers.gracePeriodStart,
+        paidOnce: customers.paidOnce,
+      })
+      .from(customers);
+
+    const paymentMethodCount = await db
+      .select({ customerId: customerPaymentMethods.customerId })
+      .from(customerPaymentMethods)
+      .where(eq(customerPaymentMethods.status, 'active'))
+      .groupBy(customerPaymentMethods.customerId);
+
+    // Count refund records for current month
+    const { start: refundStart, end: refundEnd } = getMonthBounds(currentMonth);
+    const refundRecords = await db
+      .select({ amountUsdCents: billingRecords.amountUsdCents })
+      .from(billingRecords)
+      .where(
+        and(
+          eq(billingRecords.type, 'credit'),
+          eq(billingRecords.status, 'paid'),
+          gte(billingRecords.billingPeriodStart, refundStart),
+          lt(billingRecords.billingPeriodStart, refundEnd),
+          sql`${billingRecords.failureReason} LIKE 'refund_of:%'`
+        )
+      );
+
+    // Count failed refund attempts from admin notifications (code=STRIPE_REFUND_FAILED).
+    // Successful refunds show in recentRefunds above, but failed ones only exist as
+    // notifications — surfacing the count here gives a complete picture.
+    const [refundFailureCount] = await db
+      .select({ count: sql<number>`COUNT(*)` })
+      .from(adminNotifications)
+      .where(
+        and(
+          eq(adminNotifications.code, 'STRIPE_REFUND_FAILED'),
+          eq(adminNotifications.acknowledged, false)
+        )
+      );
+
+    return {
+      currentMonth: { label: currentMonth, ...currentBins },
+      previousMonth: { label: previousMonth, ...previousBins },
+      customers: {
+        total: allCustomers.length,
+        inGracePeriod: allCustomers.filter(c => c.gracePeriodStart !== null).length,
+        suspended: allCustomers.filter(c => c.status === 'suspended').length,
+        withPaymentMethod: paymentMethodCount.length,
+      },
+      recentRefunds: {
+        count: refundRecords.length,
+        totalCents: refundRecords.reduce((sum, r) => sum + Number(r.amountUsdCents), 0),
+      },
+      refundFailures: {
+        count: Number(refundFailureCount?.count ?? 0),
+      },
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('[Billing Monitor] /api/billing/overview failed:', err);
+    try {
+      await logAdminNotificationDedup({
+        severity: 'error',
+        category: 'billing',
+        code: 'BILLING_MONITOR_OVERVIEW_FAILED',
+        message: `Billing overview endpoint failed: ${message}`,
+        details: { stack: err instanceof Error ? err.stack : undefined },
+      });
+    } catch { /* don't let notification failure mask the original error */ }
+    return reply.status(500).send({ error: 'Failed to load billing overview' });
+  }
+});
+
+// GET /api/billing/invoices — Paginated invoice list with payment details
+server.get('/api/billing/invoices', async (request, reply) => {
+  const query = validate(billingMonthQuerySchema, request.query, reply);
+  if (!query) return;
+
+  try {
+    const monthStr = query.month ?? getCurrentMonth();
+    const limit = query.limit ?? 50;
+    const offset = query.offset ?? 0;
+    const { start, end } = getMonthBounds(monthStr);
+
+    // Build status filter
+    const statusConditions = [];
+    statusConditions.push(gte(billingRecords.billingPeriodStart, start));
+    statusConditions.push(lt(billingRecords.billingPeriodStart, end));
+
+    if (query.status !== 'all') {
+      // Map 'voided' to the DB enum values
+      if (query.status === 'voided') {
+        statusConditions.push(
+          sql`${billingRecords.status} IN ('void', 'cancelled')`
+        );
+      } else {
+        statusConditions.push(eq(billingRecords.status, query.status));
+      }
+    }
+
+    // Get billing records
+    const records = await db
+      .select()
+      .from(billingRecords)
+      .where(and(...statusConditions))
+      .orderBy(desc(billingRecords.createdAt))
+      .limit(limit)
+      .offset(offset);
+
+    if (records.length === 0) {
+      return { invoices: [], month: monthStr };
+    }
+
+    // Get payment sources and line items for all records in batch
+    const recordIds = records.map(r => r.id);
+    const [payments, lineItems] = await Promise.all([
+      db
+        .select()
+        .from(invoicePayments)
+        .where(sql`${invoicePayments.billingRecordId} IN (${sql.join(recordIds.map(id => sql`${id}`), sql`, `)})`),
+      db
+        .select()
+        .from(invoiceLineItems)
+        .where(sql`${invoiceLineItems.billingRecordId} IN (${sql.join(recordIds.map(id => sql`${id}`), sql`, `)})`),
+    ]);
+
+    // Group by billing record ID
+    const paymentsByRecord = new Map<number, typeof payments>();
+    for (const p of payments) {
+      const list = paymentsByRecord.get(p.billingRecordId) ?? [];
+      list.push(p);
+      paymentsByRecord.set(p.billingRecordId, list);
+    }
+
+    const lineItemsByRecord = new Map<number, typeof lineItems>();
+    for (const li of lineItems) {
+      const list = lineItemsByRecord.get(li.billingRecordId) ?? [];
+      list.push(li);
+      lineItemsByRecord.set(li.billingRecordId, list);
+    }
+
+    const invoices = records.map(r => {
+      const { displayBin, color } = classifyInvoiceBin(r);
+      const rPayments = paymentsByRecord.get(r.id) ?? [];
+      const rLineItems = lineItemsByRecord.get(r.id) ?? [];
+
+      return {
+        id: r.id,
+        customerId: r.customerId,
+        amountCents: Number(r.amountUsdCents),
+        amountPaidCents: Number(r.amountPaidUsdCents),
+        status: r.status,
+        displayBin,
+        color,
+        type: r.type,
+        billingType: r.billingType,
+        billingPeriodStart: r.billingPeriodStart.toISOString(),
+        billingPeriodEnd: r.billingPeriodEnd.toISOString(),
+        retryCount: r.retryCount ?? 0,
+        lastRetryAt: r.lastRetryAt?.toISOString() ?? null,
+        failureReason: r.failureReason,
+        paymentActionUrl: r.paymentActionUrl,
+        createdAt: r.createdAt.toISOString(),
+        paymentSources: rPayments.map(p => ({
+          type: p.sourceType,
+          amountCents: Number(p.amountUsdCents),
+          referenceId: p.providerReferenceId ?? p.escrowTransactionId?.toString() ?? p.creditId?.toString() ?? null,
+        })),
+        lineItems: rLineItems.map(li => ({
+          type: li.itemType,
+          serviceType: li.serviceType,
+          amountCents: Number(li.amountUsdCents),
+          quantity: Number(li.quantity),
+          description: li.description,
+        })),
+      };
+    });
+
+    return { invoices, month: monthStr };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('[Billing Monitor] /api/billing/invoices failed:', err);
+    try {
+      await logAdminNotificationDedup({
+        severity: 'error',
+        category: 'billing',
+        code: 'BILLING_MONITOR_INVOICES_FAILED',
+        message: `Billing invoices endpoint failed: ${message}`,
+        details: { stack: err instanceof Error ? err.stack : undefined },
+      });
+    } catch { /* don't let notification failure mask the original error */ }
+    return reply.status(500).send({ error: 'Failed to load billing invoices' });
+  }
+});
+
+// GET /api/alarms — Self-clearing conditions computed from live DB state
+// Optional filter: ?category=billing (omit = return all categories)
+//
+// Unlike notifications (which are persisted and require manual dismiss), alarms
+// are re-evaluated from scratch on every request. An alarm appears while its
+// underlying condition exists and disappears the moment it resolves — no manual
+// action needed. The frontend polls this endpoint on its adaptive interval.
+server.get('/api/alarms', async (request, reply) => {
+  const query = validate(alarmQuerySchema, request.query, reply);
+  if (!query) return;
+
+  try {
+    const items = await getAlarmItems(query.category);
+    return { items };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('[Alarms] /api/alarms failed:', err);
+    try {
+      await logAdminNotificationDedup({
+        severity: 'error',
+        category: 'system',
+        code: 'ALARMS_ENDPOINT_FAILED',
+        message: `Alarms endpoint failed: ${message}`,
+        details: { category: query.category, stack: err instanceof Error ? err.stack : undefined },
+      });
+    } catch { /* don't let notification failure mask the original error */ }
+    return reply.status(500).send({ error: 'Failed to load alarms' });
+  }
+});
+
+// GET /api/alarms/counts — Lightweight counts-only for Dashboard polling
+server.get('/api/alarms/counts', async (_request, reply) => {
+  try {
+    const items = await getAlarmItems();
+    return countAlarmsByCategory(items);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('[Alarms] /api/alarms/counts failed:', err);
+    try {
+      await logAdminNotificationDedup({
+        severity: 'error',
+        category: 'system',
+        code: 'ALARMS_COUNTS_ENDPOINT_FAILED',
+        message: `Alarms counts endpoint failed: ${message}`,
+        details: { stack: err instanceof Error ? err.stack : undefined },
+      });
+    } catch { /* don't let notification failure mask the original error */ }
+    return reply.status(500).send({ error: 'Failed to load alarm counts' });
+  }
+});
+
+// Shared alarm item type
+interface AlarmItem {
+  category: string;
+  type: string;
+  invoiceId: number | null;
+  customerId: number;
+  amountCents: number;
+  failureReason: string | null;
+  retryCount: number;
+  lastRetryAt: string | null;
+  daysSinceLastRetry: number | null;
+  daysSinceCreated: number | null;
+  message: string;
+}
+
+// Build alarm counts grouped by category
+function countAlarmsByCategory(items: AlarmItem[]): Record<string, number> & { total: number } {
+  const counts: Record<string, number> & { total: number } = { total: items.length };
+  for (const item of items) {
+    counts[item.category] = (counts[item.category] ?? 0) + 1;
+  }
+  return counts;
+}
+
+/**
+ * Compute all alarm items by querying current DB state.
+ *
+ * This function is stateless — it runs fresh queries every call and returns
+ * whatever conditions currently exist. Nothing is persisted; if the underlying
+ * data changes (e.g. an invoice gets paid), the alarm simply won't appear on
+ * the next call. The frontend polls on its adaptive interval to pick up changes.
+ *
+ * @param categoryFilter  When set, only returns alarms for that category
+ *                        (skips queries for other categories entirely).
+ */
+async function getAlarmItems(categoryFilter?: string): Promise<AlarmItem[]> {
+  // Currently all alarms are billing — skip if filtering for a different category
+  if (categoryFilter && categoryFilter !== 'billing') return [];
+
+  const now = new Date();
+  const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+
+  const items: AlarmItem[] = [];
+
+  // 1. Failed + retries exhausted (retryCount >= 3)
+  const exhaustedInvoices = await db
+    .select()
+    .from(billingRecords)
+    .where(
+      and(
+        eq(billingRecords.status, 'failed'),
+        gte(billingRecords.retryCount, 3)
+      )
+    )
+    .orderBy(desc(billingRecords.lastRetryAt));
+
+  for (const inv of exhaustedInvoices) {
+    const daysSinceRetry = inv.lastRetryAt
+      ? Math.floor((now.getTime() - new Date(inv.lastRetryAt).getTime()) / (24 * 60 * 60 * 1000))
+      : null;
+    const daysSinceCreated = Math.floor((now.getTime() - new Date(inv.createdAt).getTime()) / (24 * 60 * 60 * 1000));
+    items.push({
+      category: 'billing',
+      type: 'failed_exhausted',
+      invoiceId: inv.id,
+      customerId: inv.customerId,
+      amountCents: Number(inv.amountUsdCents),
+      failureReason: inv.failureReason,
+      retryCount: inv.retryCount ?? 0,
+      lastRetryAt: inv.lastRetryAt?.toISOString() ?? null,
+      daysSinceLastRetry: daysSinceRetry,
+      daysSinceCreated,
+      message: `Invoice #${inv.id}: all retries exhausted (${inv.failureReason ?? 'unknown reason'})`,
+    });
+  }
+
+  // 2. Failed with stalled retries (retryCount < 3 but no recent retry activity).
+  // Catches invoices where the processor hiccupped and retries stopped advancing.
+  // Also catches legacy rows where lastRetryAt was never set — uses createdAt as fallback.
+  const stalledRetries = await db
+    .select()
+    .from(billingRecords)
+    .where(
+      and(
+        eq(billingRecords.status, 'failed'),
+        sql`COALESCE(${billingRecords.retryCount}, 0) < 3`,
+        sql`COALESCE(${billingRecords.lastRetryAt}, ${billingRecords.createdAt}) <= ${oneDayAgo}`
+      )
+    )
+    .orderBy(sql`COALESCE(${billingRecords.lastRetryAt}, ${billingRecords.createdAt}) DESC`);
+
+  for (const inv of stalledRetries) {
+    const daysSinceRetry = inv.lastRetryAt
+      ? Math.floor((now.getTime() - new Date(inv.lastRetryAt).getTime()) / (24 * 60 * 60 * 1000))
+      : null;
+    const daysSinceCreated = Math.floor((now.getTime() - new Date(inv.createdAt).getTime()) / (24 * 60 * 60 * 1000));
+    const sinceLabel = inv.lastRetryAt
+      ? `last attempt ${daysSinceRetry}d ago`
+      : `created ${daysSinceCreated}d ago, never retried`;
+    items.push({
+      category: 'billing',
+      type: 'failed_stalled',
+      invoiceId: inv.id,
+      customerId: inv.customerId,
+      amountCents: Number(inv.amountUsdCents),
+      failureReason: inv.failureReason,
+      retryCount: inv.retryCount ?? 0,
+      lastRetryAt: inv.lastRetryAt?.toISOString() ?? null,
+      daysSinceLastRetry: daysSinceRetry,
+      daysSinceCreated,
+      message: `Invoice #${inv.id}: failed with ${inv.retryCount ?? 0} retries, ${sinceLabel} — retries may be stalled`,
+    });
+  }
+
+  // 3. Stale 3DS (pending + paymentActionUrl set for > 7 days)
+  const stale3ds = await db
+    .select()
+    .from(billingRecords)
+    .where(
+      and(
+        eq(billingRecords.status, 'pending'),
+        isNotNull(billingRecords.paymentActionUrl),
+        lte(billingRecords.createdAt, sevenDaysAgo)
+      )
+    );
+
+  for (const inv of stale3ds) {
+    const daysSinceCreated = Math.floor((now.getTime() - new Date(inv.createdAt).getTime()) / (24 * 60 * 60 * 1000));
+    items.push({
+      category: 'billing',
+      type: 'stale_3ds',
+      invoiceId: inv.id,
+      customerId: inv.customerId,
+      amountCents: Number(inv.amountUsdCents),
+      failureReason: null,
+      retryCount: 0,
+      lastRetryAt: null,
+      daysSinceLastRetry: null,
+      daysSinceCreated,
+      message: `Invoice #${inv.id}: 3DS verification pending for ${daysSinceCreated} days`,
+    });
+  }
+
+  // 4. Stuck pending invoices (pending, no paymentActionUrl, created > 24h ago).
+  // These should have been picked up by the billing processor. If they're still
+  // pending after a day, something went wrong (processor hiccup, clock skew, etc.).
+  const stuckPending = await db
+    .select()
+    .from(billingRecords)
+    .where(
+      and(
+        eq(billingRecords.status, 'pending'),
+        isNull(billingRecords.paymentActionUrl),
+        lte(billingRecords.createdAt, oneDayAgo)
+      )
+    );
+
+  for (const inv of stuckPending) {
+    const daysSince = Math.floor((now.getTime() - new Date(inv.createdAt).getTime()) / (24 * 60 * 60 * 1000));
+    items.push({
+      category: 'billing',
+      type: 'stuck_pending',
+      invoiceId: inv.id,
+      customerId: inv.customerId,
+      amountCents: Number(inv.amountUsdCents),
+      failureReason: null,
+      retryCount: inv.retryCount ?? 0,
+      lastRetryAt: inv.lastRetryAt?.toISOString() ?? null,
+      daysSinceLastRetry: null,
+      daysSinceCreated: daysSince,
+      message: `Invoice #${inv.id}: stuck in pending for ${daysSince} day(s) — processor may have missed it`,
+    });
+  }
+
+  // 5. Customers in grace period with < 3 days remaining (14-day grace period)
+  const graceCustomers = await db
+    .select({
+      customerId: customers.customerId,
+      gracePeriodStart: customers.gracePeriodStart,
+    })
+    .from(customers)
+    .where(isNotNull(customers.gracePeriodStart));
+
+  for (const c of graceCustomers) {
+    if (!c.gracePeriodStart) continue;
+    const graceEnd = new Date(new Date(c.gracePeriodStart).getTime() + 14 * 24 * 60 * 60 * 1000);
+    const daysRemaining = Math.ceil((graceEnd.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
+    if (daysRemaining <= 3 && daysRemaining >= 0) {
+      items.push({
+        category: 'billing',
+        type: 'grace_expiring',
+        invoiceId: null,
+        customerId: c.customerId,
+        amountCents: 0,
+        failureReason: null,
+        retryCount: 0,
+        lastRetryAt: null,
+        daysSinceLastRetry: null,
+        daysSinceCreated: null,
+        message: `Customer ${c.customerId}: grace period expires in ${daysRemaining} day(s)`,
+      });
+    }
+  }
+
+  return items;
+}
 
 // ============================================================================
 // Graceful shutdown

@@ -797,6 +797,43 @@ psql suiftly_prod -c "SELECT * FROM fleet_status;"
 psql suiftly_prod -c "SELECT * FROM server_status ORDER BY reported_at DESC;"
 ```
 
+### Alarms vs Notifications
+
+The admin UI uses two distinct monitoring mechanisms. They look similar but behave differently:
+
+| | **Alarms** | **Notifications** |
+|---|---|---|
+| **Source** | Live DB queries (computed) | `admin_notifications` table (persisted) |
+| **Lifecycle** | Self-clearing — appears while condition exists, disappears when resolved | Requires manual acknowledge/delete |
+| **Storage** | None (stateless, recomputed per request) | Database rows with severity, category, timestamps |
+| **Action buttons** | None (no user action needed) | Dismiss, Delete, Acknowledge All |
+| **Category** | Each alarm has a `category` field (e.g. `billing`) | Uses `category` column in `admin_notifications` |
+
+**Alarms** are conditions derived from current DB state. The backend runs fresh queries on every API call — nothing is cached or persisted. When the underlying data changes (e.g. a failed invoice gets paid), the alarm simply stops appearing on the next poll. The frontend polls `GET /api/alarms` on its adaptive interval to pick up changes.
+
+Current billing alarm rules:
+1. Failed invoices with retries exhausted (retryCount >= 3)
+2. Failed invoices with stalled retries (no retry activity in 24h)
+3. Stale 3DS verification (pending > 7 days)
+4. Stuck pending invoices (pending without 3DS for > 24h)
+5. Grace period expiring (< 3 days remaining)
+
+**Notifications** are events logged to the `admin_notifications` table by backend processes (webhook handlers, billing processor, LM sync, etc.). They persist until an admin acknowledges or deletes them. Deduplication by `code + category` prevents spam — if a notification with the same code already exists unacknowledged, the message is updated rather than creating a duplicate.
+
+**API endpoints:**
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/alarms?category=billing` | Alarm items, optionally filtered by category |
+| `GET /api/alarms/counts` | Lightweight counts by category (for Dashboard) |
+| `GET /api/notifications?category=billing&acknowledged=false` | Notifications, filtered by category and/or status |
+| `GET /api/notifications/counts` | Counts by severity + `byCategory` breakdown |
+| `POST /api/notifications/acknowledge-all?category=billing` | Acknowledge scoped to category |
+
+**UI layout:**
+- **Dashboard** — Summary table showing alarm + notification counts per category, with links to dedicated pages.
+- **Billing page** — Two separate cards: Alarms card (read-only, self-clearing) and Notifications card (with dismiss/delete/acknowledge-all actions).
+
 ---
 
 ## Security Considerations

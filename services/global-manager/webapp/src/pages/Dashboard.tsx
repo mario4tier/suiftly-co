@@ -24,40 +24,32 @@ interface LMStatusResponse {
   managers: LMStatus[];
 }
 
+interface AlarmCounts {
+  total: number;
+  [category: string]: number;
+}
+
 interface NotificationCounts {
   total: number;
   error: number;
   warning: number;
   info: number;
+  byCategory: Record<string, number>;
 }
 
-interface Notification {
-  notificationId: number;
-  severity: string;
-  category: string;
-  code: string;
-  message: string;
-  details: any;
-  customerId: string | null;
-  invoiceId: string | null;
-  acknowledged: boolean;
-  acknowledgedAt: string | null;
-  acknowledgedBy: string | null;
-  createdAt: string;
-}
+// Categories with dedicated pages get links
+const CATEGORY_PAGES: Record<string, string> = {
+  billing: '/billing',
+};
 
 export function Dashboard() {
   const [health, setHealth] = useState<HealthStatus | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
   const [lmStatus, setLmStatus] = useState<LMStatusResponse | null>(null);
   const [lmError, setLmError] = useState<string | null>(null);
-  const [counts, setCounts] = useState<NotificationCounts | null>(null);
-  const [notifications, setNotifications] = useState<Notification[]>([]);
-  const [showAcknowledged, setShowAcknowledged] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [notifError, setNotifError] = useState<string | null>(null);
+  const [alarmCounts, setAlarmCounts] = useState<AlarmCounts | null>(null);
+  const [notifCounts, setNotifCounts] = useState<NotificationCounts | null>(null);
 
-  // Adaptive polling based on user activity
   const { pollingInterval, markUpdated } = useAdminPollingContext();
 
   const fetchHealth = useCallback(async () => {
@@ -86,92 +78,51 @@ export function Dashboard() {
     }
   }, []);
 
-  const fetchCounts = useCallback(async () => {
+  const fetchAlarmCounts = useCallback(async () => {
     try {
-      const res = await fetch('/api/notifications/counts');
+      const res = await fetch('/api/alarms/counts');
       if (!res.ok) return;
       const data = await res.json();
-      setCounts(data);
+      setAlarmCounts(data);
     } catch {
       // Ignore
     }
   }, []);
 
-  const fetchNotifications = useCallback(async () => {
-    setLoading(true);
-    setNotifError(null);
+  const fetchNotifCounts = useCallback(async () => {
     try {
-      const url = showAcknowledged
-        ? '/api/notifications'
-        : '/api/notifications?acknowledged=false';
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const res = await fetch('/api/notifications/counts');
+      if (!res.ok) return;
       const data = await res.json();
-      setNotifications(data.notifications || []);
-    } catch (e) {
-      setNotifError(e instanceof Error ? e.message : 'Failed to fetch');
-      setNotifications([]);
-    } finally {
-      setLoading(false);
+      setNotifCounts(data);
+    } catch {
+      // Ignore
     }
-  }, [showAcknowledged]);
-
-  const acknowledgeNotification = async (id: number) => {
-    await fetch(`/api/notifications/${id}/acknowledge`, { method: 'POST' });
-    fetchNotifications();
-    fetchCounts();
-  };
-
-  const acknowledgeAll = async () => {
-    await fetch('/api/notifications/acknowledge-all', { method: 'POST' });
-    fetchNotifications();
-    fetchCounts();
-  };
-
-  const deleteNotification = async (id: number) => {
-    await fetch(`/api/notifications/${id}`, { method: 'DELETE' });
-    fetchNotifications();
-    fetchCounts();
-  };
-
-  const deleteAllAcknowledged = async () => {
-    await fetch('/api/notifications/acknowledged', { method: 'DELETE' });
-    fetchNotifications();
-    fetchCounts();
-  };
+  }, []);
 
   useEffect(() => {
     const fetchAll = async () => {
-      await Promise.all([fetchHealth(), fetchLMStatus(), fetchCounts()]);
+      await Promise.all([fetchHealth(), fetchLMStatus(), fetchAlarmCounts(), fetchNotifCounts()]);
       markUpdated();
     };
     fetchAll();
     const interval = setInterval(fetchAll, pollingInterval);
     return () => clearInterval(interval);
-  }, [fetchHealth, fetchLMStatus, fetchCounts, pollingInterval, markUpdated]);
-
-  useEffect(() => {
-    fetchNotifications();
-  }, [fetchNotifications]);
-
-  const severityColor = (severity: string) => {
-    switch (severity) {
-      case 'error': return '#f87171';
-      case 'warning': return '#fbbf24';
-      case 'info': return '#60a5fa';
-      default: return '#94a3b8';
-    }
-  };
+  }, [fetchHealth, fetchLMStatus, fetchAlarmCounts, fetchNotifCounts, pollingInterval, markUpdated]);
 
   // Calculate LM sync state from status
   const getLMState = (lm: LMStatus): SyncState => {
     if (!lm.reachable) return SyncState.Down;
     if (lm.error) return SyncState.Error;
-    // Synced if all vaults have applied >= 1 and no processing
     const allApplied = lm.vaults.every(v => v.appliedSeq > 0 && v.processingSeq === null);
     if (allApplied) return SyncState.Sync;
     return SyncState.Pending;
   };
+
+  // Build category rows for the monitoring summary
+  const categoryRows = buildCategoryRows(alarmCounts, notifCounts);
+  const totalAlarms = alarmCounts?.total ?? 0;
+  const totalNotifs = notifCounts?.total ?? 0;
 
   return (
     <div style={{ maxWidth: '900px' }}>
@@ -259,178 +210,110 @@ export function Dashboard() {
         )}
       </div>
 
-      {/* Notification Counts */}
-      {counts && counts.total > 0 && (
-        <div style={{
-          background: '#1e293b',
-          padding: '1rem',
-          borderRadius: '0.5rem',
-          marginBottom: '1rem',
-          display: 'flex',
-          gap: '1.5rem',
-          alignItems: 'center'
-        }}>
-          <span style={{ color: '#94a3b8' }}>Unacknowledged:</span>
-          {counts.error > 0 && (
-            <span style={{ color: '#f87171' }}>{counts.error} errors</span>
-          )}
-          {counts.warning > 0 && (
-            <span style={{ color: '#fbbf24' }}>{counts.warning} warnings</span>
-          )}
-          {counts.info > 0 && (
-            <span style={{ color: '#60a5fa' }}>{counts.info} info</span>
-          )}
-        </div>
-      )}
-
-      {/* Notifications */}
+      {/* Monitoring Summary */}
       <div style={{
         background: '#1e293b',
         padding: '1rem',
         borderRadius: '0.5rem',
-        marginBottom: '1rem'
+        marginBottom: '1rem',
       }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-          <h2 style={{ fontSize: '1rem', color: '#94a3b8', margin: 0 }}>
-            Notifications
-          </h2>
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
-            <label style={{ color: '#94a3b8', fontSize: '0.875rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-              <input
-                type="checkbox"
-                checked={showAcknowledged}
-                onChange={(e) => setShowAcknowledged(e.target.checked)}
-              />
-              Show acknowledged
-            </label>
-            {notifications.some(n => !n.acknowledged) && (
-              <button
-                onClick={acknowledgeAll}
-                style={{
-                  background: '#3b82f6',
-                  color: 'white',
-                  border: 'none',
-                  padding: '0.25rem 0.5rem',
-                  borderRadius: '0.25rem',
-                  cursor: 'pointer',
-                  fontSize: '0.75rem'
-                }}
-              >
-                Acknowledge All
-              </button>
-            )}
-            {showAcknowledged && notifications.some(n => n.acknowledged) && (
-              <button
-                onClick={deleteAllAcknowledged}
-                style={{
-                  background: '#ef4444',
-                  color: 'white',
-                  border: 'none',
-                  padding: '0.25rem 0.5rem',
-                  borderRadius: '0.25rem',
-                  cursor: 'pointer',
-                  fontSize: '0.75rem'
-                }}
-              >
-                Delete Acknowledged
-              </button>
-            )}
-          </div>
-        </div>
+        <h2 style={{ fontSize: '1rem', marginBottom: '0.75rem', color: '#94a3b8' }}>
+          Monitoring Summary
+        </h2>
 
-        {loading ? (
-          <p style={{ color: '#94a3b8' }}>Loading...</p>
-        ) : notifError ? (
-          <p style={{ color: '#f87171' }}>Error: {notifError}</p>
-        ) : notifications.length === 0 ? (
-          <p style={{ color: '#64748b' }}>No notifications</p>
+        {categoryRows.length === 0 && totalAlarms === 0 && totalNotifs === 0 ? (
+          <p style={{ color: '#64748b', fontSize: '0.875rem' }}>All clear — no alarms or notifications.</p>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-            {notifications.map((n) => (
-              <div
-                key={n.notificationId}
-                style={{
-                  background: n.acknowledged ? '#0f172a' : '#1e3a5f',
-                  padding: '0.75rem',
-                  borderRadius: '0.25rem',
-                  borderLeft: `3px solid ${severityColor(n.severity)}`,
-                  opacity: n.acknowledged ? 0.6 : 1
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.25rem' }}>
-                      <span style={{
-                        color: severityColor(n.severity),
-                        fontWeight: 'bold',
-                        textTransform: 'uppercase',
-                        fontSize: '0.75rem'
-                      }}>
-                        {n.severity}
-                      </span>
-                      <span style={{ color: '#64748b', fontSize: '0.75rem' }}>{n.category}</span>
-                      <span style={{ color: '#475569', fontSize: '0.75rem' }}>{n.code}</span>
-                    </div>
-                    <p style={{ color: '#e2e8f0', margin: 0, fontSize: '0.875rem' }}>{n.message}</p>
-                    {n.details && (
-                      <pre style={{
-                        color: '#94a3b8',
-                        fontSize: '0.75rem',
-                        margin: '0.5rem 0 0',
-                        background: '#0f172a',
-                        padding: '0.5rem',
-                        borderRadius: '0.25rem',
-                        overflow: 'auto',
-                        maxHeight: '100px',
-                        maxWidth: '100%',
-                        whiteSpace: 'pre-wrap',
-                        wordBreak: 'break-word',
-                      }}>
-                        {JSON.stringify(n.details, null, 2)}
-                      </pre>
-                    )}
-                    <div style={{ color: '#475569', fontSize: '0.7rem', marginTop: '0.25rem' }}>
-                      {new Date(n.createdAt).toLocaleString()}
-                      {n.customerId && ` | Customer: ${n.customerId}`}
-                      {n.invoiceId && ` | Invoice: ${n.invoiceId}`}
-                    </div>
-                  </div>
-                  <div style={{ display: 'flex', gap: '0.25rem' }}>
-                    {!n.acknowledged && (
-                      <button
-                        onClick={() => acknowledgeNotification(n.notificationId)}
-                        style={{
-                          background: '#22c55e',
-                          color: 'white',
-                          border: 'none',
-                          padding: '0.25rem 0.5rem',
-                          borderRadius: '0.25rem',
-                          cursor: 'pointer',
-                          fontSize: '0.75rem'
-                        }}
-                      >
-                        Dismiss
-                      </button>
-                    )}
-                    <button
-                      onClick={() => deleteNotification(n.notificationId)}
-                      style={{
-                        background: '#64748b',
-                        color: 'white',
-                        border: 'none',
-                        padding: '0.25rem 0.5rem',
-                        borderRadius: '0.25rem',
-                        cursor: 'pointer',
-                        fontSize: '0.75rem'
-                      }}
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
+          <table style={{
+            width: '100%',
+            borderCollapse: 'collapse',
+            fontSize: '0.8125rem',
+          }}>
+            <thead>
+              <tr style={{ borderBottom: '1px solid #334155' }}>
+                <th style={{ padding: '0.5rem 0.75rem', textAlign: 'left', color: '#64748b', fontWeight: 500, fontSize: '0.75rem' }}>Category</th>
+                <th style={{ padding: '0.5rem 0.75rem', textAlign: 'right', color: '#64748b', fontWeight: 500, fontSize: '0.75rem' }}>Alarms</th>
+                <th style={{ padding: '0.5rem 0.75rem', textAlign: 'right', color: '#64748b', fontWeight: 500, fontSize: '0.75rem' }}>Notifications</th>
+                <th style={{ padding: '0.5rem 0.75rem', textAlign: 'right', color: '#64748b', fontWeight: 500, fontSize: '0.75rem', width: '60px' }}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {categoryRows.map((row) => {
+                const hasAlarms = row.alarms > 0;
+                const pagePath = CATEGORY_PAGES[row.category];
+                return (
+                  <tr
+                    key={row.category}
+                    style={{
+                      borderBottom: '1px solid #334155',
+                      background: hasAlarms ? '#7f1d1d11' : 'transparent',
+                    }}
+                  >
+                    <td style={{
+                      padding: '0.5rem 0.75rem',
+                      color: hasAlarms ? '#fca5a5' : '#e2e8f0',
+                      fontWeight: hasAlarms ? 600 : 400,
+                    }}>
+                      {row.category}
+                    </td>
+                    <td style={{
+                      padding: '0.5rem 0.75rem',
+                      textAlign: 'right',
+                      color: hasAlarms ? '#ef4444' : '#64748b',
+                      fontWeight: hasAlarms ? 700 : 400,
+                    }}>
+                      {row.alarms}
+                    </td>
+                    <td style={{
+                      padding: '0.5rem 0.75rem',
+                      textAlign: 'right',
+                      color: row.notifications > 0 ? '#f59e0b' : '#64748b',
+                    }}>
+                      {row.notifications}
+                    </td>
+                    <td style={{ padding: '0.5rem 0.75rem', textAlign: 'right' }}>
+                      {pagePath && (
+                        <Link
+                          to={pagePath}
+                          style={{
+                            color: '#60a5fa',
+                            fontSize: '0.75rem',
+                            textDecoration: 'none',
+                          }}
+                        >
+                          View &rarr;
+                        </Link>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+
+              {/* Total row */}
+              {categoryRows.length > 1 && (
+                <tr style={{ borderTop: '2px solid #475569' }}>
+                  <td style={{ padding: '0.5rem 0.75rem', color: '#94a3b8', fontWeight: 600 }}>Total</td>
+                  <td style={{
+                    padding: '0.5rem 0.75rem',
+                    textAlign: 'right',
+                    color: totalAlarms > 0 ? '#ef4444' : '#64748b',
+                    fontWeight: 600,
+                  }}>
+                    {totalAlarms}
+                  </td>
+                  <td style={{
+                    padding: '0.5rem 0.75rem',
+                    textAlign: 'right',
+                    color: totalNotifs > 0 ? '#f59e0b' : '#64748b',
+                    fontWeight: 600,
+                  }}>
+                    {totalNotifs}
+                  </td>
+                  <td></td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         )}
       </div>
 
@@ -439,4 +322,43 @@ export function Dashboard() {
       </p>
     </div>
   );
+}
+
+// Build merged category rows from alarm counts + notification counts
+// Only includes categories that have at least one alarm or notification
+function buildCategoryRows(
+  alarmCounts: AlarmCounts | null,
+  notifCounts: NotificationCounts | null,
+): Array<{ category: string; alarms: number; notifications: number }> {
+  const categories = new Set<string>();
+
+  // Collect categories from alarms (skip 'total' key)
+  if (alarmCounts) {
+    for (const key of Object.keys(alarmCounts)) {
+      if (key !== 'total') categories.add(key);
+    }
+  }
+
+  // Collect categories from notifications
+  if (notifCounts?.byCategory) {
+    for (const key of Object.keys(notifCounts.byCategory)) {
+      categories.add(key);
+    }
+  }
+
+  const rows = Array.from(categories)
+    .map(cat => ({
+      category: cat,
+      alarms: (alarmCounts && cat in alarmCounts) ? (alarmCounts as Record<string, number>)[cat] : 0,
+      notifications: notifCounts?.byCategory?.[cat] ?? 0,
+    }))
+    .filter(r => r.alarms > 0 || r.notifications > 0)
+    .sort((a, b) => {
+      // Sort: categories with alarms first, then by name
+      if (a.alarms > 0 && b.alarms === 0) return -1;
+      if (a.alarms === 0 && b.alarms > 0) return 1;
+      return a.category.localeCompare(b.category);
+    });
+
+  return rows;
 }

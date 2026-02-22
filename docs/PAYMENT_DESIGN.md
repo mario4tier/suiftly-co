@@ -12,7 +12,9 @@ The billing system currently hard-codes escrow as the only charge method in `pro
 
 ### Payment Methods
 
-All payment methods are equal at the priority/ordering layer — none gets hardcoded priority. However, each provider has different setup flows and runtime characteristics (see [Design Decisions](#13-design-decisions)):
+All payment methods are equal at the priority/ordering layer — none gets hardcoded priority over another; the customer controls the order. However, MVP enforces **one active method per provider type** (one card, one escrow, one PayPal) as an app-level simplification. The DB schema supports multiple rows per type — relaxing this limit requires only an app-code change, no migration. See [Design Decisions](#13-design-decisions) for rationale.
+
+**Implication for fallback:** Cross-provider fallback (e.g., card fails → escrow pays) works at MVP. Within-provider fallback (e.g., card A fails → card B) requires the multi-card relaxation. Each provider has different setup flows and runtime characteristics:
 
 | Method | Label | Setup Step | Charge Model |
 |--------|-------|------------|--------------|
@@ -123,7 +125,16 @@ export interface ProviderChargeResult {
    */
   txDigest?: Buffer;
   error?: string;
+  /** Provider-specific error code for targeted UI guidance (see Service Gate section) */
+  errorCode?: 'insufficient_escrow' | 'card_declined' | 'requires_action' | 'account_not_configured';
   retryable: boolean;
+  /**
+   * Stripe-hosted invoice URL for 3DS completion (Stripe only).
+   * Set when charge returns requires_action — the user must visit this URL
+   * to complete authentication. Stored on billing_records.paymentActionUrl
+   * so the dashboard can render a "Complete payment" prompt.
+   */
+  hostedInvoiceUrl?: string;
 }
 
 export interface ProviderInfo {
@@ -225,9 +236,14 @@ export class StripePaymentProvider implements IPaymentProvider {
     // 3. Add InvoiceItem with amount and description
     // 4. Finalize and pay the invoice (Stripe creates PaymentIntent internally)
     //    - Pass params.idempotencyKey as Stripe-Idempotency-Key header
-    // 5. Handle 'requires_action' → return { success: false, retryable: false }
-    //    (see 3DS/SCA section below)
-    // 6. Return { referenceId: stripeInvoiceId }
+    // 5. Handle 'requires_action':
+    //    return { success: false, retryable: false,
+    //             errorCode: 'requires_action',
+    //             hostedInvoiceUrl: stripeInvoice.hosted_invoice_url }
+    //    (see 3DS/SCA section below — caller persists URL on billing_records)
+    // 6. Handle decline:
+    //    return { success: false, retryable: true, errorCode: 'card_declined' }
+    // 7. Return { referenceId: stripeInvoiceId }
     //    NOTE: Does NOT create invoice_payments — caller does that
   }
 
@@ -393,6 +409,18 @@ if (remainingAmount > 0) {
 
   for (const provider of providers) {
     if (!await provider.canPay(customerId, remainingAmount)) {
+      // Track skipped providers for targeted error messages
+      // e.g., escrow skipped due to insufficient balance → errorCode: 'insufficient_escrow'
+      if (provider.type === 'escrow' && await provider.isConfigured(customerId)) {
+        lastError = {
+          type: 'payment_failed',
+          message: 'Insufficient escrow balance',
+          errorCode: 'insufficient_escrow',
+          customerId,
+          invoiceId: billingRecordId,
+          retryable: false,
+        };
+      }
       continue;
     }
 
@@ -440,10 +468,18 @@ if (remainingAmount > 0) {
     lastError = {
       type: 'payment_failed',
       message: chargeResult.error ?? `${provider.type} charge failed`,
+      errorCode: chargeResult.errorCode,
       customerId,
       invoiceId: billingRecordId,
       retryable: chargeResult.retryable,
     };
+
+    // Persist Stripe-hosted URL for 3DS completion (if returned)
+    if (chargeResult.hostedInvoiceUrl) {
+      await tx.update(billingRecords).set({
+        paymentActionUrl: chargeResult.hostedInvoiceUrl,
+      }).where(eq(billingRecords.id, billingRecordId));
+    }
   }
 
   if (!charged) {
@@ -635,9 +671,19 @@ export const invoicePayments = pgTable('invoice_payments', {
 - `providerReferenceId` is a generic varchar for external providers — the external system (Stripe, PayPal) is the source of record
 - Adding a new external provider only requires adding its name to the `IN ('stripe', 'paypal', ...)` list — no new column needed
 
-### billing_records.txDigest
+### billing_records changes
 
-**No change.** The `txDigest` column (`bytea`) on `billing_records` remains. It stores the on-chain transaction digest for escrow payments. For Stripe/PayPal payments, it stays `NULL`. The Stripe payment intent ID and PayPal order ID are stored in `invoice_payments.providerReferenceId`.
+**`txDigest`** — No change. Stores on-chain transaction digest for escrow payments. `NULL` for Stripe/PayPal. The Stripe invoice ID and PayPal order ID are stored in `invoice_payments.providerReferenceId`.
+
+**`paymentActionUrl`** — New nullable `varchar(500)` column. Stores the Stripe-hosted invoice URL when a charge returns `requires_action` (3DS authentication needed). The dashboard reads this to render a "Complete payment" prompt. Cleared when:
+- The `invoice.paid` webhook confirms payment (user completed 3DS)
+- The invoice is voided or superseded
+- The user replaces their card (new charge attempt will set a new URL if needed)
+
+```typescript
+// Add to billingRecords in schema/escrow.ts:
+paymentActionUrl: varchar('payment_action_url', { length: 500 }),
+```
 
 ### New: payment_webhook_events table
 
@@ -689,12 +735,15 @@ export const paymentWebhookEvents = pgTable('payment_webhook_events', {
 2. Invoice payment uses the saved payment method — Stripe applies SCA exemptions where possible
 3. If 3DS is still required (exemption denied), the invoice remains `open` with `requires_action`
 
-**When `requires_action` occurs:**
-- `StripePaymentProvider.charge()` returns `{ success: false, retryable: false, error: 'Card requires authentication' }`
-- The provider chain falls through to the next provider (if any)
-- If no provider succeeds, the billing invoice enters the normal retry/grace period flow
-- The dashboard shows a "Complete payment" prompt linking to a Stripe-hosted 3DS page
-- After the user completes 3DS, the `invoice.paid` webhook confirms payment
+**When `requires_action` occurs — full propagation path:**
+1. `StripePaymentProvider.charge()` returns `{ success: false, retryable: false, errorCode: 'requires_action', hostedInvoiceUrl: '...' }`
+2. `processInvoicePayment()` persists `hostedInvoiceUrl` on `billing_records.paymentActionUrl`
+3. The provider chain falls through to the next provider (if any)
+4. If no provider succeeds, the billing invoice enters `failed` status (periodic job retry)
+5. **API surface:** The service gate throws a structured error with `cause: { errorCode: 'requires_action', paymentActionUrl }` so the frontend can render a "Complete payment" button
+6. **Validation warnings:** `validateSubscription()` checks for `paymentActionUrl` on pending invoices and returns a `REQUIRES_ACTION` warning with the URL
+7. The dashboard renders a "Complete payment" prompt linking to the Stripe-hosted 3DS page
+8. After the user completes 3DS, the `invoice.paid` webhook confirms payment and clears `paymentActionUrl`
 
 **This is acceptable because:**
 - SetupIntent consent succeeds for most merchant-initiated charges
@@ -825,7 +874,8 @@ export async function stripeWebhookRoute(server: FastifyInstance) {
     //         (the synchronous charge() path already marked it paid; this is the
     //         normal case — webhook arrives after charge() returned success)
     //      d. If still 'pending'/'failed': update to 'paid', create invoice_payments
-    //         row with providerReferenceId = stripeInvoiceId
+    //         row with providerReferenceId = stripeInvoiceId,
+    //         clear paymentActionUrl (3DS completed)
     //         (this handles the async 3DS completion case where charge() returned
     //         requires_action and the user later completed authentication)
     //
@@ -895,9 +945,30 @@ if (service.subPendingInvoiceId !== null && input.enabled) {
   );
 
   if (!paymentResult.fullyPaid) {
+    // Provider-specific error guidance so users know exactly what to do
+    const err = paymentResult.error;
+    let message = 'Payment failed. Check your payment methods via Billing page.';
+    let actionUrl: string | undefined;
+
+    if (err?.errorCode === 'insufficient_escrow') {
+      message = 'Insufficient escrow balance. Deposit USDC to your escrow account via the Billing page.';
+    } else if (err?.errorCode === 'card_declined') {
+      message = 'Your card was declined. Update your card on the Billing page.';
+    } else if (err?.errorCode === 'requires_action') {
+      // 3DS authentication needed — read the persisted URL
+      const record = await tx.select({ paymentActionUrl: billingRecords.paymentActionUrl })
+        .from(billingRecords)
+        .where(eq(billingRecords.id, service.subPendingInvoiceId))
+        .limit(1);
+      actionUrl = record[0]?.paymentActionUrl ?? undefined;
+      message = 'Your card requires authentication. Complete payment to continue.';
+    }
+
     throw new TRPCError({
       code: 'PRECONDITION_FAILED',
-      message: 'Payment failed. Check your payment methods via Billing page.',
+      message,
+      // Structured cause so the frontend can render targeted UI
+      cause: { errorCode: err?.errorCode, paymentActionUrl: actionUrl },
     });
   }
 
@@ -933,13 +1004,38 @@ if (activePaymentMethods.length === 0) {
     code: 'NO_PAYMENT_METHOD',
     message: 'No payment method configured. Add a payment method via Billing page.',
   });
+} else {
+  // Provider-specific warnings for escrow-only customers
+  const hasNonEscrow = activePaymentMethods.some(m => m.providerType !== 'escrow');
+  if (!hasNonEscrow) {
+    // Escrow-only — check balance against upcoming charge
+    const tierPrice = getTierPriceUsdCents(service.tier);
+    if ((customer.currentBalanceUsdCents ?? 0) < tierPrice) {
+      warnings.push({
+        code: 'INSUFFICIENT_ESCROW',
+        message: `Escrow balance ($${((customer.currentBalanceUsdCents ?? 0) / 100).toFixed(2)}) is below the tier price ($${(tierPrice / 100).toFixed(2)}). Deposit USDC or add another payment method.`,
+      });
+    }
+  }
+
+  // Warn if a pending invoice has a 3DS action URL (user needs to complete authentication)
+  if (service.subPendingInvoiceId) {
+    const record = await db.select({ paymentActionUrl: billingRecords.paymentActionUrl })
+      .from(billingRecords)
+      .where(eq(billingRecords.id, service.subPendingInvoiceId))
+      .limit(1);
+    if (record[0]?.paymentActionUrl) {
+      warnings.push({
+        code: 'REQUIRES_ACTION',
+        message: 'Your card requires authentication. Complete payment to continue.',
+        paymentActionUrl: record[0].paymentActionUrl,
+      });
+    }
+  }
 }
-// NOTE: With multiple providers, balance warnings are less useful.
-// A user with $0 escrow but a valid Stripe card is fine.
-// Only warn if there are NO methods at all.
 ```
 
-**Behavior change note:** The current gate blocks enabling when escrow balance is insufficient. The new gate allows enabling as long as ANY payment method exists — even if escrow has $0 — because the user may intend to pay via Stripe/PayPal. The actual payment validation happens at charge time via `canPay()`.
+**Behavior change note:** The current gate blocks enabling when escrow balance is insufficient. The new gate allows enabling as long as ANY payment method exists — because the user may intend to pay via Stripe/PayPal. However, for **escrow-only** customers, the validator still warns about low balance so they get targeted guidance ("deposit USDC") rather than waiting for a generic charge failure.
 
 ---
 
@@ -1071,6 +1167,7 @@ addPaymentMethod: protectedProcedure
 | `packages/database/src/billing/processor.ts` | Pass providers instead of suiService |
 | `packages/database/src/billing/periodic-job.ts` | Pass providers instead of suiService |
 | `packages/database/src/schema/billing.ts` | Add `customer_payment_methods`, `payment_webhook_events`, update `invoice_payments` |
+| `packages/database/src/schema/escrow.ts` | Add `paymentActionUrl` to `billing_records` |
 | `packages/database/src/schema/customers.ts` | Add `stripeCustomerId` column |
 | `packages/database/src/schema/index.ts` | Export new tables |
 | `apps/api/src/routes/billing.ts` | Add payment method management endpoints |
@@ -1139,7 +1236,10 @@ Sandbox tests are safe for CI — Stripe's test mode is rate-limited at 25 req/s
 | Provider chain — priority order respected | Providers called in customer's priority order | Unit |
 | Stripe charge — success | Invoice created + paid, invoice_payment recorded | Unit |
 | Stripe charge — card declined | Retryable error, correct error message | Unit |
-| Stripe charge — requires_action (3DS) | Non-retryable, falls through to next provider | Unit |
+| Stripe charge — requires_action (3DS) | Non-retryable, falls through to next provider, persists paymentActionUrl | Unit |
+| 3DS — service gate returns structured error | Gate error includes errorCode + paymentActionUrl in cause | Unit |
+| 3DS — webhook clears paymentActionUrl | invoice.paid webhook clears billing_records.paymentActionUrl | Unit |
+| 3DS — validation warning | validateSubscription returns REQUIRES_ACTION with URL | Unit |
 | Stripe charge — idempotency | Same idempotency key returns cached result | Unit |
 | Webhook — invoice.paid | Billing invoice updated to PAID | Unit |
 | Webhook — duplicate event | payment_webhook_events idempotency prevents double-processing | Unit |
@@ -1148,6 +1248,8 @@ Sandbox tests are safe for CI — Stripe's test mode is rate-limited at 25 req/s
 | Service gate — no methods, pending invoice | Enabling blocked | Unit |
 | Service gate — method exists, pending invoice | Retries payment via provider chain | Unit |
 | Service gate — no pending invoice | Normal enable flow | Unit |
+| Service gate — escrow-only, $0 balance | Returns 'insufficient_escrow' errorCode with targeted message | Unit |
+| Validation — escrow-only, low balance | INSUFFICIENT_ESCROW warning with amounts | Unit |
 | SetupIntent → Invoice → paid webhook | Full lifecycle with real Stripe API | Sandbox |
 | Invoice with automatic_tax | Tax calculation returns valid amounts | Sandbox |
 | Card decline + retry with new card | Full recovery flow | Sandbox |
@@ -1205,7 +1307,7 @@ Update the sudob `/api/test/reset-all` endpoint to also clear payment-related da
 - **Raw Payment Intents** — Invoices API creates PaymentIntents internally; we don't use the PaymentIntents API directly. This gives us tax-ready invoices and compliant invoice documents from day one
 - **Multi-currency** — USD only (matches existing billing system)
 - **Partial charges across providers** — One provider pays the full remaining amount
-- **Multiple methods per provider type** — One Stripe card, one escrow, one PayPal per customer (see Design Decisions)
+- **Multiple methods per provider type (MVP)** — One Stripe card, one escrow, one PayPal per customer. DB supports multiples; app-level check is the only constraint. Relaxing this (e.g., multi-card with within-provider fallback) is a near-term enhancement requiring only app-code changes (see Design Decisions)
 - **Frontend changes** — Covered in a separate UI design doc
 - **Tax collection (for now)** — `automatic_tax: { enabled: false }` ships day one. When nexus is reached, flip to `true` — no code or schema changes needed. Stripe Tax handles calculation, collection, and reporting at 0.5% per transaction
 - **Stripe Connect** — Not needed (we're the merchant)
@@ -1235,6 +1337,8 @@ Current application-level limits (can be relaxed without DB migration):
 - **PayPal:** One billing agreement per customer (app-level pre-check)
 
 The DB unique index is on `(customer_id, provider_ref) WHERE active AND NOT NULL`, so adding multi-card support later only requires changing the application code — no schema migration.
+
+**Lost/expired card handling:** When a card charge fails with `card_declined`, the payment method remains `active` (the user may want to retry after updating with their bank). The dashboard shows a targeted "Update your card" prompt via the structured error payload. The user can remove the card and add a new one — or, once multi-card support is added, add a second card as fallback. The system does NOT auto-demote or auto-remove failed cards, since declines can be transient (e.g., fraud hold that the user resolves with their bank).
 
 ### `displayLabel` for escrow is computed live
 
@@ -1272,5 +1376,5 @@ The webhook handler is essential for the **async 3DS case**: when `charge()` ret
 
 ---
 
-**Version:** 4.1
+**Version:** 4.2
 **Last Updated:** 2026-02-19
