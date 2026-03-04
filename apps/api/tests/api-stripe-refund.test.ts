@@ -24,6 +24,7 @@ import {
   trpcMutation,
   restCall,
   resetTestData,
+  addStripePaymentMethod,
   runPeriodicBillingJob,
 } from './helpers/http.js';
 import { login, TEST_WALLET } from './helpers/auth.js';
@@ -59,12 +60,8 @@ describe('API: Stripe Refund Flow', () => {
    * Helper: Subscribe to a tier with Stripe as payment method
    */
   async function subscribeWithStripe(tier: string): Promise<void> {
-    // Add stripe as payment method
-    await trpcMutation<any>(
-      'billing.addPaymentMethod',
-      { providerType: 'stripe' },
-      accessToken
-    );
+    // Add stripe as payment method (complete-setup creates the row)
+    await addStripePaymentMethod(accessToken);
 
     // Subscribe
     const result = await trpcMutation<any>(

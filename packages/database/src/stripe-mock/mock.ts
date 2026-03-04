@@ -63,6 +63,7 @@ export class MockStripeService implements IStripeService {
   private customers = new Map<string, MockStripeCustomer>();
   private paymentIntents = new Map<string, MockPaymentIntent>();
   private idempotencyCache = new Map<string, StripeChargeResult>();
+  private setupIntents = new Map<string, { stripeCustomerId: string; paymentMethodId: string }>();
   private refunds: MockRefund[] = [];
   private nextCustomerIndex = 1;
   private nextPaymentIntentIndex = 1;
@@ -123,6 +124,9 @@ export class MockStripeService implements IStripeService {
 
     customer.paymentMethods.push(method);
     customer.defaultPaymentMethodId = paymentMethodId;
+
+    // Track setupIntent → customer/paymentMethod mapping for test endpoint
+    this.setupIntents.set(setupIntentId, { stripeCustomerId, paymentMethodId });
 
     return { clientSecret, setupIntentId };
   }
@@ -252,6 +256,19 @@ export class MockStripeService implements IStripeService {
     }
   }
 
+  async setDefaultPaymentMethod(stripeCustomerId: string, paymentMethodId: string): Promise<void> {
+    const customer = this.customers.get(stripeCustomerId);
+    if (customer) {
+      customer.defaultPaymentMethodId = paymentMethodId;
+    }
+  }
+
+  async voidInvoice(stripeInvoiceId: string): Promise<{ success: boolean; error?: string }> {
+    // In mock mode, just acknowledge the void (no real Stripe invoice to cancel)
+    console.log(`[MockStripe] voidInvoice: ${stripeInvoiceId}`);
+    return { success: true };
+  }
+
   async refund(params: StripeRefundParams): Promise<StripeRefundResult> {
     const refundId = `re_mock_${this.nextRefundIndex++}`;
 
@@ -271,6 +288,11 @@ export class MockStripeService implements IStripeService {
     return [...this.refunds];
   }
 
+  /** Get setupIntent info for test endpoint (maps setupIntentId → customer/paymentMethod) */
+  getSetupIntentInfo(setupIntentId: string): { stripeCustomerId: string; paymentMethodId: string } | undefined {
+    return this.setupIntents.get(setupIntentId);
+  }
+
   isMock(): boolean {
     return true;
   }
@@ -280,6 +302,7 @@ export class MockStripeService implements IStripeService {
     this.customers.clear();
     this.paymentIntents.clear();
     this.idempotencyCache.clear();
+    this.setupIntents.clear();
     this.refunds = [];
     this.nextCustomerIndex = 1;
     this.nextPaymentIntentIndex = 1;

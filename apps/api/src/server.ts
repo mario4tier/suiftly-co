@@ -18,6 +18,7 @@ import { initializeFrontendConfig } from './lib/init-config';
 import { initializeConfigCache } from './lib/config-cache';
 import { verifyDatabasePermissions } from './lib/db-permissions-check';
 import { testDelayManager } from './lib/test-delays';
+import { isTestFeaturesEnabled } from '@mhaxbe/system-config';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -92,8 +93,8 @@ server.get('/health', {
   };
 });
 
-// Test endpoints (only in development/test)
-if (config.NODE_ENV !== 'production') {
+// Test endpoints (only when test features enabled via system.conf)
+if (isTestFeaturesEnabled()) {
   // Import test utilities
   const { testDelayManager } = await import('./lib/test-delays.js');
   const {
@@ -847,6 +848,53 @@ if (config.NODE_ENV !== 'production') {
   });
 
   // ========================================
+  // Stripe Card Setup Completion (test only)
+  // ========================================
+
+  // Simulate Stripe webhook for setup_intent.succeeded
+  // Called by the mock card dialog instead of real Stripe.js
+  server.post('/test/stripe/complete-setup', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    const body = request.body as any;
+    const setupIntentId = body?.setupIntentId;
+
+    if (!setupIntentId) {
+      reply.code(400).send({ success: false, error: 'setupIntentId is required' });
+      return;
+    }
+
+    try {
+      const { getStripeService, MockStripeService } = await import('@suiftly/database/stripe-mock');
+      const { handleSetupIntentSucceeded } = await import('./routes/stripe-webhook.js');
+
+      const stripeService = getStripeService();
+      if (!(stripeService instanceof MockStripeService)) {
+        reply.code(400).send({ success: false, error: 'complete-setup only works in mock mode' });
+        return;
+      }
+
+      const info = stripeService.getSetupIntentInfo(setupIntentId);
+      if (!info) {
+        reply.code(404).send({ success: false, error: `SetupIntent ${setupIntentId} not found in mock` });
+        return;
+      }
+
+      // Call the same handler the real webhook would call
+      await handleSetupIntentSucceeded({
+        payment_method: info.paymentMethodId,
+        customer: info.stripeCustomerId,
+        metadata: { card_brand: 'visa', card_last4: '4242' },
+      });
+
+      reply.send({ success: true });
+    } catch (error: any) {
+      console.error('[TEST COMPLETE-SETUP ERROR]', error);
+      reply.code(500).send({ success: false, error: error.message || String(error) });
+    }
+  });
+
+  // ========================================
   // Stripe Mock Configuration Endpoints
   // ========================================
 
@@ -1325,7 +1373,7 @@ async function start() {
     console.log(`  🔐 Auth REST: http://${config.HOST}:${config.PORT}/i/auth/*`);
     console.log(`  📡 tRPC API: http://${config.HOST}:${config.PORT}/i/api`);
     console.log(`  🔧 Health: http://${config.HOST}:${config.PORT}/health`);
-    if (config.NODE_ENV !== 'production') {
+    if (isTestFeaturesEnabled()) {
       console.log(`  🧪 Test Config: http://${config.HOST}:${config.PORT}/test/config`);
       console.log(`  🧪 Test Delays: POST http://${config.HOST}:${config.PORT}/test/delays`);
       console.log(`  🧪 Test Data Reset: POST http://${config.HOST}:${config.PORT}/test/data/reset`);

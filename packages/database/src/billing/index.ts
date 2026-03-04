@@ -25,6 +25,12 @@ export {
 export {
   processInvoicePayment,
   getInvoicePaidAmount,
+  retryUnpaidInvoices,
+} from './payments';
+
+export type {
+  RetryInvoiceDetail,
+  RetryLimits,
 } from './payments';
 
 // Payment providers
@@ -43,6 +49,7 @@ export type {
 export {
   applyCreditsToInvoice,
   issueCredit,
+  issueReconciliationCredit,
   getAvailableCredits,
 } from './credits';
 

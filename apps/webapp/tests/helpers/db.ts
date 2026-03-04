@@ -9,6 +9,7 @@ import type { APIRequestContext, Page } from '@playwright/test';
 import { expect } from '@playwright/test';
 import { PORT } from '@suiftly/shared/constants';
 import { waitAfterMutation } from './wait-utils';
+import { addSandboxCreditCard } from './stripe';
 
 const API_BASE = `http://localhost:${PORT.API}`;
 
@@ -388,8 +389,8 @@ export async function authenticateWithMockWallet(page: Page): Promise<void> {
  */
 export async function addCryptoPayment(page: Page): Promise<void> {
   // Check if escrow payment method already exists (e.g. auto-added by deposit endpoint).
-  // If the "Crypto" row is already in the list, the add button won't be rendered.
-  const cryptoRow = page.locator('text=/Crypto/i').first();
+  // If the "Suiftly Escrow" row is already in the list, the add button won't be rendered.
+  const cryptoRow = page.locator('text=/Suiftly Escrow/i').first();
   const addButton = page.locator('[data-testid="add-crypto-payment"]');
 
   // Wait for the Payment Methods section to render (either the add button or an existing crypto row)
@@ -407,14 +408,119 @@ export async function addCryptoPayment(page: Page): Promise<void> {
 
 /**
  * Add credit card (Stripe) payment method on the billing page.
- * Clicks "Add Credit Card" button and waits for the method to appear.
+ * Clicks "Add Credit Card", interacts with the card dialog, and waits for the method to appear.
+ * In mock mode, the dialog shows a pre-filled test card - just click "Add Card".
  * Assumes the page is already on /billing.
  */
+/**
+ * Set up a payment provider for E2E tests.
+ *
+ * - **escrow**: deposits `balanceUsd` into the test escrow account, navigates to
+ *   billing, and adds the crypto payment method.
+ * - **stripe**: disables force-mock (uses real Stripe sandbox), navigates to
+ *   billing, and adds a credit card via real Stripe Elements.
+ *   `balanceUsd` is ignored (Stripe charges the card directly).
+ *
+ * Assumes the page is already authenticated (post-login).
+ */
+export async function setupPaymentProvider(
+  page: Page,
+  request: APIRequestContext,
+  provider: 'escrow' | 'stripe',
+  balanceUsd: number
+): Promise<void> {
+  if (provider === 'escrow') {
+    // Deposit funds into escrow account
+    await ensureTestBalance(request, balanceUsd);
+
+    // Navigate to billing to add the payment method
+    await page.click('text=Billing');
+    await page.waitForURL('/billing', { timeout: 5000 });
+    await addCryptoPayment(page);
+  } else {
+    // Disable force-mock so real Stripe sandbox is used
+    await request.post(`${API_BASE}/test/stripe/force-mock`, {
+      data: { enabled: false },
+    });
+
+    // Navigate to billing to add the payment method via Stripe Elements
+    await page.click('text=Billing');
+    await page.waitForURL('/billing', { timeout: 5000 });
+
+    await addSandboxCreditCard(page);
+  }
+}
+
+/**
+ * Subscribe to the Seal service via the onboarding flow.
+ *
+ * Navigates to the Seal page, accepts terms, selects a tier, clicks Subscribe,
+ * and waits for the "Subscription successful" toast + redirect to overview.
+ *
+ * Assumes the page is already authenticated and a payment method is configured
+ * (or the test expects payment-pending behavior).
+ *
+ * @param tier - 'STARTER' | 'PRO' | 'ENTERPRISE' (default: 'PRO')
+ * @param options.successTimeout - How long to wait for "Subscription successful" (default 10000)
+ * @param options.expectSuccess - If false, skips waiting for success toast (for payment-pending tests). Default true.
+ */
+export async function subscribeSealService(
+  page: Page,
+  tier: 'STARTER' | 'PRO' | 'ENTERPRISE' = 'PRO',
+  options?: {
+    successTimeout?: number;
+    expectSuccess?: boolean;
+  }
+): Promise<void> {
+  const successTimeout = options?.successTimeout ?? 10000;
+  const expectSuccess = options?.expectSuccess ?? true;
+
+  // Navigate to seal service page
+  await page.click('text=Seal');
+  await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
+
+  // Accept terms
+  await page.locator('label:has-text("Agree to")').click();
+
+  // Select tier (PRO is default in the UI, only click heading for non-PRO)
+  if (tier !== 'PRO') {
+    await page.getByRole('heading', { name: tier }).click();
+  }
+
+  // Subscribe
+  await page.locator('button:has-text("Subscribe to Service")').click();
+
+  if (expectSuccess) {
+    // Wait for subscription success toast
+    await expect(
+      page.locator('[data-sonner-toast]').filter({ hasText: /Subscription successful/i })
+    ).toBeVisible({ timeout: successTimeout });
+
+    // Wait for redirect to overview
+    await page.waitForURL(/\/services\/seal\/overview/, { timeout: 5000 });
+  }
+}
+
 export async function addCreditCardPayment(page: Page): Promise<void> {
   const addButton = page.locator('[data-testid="add-credit-card"]');
   await expect(addButton).toBeVisible({ timeout: 5000 });
   await addButton.click();
+
+  // Wait for card dialog to open
+  const dialog = page.locator('[role="dialog"]');
+  await expect(dialog).toBeVisible({ timeout: 5000 });
+  await expect(dialog.locator('text=Add Credit Card')).toBeVisible();
+
+  // Click "Add Card" button in the dialog (mock mode auto-fills card details)
+  const addCardButton = dialog.locator('button:has-text("Add Card")');
+  await expect(addCardButton).toBeVisible();
+  await addCardButton.click();
+
+  // Wait for dialog to close
+  await expect(dialog).not.toBeVisible({ timeout: 10000 });
+
   await waitAfterMutation(page);
-  // Wait for method to appear in the list
+
+  // Wait for method to appear in the list with card details
   await expect(page.locator('[data-testid="payment-method-row"]').filter({ hasText: 'Credit Card' })).toBeVisible({ timeout: 5000 });
 }

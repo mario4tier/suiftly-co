@@ -74,6 +74,12 @@ export async function startGracePeriod(
 /**
  * Clear grace period for a customer (payment received)
  *
+ * Also resumes the account if it was suspended for non-payment.
+ * This ensures that successful payment retries (from adding a new payment
+ * method, periodic retries, or webhook reconciliation) automatically
+ * unsuspend the customer. Services remain disabled — the user must
+ * manually re-enable them (per BILLING_DESIGN.md R6).
+ *
  * @param tx Transaction handle (must have customer lock)
  * @param customerId Customer ID
  */
@@ -84,6 +90,7 @@ export async function clearGracePeriod(
   await tx
     .update(customers)
     .set({
+      status: 'active',
       gracePeriodStart: null,
       gracePeriodNotifiedAt: null,
     })

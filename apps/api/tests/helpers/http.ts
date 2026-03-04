@@ -243,6 +243,40 @@ export async function truncateAllTables(): Promise<void> {
 }
 
 /**
+ * Add a Stripe payment method and complete the setup.
+ *
+ * In mock mode, addPaymentMethod returns a SetupIntent but does NOT create a
+ * payment method row — the row is created by the setup_intent.succeeded webhook.
+ * This helper calls /test/stripe/complete-setup to simulate that webhook,
+ * matching the production flow: add → confirm card → webhook → row created.
+ *
+ * @param accessToken - JWT access token from login()
+ * @returns The setupIntentId for further assertions
+ */
+export async function addStripePaymentMethod(accessToken: string): Promise<string> {
+  const addResult = await trpcMutation<any>(
+    'billing.addPaymentMethod',
+    { providerType: 'stripe' },
+    accessToken
+  );
+  if (addResult.error) {
+    throw new Error(`addPaymentMethod failed: ${JSON.stringify(addResult.error)}`);
+  }
+  const setupIntentId = addResult.result?.data?.setupIntentId;
+  if (!setupIntentId) {
+    throw new Error('addPaymentMethod did not return setupIntentId');
+  }
+
+  // Complete the setup (simulates the webhook in mock mode)
+  const completeResult = await restCall<any>('POST', '/test/stripe/complete-setup', { setupIntentId });
+  if (!completeResult.success) {
+    throw new Error(`complete-setup failed: ${completeResult.error}`);
+  }
+
+  return setupIntentId;
+}
+
+/**
  * Subscribe to a service and enable it via API
  * This is the proper API-based flow for setting up a paid, enabled service.
  *

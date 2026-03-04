@@ -11,7 +11,7 @@ import { serviceInstances, customers, billingRecords } from '@suiftly/database/s
 import { eq } from 'drizzle-orm';
 import { getSuiService } from '@suiftly/database/sui-mock';
 import { getStripeService } from '@suiftly/database/stripe-mock';
-import { getCustomerProviders, processInvoicePayment } from '@suiftly/database/billing';
+import { getCustomerProviders, processInvoicePayment, issueReconciliationCredit, clearGracePeriod, recalculateDraftInvoice } from '@suiftly/database/billing';
 import type { LockedTransaction } from '@suiftly/database/billing';
 import { dbClock } from '@suiftly/shared/db-clock';
 
@@ -72,4 +72,32 @@ export async function retryPendingInvoice(
   await tx.update(customers)
     .set({ paidOnce: true })
     .where(eq(customers.customerId, customerId));
+
+  // Clear grace period if the customer was in one due to previous payment failure.
+  await clearGracePeriod(tx, customerId);
+
+  // Issue reconciliation credit for partial month (deferred payment).
+  const [invoice] = await tx
+    .select()
+    .from(billingRecords)
+    .where(eq(billingRecords.id, service.subPendingInvoiceId))
+    .limit(1);
+
+  if (invoice) {
+    const [si] = await tx.select({ serviceType: serviceInstances.serviceType })
+      .from(serviceInstances)
+      .where(eq(serviceInstances.instanceId, service.instanceId))
+      .limit(1);
+    if (si) {
+      await issueReconciliationCredit(tx, customerId, invoice, si.serviceType);
+    }
+  }
+
+  // Recalculate DRAFT invoice to reflect the paid invoice.
+  // Non-fatal: stale DRAFT will self-correct on next billing cycle.
+  try {
+    await recalculateDraftInvoice(tx, customerId, dbClock);
+  } catch (err) {
+    console.error(`[retryPendingInvoice] Failed to recalculate DRAFT for customer ${customerId}:`, err);
+  }
 }

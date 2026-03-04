@@ -13,9 +13,10 @@
 import type { FastifyInstance } from 'fastify';
 import crypto from 'crypto';
 import { db } from '@suiftly/database';
-import { withCustomerLock, issueCredit, recalculateDraftInvoice, clearGracePeriod, logInternalError, logInternalErrorOnce } from '@suiftly/database/billing';
+import { withCustomerLock, issueReconciliationCredit, recalculateDraftInvoice, clearGracePeriod, logInternalError, logInternalErrorOnce } from '@suiftly/database/billing';
+import { getStripeService } from '@suiftly/database/stripe-mock';
 import { paymentWebhookEvents, customerPaymentMethods, customers, billingRecords, serviceInstances, invoicePayments } from '@suiftly/database/schema';
-import { eq, and, inArray } from 'drizzle-orm';
+import { eq, and, inArray, gt } from 'drizzle-orm';
 import { dbClockProvider } from '@suiftly/shared/db-clock';
 import { config } from '../lib/config';
 
@@ -73,8 +74,10 @@ function verifyStripeSignature(
     .update(signedPayload)
     .digest('hex');
 
-  // Constant-time comparison
-  if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature))) {
+  // Constant-time comparison (timingSafeEqual throws RangeError if lengths differ)
+  const sigBuf = Buffer.from(signature);
+  const expectedBuf = Buffer.from(expectedSignature);
+  if (sigBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(sigBuf, expectedBuf)) {
     return { valid: false, error: 'Signature mismatch' };
   }
 
@@ -117,6 +120,22 @@ export async function registerStripeWebhook(server: FastifyInstance) {
 
     if (!verification.valid) {
       console.error(`[Stripe Webhook] Signature verification failed: ${verification.error}`);
+      // Notify admin — persistent failures indicate misconfiguration or an attack.
+      // Uses logInternalErrorOnce with synthetic invoiceId to deduplicate under rapid fire.
+      try {
+        await logInternalErrorOnce(db, {
+          severity: 'warning',
+          category: 'security',
+          code: 'WEBHOOK_SIGNATURE_FAILED',
+          message: `Stripe webhook signature verification failed: ${verification.error}`,
+          details: {
+            error: verification.error,
+            ip: request.ip,
+            userAgent: request.headers['user-agent'],
+          },
+          invoiceId: -1,
+        });
+      } catch { /* don't block the 400 response */ }
       return reply.status(400).send({ error: 'Invalid signature' });
     }
 
@@ -282,20 +301,38 @@ async function handleInvoicePaid(invoice: Record<string, unknown>) {
     return;
   }
 
-  // Skip if already paid — but notify admin since Stripe charged an already-settled invoice.
-  // This can happen if the provider chain fell through to escrow (which succeeded) but the
-  // customer later completes 3DS on the stale Stripe-hosted page, causing a double charge.
+  // Already paid — another provider succeeded before Stripe (e.g., customer completed 3DS
+  // on a stale Stripe-hosted page after escrow already paid). Auto-refund to prevent double charge.
   if (record.status === 'paid') {
-    console.log(`[Stripe Webhook] invoice.paid: billing record ${billingRecordId} already paid, skipping`);
-    await logInternalError(db, {
-      severity: 'warning',
-      category: 'billing',
-      code: 'WEBHOOK_INVOICE_ALREADY_PAID',
-      message: `Stripe invoice ${stripeInvoiceId} paid but billing record ${billingRecordId} was already paid — possible double charge`,
-      details: { stripeInvoiceId, billingRecordId, amountPaid, existingStatus: record.status },
-      customerId: record.customerId,
-      invoiceId: billingRecordId,
-    });
+    console.log(`[Stripe Webhook] invoice.paid: billing record ${billingRecordId} already paid — auto-refunding Stripe charge`);
+    const stripeService = getStripeService();
+    try {
+      const refundResult = await stripeService.refund({
+        stripeInvoiceId: stripeInvoiceId,
+        amountUsdCents: amountPaid ?? Number(record.amountUsdCents),
+        reason: `Auto-refund: billing record ${billingRecordId} already paid by another provider`,
+      });
+      await logInternalError(db, {
+        severity: 'error',
+        category: 'billing',
+        code: 'DOUBLE_CHARGE_AUTO_REFUNDED',
+        message: `Auto-refunded Stripe charge on already-paid invoice ${billingRecordId}`,
+        details: { stripeInvoiceId, refundId: refundResult.refundId, refundSuccess: refundResult.success, amountPaid },
+        customerId: record.customerId,
+        invoiceId: billingRecordId,
+      });
+    } catch (err) {
+      // Refund failed — escalate so admin can manually refund
+      await logInternalError(db, {
+        severity: 'error',
+        category: 'billing',
+        code: 'DOUBLE_CHARGE_REFUND_FAILED',
+        message: `MANUAL ACTION REQUIRED: Stripe charged already-paid invoice ${billingRecordId} and auto-refund failed`,
+        details: { stripeInvoiceId, error: err instanceof Error ? err.message : String(err), amountPaid },
+        customerId: record.customerId,
+        invoiceId: billingRecordId,
+      });
+    }
     return;
   }
 
@@ -352,15 +389,19 @@ async function handleInvoicePaid(invoice: Record<string, unknown>) {
       amountUsdCents: invoiceAmount,
     });
 
-    // 2. Update billing_records: status='paid', amount, clear stale failure metadata.
+    // 2. Update billing_records: status='paid', clear stale failure metadata.
     //    Keep retryCount as audit trail (how many attempts before success).
     //    Clear failureReason/lastRetryAt/paymentActionUrl so they don't leak into
     //    UI, alerts, or retry heuristics for what is now a paid invoice.
+    //    amountPaidUsdCents: ADD Stripe payment to any credits already applied
+    //    (credits are applied before the provider chain and NOT rolled back on failure,
+    //    so freshRecord.amountPaidUsdCents may already include credit payments).
+    const existingPaidCents = Number(freshRecord.amountPaidUsdCents ?? 0);
     await tx
       .update(billingRecords)
       .set({
         status: 'paid',
-        amountPaidUsdCents: invoiceAmount,
+        amountPaidUsdCents: existingPaidCents + invoiceAmount,
         paymentActionUrl: null,
         failureReason: null,
         lastRetryAt: null,
@@ -396,33 +437,13 @@ async function handleInvoicePaid(invoice: Record<string, unknown>) {
       .where(eq(customers.customerId, customerId));
     await clearGracePeriod(tx, customerId);
 
-    // 5. Issue reconciliation credit for partial month.
-    //    Use the billing record's period start date (when the subscription was created),
-    //    NOT clock.today(). For 3DS completions, the webhook can fire days/weeks after
-    //    the original charge attempt, and using today would give the wrong credit amount.
-    const subscriptionDate = new Date(freshRecord.billingPeriodStart);
-    const daysInMonth = getDaysInMonth(subscriptionDate.getUTCFullYear(), subscriptionDate.getUTCMonth() + 1);
-    const dayOfMonth = subscriptionDate.getUTCDate();
-    const daysUsed = daysInMonth - dayOfMonth + 1; // +1 because subscription day is included
-    const daysNotUsed = daysInMonth - daysUsed;
-
-    // Use the invoice amount as the monthly price for reconciliation
-    const monthlyPrice = Number(freshRecord.amountUsdCents);
-    const reconciliationCreditCents = Math.floor(
-      (monthlyPrice * daysNotUsed) / daysInMonth
-    );
-
-    if (reconciliationCreditCents > 0) {
-      // Use the service type from the pending service if available
-      const serviceType = pendingServices[0]?.serviceType ?? 'unknown';
-
-      await issueCredit(
-        tx,
-        customerId,
-        reconciliationCreditCents,
-        'reconciliation',
-        `Partial month credit for ${serviceType} (${daysNotUsed}/${daysInMonth} days unused)`,
-        null // Never expires
+    // 5. Issue reconciliation credit for partial month (deferred payment).
+    //    Only for subscription invoices linked to a pending service.
+    //    Uses the shared issueReconciliationCredit which guards on billingType='immediate'
+    //    and billingPeriodStart presence.
+    if (pendingServices.length > 0) {
+      await issueReconciliationCredit(
+        tx, customerId, freshRecord, pendingServices[0].serviceType,
       );
     }
 
@@ -451,24 +472,15 @@ async function handleInvoicePaid(invoice: Record<string, unknown>) {
 }
 
 /**
- * Get number of days in a month (UTC-based)
- */
-function getDaysInMonth(year: number, month: number): number {
-  return new Date(Date.UTC(year, month, 0)).getUTCDate();
-}
-
-/**
  * Handle payment_intent.succeeded
  *
- * For off_session charges that succeed synchronously, the invoice_payments row
- * and billing_records status were already set by StripePaymentProvider.charge().
- * This webhook is a confirmation — no DB action needed.
+ * Intentionally a no-op. We use the Invoices API, so Stripe always fires
+ * invoice.paid alongside payment_intent.succeeded — handleInvoicePaid is
+ * the canonical reconciliation path (including late 3DS completion).
  *
- * TODO: For charges that required 3DS (requires_action), the provider chain
- * fell through to the next provider. If the user later completes 3DS via
- * the Stripe-hosted page, this webhook fires and we should reconcile:
- * 1. Find the invoice by paymentIntent metadata
- * 2. If still unpaid, create invoice_payment row + mark paid
+ * If another provider already paid the invoice, handleInvoicePaid auto-refunds
+ * the duplicate Stripe charge (Fix 1a). If 3DS times out, reconcileStuckInvoices
+ * voids the Stripe invoice (Fix 2).
  */
 async function handlePaymentIntentSucceeded(paymentIntent: Record<string, unknown>) {
   const intentId = paymentIntent.id as string;
@@ -476,23 +488,86 @@ async function handlePaymentIntentSucceeded(paymentIntent: Record<string, unknow
   const metadata = paymentIntent.metadata as Record<string, string> | null;
   const billingRecordId = metadata?.billing_record_id;
 
-  console.log(`[Stripe Webhook] payment_intent.succeeded: ${intentId}, customer: ${stripeCustomerId}, billingRecord: ${billingRecordId}`);
-  // Reconciliation is handled by invoice.paid webhook (not here).
-  // PaymentIntents are created internally by Stripe Invoices API.
+  // Intentionally a no-op for reconciliation. invoice.paid is the canonical path
+  // for Invoices API charges. If invoice.paid never arrives (Stripe bug/misconfiguration),
+  // reconcileStuckInvoices (10-min threshold) catches it. Adding reconciliation here
+  // would race with handleInvoicePaid (both fire within seconds of each other).
+  console.log(`[Stripe Webhook] payment_intent.succeeded: ${intentId}, customer: ${stripeCustomerId}, billingRecordId: ${billingRecordId ?? 'none'}`);
 }
 
 /**
  * Handle payment_intent.payment_failed
  *
  * The provider chain already handles failures by falling through to the next
- * provider. This webhook provides additional context for logging/auditing.
+ * provider and records failureReason on the billing record. The retry-exhaustion
+ * path notifies admins via PAYMENT_RETRIES_EXHAUSTED.
+ *
+ * This webhook provides additional context: Stripe-side error details that may
+ * not be in our billing record (e.g., decline codes, issuer messages).
  */
 async function handlePaymentIntentFailed(paymentIntent: Record<string, unknown>) {
   const intentId = paymentIntent.id as string;
   const lastError = paymentIntent.last_payment_error as Record<string, unknown> | null;
   const errorMessage = lastError?.message as string || 'Unknown error';
+  const declineCode = lastError?.decline_code as string | undefined;
+  const metadata = paymentIntent.metadata as Record<string, string> | null;
+  const billingRecordId = metadata?.billing_record_id;
 
-  console.log(`[Stripe Webhook] payment_intent.payment_failed: ${intentId}, error: ${errorMessage}`);
+  console.log(`[Stripe Webhook] payment_intent.payment_failed: ${intentId}, error: ${errorMessage}, decline: ${declineCode}`);
+
+  // Log to admin notifications for visibility into Stripe-side failure details.
+  // Uses logInternalErrorOnce keyed on invoiceId to avoid noise from Stripe retries.
+  const parsedInvoiceId = billingRecordId ? parseInt(billingRecordId, 10) : undefined;
+  if (parsedInvoiceId && !isNaN(parsedInvoiceId)) {
+    // Resolve customerId from the billing record for faster admin triage
+    let customerId: number | undefined;
+    try {
+      const record = await db.query.billingRecords.findFirst({
+        columns: { customerId: true },
+        where: eq(billingRecords.id, parsedInvoiceId),
+      });
+      customerId = record?.customerId;
+    } catch { /* non-fatal lookup */ }
+
+    try {
+      await logInternalErrorOnce(db, {
+        severity: 'warning',
+        category: 'billing',
+        code: 'STRIPE_PAYMENT_FAILED',
+        message: `Stripe payment failed for invoice ${parsedInvoiceId}: ${errorMessage}`,
+        details: { intentId, errorMessage, declineCode },
+        customerId,
+        invoiceId: parsedInvoiceId,
+      });
+    } catch { /* don't block webhook response */ }
+  } else {
+    // No billing_record_id — could be a manual charge, misconfigured invoice metadata,
+    // or a payment intent from a different integration. Log for admin triage.
+    // Use logInternalError (not Once) because each distinct intentId is a separate event
+    // worth investigating — the synthetic invoiceId:-2 dedup key was too coarse.
+    const stripeCustomerId = paymentIntent.customer as string | null;
+    // Resolve customerId from stripeCustomerId for faster admin triage
+    let customerId: number | undefined;
+    if (stripeCustomerId) {
+      try {
+        const cust = await db.query.customers.findFirst({
+          columns: { customerId: true },
+          where: eq(customers.stripeCustomerId, stripeCustomerId),
+        });
+        customerId = cust?.customerId;
+      } catch { /* non-fatal lookup */ }
+    }
+    try {
+      await logInternalError(db, {
+        severity: 'info',
+        category: 'billing',
+        code: 'STRIPE_PAYMENT_FAILED_NO_METADATA',
+        message: `Stripe payment_intent.payment_failed without billing_record_id: ${intentId}`,
+        details: { intentId, stripeCustomerId, errorMessage, declineCode, metadata },
+        customerId,
+      });
+    } catch { /* don't block webhook response */ }
+  }
 }
 
 /**
@@ -500,7 +575,7 @@ async function handlePaymentIntentFailed(paymentIntent: Record<string, unknown>)
  * Records the payment method details in customer_payment_methods.
  * This fires after the user completes the Stripe card setup flow (including 3DS).
  */
-async function handleSetupIntentSucceeded(setupIntent: Record<string, unknown>) {
+export async function handleSetupIntentSucceeded(setupIntent: Record<string, unknown>) {
   const paymentMethodId = setupIntent.payment_method as string;
   const stripeCustomerId = setupIntent.customer as string;
   const metadata = setupIntent.metadata as Record<string, string> | null;
@@ -519,6 +594,13 @@ async function handleSetupIntentSucceeded(setupIntent: Record<string, unknown>) 
 
   if (!customer) {
     console.error(`[Stripe Webhook] No customer found for stripeCustomerId: ${stripeCustomerId}`);
+    await logInternalError(db, {
+      severity: 'warning',
+      category: 'billing',
+      code: 'WEBHOOK_SETUP_INTENT_NO_CUSTOMER',
+      message: `setup_intent.succeeded: no customer found for stripeCustomerId ${stripeCustomerId} — possible data inconsistency`,
+      details: { stripeCustomerId, paymentMethodId, metadata },
+    });
     return;
   }
 
@@ -526,16 +608,16 @@ async function handleSetupIntentSucceeded(setupIntent: Record<string, unknown>) 
   // additions (e.g., user adding via API while webhook fires simultaneously).
   // Without the lock, both could read the same maxPriority and insert at the same priority.
   await withCustomerLock(db, customer.customerId, async (tx) => {
-    // Upsert the payment method details into customer_payment_methods
-    // The row may already exist from billing.addPaymentMethod — update providerRef + providerConfig
-    // First try by providerRef (idempotent re-delivery), then by customerId + providerType
+    // Upsert the payment method details into customer_payment_methods.
+    // First try by providerRef (idempotent re-delivery of the same webhook).
+    // Then check for an existing active stripe row (e.g., from a previous setup
+    // that was interrupted, or a re-add after removal).
     let existingMethod = await tx.query.customerPaymentMethods.findFirst({
       where: eq(customerPaymentMethods.providerRef, paymentMethodId),
     });
 
     if (!existingMethod) {
-      // addPaymentMethod('stripe') creates the row with providerRef=null —
-      // find it by customerId + providerType + active status
+      // Check for an existing active stripe method for this customer
       existingMethod = await tx.query.customerPaymentMethods.findFirst({
         where: and(
           eq(customerPaymentMethods.customerId, customer.customerId),
@@ -545,9 +627,34 @@ async function handleSetupIntentSucceeded(setupIntent: Record<string, unknown>) 
       });
     }
 
-    const cardDetails = metadata?.card_brand && metadata?.card_last4
-      ? { brand: metadata.card_brand, last4: metadata.card_last4 }
-      : null;
+    // Get card details: prefer Stripe API (authoritative), fall back to metadata (mock mode).
+    // This ordering ensures live card data is never overwritten by stale metadata
+    // if concurrent setup_intent.succeeded webhooks race (e.g., multiple browser tabs).
+    let cardDetails: { brand: string; last4: string } | null = null;
+    try {
+      const stripeService = getStripeService();
+      const methods = await stripeService.getPaymentMethods(stripeCustomerId);
+      const pm = methods.find(m => m.id === paymentMethodId);
+      if (pm) {
+        cardDetails = { brand: pm.brand, last4: pm.last4 };
+      }
+    } catch (err) {
+      console.error('[Stripe Webhook] Failed to fetch card details from Stripe:', err);
+      try {
+        await logInternalError(db, {
+          severity: 'info',
+          category: 'billing',
+          code: 'CARD_DETAILS_FETCH_FAILED',
+          message: `Failed to fetch card details for payment method ${paymentMethodId}`,
+          details: { error: err instanceof Error ? err.message : String(err), stripeCustomerId },
+          customerId: customer.customerId,
+        });
+      } catch { /* don't block webhook */ }
+    }
+    // Fallback: use metadata (mock mode provides card_brand/card_last4 on SetupIntent)
+    if (!cardDetails && metadata?.card_brand && metadata?.card_last4) {
+      cardDetails = { brand: metadata.card_brand, last4: metadata.card_last4 };
+    }
 
     if (existingMethod) {
       // Update with confirmed card details + providerRef (may be null from addPaymentMethod)
@@ -555,7 +662,7 @@ async function handleSetupIntentSucceeded(setupIntent: Record<string, unknown>) 
         .set({
           status: 'active',
           providerRef: paymentMethodId,
-          providerConfig: cardDetails ? JSON.stringify(cardDetails) : existingMethod.providerConfig,
+          providerConfig: cardDetails ?? existingMethod.providerConfig,
           updatedAt: new Date(),
         })
         .where(eq(customerPaymentMethods.id, existingMethod.id));
@@ -573,10 +680,92 @@ async function handleSetupIntentSucceeded(setupIntent: Record<string, unknown>) 
         status: 'active',
         priority: maxPriority + 1,
         providerRef: paymentMethodId,
-        providerConfig: cardDetails ? JSON.stringify(cardDetails) : null,
+        providerConfig: cardDetails ?? null,
       });
     }
 
     console.log(`[Stripe Webhook] Payment method ${paymentMethodId} saved for customer ${customer.customerId}`);
+
+    // Set as default payment method on the Stripe customer so invoices.pay()
+    // can charge without an explicit payment_method parameter.
+    try {
+      const stripeService = getStripeService();
+      await stripeService.setDefaultPaymentMethod(stripeCustomerId, paymentMethodId);
+      console.log(`[Stripe Webhook] Set default payment method ${paymentMethodId} on Stripe customer ${stripeCustomerId}`);
+    } catch (err) {
+      console.error(`[Stripe Webhook] Failed to set default payment method on Stripe customer:`, err);
+    }
+
+    // Clear failure metadata on recent failed invoices so the reactive retry (GM
+    // sync below) can charge the new card. We keep retryCount intact to preserve
+    // Stripe idempotency key uniqueness — resetting to 0 would collide with the
+    // original attempt's key within Stripe's 24h window, returning a cached
+    // requires_action result instead of charging the new card.
+    // The reactive path (retryUnpaidInvoices without limits) ignores retryCount,
+    // so exhausted invoices are still retried.
+    //
+    // Scoped to invoices created in the last 90 days to avoid reviving very old
+    // failures (e.g., from cancelled services months ago). 90 days covers 3
+    // billing cycles — any invoice older than that should be handled manually.
+    const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+    const resetResult = await tx.update(billingRecords)
+      .set({ failureReason: null, lastRetryAt: null })
+      .where(
+        and(
+          eq(billingRecords.customerId, customer.customerId),
+          eq(billingRecords.status, 'failed'),
+          gt(billingRecords.createdAt, ninetyDaysAgo),
+        )
+      )
+      .returning({ id: billingRecords.id });
+
+    if (resetResult.length > 0) {
+      console.log(`[Stripe Webhook] Cleared failure metadata on ${resetResult.length} failed invoice(s) for customer ${customer.customerId}: [${resetResult.map(r => r.id).join(', ')}]`);
+    }
+
   });
+
+  // Fire-and-forget: queue payment retry via GM task queue.
+  // This triggers retryUnpaidInvoices (no retryCount limit) reactively,
+  // so the customer doesn't have to wait for the periodic cycle.
+  // If this call fails, the periodic processor will still pick up the invoices
+  // because we cleared failure metadata (failureReason, lastRetryAt) above.
+  try {
+    const gmUrl = config.GM_URL || 'http://localhost:22600';
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    const gmResponse = await fetch(`${gmUrl}/api/queue/sync-customer/${customer.customerId}?source=api&async=true`, {
+      method: 'POST',
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    if (gmResponse.ok) {
+      console.log(`[Stripe Webhook] Queued payment retry for customer ${customer.customerId}`);
+    } else {
+      console.error(`[Stripe Webhook] GM sync-customer returned ${gmResponse.status}`);
+      try {
+        await logInternalError(db, {
+          severity: 'warning',
+          category: 'billing',
+          code: 'WEBHOOK_GM_QUEUE_FAILED',
+          message: `GM sync-customer returned ${gmResponse.status} while queuing Stripe webhook retry for customer ${customer.customerId}`,
+          details: { status: gmResponse.status, statusText: gmResponse.statusText },
+          customerId: customer.customerId,
+        });
+      } catch { /* avoid blocking webhook response on alert failure */ }
+    }
+  } catch (err: any) {
+    // Non-fatal: periodic processor will retry on next cycle (failureReason was cleared above)
+    console.error(`[Stripe Webhook] Failed to queue payment retry:`, err.name === 'AbortError' ? 'timeout' : err.message);
+    try {
+      await logInternalError(db, {
+        severity: 'warning',
+        category: 'billing',
+        code: 'WEBHOOK_GM_QUEUE_FAILED',
+        message: `Error queueing GM sync-customer after Stripe webhook for customer ${customer.customerId}`,
+        details: { error: err instanceof Error ? err.message : String(err) },
+        customerId: customer.customerId,
+      });
+    } catch { /* avoid blocking webhook response on alert failure */ }
+  }
 }

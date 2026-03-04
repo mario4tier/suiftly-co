@@ -40,6 +40,8 @@ interface NotificationCounts {
 // Categories with dedicated pages get links
 const CATEGORY_PAGES: Record<string, string> = {
   billing: '/billing',
+  vault: '/kvcrypt',
+  'lm-sync': '/kvcrypt',
 };
 
 export function Dashboard() {

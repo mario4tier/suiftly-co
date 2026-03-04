@@ -20,6 +20,7 @@ import {
   restCall,
   resetTestData,
   ensureTestBalance,
+  addStripePaymentMethod,
 } from './helpers/http.js';
 import { login, TEST_WALLET } from './helpers/auth.js';
 
@@ -95,11 +96,7 @@ describe('API: Payment Method CRUD', () => {
         { providerType: 'escrow' },
         accessToken
       );
-      await trpcMutation<any>(
-        'billing.addPaymentMethod',
-        { providerType: 'stripe' },
-        accessToken
-      );
+      await addStripePaymentMethod(accessToken);
 
       const result = await trpcQuery<any>(
         'billing.getPaymentMethods',
@@ -217,7 +214,7 @@ describe('API: Payment Method CRUD', () => {
   // addPaymentMethod - stripe
   // =========================================================================
   describe('addPaymentMethod - stripe', () => {
-    it('should return clientSecret for card setup', async () => {
+    it('should return clientSecret for card setup (no row until webhook)', async () => {
       const result = await trpcMutation<any>(
         'billing.addPaymentMethod',
         { providerType: 'stripe' },
@@ -238,7 +235,23 @@ describe('API: Payment Method CRUD', () => {
       expect(customer?.stripeCustomerId).toBeDefined();
       expect(customer?.stripeCustomerId).toContain('cus_mock_');
 
-      // Verify payment method row was created
+      // Payment method row is NOT created eagerly — it's created by the
+      // setup_intent.succeeded webhook handler when the user confirms the card.
+      const methods = await db.select()
+        .from(customerPaymentMethods)
+        .where(and(
+          eq(customerPaymentMethods.customerId, customerId),
+          eq(customerPaymentMethods.providerType, 'stripe'),
+          eq(customerPaymentMethods.status, 'active')
+        ));
+      expect(methods).toHaveLength(0);
+    });
+
+    it('should create payment method row after completing setup', async () => {
+      // Use the helper that simulates the full flow (addPaymentMethod + webhook)
+      await addStripePaymentMethod(accessToken);
+
+      // Row should now exist (created by webhook handler)
       const methods = await db.select()
         .from(customerPaymentMethods)
         .where(and(
@@ -247,15 +260,15 @@ describe('API: Payment Method CRUD', () => {
           eq(customerPaymentMethods.status, 'active')
         ));
       expect(methods).toHaveLength(1);
+      expect(methods[0].providerRef).toBeDefined();
+      expect(methods[0].providerRef).toContain('pm_mock_');
     });
 
-    it('should reject duplicate stripe method', async () => {
-      await trpcMutation<any>(
-        'billing.addPaymentMethod',
-        { providerType: 'stripe' },
-        accessToken
-      );
+    it('should reject duplicate stripe method (after setup is completed)', async () => {
+      // Complete the first setup
+      await addStripePaymentMethod(accessToken);
 
+      // Second addPaymentMethod should fail (active stripe row exists)
       const result = await trpcMutation<any>(
         'billing.addPaymentMethod',
         { providerType: 'stripe' },
@@ -264,6 +277,47 @@ describe('API: Payment Method CRUD', () => {
 
       expect(result.error).toBeDefined();
       expect(result.error.data?.code).toBe('CONFLICT');
+    });
+
+    it('should allow re-adding after cancel (no orphan row)', async () => {
+      // Call addPaymentMethod but don't complete the setup (simulates cancel)
+      await trpcMutation<any>(
+        'billing.addPaymentMethod',
+        { providerType: 'stripe' },
+        accessToken
+      );
+
+      // No row should exist
+      let methods = await db.select()
+        .from(customerPaymentMethods)
+        .where(and(
+          eq(customerPaymentMethods.customerId, customerId),
+          eq(customerPaymentMethods.providerType, 'stripe'),
+          eq(customerPaymentMethods.status, 'active')
+        ));
+      expect(methods).toHaveLength(0);
+
+      // Call addPaymentMethod again — should succeed (no orphan row blocking)
+      const result = await trpcMutation<any>(
+        'billing.addPaymentMethod',
+        { providerType: 'stripe' },
+        accessToken
+      );
+      expect(result.result?.data?.success).toBe(true);
+
+      // Complete the second setup
+      const setupIntentId = result.result?.data?.setupIntentId;
+      await restCall('POST', '/test/stripe/complete-setup', { setupIntentId });
+
+      // Row should now exist
+      methods = await db.select()
+        .from(customerPaymentMethods)
+        .where(and(
+          eq(customerPaymentMethods.customerId, customerId),
+          eq(customerPaymentMethods.providerType, 'stripe'),
+          eq(customerPaymentMethods.status, 'active')
+        ));
+      expect(methods).toHaveLength(1);
     });
   });
 
@@ -289,7 +343,7 @@ describe('API: Payment Method CRUD', () => {
   // =========================================================================
   describe('removePaymentMethod', () => {
     it('should remove method and reorder remaining', async () => {
-      // Add escrow + stripe
+      // Add escrow + stripe (complete-setup creates the stripe row)
       await ensureTestBalance(50, { walletAddress: TEST_WALLET });
 
       await trpcMutation<any>(
@@ -297,11 +351,7 @@ describe('API: Payment Method CRUD', () => {
         { providerType: 'escrow' },
         accessToken
       );
-      await trpcMutation<any>(
-        'billing.addPaymentMethod',
-        { providerType: 'stripe' },
-        accessToken
-      );
+      await addStripePaymentMethod(accessToken);
 
       // Get method IDs
       const methodsBefore = await db.select()
@@ -394,11 +444,7 @@ describe('API: Payment Method CRUD', () => {
         { providerType: 'escrow' },
         accessToken
       );
-      await trpcMutation<any>(
-        'billing.addPaymentMethod',
-        { providerType: 'stripe' },
-        accessToken
-      );
+      await addStripePaymentMethod(accessToken);
 
       // Get method IDs
       const methodsBefore = await db.select()
@@ -447,11 +493,7 @@ describe('API: Payment Method CRUD', () => {
         { providerType: 'escrow' },
         accessToken
       );
-      await trpcMutation<any>(
-        'billing.addPaymentMethod',
-        { providerType: 'stripe' },
-        accessToken
-      );
+      await addStripePaymentMethod(accessToken);
 
       const methods = await db.select()
         .from(customerPaymentMethods)

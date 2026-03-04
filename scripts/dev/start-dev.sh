@@ -88,13 +88,14 @@ if [ -d "$SUIFTLY_DIR/node_modules/@playwright" ]; then
 fi
 
 # ============================================================================
-# Check Stripe CLI is installed (required for webhook forwarding in dev)
+# Start Stripe webhook listener (optional — for webhook forwarding in dev)
 # ============================================================================
+STRIPE_WEBHOOK_SECRET=""
 if ! command -v stripe &>/dev/null; then
   echo ""
-  echo "ERROR: Stripe CLI is not installed!"
+  echo "WARNING: Stripe CLI is not installed. Webhook forwarding disabled."
   echo ""
-  echo "  Install it with:"
+  echo "  To enable Stripe webhook forwarding, install with:"
   echo ""
   echo "    curl -s https://packages.stripe.dev/api/security/keypair/stripe-cli-gpg/public | gpg --dearmor | sudo tee /usr/share/keyrings/stripe.gpg >/dev/null"
   echo "    echo 'deb [signed-by=/usr/share/keyrings/stripe.gpg] https://packages.stripe.dev/stripe-cli-debian-local stable main' | sudo tee /etc/apt/sources.list.d/stripe.list"
@@ -102,46 +103,41 @@ if ! command -v stripe &>/dev/null; then
   echo ""
   echo "  Then authenticate: stripe login"
   echo ""
-  exit 1
-fi
-
-# ============================================================================
-# Start Stripe webhook listener (captures whsec_ for API server)
-# ============================================================================
-echo "Starting Stripe webhook listener..."
-
-# Kill any existing stripe listen process
-pkill -f "stripe listen" 2>/dev/null || true
-sleep 1
-
-# Start stripe listen in background, capturing output to extract whsec_
-STRIPE_LOG="/tmp/suiftly-stripe-listen.log"
-stripe listen --forward-to localhost:22700/stripe/webhook > "$STRIPE_LOG" 2>&1 &
-STRIPE_PID=$!
-echo "$STRIPE_PID" > /tmp/suiftly-stripe-listen.pid
-
-# Wait for the whsec_ secret to appear in output (stripe prints it on startup)
-STRIPE_WEBHOOK_SECRET=""
-for i in {1..15}; do
-  sleep 1
-  if [ -f "$STRIPE_LOG" ]; then
-    STRIPE_WEBHOOK_SECRET=$(grep -o 'whsec_[a-zA-Z0-9]*' "$STRIPE_LOG" | head -1)
-    if [ -n "$STRIPE_WEBHOOK_SECRET" ]; then
-      break
-    fi
-  fi
-  echo "  Waiting for Stripe CLI... ($i/15)"
-done
-
-if [ -z "$STRIPE_WEBHOOK_SECRET" ]; then
-  echo "WARNING: Could not capture Stripe webhook secret"
-  echo "  stripe listen may need re-authentication: stripe login"
-  echo "  Continuing without webhook forwarding..."
-  kill $STRIPE_PID 2>/dev/null || true
-  rm -f /tmp/suiftly-stripe-listen.pid
 else
-  echo "  Stripe webhook listener started (PID: $STRIPE_PID)"
-  echo "  Webhook secret: ${STRIPE_WEBHOOK_SECRET:0:12}..."
+  echo "Starting Stripe webhook listener..."
+
+  # Kill any existing stripe listen process
+  pkill -f "stripe listen" 2>/dev/null || true
+  sleep 1
+
+  # Start stripe listen in background, capturing output to extract whsec_
+  STRIPE_LOG="/tmp/suiftly-stripe-listen.log"
+  stripe listen --forward-to localhost:22700/stripe/webhook > "$STRIPE_LOG" 2>&1 &
+  STRIPE_PID=$!
+  echo "$STRIPE_PID" > /tmp/suiftly-stripe-listen.pid
+
+  # Wait for the whsec_ secret to appear in output (stripe prints it on startup)
+  for i in {1..15}; do
+    sleep 1
+    if [ -f "$STRIPE_LOG" ]; then
+      STRIPE_WEBHOOK_SECRET=$(grep -o 'whsec_[a-zA-Z0-9]*' "$STRIPE_LOG" | head -1)
+      if [ -n "$STRIPE_WEBHOOK_SECRET" ]; then
+        break
+      fi
+    fi
+    echo "  Waiting for Stripe CLI... ($i/15)"
+  done
+
+  if [ -z "$STRIPE_WEBHOOK_SECRET" ]; then
+    echo "WARNING: Could not capture Stripe webhook secret"
+    echo "  stripe listen may need re-authentication: stripe login"
+    echo "  Continuing without webhook forwarding..."
+    kill $STRIPE_PID 2>/dev/null || true
+    rm -f /tmp/suiftly-stripe-listen.pid
+  else
+    echo "  Stripe webhook listener started (PID: $STRIPE_PID)"
+    echo "  Webhook secret: ${STRIPE_WEBHOOK_SECRET:0:12}..."
+  fi
 fi
 
 # ============================================================================
@@ -356,12 +352,28 @@ fi
 echo "Starting API server (MOCK_AUTH=true)..."
 cd /home/olet/suiftly-co
 
-# Load Stripe keys from ~/.suiftly.env
+# Load Stripe keys from ~/.suiftly.env (strip surrounding quotes if present)
 STRIPE_SK=""
 STRIPE_PK=""
 if [ -f "$HOME/.suiftly.env" ]; then
-  STRIPE_SK=$(grep '^STRIPE_SECRET_KEY=' "$HOME/.suiftly.env" | cut -d= -f2-)
-  STRIPE_PK=$(grep '^STRIPE_PUBLISHABLE_KEY=' "$HOME/.suiftly.env" | cut -d= -f2-)
+  STRIPE_SK=$(grep '^STRIPE_SECRET_KEY=' "$HOME/.suiftly.env" | cut -d= -f2- | sed 's/^["'"'"']//;s/["'"'"']$//')
+  STRIPE_PK=$(grep '^STRIPE_PUBLISHABLE_KEY=' "$HOME/.suiftly.env" | cut -d= -f2- | sed 's/^["'"'"']//;s/["'"'"']$//')
+fi
+
+# Verify Stripe configuration
+if [ -n "$STRIPE_SK" ] && [ -n "$STRIPE_PK" ]; then
+  echo "  Stripe keys loaded (${STRIPE_PK:0:15}...)"
+  if [ -z "$STRIPE_WEBHOOK_SECRET" ]; then
+    echo "  WARNING: No webhook secret captured — Stripe webhooks will use default dev secret"
+  fi
+elif [ -n "$STRIPE_SK" ] || [ -n "$STRIPE_PK" ]; then
+  echo "  WARNING: Only one Stripe key found in ~/.suiftly.env"
+  echo "    Both STRIPE_SECRET_KEY and STRIPE_PUBLISHABLE_KEY are required for Stripe sandbox"
+  echo "    Falling back to mock Stripe service"
+  STRIPE_SK=""
+  STRIPE_PK=""
+else
+  echo "  No Stripe keys in ~/.suiftly.env — using mock Stripe service"
 fi
 
 MOCK_AUTH=true DATABASE_URL="postgresql://deploy:deploy_password_change_me@localhost/suiftly_dev" \
@@ -391,6 +403,17 @@ if ! curl -sf http://localhost:22700/health >/dev/null 2>&1; then
   exit 1
 fi
 echo "  API server started (PID: $API_PID)"
+
+# Verify Stripe is properly configured in the running API
+if [ -n "$STRIPE_PK" ]; then
+  LOADED_PK=$(curl -sf http://localhost:22700/i/api/config.getFrontendConfig 2>/dev/null | grep -o '"stripePublishableKey":"[^"]*"' | cut -d'"' -f4)
+  if [ -n "$LOADED_PK" ] && [ "$LOADED_PK" != "" ]; then
+    echo "  Stripe sandbox mode verified (key visible to frontend)"
+  else
+    echo "  WARNING: Stripe publishable key not reflected in API config endpoint"
+    echo "    Check API logs: tail /tmp/suiftly-api.log"
+  fi
+fi
 
 # ============================================================================
 # Start Webapp (direct npm - not systemd)

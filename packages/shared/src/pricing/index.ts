@@ -33,8 +33,13 @@ export const ADDON_PRICES_USD_CENTS = {
  *
  * @param tier Tier name (starter, pro, enterprise) - case insensitive
  * @returns Price in cents
+ * @throws Error if tier is not recognized
  */
 export function getTierPriceUsdCents(tier: string): number {
   const tierKey = tier.toLowerCase() as keyof typeof TIER_PRICES_USD_CENTS;
-  return TIER_PRICES_USD_CENTS[tierKey] ?? 0;
+  const price = TIER_PRICES_USD_CENTS[tierKey];
+  if (price === undefined) {
+    throw new Error(`Unknown tier: ${tier}. Valid tiers: ${Object.keys(TIER_PRICES_USD_CENTS).join(', ')}`);
+  }
+  return price;
 }

@@ -59,6 +59,7 @@ export interface ProviderChargeParams {
   amountUsdCents: number;
   invoiceId: number;
   description: string;
+  retryCount: number;
 }
 
 export interface ProviderChargeResult {
@@ -80,6 +81,12 @@ export interface ProviderChargeResult {
    * to complete authentication. Stored on billing_records.paymentActionUrl.
    */
   hostedInvoiceUrl?: string;
+  /**
+   * Stripe Invoice ID (in_xxx) when requires_action is returned.
+   * Used by processInvoicePayment to void the Stripe invoice if a subsequent
+   * provider succeeds, preventing double charge on late 3DS completion.
+   */
+  stripeInvoiceId?: string;
   retryable: boolean;
 }
 

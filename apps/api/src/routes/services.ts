@@ -1025,7 +1025,7 @@ export const servicesRouter = router({
           configNeededReason = 'No active API key';
         } else if (!hasSealKeys) {
           operationalStatus = 'config_needed';
-          configNeededReason = 'No seal keys configured';
+          configNeededReason = 'No seal keys registered';
         } else {
           operationalStatus = 'up';
         }

@@ -349,6 +349,8 @@ export async function markInvoicePaid(
       status: 'paid',
       txDigest,
       amountPaidUsdCents: amountPaidCents,
+      failureReason: null,
+      paymentActionUrl: null,
     })
     .where(eq(billingRecords.id, invoiceId));
 }

@@ -50,10 +50,23 @@ export interface IStripeService {
   deletePaymentMethod(paymentMethodId: string): Promise<void>;
 
   /**
+   * Set the default payment method on the Stripe customer.
+   * Required so invoices.pay() can charge without an explicit payment_method.
+   */
+  setDefaultPaymentMethod(stripeCustomerId: string, paymentMethodId: string): Promise<void>;
+
+  /**
    * Issue a partial or full refund against a Stripe invoice.
    * Looks up the charge/payment_intent from the invoice and refunds.
    */
   refund(params: StripeRefundParams): Promise<StripeRefundResult>;
+
+  /**
+   * Void (cancel) an open/draft Stripe invoice.
+   * Used to prevent late 3DS completion when another provider has already paid.
+   * No-op if the invoice is already paid/voided.
+   */
+  voidInvoice(stripeInvoiceId: string): Promise<{ success: boolean; error?: string }>;
 
   /** Is this the mock implementation? */
   isMock(): boolean;

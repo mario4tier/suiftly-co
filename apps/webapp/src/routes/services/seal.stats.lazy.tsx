@@ -5,6 +5,7 @@
 
 import { useState } from 'react';
 import { createLazyFileRoute } from '@tanstack/react-router';
+import { TextRoute } from '../../components/ui/text-route';
 import { DashboardLayout } from '../../components/layout/DashboardLayout';
 import { Card } from '../../components/ui/card';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../../components/ui/tabs';
@@ -836,7 +837,7 @@ function SealStatsPage() {
                   Configuration Required
                 </p>
                 <p className="text-sm text-yellow-700 dark:text-yellow-300 mt-1">
-                  {sealStatus.configNeededReason}. Service cannot process requests until configured.
+                  {sealStatus.configNeededReason}. <TextRoute to="/services/seal/overview" search={{ tab: 'seal-keys' }}>Go to Seal Keys tab</TextRoute>
                 </p>
               </div>
             </div>

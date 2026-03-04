@@ -15,6 +15,7 @@ import type { IPaymentProvider, ProviderChargeParams, ProviderChargeResult, Prov
 import type { ISuiService } from '@suiftly/shared/sui-service';
 import type { DatabaseOrTransaction } from '../../db';
 import { customers, escrowTransactions } from '../../schema';
+import { logInternalError } from '../admin-notifications';
 import type { DBClock } from '@suiftly/shared/db-clock';
 
 export class EscrowPaymentProvider implements IPaymentProvider {
@@ -47,13 +48,33 @@ export class EscrowPaymentProvider implements IPaymentProvider {
       return { success: false, error: 'No escrow account configured', retryable: false };
     }
 
-    // Charge escrow via ISuiService
-    const chargeResult = await this.suiService.charge({
-      userAddress: customer.walletAddress,
-      amountUsdCents: params.amountUsdCents,
-      description: params.description,
-      escrowAddress: customer.escrowContractId,
-    });
+    // Charge escrow via ISuiService.
+    // Wrap in try-catch so transient RPC/network errors return a retryable
+    // failure instead of throwing and aborting the entire provider chain.
+    let chargeResult;
+    try {
+      chargeResult = await this.suiService.charge({
+        userAddress: customer.walletAddress,
+        amountUsdCents: params.amountUsdCents,
+        description: params.description,
+        escrowAddress: customer.escrowContractId,
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      console.error(`[EscrowProvider] charge failed for customer ${params.customerId}, invoice ${params.invoiceId}: ${msg}`);
+      try {
+        await logInternalError(this.db, {
+          severity: 'error',
+          category: 'billing',
+          code: 'ESCROW_CHARGE_EXCEPTION',
+          message: `Escrow charge exception for customer ${params.customerId}, invoice ${params.invoiceId}: ${msg}`,
+          details: { stack: error instanceof Error ? error.stack : undefined },
+          customerId: params.customerId,
+          invoiceId: params.invoiceId,
+        });
+      } catch { /* don't let notification failure affect the result */ }
+      return { success: false, error: `Escrow RPC error: ${msg}`, retryable: true };
+    }
 
     if (!chargeResult.success || !chargeResult.digest) {
       return {

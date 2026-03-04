@@ -7,20 +7,31 @@ import { Dashboard } from './pages/Dashboard';
 import { InfraStats } from './pages/InfraStats';
 import { KVCryptDebug } from './pages/KVCryptDebug';
 import { BillingMonitor } from './pages/BillingMonitor';
+import { CustomerDetail } from './pages/CustomerDetail';
+import { InvoiceDetail } from './pages/InvoiceDetail';
 
 function App() {
   return (
     <BrowserRouter>
-      <AdminPollingProvider>
-        <Layout>
-          <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/billing" element={<BillingMonitor />} />
-            <Route path="/infra" element={<InfraStats />} />
-            <Route path="/kvcrypt" element={<KVCryptDebug />} />
-          </Routes>
-        </Layout>
-      </AdminPollingProvider>
+      <Routes>
+        {/* Standalone detail pages — no sidebar, no polling */}
+        <Route path="/customer" element={<CustomerDetail />} />
+        <Route path="/invoice" element={<InvoiceDetail />} />
+
+        {/* Main dashboard pages with Layout + polling */}
+        <Route path="/*" element={
+          <AdminPollingProvider>
+            <Layout>
+              <Routes>
+                <Route path="/" element={<Dashboard />} />
+                <Route path="/billing" element={<BillingMonitor />} />
+                <Route path="/infra" element={<InfraStats />} />
+                <Route path="/kvcrypt" element={<KVCryptDebug />} />
+              </Routes>
+            </Layout>
+          </AdminPollingProvider>
+        } />
+      </Routes>
     </BrowserRouter>
   );
 }

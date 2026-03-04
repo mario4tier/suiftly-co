@@ -135,6 +135,10 @@ export async function issueCredit(
   expiresAt: Date | null = null,
   campaignId: string | null = null
 ): Promise<number> {
+  if (amountCents <= 0) {
+    throw new Error(`issueCredit: amountCents must be positive, got ${amountCents}`);
+  }
+
   const [credit] = await tx
     .insert(customerCredits)
     .values({
@@ -149,6 +153,75 @@ export async function issueCredit(
     .returning({ creditId: customerCredits.creditId });
 
   return credit.creditId;
+}
+
+/**
+ * Issue a reconciliation credit for partial-month usage when a deferred payment succeeds.
+ *
+ * When a subscription charge is deferred (no payment method, 3DS pending), the original
+ * handleSubscriptionBillingLocked skips the pro-rata credit because fullyPaid was false.
+ * This function issues the credit using the invoice's billingPeriodStart (the subscription date).
+ *
+ * @param tx Transaction handle (must have customer lock)
+ * @param customerId Customer ID
+ * @param invoice The paid invoice (must have billingType='immediate' and billingPeriodStart)
+ * @param serviceType Service type for credit description (e.g. 'seal')
+ */
+export async function issueReconciliationCredit(
+  tx: DatabaseOrTransaction,
+  customerId: number,
+  invoice: { billingType: string | null; billingPeriodStart: Date | string | null; amountUsdCents: number | string },
+  serviceType: string,
+): Promise<void> {
+  if (invoice.billingType !== 'immediate' || !invoice.billingPeriodStart) return;
+
+  const monthlyPrice = Number(invoice.amountUsdCents);
+  if (monthlyPrice <= 0) return; // Guard against zero/negative invoice amounts
+
+  const subscriptionDate = new Date(invoice.billingPeriodStart);
+  const year = subscriptionDate.getUTCFullYear();
+  const month = subscriptionDate.getUTCMonth() + 1;
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const dayOfMonth = subscriptionDate.getUTCDate();
+  const daysUsed = daysInMonth - dayOfMonth + 1; // +1 because subscription day is included
+  const daysNotUsed = daysInMonth - daysUsed;
+
+  const reconciliationCreditCents = Math.floor(
+    (monthlyPrice * daysNotUsed) / daysInMonth
+  );
+
+  if (reconciliationCreditCents > 0) {
+    const description = `Partial month credit for ${serviceType} (${daysNotUsed}/${daysInMonth} days unused)`;
+
+    // Idempotency guard: this function may be called from multiple paths
+    // (retryPendingInvoice, retryUnpaidInvoices, handleInvoicePaid webhook)
+    // for the same invoice. The description is deterministic, so we can
+    // check for an existing credit with the same description to prevent duplicates.
+    const existing = await tx
+      .select({ creditId: customerCredits.creditId })
+      .from(customerCredits)
+      .where(
+        and(
+          eq(customerCredits.customerId, customerId),
+          eq(customerCredits.reason, 'reconciliation'),
+          eq(customerCredits.description, description),
+        )
+      )
+      .limit(1);
+
+    if (existing.length > 0) {
+      return; // Credit already issued for this exact scenario
+    }
+
+    await issueCredit(
+      tx,
+      customerId,
+      reconciliationCreditCents,
+      'reconciliation',
+      description,
+      null,
+    );
+  }
 }
 
 /**

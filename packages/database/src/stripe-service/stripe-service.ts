@@ -81,6 +81,9 @@ export class StripeService implements IStripeService {
           customer: params.stripeCustomerId,
           auto_advance: false,
           collection_method: 'charge_automatically',
+          payment_settings: {
+            payment_method_types: ['card'],
+          },
           metadata: {
             idempotency_key: params.idempotencyKey,
             description: params.description,
@@ -259,6 +262,30 @@ export class StripeService implements IStripeService {
 
   async deletePaymentMethod(paymentMethodId: string): Promise<void> {
     await this.stripe.paymentMethods.detach(paymentMethodId);
+  }
+
+  async setDefaultPaymentMethod(stripeCustomerId: string, paymentMethodId: string): Promise<void> {
+    await this.stripe.customers.update(stripeCustomerId, {
+      invoice_settings: { default_payment_method: paymentMethodId },
+    });
+  }
+
+  async voidInvoice(stripeInvoiceId: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      const invoice = await this.stripe.invoices.retrieve(stripeInvoiceId);
+
+      // Only void if the invoice is in a voidable state (draft or open)
+      if (invoice.status === 'draft' || invoice.status === 'open') {
+        await this.stripe.invoices.voidInvoice(stripeInvoiceId);
+        return { success: true };
+      }
+
+      // Already paid/voided/uncollectible — no action needed
+      return { success: true };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { success: false, error: `Failed to void Stripe invoice: ${message}` };
+    }
   }
 
   async refund(params: StripeRefundParams): Promise<StripeRefundResult> {

@@ -14,6 +14,9 @@ const API_BASE = 'http://localhost:22700';
 
 test.describe('Payment Fallback Flows', () => {
   test.beforeEach(async ({ page, request }) => {
+    // Force mock Stripe service (real Stripe keys may be configured)
+    await request.post(`${API_BASE}/test/stripe/force-mock`, { data: { enabled: true } });
+
     // Reset customer test data (delete all services, zero balance, NO escrow account)
     await request.post(`${API_BASE}/test/data/reset`, {
       data: {
@@ -27,6 +30,10 @@ test.describe('Payment Fallback Flows', () => {
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
+  });
+
+  test.afterEach(async ({ request }) => {
+    await request.post(`${API_BASE}/test/stripe/force-mock`, { data: { enabled: false } });
   });
 
   test('should show pending payment notification after subscribing with $0 balance', async ({ page }) => {

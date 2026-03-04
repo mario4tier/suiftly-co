@@ -597,6 +597,7 @@ describe('Billing Processor (Phase 1B)', () => {
         type: 'charge',
         status: 'failed',
         retryCount: 3, // Max retries reached
+        failureReason: 'Card declined', // Must be non-null to match production behavior
         lastRetryAt: clock.now(),
         createdAt: clock.now(),
       });

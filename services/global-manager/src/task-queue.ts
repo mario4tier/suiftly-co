@@ -25,12 +25,11 @@
  */
 
 import { db, adminNotifications } from '@suiftly/database';
-import { runPeriodicBillingJob } from '@suiftly/database/billing';
+import { runPeriodicBillingJob, withCustomerLock, getCustomerProviders, retryUnpaidInvoices } from '@suiftly/database/billing';
 import { getSuiService } from '@suiftly/database/sui-mock';
 import { getStripeService } from '@suiftly/database/stripe-mock';
 import { getMockClockState, setMockClockState } from '@suiftly/database/test-kv';
-import { dbClockProvider } from '@suiftly/shared/db-clock';
-import { reconcilePayments } from './reconcile-payments.js';
+import { dbClockProvider, dbClock } from '@suiftly/shared/db-clock';
 import { generateAllVaults } from './tasks/generate-vault.js';
 import { pollLMStatus } from './tasks/poll-lm-status.js';
 import {
@@ -511,18 +510,46 @@ async function processSyncLMStatusTask(taskId: string, verbose: boolean = false)
 }
 
 /**
- * Execute sync-customer: reconcile payments for a specific customer
- * Calls the shared reconcilePayments function directly
+ * Execute sync-customer: retry unpaid invoices for a specific customer.
+ *
+ * Uses the shared retryUnpaidInvoices() which calls processInvoicePayment()
+ * — the same code path used by the API server. This ensures consistent
+ * behavior: credits applied first, full provider chain (escrow → stripe → paypal),
+ * grace period cleared, 3DS handling, and reconciliation credits.
+ *
+ * Called after deposits (escrow) and after adding payment methods (stripe).
  */
 async function executeSyncCustomer(customerId: number): Promise<void> {
   // Sync clock from test_kv before running (for testing)
   await dbClockProvider.syncFromTestKv();
 
-  const result = await reconcilePayments(customerId);
-
-  console.log(
-    `[SYNC] Customer ${customerId}: ${result.chargesSucceeded} succeeded, ${result.chargesFailed} failed`
-  );
+  try {
+    await withCustomerLock(db, customerId, async (tx) => {
+      const paymentServices = { suiService: getSuiService(), stripeService: getStripeService() };
+      const providers = await getCustomerProviders(customerId, paymentServices, tx, dbClock);
+      if (providers.length > 0) {
+        const { paidCount, failedCount } = await retryUnpaidInvoices(tx, customerId, providers, dbClock);
+        if (paidCount > 0 || failedCount > 0) {
+          console.log(`[SYNC] Customer ${customerId}: ${paidCount} paid, ${failedCount} failed`);
+        }
+      }
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[SYNC] Customer ${customerId} payment retry failed:`, msg);
+    try {
+      await db.insert(adminNotifications).values({
+        severity: 'error',
+        category: 'billing',
+        code: 'SYNC_PAYMENT_RETRY_FAILED',
+        message: `Payment retry failed for customer ${customerId}: ${msg}`,
+        details: JSON.stringify({ customerId, error: msg }),
+        customerId,
+      });
+    } catch (notifErr) {
+      console.error(`[SYNC] Failed to create payment retry failure notification:`, notifErr);
+    }
+  }
 }
 
 /**
@@ -783,7 +810,7 @@ let periodicLMStatusInterval: ReturnType<typeof setInterval> | null = null;
  */
 export const LM_STATUS_INTERVAL_MS = 5 * 1000; // 5 seconds (both dev and prod)
 export const SYNC_ALL_INTERVAL_DEV_MS = 5 * 1000; // 5 seconds (test/dev)
-export const SYNC_ALL_INTERVAL_PROD_MS = 5 * 1000; // 5 seconds (production)
+export const SYNC_ALL_INTERVAL_PROD_MS = 5 * 60 * 1000; // 5 minutes (production)
 
 // Threshold for slow vault generation warning (ms)
 const VAULT_GENERATION_SLOW_THRESHOLD_MS = 4000;

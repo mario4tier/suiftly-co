@@ -445,6 +445,39 @@ async function startApiWebappOnly(): Promise<void> {
   // Note: Skip Admin webapp for mid-test restart - not needed for E2E tests
   // and was causing issues with process management
 
+  // Read Stripe config so the restarted API server can handle real Stripe
+  // sandbox tests. start-dev.sh loads these from ~/.suiftly.env and the
+  // stripe listen log, but that context is lost after process restart.
+  const stripeEnv: Record<string, string> = {};
+
+  // 1. Read Stripe keys from ~/.suiftly.env (same logic as start-dev.sh)
+  const suiftlyEnvPath = join(homedir(), '.suiftly.env');
+  if (existsSync(suiftlyEnvPath)) {
+    try {
+      const envContent = readFileSync(suiftlyEnvPath, 'utf8');
+      const skMatch = envContent.match(/^STRIPE_SECRET_KEY=["']?([^"'\n]+)["']?/m);
+      const pkMatch = envContent.match(/^STRIPE_PUBLISHABLE_KEY=["']?([^"'\n]+)["']?/m);
+      if (skMatch?.[1] && pkMatch?.[1]) {
+        stripeEnv.STRIPE_SECRET_KEY = skMatch[1];
+        stripeEnv.STRIPE_PUBLISHABLE_KEY = pkMatch[1];
+        console.log(`[DEBUG] Loaded Stripe keys from ~/.suiftly.env`);
+      }
+    } catch { /* ignore read errors */ }
+  }
+
+  // 2. Read webhook secret from the running stripe listen process
+  const stripeLogPath = '/tmp/suiftly-stripe-listen.log';
+  if (existsSync(stripeLogPath)) {
+    try {
+      const logContent = readFileSync(stripeLogPath, 'utf8');
+      const match = logContent.match(/whsec_[a-zA-Z0-9]+/);
+      if (match) {
+        stripeEnv.STRIPE_WEBHOOK_SECRET = match[0];
+        console.log(`[DEBUG] Read Stripe webhook secret from log: ${match[0].slice(0, 12)}...`);
+      }
+    } catch { /* ignore read errors */ }
+  }
+
   console.log('[DEBUG] About to start API server...');
   // Start API server using spawn with detached to avoid process group issues
   const apiProc = spawn('npx', ['tsx', 'apps/api/src/server.ts'], {
@@ -453,6 +486,7 @@ async function startApiWebappOnly(): Promise<void> {
       ...process.env,
       MOCK_AUTH: 'true',
       DATABASE_URL: 'postgresql://deploy:deploy_password_change_me@localhost/suiftly_dev',
+      ...stripeEnv,
     },
     detached: true,
     stdio: ['ignore', 'pipe', 'pipe'],

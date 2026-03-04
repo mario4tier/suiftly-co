@@ -19,7 +19,7 @@ import { eq, and, sql, inArray, desc, gt } from 'drizzle-orm';
 import { billingRecords, customers, serviceInstances, invoicePayments, customerCredits } from '../schema';
 import type { Database } from '../db';
 import { withCustomerLock, type LockedTransaction } from './locking';
-import { processInvoicePayment } from './payments';
+import { processInvoicePayment, retryUnpaidInvoices } from './payments';
 import { getAvailableCredits } from './credits';
 import {
   startGracePeriod,
@@ -275,10 +275,13 @@ async function processMonthlyBilling(
             .set({ paidOnce: true })
             .where(eq(customers.customerId, customerId));
 
-          // Mark all active services as having paid at least once (for tier change/cancellation behavior)
+          // Mark all active services as having paid at least once (for tier change/cancellation behavior).
+          // Also clear subPendingInvoiceId: if a service had a failed initial invoice,
+          // the monthly billing payment proves the customer can pay — the stale pending
+          // invoice is now just a collections matter, not a service-enable gate.
           await tx
             .update(serviceInstances)
-            .set({ paidOnce: true })
+            .set({ paidOnce: true, subPendingInvoiceId: null })
             .where(eq(serviceInstances.customerId, customerId));
         } else {
           // Payment failed
@@ -304,6 +307,16 @@ async function processMonthlyBilling(
               timestamp: config.clock.now(),
               description: `Grace period started (14 days)`,
               success: true,
+            });
+
+            await logInternalError(tx, {
+              severity: 'warning',
+              category: 'billing',
+              code: 'GRACE_PERIOD_STARTED',
+              message: `Customer ${customerId} entered 14-day grace period after payment failure`,
+              details: { invoiceId: invoice.id, amount: Number(invoice.amountUsdCents) },
+              customerId,
+              invoiceId: invoice.id,
             });
           }
         }
@@ -546,13 +559,9 @@ async function processExcessCreditRefunds(
 /**
  * Retry failed payments
  *
- * Attempts to re-process failed invoices that haven't exceeded retry limit.
- *
- * @param tx Transaction handle (must have customer lock)
- * @param customerId Customer ID
- * @param config Billing processor configuration
- * @param services Sui service for escrow operations
- * @returns Billing result
+ * Thin wrapper around retryUnpaidInvoices with periodic retry limits.
+ * Converts detailed results to BillingOperations and notifies admin
+ * when retries are exhausted.
  */
 async function retryFailedPayments(
   tx: LockedTransaction,
@@ -568,101 +577,72 @@ async function retryFailedPayments(
   };
 
   const now = config.clock.now();
-  const retryThreshold = new Date(now.getTime() - config.retryIntervalHours * 60 * 60 * 1000);
+  const providers = await getCustomerProviders(customerId, services, tx, config.clock);
+  if (providers.length === 0) return result;
 
-  // Find failed invoices eligible for retry
-  const failedInvoices = await tx
-    .select()
-    .from(billingRecords)
-    .where(
-      and(
-        eq(billingRecords.customerId, customerId),
-        eq(billingRecords.status, 'failed'),
-        sql`COALESCE(${billingRecords.retryCount}, 0) < ${config.maxRetryAttempts}`,
-        sql`(${billingRecords.lastRetryAt} IS NULL OR ${billingRecords.lastRetryAt} < ${retryThreshold})`
-      )
-    );
+  const retryResult = await retryUnpaidInvoices(tx, customerId, providers, config.clock, {
+    maxRetries: config.maxRetryAttempts,
+    cooldownHours: config.retryIntervalHours,
+    clock: config.clock,
+  });
 
-  for (const invoice of failedInvoices) {
-    // Reset status to pending for retry
-    await tx
-      .update(billingRecords)
-      .set({ status: 'pending' })
-      .where(eq(billingRecords.id, invoice.id));
-
-    // Build provider chain and attempt payment
-    const providers = await getCustomerProviders(customerId, services, tx, config.clock);
-    const paymentResult = await processInvoicePayment(
-      tx,
-      invoice.id,
-      providers,
-      config.clock
-    );
-
-    if (paymentResult.fullyPaid) {
+  for (const detail of retryResult.details) {
+    if (detail.paid) {
       result.operations.push({
         type: 'payment_retry',
         timestamp: now,
-        amountUsdCents: paymentResult.amountPaidCents,
-        invoiceId: invoice.id,
+        amountUsdCents: detail.amountCents,
+        invoiceId: detail.invoiceId,
         description: `Payment retry successful`,
         success: true,
       });
-
-      // Clear grace period if applicable
-      await clearGracePeriod(tx, customerId);
-
-      // Mark customer as having paid (for grace period eligibility)
-      await tx
-        .update(customers)
-        .set({ paidOnce: true })
-        .where(eq(customers.customerId, customerId));
-
-      // Mark all active services as having paid at least once (for tier change/cancellation behavior)
-      await tx
-        .update(serviceInstances)
-        .set({ paidOnce: true })
-        .where(eq(serviceInstances.customerId, customerId));
     } else {
       result.operations.push({
         type: 'payment_retry',
         timestamp: now,
-        amountUsdCents: Number(invoice.amountUsdCents),
-        invoiceId: invoice.id,
-        description: `Payment retry failed: ${paymentResult.error?.message}`,
+        amountUsdCents: detail.amountCents,
+        invoiceId: detail.invoiceId,
+        description: `Payment retry failed: ${detail.error?.message}`,
         success: false,
       });
 
-      if (paymentResult.error) {
-        result.errors.push(paymentResult.error);
+      if (detail.error) {
+        result.errors.push(detail.error);
       }
 
       // Notify admin when retries are exhausted (at most once per invoice).
       // retryCount was incremented by processInvoicePayment on failure.
-      // Wrapped in try-catch: notification failure must not abort the billing run
-      // (payment status is already updated, and subsequent operations like grace
-      // period checks still need to run).
-      const currentRetryCount = Number(invoice.retryCount ?? 0) + 1; // +1 for the attempt that just failed
+      const currentRetryCount = detail.previousRetryCount + 1;
       if (currentRetryCount >= config.maxRetryAttempts) {
         try {
           await logInternalErrorOnce(tx, {
             severity: 'error',
             category: 'billing',
             code: 'PAYMENT_RETRIES_EXHAUSTED',
-            message: `All ${config.maxRetryAttempts} payment retries exhausted for invoice ${invoice.id}`,
+            message: `All ${config.maxRetryAttempts} payment retries exhausted for invoice ${detail.invoiceId}`,
             details: {
-              lastError: paymentResult.error?.message,
-              errorCode: paymentResult.error?.errorCode,
-              amountUsdCents: Number(invoice.amountUsdCents),
+              lastError: detail.error?.message,
+              errorCode: detail.error?.errorCode,
+              amountUsdCents: detail.amountCents,
               retryCount: currentRetryCount,
             },
             customerId,
-            invoiceId: invoice.id,
+            invoiceId: detail.invoiceId,
           });
         } catch (notifErr) {
-          console.error(`[Billing] Failed to create retry-exhausted notification for invoice ${invoice.id}:`, notifErr);
+          console.error(`[Billing] Failed to create retry-exhausted notification for invoice ${detail.invoiceId}:`, notifErr);
         }
       }
+    }
+  }
+
+  // Recalculate DRAFT invoice after retries to reflect newly-paid invoices.
+  // Non-fatal: stale DRAFT will self-correct on next billing cycle.
+  if (retryResult.paidCount > 0) {
+    try {
+      await recalculateDraftInvoice(tx, customerId, config.clock);
+    } catch (err) {
+      console.error(`[Billing] Failed to recalculate DRAFT after payment retry for customer ${customerId}:`, err);
     }
   }
 
@@ -707,6 +687,15 @@ async function checkGracePeriodExpiration(
       timestamp: config.clock.now(),
       description: `Grace period expired - account suspended (${serviceCount} services disabled)`,
       success: true,
+    });
+
+    await logInternalError(tx, {
+      severity: 'error',
+      category: 'billing',
+      code: 'CUSTOMER_SUSPENDED',
+      message: `Customer ${customerId} suspended for non-payment — ${serviceCount} services disabled`,
+      details: { serviceCount },
+      customerId,
     });
   }
 

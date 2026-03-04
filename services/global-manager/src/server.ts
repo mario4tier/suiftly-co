@@ -9,7 +9,7 @@ import Fastify from 'fastify';
 import { z } from 'zod';
 import type { VaultType } from '@mhaxbe/vault-codec';
 import { getGlobalVaultTypes } from '@mhaxbe/server-configs';
-import { db, adminNotifications, systemControl, billingRecords, customers, customerPaymentMethods, invoicePayments, invoiceLineItems } from '@suiftly/database';
+import { db, adminNotifications, systemControl, billingRecords, customers, customerPaymentMethods, invoicePayments, invoiceLineItems, serviceInstances, escrowTransactions } from '@suiftly/database';
 import { getMockClockState, setMockClockState } from '@suiftly/database/test-kv';
 import { desc, eq, and, sql, gte, lte, lt, isNotNull, isNull } from 'drizzle-orm';
 import { dbClock } from '@suiftly/shared/db-clock';
@@ -91,6 +91,17 @@ const testNotificationBodySchema = z.object({
   code: z.string().min(1).max(100).optional().default('TEST_NOTIFICATION'),
   message: z.string().min(1).max(1000).optional().default('This is a test notification'),
 });
+
+// Safe JSON.parse for notification.details — never throws.
+// Returns parsed object on success, raw string on parse failure.
+function safeParseDetails(details: string | null): any {
+  if (!details) return null;
+  try {
+    return JSON.parse(details);
+  } catch {
+    return details; // Return raw string so the admin can still see it
+  }
+}
 
 // Helper to validate and return parsed result or send error
 function validate<T extends z.ZodTypeAny>(
@@ -187,7 +198,7 @@ server.get('/api/notifications', async (request, reply) => {
   return {
     notifications: notifications.map((n) => ({
       ...n,
-      details: n.details ? JSON.parse(n.details) : null,
+      details: safeParseDetails(n.details),
     })),
     count: notifications.length,
   };
@@ -290,11 +301,17 @@ server.delete('/api/notifications/:id', async (request, reply) => {
   return { success: true };
 });
 
-// Delete all acknowledged notifications
-server.delete('/api/notifications/acknowledged', async () => {
+// Delete all acknowledged notifications (optionally filtered by category)
+server.delete<{ Querystring: { category?: string } }>('/api/notifications/acknowledged', async (request) => {
+  const { category } = request.query;
+  const conditions = [eq(adminNotifications.acknowledged, true)];
+  if (category) {
+    conditions.push(eq(adminNotifications.category, category));
+  }
+
   const result = await db
     .delete(adminNotifications)
-    .where(eq(adminNotifications.acknowledged, true))
+    .where(and(...conditions))
     .returning({ notificationId: adminNotifications.notificationId });
 
   return { success: true, deletedCount: result.length };
@@ -1465,8 +1482,7 @@ function classifyInvoiceBin(record: {
     }
     case 'paid':
       return { displayBin: 'Paid', color: 'green' };
-    case 'void':
-    case 'cancelled':
+    case 'voided':
       return { displayBin: 'Voided', color: 'gray' };
     default:
       return { displayBin: record.status, color: 'gray' };
@@ -1659,11 +1675,8 @@ server.get('/api/billing/invoices', async (request, reply) => {
     statusConditions.push(lt(billingRecords.billingPeriodStart, end));
 
     if (query.status !== 'all') {
-      // Map 'voided' to the DB enum values
       if (query.status === 'voided') {
-        statusConditions.push(
-          sql`${billingRecords.status} IN ('void', 'cancelled')`
-        );
+        statusConditions.push(eq(billingRecords.status, 'voided'));
       } else {
         statusConditions.push(eq(billingRecords.status, query.status));
       }
@@ -2022,6 +2035,159 @@ async function getAlarmItems(categoryFilter?: string): Promise<AlarmItem[]> {
 
   return items;
 }
+
+// ============================================================================
+// Customer & Invoice Detail API (for Admin Dashboard drill-down pages)
+// ============================================================================
+
+// GET /api/customer/:customerId — All DB entries for a customer
+server.get('/api/customer/:customerId', async (request, reply) => {
+  const params = validate(customerIdParamSchema, request.params, reply);
+  if (!params) return;
+
+  const { customerId } = params;
+
+  try {
+    // Fetch all related data in parallel
+    const [customerRows, paymentMethods, services, invoices, notifications, escrowTxns] = await Promise.all([
+      db.select().from(customers).where(eq(customers.customerId, customerId)).limit(1),
+      db.select().from(customerPaymentMethods).where(eq(customerPaymentMethods.customerId, customerId)).orderBy(customerPaymentMethods.priority),
+      db.select().from(serviceInstances).where(eq(serviceInstances.customerId, customerId)),
+      db.select().from(billingRecords).where(eq(billingRecords.customerId, customerId)).orderBy(desc(billingRecords.createdAt)).limit(50),
+      db.select().from(adminNotifications).where(eq(adminNotifications.customerId, customerId)).orderBy(desc(adminNotifications.createdAt)).limit(50),
+      db.select().from(escrowTransactions).where(eq(escrowTransactions.customerId, customerId)).orderBy(desc(escrowTransactions.timestamp)).limit(50),
+    ]);
+
+    if (customerRows.length === 0) {
+      return reply.status(404).send({ error: `Customer ${customerId} not found` });
+    }
+
+    // For each invoice, fetch line items and payment sources
+    const invoiceIds = invoices.map(inv => inv.id);
+    let lineItems: any[] = [];
+    let payments: any[] = [];
+    if (invoiceIds.length > 0) {
+      [lineItems, payments] = await Promise.all([
+        db.select().from(invoiceLineItems).where(sql`${invoiceLineItems.billingRecordId} IN (${sql.join(invoiceIds.map(id => sql`${id}`), sql`, `)})`),
+        db.select().from(invoicePayments).where(sql`${invoicePayments.billingRecordId} IN (${sql.join(invoiceIds.map(id => sql`${id}`), sql`, `)})`),
+      ]);
+    }
+
+    // Group line items and payments by invoice
+    const lineItemsByInvoice = new Map<number, any[]>();
+    for (const li of lineItems) {
+      const arr = lineItemsByInvoice.get(li.billingRecordId) || [];
+      arr.push(li);
+      lineItemsByInvoice.set(li.billingRecordId, arr);
+    }
+    const paymentsByInvoice = new Map<number, any[]>();
+    for (const p of payments) {
+      const arr = paymentsByInvoice.get(p.billingRecordId) || [];
+      arr.push(p);
+      paymentsByInvoice.set(p.billingRecordId, arr);
+    }
+
+    return {
+      customer: customerRows[0],
+      paymentMethods,
+      services,
+      invoices: invoices.map(inv => ({
+        ...inv,
+        ...classifyInvoiceBin(inv),
+        lineItems: lineItemsByInvoice.get(inv.id) || [],
+        paymentSources: (paymentsByInvoice.get(inv.id) || []).map(p => ({
+          type: p.sourceType,
+          amountCents: p.amountUsdCents,
+          referenceId: p.providerReferenceId,
+        })),
+      })),
+      notifications: notifications.map(n => ({
+        ...n,
+        details: safeParseDetails(n.details),
+      })),
+      escrowTransactions: escrowTxns,
+    };
+  } catch (err) {
+    console.error(`[Customer Detail] /api/customer/${customerId} failed:`, err);
+    return reply.status(500).send({ error: 'Failed to load customer details' });
+  }
+});
+
+// GET /api/invoice/:invoiceId — All DB entries for an invoice
+const invoiceIdParamSchema = z.object({
+  invoiceId: z.string().regex(/^\d+$/, 'Invoice ID must be a positive integer').transform(Number),
+});
+
+server.get('/api/invoice/:invoiceId', async (request, reply) => {
+  const params = validate(invoiceIdParamSchema, request.params, reply);
+  if (!params) return;
+
+  const { invoiceId } = params;
+
+  try {
+    const [invoiceRows, lineItems, payments, notifications] = await Promise.all([
+      db.select().from(billingRecords).where(eq(billingRecords.id, invoiceId)).limit(1),
+      db.select().from(invoiceLineItems).where(eq(invoiceLineItems.billingRecordId, invoiceId)),
+      db.select().from(invoicePayments).where(eq(invoicePayments.billingRecordId, invoiceId)),
+      db.select().from(adminNotifications).where(eq(adminNotifications.invoiceId, invoiceId)).orderBy(desc(adminNotifications.createdAt)).limit(50),
+    ]);
+
+    if (invoiceRows.length === 0) {
+      return reply.status(404).send({ error: `Invoice ${invoiceId} not found` });
+    }
+
+    const invoice = invoiceRows[0];
+
+    // Fetch the parent customer
+    const [customerRows] = await Promise.all([
+      db.select().from(customers).where(eq(customers.customerId, invoice.customerId)).limit(1),
+    ]);
+
+    return {
+      invoice: {
+        ...invoice,
+        ...classifyInvoiceBin(invoice),
+      },
+      customer: customerRows[0] || null,
+      lineItems,
+      paymentSources: payments.map(p => ({
+        ...p,
+        type: p.sourceType,
+        amountCents: p.amountUsdCents,
+        referenceId: p.providerReferenceId,
+      })),
+      notifications: notifications.map(n => ({
+        ...n,
+        details: safeParseDetails(n.details),
+      })),
+    };
+  } catch (err) {
+    console.error(`[Invoice Detail] /api/invoice/${invoiceId} failed:`, err);
+    return reply.status(500).send({ error: 'Failed to load invoice details' });
+  }
+});
+
+// Reset retryCount on a specific invoice
+server.post<{ Params: { invoiceId: string } }>('/api/invoice/:invoiceId/reset-retry', async (request, reply) => {
+  const invoiceId = Number(request.params.invoiceId);
+  if (!invoiceId || isNaN(invoiceId)) {
+    return reply.status(400).send({ error: 'Invalid invoice ID' });
+  }
+  try {
+    const result = await db.update(billingRecords)
+      .set({ retryCount: 0, failureReason: null, lastRetryAt: null })
+      .where(eq(billingRecords.id, invoiceId))
+      .returning({ id: billingRecords.id, retryCount: billingRecords.retryCount });
+    if (result.length === 0) {
+      return reply.status(404).send({ error: 'Invoice not found' });
+    }
+    console.log(`[Admin] Reset retryCount on invoice #${invoiceId}`);
+    return { ok: true, invoiceId };
+  } catch (err) {
+    console.error(`[Admin] Failed to reset retryCount on invoice #${invoiceId}:`, err);
+    return reply.status(500).send({ error: 'Failed to reset retry count' });
+  }
+});
 
 // ============================================================================
 // Graceful shutdown

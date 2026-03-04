@@ -317,4 +317,56 @@ describe('API: Reconciliation Credit Calculation', () => {
       expect(Number(credits[0].originalAmountUsdCents)).toBe(expectedCreditCents);
     });
   });
+
+  describe('Reconciliation Credit Idempotency', () => {
+    it('should not issue duplicate reconciliation credits when called multiple times', async () => {
+      /**
+       * The processor is fire-and-forget: the same invoice can be retried
+       * by multiple paths (retryPendingInvoice, retryUnpaidInvoices, webhook).
+       * issueReconciliationCredit must be idempotent — calling it twice for the
+       * same invoice/scenario should only produce one credit.
+       */
+
+      // ---- Step 1: Subscribe to starter with no funds ----
+      await setClockTime('2025-01-03T00:00:00Z'); // Day 3 of January
+
+      await trpcMutation<any>(
+        'services.subscribe',
+        { serviceType: 'seal', tier: 'starter' },
+        accessToken
+      );
+
+      // ---- Step 2: Deposit funds and reconcile ----
+      await trpcMutation<any>(
+        'billing.deposit',
+        { amountUsd: 50 },
+        accessToken
+      );
+
+      await reconcilePendingPayments(customerId);
+
+      // Should have exactly one reconciliation credit
+      let credits = await db.query.customerCredits.findMany({
+        where: and(
+          eq(customerCredits.customerId, customerId),
+          eq(customerCredits.reason, 'reconciliation'),
+        ),
+      });
+      expect(credits.length).toBe(1);
+      const firstCreditAmount = Number(credits[0].originalAmountUsdCents);
+
+      // ---- Step 3: Reconcile AGAIN (simulates duplicate queue dispatch) ----
+      await reconcilePendingPayments(customerId);
+
+      // Should still have exactly one reconciliation credit (idempotent)
+      credits = await db.query.customerCredits.findMany({
+        where: and(
+          eq(customerCredits.customerId, customerId),
+          eq(customerCredits.reason, 'reconciliation'),
+        ),
+      });
+      expect(credits.length).toBe(1);
+      expect(Number(credits[0].originalAmountUsdCents)).toBe(firstCreditAmount);
+    });
+  });
 });

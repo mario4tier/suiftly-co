@@ -199,6 +199,10 @@ export async function resetCustomerTestData(options: TestDataResetOptions = {}) 
         // (Keep customer to preserve wallet address association)
         await tx.update(customers)
           .set({
+            status: 'active',
+            paidOnce: false,
+            gracePeriodStart: null,
+            gracePeriodNotifiedAt: null,
             currentBalanceUsdCents: balanceUsdCents,
             spendingLimitUsdCents: spendingLimitUsdCents,
             currentPeriodChargedUsdCents: 0,

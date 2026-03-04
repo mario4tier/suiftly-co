@@ -15,6 +15,7 @@ import type { IPaymentProvider, ProviderChargeParams, ProviderChargeResult, Prov
 import type { IStripeService } from '@suiftly/shared/stripe-service';
 import type { DatabaseOrTransaction } from '../../db';
 import { customers, customerPaymentMethods } from '../../schema';
+import { logInternalError } from '../admin-notifications';
 
 export class StripePaymentProvider implements IPaymentProvider {
   readonly type = 'stripe' as const;
@@ -34,9 +35,29 @@ export class StripePaymentProvider implements IPaymentProvider {
     const customer = await this.getCustomer(customerId);
     if (!customer?.stripeCustomerId) return false;
 
-    // Check that Stripe customer has at least one payment method
-    const methods = await this.stripeService.getPaymentMethods(customer.stripeCustomerId);
-    return methods.length > 0;
+    // Check that Stripe customer has at least one payment method.
+    // Catch transient Stripe/network errors so the provider chain can
+    // fall through to the next provider instead of aborting.
+    try {
+      const methods = await this.stripeService.getPaymentMethods(customer.stripeCustomerId);
+      return methods.length > 0;
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      console.error(`[StripeProvider] canPay failed for customer ${customerId}: ${msg}`);
+      // Surface to admin — a persistent auth/config error here silently
+      // demotes Stripe from the provider chain for this customer.
+      try {
+        await logInternalError(this.db, {
+          severity: 'warning',
+          category: 'billing',
+          code: 'STRIPE_API_UNREACHABLE',
+          message: `Stripe API error in canPay for customer ${customerId}: ${msg}`,
+          details: { stack: error instanceof Error ? error.stack : undefined },
+          customerId,
+        });
+      } catch { /* don't let notification failure affect the result */ }
+      return false;
+    }
   }
 
   async charge(params: ProviderChargeParams): Promise<ProviderChargeResult> {
@@ -45,13 +66,54 @@ export class StripePaymentProvider implements IPaymentProvider {
       return { success: false, error: 'No Stripe customer configured', errorCode: 'account_not_configured', retryable: false };
     }
 
-    const result = await this.stripeService.charge({
-      stripeCustomerId: customer.stripeCustomerId,
-      amountUsdCents: params.amountUsdCents,
-      description: params.description,
-      idempotencyKey: `inv_${params.invoiceId}_stripe`,
-      billingRecordId: params.invoiceId,
-    });
+    // Wrap Stripe API call so transient network/API errors return a retryable
+    // failure instead of throwing and aborting the entire provider chain.
+    let result;
+    try {
+      result = await this.stripeService.charge({
+        stripeCustomerId: customer.stripeCustomerId,
+        amountUsdCents: params.amountUsdCents,
+        description: params.description,
+        idempotencyKey: `inv_${params.invoiceId}_stripe_r${params.retryCount}`,
+        billingRecordId: params.invoiceId,
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      console.error(`[StripeProvider] charge failed for customer ${params.customerId}, invoice ${params.invoiceId}: ${msg}`);
+      // Surface to admin — Stripe charge threw an unexpected exception.
+      try {
+        await logInternalError(this.db, {
+          severity: 'error',
+          category: 'billing',
+          code: 'STRIPE_CHARGE_EXCEPTION',
+          message: `Stripe charge exception for customer ${params.customerId}, invoice ${params.invoiceId}: ${msg}`,
+          details: { stack: error instanceof Error ? error.stack : undefined },
+          customerId: params.customerId,
+          invoiceId: params.invoiceId,
+        });
+      } catch { /* don't let notification failure affect the result */ }
+      return { success: false, error: `Stripe API error: ${msg}`, retryable: true };
+    }
+
+    // Stripe signaled requires_action but did not supply a hosted invoice URL.
+    // Without a URL, the user cannot complete 3DS; alert admin for investigation.
+    if (result.requiresAction && !result.hostedInvoiceUrl) {
+      try {
+        await logInternalError(this.db, {
+          severity: 'error',
+          category: 'billing',
+          code: 'STRIPE_REQUIRES_ACTION_NO_URL',
+          message: `Stripe requires_action without hosted_invoice_url for customer ${params.customerId}, invoice ${params.invoiceId}`,
+          details: {
+            stripeInvoiceId: result.stripeInvoiceId,
+            paymentIntentId: result.paymentIntentId,
+            error: result.error,
+          },
+          customerId: params.customerId,
+          invoiceId: params.invoiceId,
+        });
+      } catch { /* alert failure should not block the provider chain */ }
+    }
 
     if (result.success && result.paymentIntentId) {
       return {
@@ -74,6 +136,7 @@ export class StripePaymentProvider implements IPaymentProvider {
       error: result.error ?? 'Stripe charge failed',
       errorCode,
       hostedInvoiceUrl: result.hostedInvoiceUrl,
+      stripeInvoiceId: result.stripeInvoiceId,
       retryable: result.retryable,
     };
   }

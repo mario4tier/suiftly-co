@@ -19,6 +19,7 @@ import {
   restCall,
   resetTestData,
   ensureTestBalance,
+  addStripePaymentMethod,
   subscribeAndEnable,
   reconcilePendingPayments,
 } from './helpers/http.js';
@@ -115,12 +116,8 @@ describe('API: Provider Chain & Service Gates', () => {
         accessToken
       );
 
-      // Add stripe as priority 2
-      await trpcMutation<any>(
-        'billing.addPaymentMethod',
-        { providerType: 'stripe' },
-        accessToken
-      );
+      // Add stripe as priority 2 (complete-setup creates the row)
+      await addStripePaymentMethod(accessToken);
 
       // Subscribe — escrow should fail, stripe should succeed
       const subscribeResult = await trpcMutation<any>(

@@ -211,6 +211,7 @@ function SealOverviewPage() {
                   id="service-toggle"
                   checked={localIsEnabled}
                   onCheckedChange={handleToggleService}
+                  disabled={isToggling}
                 />
                 <span className="text-sm font-medium text-gray-600 dark:text-gray-400">
                   {localIsEnabled ? "ON" : "OFF"}
@@ -251,7 +252,7 @@ function SealOverviewPage() {
                   Configuration Required
                 </p>
                 <p className="text-sm text-yellow-700 dark:text-yellow-300 mt-1">
-                  {sealStatus.configNeededReason}. Service cannot process requests until configured.
+                  {sealStatus.configNeededReason}. <TextRoute to="/services/seal/overview" search={{ tab: 'seal-keys' }}>Go to Seal Keys tab</TextRoute>
                 </p>
               </div>
             </div>

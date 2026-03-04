@@ -9,7 +9,7 @@ import { router, protectedProcedure } from '../lib/trpc';
 import { getSuiService } from '@suiftly/database/sui-mock';
 import { getStripeService } from '@suiftly/database/stripe-mock';
 import { db, logActivity, findOrCreateCustomerWithEscrow } from '@suiftly/database';
-import { ledgerEntries, customers, billingRecords, invoiceLineItems, customerPaymentMethods } from '@suiftly/database/schema';
+import { ledgerEntries, customers, billingRecords, invoiceLineItems, invoicePayments, customerPaymentMethods } from '@suiftly/database/schema';
 import { eq, and, desc, sql, asc } from 'drizzle-orm';
 import { SPENDING_LIMIT, INVOICE_LINE_ITEM_TYPE } from '@suiftly/shared/constants';
 import { config } from '../lib/config';
@@ -234,6 +234,7 @@ export const billingRouter = router({
         txDigest: Buffer | null;
         createdAt: Date;
         lineItemDescriptions: string[];
+        paidVia: string | null; // e.g. "Visa ••••4242", "Escrow", "Credit"
       }>();
 
       for (const row of invoiceResults) {
@@ -263,7 +264,97 @@ export const billingRouter = router({
             txDigest: row.txDigest,
             createdAt: row.createdAt,
             lineItemDescriptions: lineItemDescription ? [lineItemDescription] : [],
+            paidVia: null,
           });
+        }
+      }
+
+      // Enrich paid invoices with payment source info
+      const invoiceIds = [...invoiceMap.keys()];
+      if (invoiceIds.length > 0) {
+        const payments = await db
+          .select({
+            billingRecordId: invoicePayments.billingRecordId,
+            sourceType: invoicePayments.sourceType,
+            providerReferenceId: invoicePayments.providerReferenceId,
+            amountUsdCents: invoicePayments.amountUsdCents,
+          })
+          .from(invoicePayments)
+          .where(sql`${invoicePayments.billingRecordId} IN (${sql.join(invoiceIds.map(id => sql`${id}`), sql`, `)})`);
+
+        // Build a map of providerRef → card info for Stripe payments
+        // Look up from active + removed methods (payment may have been made with a now-removed card)
+        const stripeRefs = payments
+          .filter(p => p.sourceType === 'stripe' && p.providerReferenceId)
+          .map(p => p.providerReferenceId!);
+
+        let cardInfoMap = new Map<string, { brand: string; last4: string }>();
+        if (stripeRefs.length > 0) {
+          // Stripe invoice references (in_xxx) don't match payment method refs (pm_xxx).
+          // Look up card info by customer's payment methods instead.
+          const methods = await db
+            .select({
+              providerRef: customerPaymentMethods.providerRef,
+              providerConfig: customerPaymentMethods.providerConfig,
+            })
+            .from(customerPaymentMethods)
+            .where(and(
+              eq(customerPaymentMethods.customerId, customer.customerId),
+              eq(customerPaymentMethods.providerType, 'stripe'),
+            ));
+
+          for (const m of methods) {
+            if (m.providerRef && m.providerConfig) {
+              try {
+                const config = typeof m.providerConfig === 'string'
+                  ? JSON.parse(m.providerConfig)
+                  : m.providerConfig;
+                if (config.brand && config.last4) {
+                  cardInfoMap.set(m.providerRef, { brand: config.brand, last4: config.last4 });
+                }
+              } catch { /* ignore parse errors */ }
+            }
+          }
+        }
+
+        // Group payments by invoice, build paidVia label
+        for (const payment of payments) {
+          const invoice = invoiceMap.get(payment.billingRecordId);
+          if (!invoice) continue;
+
+          let sourceLabel: string;
+          switch (payment.sourceType) {
+            case 'stripe': {
+              // When there's exactly one Stripe card, show its details.
+              // With multiple cards we can't determine which was used (providerReferenceId
+              // stores Stripe invoice IDs, not payment method IDs), so show generic label.
+              const cardEntry = cardInfoMap.size === 1 ? [...cardInfoMap.values()][0] : undefined;
+              if (cardEntry) {
+                sourceLabel = `${cardEntry.brand.charAt(0).toUpperCase() + cardEntry.brand.slice(1)} ••••${cardEntry.last4}`;
+              } else {
+                sourceLabel = 'Credit Card';
+              }
+              break;
+            }
+            case 'escrow':
+              sourceLabel = 'Escrow';
+              break;
+            case 'credit':
+              sourceLabel = 'Credit';
+              break;
+            case 'paypal':
+              sourceLabel = 'PayPal';
+              break;
+            default:
+              sourceLabel = payment.sourceType;
+          }
+
+          // Combine multiple sources (e.g., "Credit + Visa ••••4242")
+          if (invoice.paidVia) {
+            invoice.paidVia += ` + ${sourceLabel}`;
+          } else {
+            invoice.paidVia = sourceLabel;
+          }
         }
       }
 
@@ -276,6 +367,7 @@ export const billingRouter = router({
         txDigest: string | null;
         createdAt: string;
         status?: string;
+        paidVia?: string | null;
         source: 'ledger' | 'invoice';
       }> = [];
 
@@ -313,6 +405,7 @@ export const billingRouter = router({
           txDigest: invoice.txDigest ? `0x${invoice.txDigest.toString('hex')}` : null,
           createdAt: invoice.createdAt.toISOString(),
           status: invoice.status,
+          paidVia: invoice.paidVia,
           source: 'invoice',
         });
       }
@@ -910,16 +1003,13 @@ export const billingRouter = router({
         });
       }
 
-      // Get current max priority
+      // Get current active methods (used by escrow priority bump)
       const allMethods = await db.select()
         .from(customerPaymentMethods)
         .where(and(
           eq(customerPaymentMethods.customerId, customerId),
           eq(customerPaymentMethods.status, 'active')
         ));
-      const nextPriority = allMethods.length > 0
-        ? Math.max(...allMethods.map(m => m.priority)) + 1
-        : 1;
 
       if (input.providerType === 'escrow') {
         // Look up customer to get escrow address if available (may be null if not deposited yet)
@@ -969,37 +1059,39 @@ export const billingRouter = router({
         const stripeService = getStripeService();
         let stripeCustomerId = customer.stripeCustomerId;
 
-        if (!stripeCustomerId) {
+        // Helper: create a fresh Stripe customer and persist the ID
+        const createFreshStripeCustomer = async () => {
           const result = await stripeService.createCustomer({
             customerId,
             walletAddress: customer.walletAddress,
           });
-          stripeCustomerId = result.stripeCustomerId;
-
           await db.update(customers)
-            .set({ stripeCustomerId })
+            .set({ stripeCustomerId: result.stripeCustomerId })
             .where(eq(customers.customerId, customerId));
+          return result.stripeCustomerId;
+        };
+
+        if (!stripeCustomerId) {
+          stripeCustomerId = await createFreshStripeCustomer();
         }
 
-        const setupIntent = await stripeService.createSetupIntent(stripeCustomerId);
-
-        // Insert payment method row — providerRef set by webhook when card is confirmed.
-        // Store setupIntentId in providerConfig for webhook reconciliation.
+        let setupIntent;
         try {
-          await db.insert(customerPaymentMethods).values({
-            customerId,
-            providerType: 'stripe',
-            status: 'active',
-            priority: nextPriority,
-            providerRef: null,
-            providerConfig: JSON.stringify({ setupIntentId: setupIntent.setupIntentId }),
-          });
+          setupIntent = await stripeService.createSetupIntent(stripeCustomerId);
         } catch (err: unknown) {
-          if (err instanceof Error && err.message.includes('uniq_customer_provider_ref_active')) {
-            throw new TRPCError({ code: 'CONFLICT', message: 'stripe payment method already active' });
+          // Handle stale Stripe customer ID (e.g., from mock sessions or deleted customer)
+          const msg = err instanceof Error ? err.message : '';
+          if (!msg.includes('No such customer') && !msg.includes('not found')) {
+            throw err;
           }
-          throw err;
+          stripeCustomerId = await createFreshStripeCustomer();
+          setupIntent = await stripeService.createSetupIntent(stripeCustomerId);
         }
+
+        // Do NOT create a payment method row here. The webhook handler
+        // (setup_intent.succeeded) creates it when the user actually confirms
+        // the card. Creating it eagerly causes an orphaned 'active' row if the
+        // user cancels the dialog, which blocks future "Add Credit Card" attempts.
 
         return {
           success: true,

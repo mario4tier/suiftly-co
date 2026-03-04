@@ -6,6 +6,7 @@
 import { router, publicProcedure } from '../lib/trpc';
 import { getAllConfig } from '../lib/config-cache';
 import { config } from '../lib/config.js';
+import { isStripeForceMock } from '@suiftly/database/stripe-mock';
 
 const MOCK_AUTH = config.MOCK_AUTH;
 
@@ -29,6 +30,10 @@ export const configRouter = router({
 
     // Add mockAuth flag so frontend knows if Mock Wallet should be shown
     configObj['mockAuth'] = MOCK_AUTH ? 'true' : 'false';
+
+    // Add Stripe publishable key (empty when not configured or when force-mock is active,
+    // so the frontend falls back to the mock card dialog with compatible clientSecrets)
+    configObj['stripePublishableKey'] = isStripeForceMock() ? '' : (config.STRIPE_PUBLISHABLE_KEY || '');
 
     return configObj;
   }),

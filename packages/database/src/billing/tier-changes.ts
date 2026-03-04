@@ -18,8 +18,10 @@ import {
   createAndChargeImmediately,
   createPendingInvoiceCommitted,
   deleteUnpaidInvoice,
+  voidInvoice,
 } from './invoices';
 import { processInvoicePayment } from './payments';
+import { issueCredit } from './credits';
 import { recalculateDraftInvoice, calculateProRatedUpgradeCharge } from './service-billing';
 import { getTierPriceUsdCents, TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
 import { INVOICE_LINE_ITEM_TYPE, TIER_TO_SUBSCRIPTION_ITEM } from '@suiftly/shared/constants';
@@ -280,7 +282,22 @@ export async function handleTierUpgradeLocked(
   );
 
   if (!paymentResult.fullyPaid) {
-    // Payment failed - don't upgrade
+    // Payment failed - void the upgrade invoice to prevent the periodic retry
+    // job from charging the customer without applying the tier change.
+    // Use voidInvoice (not deleteUnpaidInvoice) because credits may have been
+    // partially applied, creating invoicePayments FK references.
+    await voidInvoice(tx, invoiceId, 'Tier upgrade payment failed');
+
+    // Restore any credits consumed by processInvoicePayment — they're attached
+    // to a voided invoice that will never retry, so the customer would lose them.
+    const creditsConsumedCents = paymentResult.paymentSources
+      .filter(s => s.type === 'credit')
+      .reduce((sum, s) => sum + s.amountCents, 0);
+    if (creditsConsumedCents > 0) {
+      await issueCredit(tx, customerId, creditsConsumedCents, 'reconciliation',
+        `Credit restoration: upgrade invoice ${invoiceId} voided after payment failure`);
+    }
+
     return {
       success: false,
       newTier,
@@ -563,8 +580,19 @@ export async function executeTierUpgradePhase2Locked(
   );
 
   if (!paymentResult.fullyPaid) {
-    // Payment failed - delete unpaid invoice (immediate operations don't retry)
-    await deleteUnpaidInvoice(tx, invoiceId);
+    // Payment failed - void the invoice (not deleteUnpaidInvoice which hits FK
+    // violations when credits created invoicePayments records).
+    await voidInvoice(tx, invoiceId, 'Tier upgrade payment failed');
+
+    // Restore any credits consumed — voided invoice won't retry.
+    const creditsConsumedCents = paymentResult.paymentSources
+      .filter(s => s.type === 'credit')
+      .reduce((sum, s) => sum + s.amountCents, 0);
+    if (creditsConsumedCents > 0) {
+      await issueCredit(tx, customerId, creditsConsumedCents, 'reconciliation',
+        `Credit restoration: upgrade invoice ${invoiceId} voided after payment failure`);
+    }
+
     return {
       success: false,
       newTier,
@@ -704,6 +732,9 @@ export async function scheduleTierDowngradeLocked(
     // Recalculate DRAFT invoice to reflect the new tier
     await recalculateDraftInvoice(tx, customerId, clock);
 
+    // Recalculate any FAILED monthly invoices to use the new tier price
+    await recalculateFailedInvoiceSubscription(tx, customerId, serviceType, newTier);
+
     return {
       success: true,
       scheduledTier: newTier,
@@ -728,11 +759,93 @@ export async function scheduleTierDowngradeLocked(
   // 5. Update DRAFT invoice to reflect scheduled change
   await recalculateDraftInvoice(tx, customerId, clock);
 
+  // 6. Recalculate any FAILED invoices to use the new tier price
+  await recalculateFailedInvoiceSubscription(tx, customerId, serviceType, newTier);
+
   return {
     success: true,
     scheduledTier: newTier,
     effectiveDate,
   };
+}
+
+/**
+ * Recalculate FAILED invoices when a tier change affects the subscription price.
+ *
+ * Updates subscription line items on FAILED invoices for the given service type
+ * to reflect the new tier's price, then recalculates the invoice total.
+ * This ensures payment retries use the correct (new) price.
+ *
+ * No-op if no FAILED invoices exist or none have matching subscription line items.
+ *
+ * @param tx Locked transaction (from withCustomerLockForAPI)
+ */
+async function recalculateFailedInvoiceSubscription(
+  tx: LockedTransaction,
+  customerId: number,
+  serviceType: ServiceType,
+  newTier: ServiceTier,
+): Promise<void> {
+  // 1. Find all FAILED invoices for this customer
+  const failedInvoices = await tx
+    .select({ id: billingRecords.id })
+    .from(billingRecords)
+    .where(and(
+      eq(billingRecords.customerId, customerId),
+      eq(billingRecords.status, 'failed'),
+    ));
+
+  if (failedInvoices.length === 0) return;
+
+  const newSubscriptionItemType = TIER_TO_SUBSCRIPTION_ITEM[newTier];
+  const newTierPrice = getTierPriceUsdCents(newTier);
+
+  // All subscription item types to match against
+  const subscriptionItemTypes = [
+    INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_STARTER,
+    INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_PRO,
+    INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_ENTERPRISE,
+  ];
+
+  for (const invoice of failedInvoices) {
+    // 2. Update subscription line items matching this service type
+    const result = await tx
+      .update(invoiceLineItems)
+      .set({
+        itemType: newSubscriptionItemType,
+        unitPriceUsdCents: newTierPrice,
+        amountUsdCents: newTierPrice,
+      })
+      .where(and(
+        eq(invoiceLineItems.billingRecordId, invoice.id),
+        eq(invoiceLineItems.serviceType, serviceType),
+        inArray(invoiceLineItems.itemType, subscriptionItemTypes),
+      ))
+      .returning({ lineItemId: invoiceLineItems.lineItemId });
+
+    // Skip invoices with no matching subscription line item (e.g., tier_upgrade invoices)
+    if (result.length === 0) continue;
+
+    // 3. Recalculate invoice total from all line items
+    const totalResult = await tx.execute(sql`
+      SELECT COALESCE(SUM(amount_usd_cents), 0) as total
+      FROM invoice_line_items
+      WHERE billing_record_id = ${invoice.id}
+    `);
+    const newTotal = Number(totalResult.rows[0]?.total ?? 0);
+
+    // Reset retry metadata so the periodic job can pick up the repriced invoice
+    // even if max retries were previously exhausted at the old (higher) price.
+    await tx
+      .update(billingRecords)
+      .set({
+        amountUsdCents: newTotal,
+        retryCount: 0,
+        lastRetryAt: null,
+        failureReason: null,
+      })
+      .where(eq(billingRecords.id, invoice.id));
+  }
 }
 
 /**
@@ -776,6 +889,9 @@ export async function cancelScheduledTierChangeLocked(
 
   // Recalculate DRAFT to use current tier
   await recalculateDraftInvoice(tx, customerId, clock);
+
+  // Revert any FAILED invoices back to the current tier price
+  await recalculateFailedInvoiceSubscription(tx, customerId, serviceType, service.tier as ServiceTier);
 
   return { success: true };
 }

@@ -17,6 +17,7 @@ import { withCustomerLock, type LockedTransaction } from './locking';
 import { getOrCreateDraftInvoice, createAndChargeImmediately, updateDraftInvoiceAmount } from './invoices';
 import { processInvoicePayment } from './payments';
 import { issueCredit } from './credits';
+import { clearGracePeriod } from './grace-period';
 import { validateInvoiceBeforeCharging } from './validation';
 import { logValidationIssues } from './admin-notifications';
 import type { DBClock } from '@suiftly/shared/db-clock';
@@ -159,6 +160,11 @@ export async function handleSubscriptionBillingLocked(
         .update(customers)
         .set({ paidOnce: true })
         .where(eq(customers.customerId, customerId));
+
+      // Clear any active grace period from a previous service's failed payment.
+      // Without this, subscribing to a new service (with successful payment) would
+      // leave a stale grace period active until the old invoice is retried.
+      await clearGracePeriod(tx, customerId);
 
       // Calculate reconciliation credit for partial month (applied on next 1st)
       // Per BILLING_DESIGN.md: credit = amount_paid × (days_not_used / days_in_month)

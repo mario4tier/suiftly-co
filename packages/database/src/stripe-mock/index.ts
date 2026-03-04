@@ -64,6 +64,11 @@ export function setStripeForceMock(value: boolean): void {
   }
 }
 
+/** Check if force-mock mode is active (used by config endpoint to hide publishable key). */
+export function isStripeForceMock(): boolean {
+  return forceMock;
+}
+
 /**
  * Reset the cached real service instance.
  * Only needed for tests that switch between real and mock.

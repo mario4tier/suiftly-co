@@ -15,12 +15,13 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/dialog';
-import { ChevronRight, ChevronDown, User, ArrowUpDown, ArrowDownUp, Shield, Building2, AlertCircle, CreditCard, Trash2, ArrowUp, ArrowDown, Wallet } from 'lucide-react';
+import { ChevronRight, ChevronDown, User, ArrowUpDown, ArrowDownUp, Shield, Building2, AlertCircle, CreditCard, Trash2, ArrowUp, ArrowDown, Wallet, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { getTierPriceUsdCents } from '@suiftly/shared/pricing';
 import { SERVICE_TYPE, SPENDING_LIMIT } from '@suiftly/shared/constants';
 import type { InvoiceLineItem } from '@suiftly/shared/types';
 import { formatLineItemDescription, formatTierName } from '@/lib/billing-utils';
+import { StripeCardDialog } from '@/components/stripe-card-dialog';
 
 export const Route = createLazyFileRoute('/billing')({
   component: BillingPage,
@@ -37,6 +38,13 @@ function BillingPage() {
   const [withdrawModalOpen, setWithdrawModalOpen] = useState(false);
   const [spendingLimitModalOpen, setSpendingLimitModalOpen] = useState(false);
 
+  // Stripe card dialog state
+  const [cardDialogOpen, setCardDialogOpen] = useState(false);
+  const [cardClientSecret, setCardClientSecret] = useState('');
+  const [cardSetupIntentId, setCardSetupIntentId] = useState('');
+  const [cardSetupPending, setCardSetupPending] = useState(false);
+  const [removeConfirmId, setRemoveConfirmId] = useState<number | null>(null);
+
   // Form states
   const [depositAmount, setDepositAmount] = useState('');
   const [withdrawAmount, setWithdrawAmount] = useState('');
@@ -46,8 +54,15 @@ function BillingPage() {
   // Query balance
   const { data: balanceData, isLoading: balanceLoading, refetch: refetchBalance } = trpc.billing.getBalance.useQuery();
 
-  // Query services to check for pending subscriptions
-  const { data: services } = trpc.services.list.useQuery();
+  // Query services to check for pending subscriptions.
+  // Poll every 3s while any service has a pending invoice, so the banner
+  // disappears promptly after GM processes the payment (webhook → retry chain).
+  const { data: services } = trpc.services.list.useQuery(undefined, {
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      return data?.some(s => s.subPendingInvoiceId != null) ? 3000 : false;
+    },
+  });
 
   // Query next scheduled payment (DRAFT invoice)
   const { data: nextPaymentData, isLoading: nextPaymentLoading } = trpc.billing.getNextScheduledPayment.useQuery();
@@ -169,6 +184,14 @@ function BillingPage() {
     try {
       const result = await addPaymentMethodMutation.mutateAsync({ providerType });
 
+      if (providerType === 'stripe' && 'clientSecret' in result && 'setupIntentId' in result) {
+        // Open card dialog to collect card details
+        setCardClientSecret(result.clientSecret);
+        setCardSetupIntentId(result.setupIntentId);
+        setCardDialogOpen(true);
+        return;
+      }
+
       if (result.success) {
         const label = providerType === 'escrow' ? 'Crypto' : providerType === 'stripe' ? 'Credit Card' : 'PayPal';
         toast.success(`${label} payment method added`);
@@ -178,6 +201,47 @@ function BillingPage() {
     } catch (err: any) {
       toast.error(err.message || 'Failed to add payment method');
     }
+  };
+
+  // Handle card dialog success.
+  // The webhook (setup_intent.succeeded) updates the DB with card details (brand, last4).
+  // There's a race: confirmSetup() returns before the webhook is processed.
+  // Poll briefly so the UI shows the card with full details.
+  const handleCardDialogSuccess = () => {
+    setCardDialogOpen(false);
+    setCardSetupPending(true);
+    toast.success('Credit card added successfully');
+    refetchBalance();
+
+    // Poll until the webhook creates the payment method row with card details.
+    // The row is created by the setup_intent.succeeded webhook handler (not eagerly
+    // by addPaymentMethod). In mock mode this is instant; real Stripe may take 10-20s.
+    let attempts = 0;
+    const refreshServices = () => {
+      utils.services.list.invalidate();
+      utils.billing.getNextScheduledPayment.invalidate();
+    };
+    const poll = () => {
+      refetchPaymentMethods().then(({ data }) => {
+        attempts++;
+        const stripeMethod = data?.methods?.find((m: any) => m.providerType === 'stripe' && m.providerRef);
+        if (stripeMethod) {
+          setCardSetupPending(false);
+          // Card saved — webhook triggers GM to retry pending payments.
+          // Invalidate services/billing periodically to reflect payment state changes.
+          refreshServices();
+        } else if (attempts < 40) {
+          // 40 × 500ms = 20s — enough for real Stripe webhook delivery
+          setTimeout(poll, 500);
+        } else {
+          setCardSetupPending(false);
+          // Even if webhook didn't arrive, refresh services so UI picks up
+          // any payment changes from GM's periodic processor.
+          refreshServices();
+        }
+      });
+    };
+    poll();
   };
 
   // Handle remove payment method
@@ -340,7 +404,7 @@ function BillingPage() {
               <span className="text-[10px] invisible">placeholder</span>
             </div>
           )}
-          {!hasStripeMethod && (
+          {!hasStripeMethod && !cardSetupPending && (
             <div className="flex flex-col items-center gap-0.5">
               <Button
                 variant="outline"
@@ -357,13 +421,13 @@ function BillingPage() {
           )}
         </div>
 
-        {!paymentMethodsData?.methods?.length ? (
+        {!paymentMethodsData?.methods?.length && !cardSetupPending ? (
           <div className="text-center py-6 text-gray-500">
             No payment methods configured yet.
           </div>
         ) : (
           <div className="space-y-2">
-            {paymentMethodsData.methods.map((method: any, index: number) => (
+            {paymentMethodsData?.methods?.map((method: any, index: number) => (
               <div
                 key={method.id}
                 data-testid="payment-method-row"
@@ -378,28 +442,28 @@ function BillingPage() {
                   )}
                   <div>
                     <span className="text-sm font-medium">
-                      {method.providerType === 'escrow' ? 'Crypto' : method.providerType === 'stripe' ? 'Credit Card' : 'PayPal'}
+                      {method.providerType === 'escrow' ? 'Suiftly Escrow' : method.providerType === 'stripe' ? 'Credit Card' : 'PayPal'}
                     </span>
-                    {method.providerType === 'escrow' && method.info?.balanceUsdCents != null && (
-                      <span className="text-sm text-gray-500 ml-2">
-                        Balance: ${(method.info.balanceUsdCents / 100).toFixed(2)}
-                      </span>
-                    )}
                     {method.providerType === 'stripe' && method.info && typeof method.info === 'string' && (() => {
                       try {
                         const card = JSON.parse(method.info);
+                        const brand = card.brand ? card.brand.charAt(0).toUpperCase() + card.brand.slice(1) : 'Card';
                         return (
                           <span className="text-sm text-gray-500 ml-2">
-                            {card.brand?.charAt(0).toUpperCase() + card.brand?.slice(1)} ····{card.last4}
+                            {brand} ••••{card.last4 ?? '****'}
                           </span>
                         );
                       } catch { return null; }
                     })()}
-                    {method.providerType === 'stripe' && method.info && typeof method.info === 'object' && method.info !== null && (
-                      <span className="text-sm text-gray-500 ml-2">
-                        {(method.info as any).brand?.charAt(0).toUpperCase() + (method.info as any).brand?.slice(1)} ····{(method.info as any).last4}
-                      </span>
-                    )}
+                    {method.providerType === 'stripe' && method.info && typeof method.info === 'object' && method.info !== null && (() => {
+                      const card = method.info as any;
+                      const brand = card.brand ? card.brand.charAt(0).toUpperCase() + card.brand.slice(1) : 'Card';
+                      return (
+                        <span className="text-sm text-gray-500 ml-2">
+                          {brand} ••••{card.last4 ?? '****'}
+                        </span>
+                      );
+                    })()}
                   </div>
                 </div>
                 <div className="flex items-center gap-1">
@@ -425,7 +489,7 @@ function BillingPage() {
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => handleRemovePaymentMethod(method.id)}
+                      onClick={() => setRemoveConfirmId(method.id)}
                       aria-label="Remove"
                       className="text-red-500 hover:text-red-700"
                     >
@@ -439,6 +503,12 @@ function BillingPage() {
                 </div>
               </div>
             ))}
+          </div>
+        )}
+        {cardSetupPending && (
+          <div className="flex items-center gap-2 p-3 border border-dashed rounded-lg text-gray-500">
+            <Loader2 className="w-4 h-4 animate-spin" />
+            <span className="text-sm">Verifying card with Stripe...</span>
           </div>
         )}
       </Card>
@@ -903,6 +973,41 @@ function BillingPage() {
         </DialogContent>
       </Dialog>
 
+      {/* Stripe Card Dialog */}
+      <StripeCardDialog
+        open={cardDialogOpen}
+        onOpenChange={setCardDialogOpen}
+        clientSecret={cardClientSecret}
+        setupIntentId={cardSetupIntentId}
+        onSuccess={handleCardDialogSuccess}
+      />
+
+      {/* Remove Credit Card Confirmation Dialog */}
+      <Dialog open={removeConfirmId !== null} onOpenChange={(open) => { if (!open) setRemoveConfirmId(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Remove Credit Card</DialogTitle>
+            <DialogDescription>
+              This will remove your credit card from the payment methods. You can add a new one later.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <CancelButton onClick={() => setRemoveConfirmId(null)}>Cancel</CancelButton>
+            <Button
+              variant="destructive"
+              onClick={async () => {
+                if (removeConfirmId !== null) {
+                  await handleRemovePaymentMethod(removeConfirmId);
+                  setRemoveConfirmId(null);
+                }
+              }}
+            >
+              Remove
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       </div>
     </DashboardLayout>
   );
@@ -916,6 +1021,7 @@ interface Transaction {
   txDigest: string | null;
   createdAt: string;
   status?: string;
+  paidVia?: string | null;
   source: 'ledger' | 'invoice';
 }
 
@@ -941,8 +1047,14 @@ function TransactionItem({ transaction }: { transaction: Transaction }) {
     minute: '2-digit',
   });
 
-  // Determine if this is a positive (green) or negative (red) transaction
-  const isPositive = transaction.type === 'deposit' || transaction.type === 'credit';
+  // Color logic for billing history:
+  // - Deposits (escrow fund): green (money added)
+  // - Credits/refunds: green (money returned)
+  // - Charges (bills): neutral gray (standard obligation)
+  // - Withdrawals (escrow withdraw): red (money removed)
+  const isGreen = transaction.type === 'deposit' || transaction.type === 'credit';
+  const isRed = transaction.type === 'withdraw';
+  // Charges are neutral (not green, not red)
 
   // Show the actual description (item name)
   // Add (pending) suffix for pending invoices
@@ -968,8 +1080,8 @@ function TransactionItem({ transaction }: { transaction: Transaction }) {
           </div>
         </div>
         <div className="flex items-center gap-3 flex-shrink-0">
-          <span className={`text-sm font-medium ${isPositive ? 'text-green-600' : 'text-red-600'}`}>
-            {isPositive ? '+' : '-'}${Math.abs(transaction.amountUsd).toFixed(2)}
+          <span className={`text-sm font-medium ${isGreen ? 'text-green-600' : isRed ? 'text-red-600' : 'text-gray-900'}`}>
+            {isGreen ? '+' : isRed ? '-' : ''}${Math.abs(transaction.amountUsd).toFixed(2)}
           </span>
           {expanded ? <ChevronDown className="w-3 h-3 text-gray-400" /> : <ChevronRight className="w-3 h-3 text-gray-400" />}
         </div>
@@ -985,6 +1097,12 @@ function TransactionItem({ transaction }: { transaction: Transaction }) {
             <div className="flex gap-2">
               <span className="text-gray-500">Invoice:</span>
               <span>#{transaction.id}</span>
+            </div>
+          )}
+          {transaction.paidVia && (
+            <div className="flex gap-2">
+              <span className="text-gray-500">Paid via:</span>
+              <span>{transaction.paidVia}</span>
             </div>
           )}
           {transaction.txDigest && (

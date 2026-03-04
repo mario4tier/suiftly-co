@@ -38,6 +38,7 @@ export let fmax_apikey = 10;
 export let fmax_ipv4 = 20;
 export let fmax_cidr = 20;
 export let mockAuth = false;
+export let stripePublishableKey = '';
 
 // Track initialization state
 let isInitialized = false;
@@ -109,6 +110,7 @@ export async function loadFrontendConfig(): Promise<void> {
         fmax_ipv4 = parseInt(config.fmax_ipv4);
         fmax_cidr = parseInt(config.fmax_cidr);
         mockAuth = config.mockAuth === 'true';
+        stripePublishableKey = config.stripePublishableKey || '';
 
         isInitialized = true;
         console.log(`[Config] Configuration loaded successfully (version: ${fver}, mockAuth: ${mockAuth})`);

@@ -19,6 +19,7 @@ import {
   invoicePayments,
   serviceInstances,
   customerCredits,
+  adminNotifications,
 } from '@suiftly/database/schema';
 import { eq, and } from 'drizzle-orm';
 import {
@@ -28,6 +29,7 @@ import {
   trpcMutation,
   setClockTime,
   resetClock,
+  addStripePaymentMethod,
 } from './helpers/http.js';
 import { login, TEST_WALLET } from './helpers/auth.js';
 
@@ -303,12 +305,8 @@ describe('API: Stripe Webhook', () => {
       await restCall('POST', '/test/stripe/force-mock', { enabled: true });
       await restCall('POST', '/test/stripe/config', { forceChargeRequiresAction: true });
 
-      // Add Stripe as only payment method
-      await trpcMutation<any>(
-        'billing.addPaymentMethod',
-        { providerType: 'stripe' },
-        accessToken
-      );
+      // Add Stripe as only payment method (setup + webhook)
+      await addStripePaymentMethod(accessToken);
 
       // Subscribe — Stripe requires 3DS → payment pending
       const result = await trpcMutation<any>(
@@ -318,13 +316,13 @@ describe('API: Stripe Webhook', () => {
       );
       expect(result.result?.data?.paymentPending).toBe(true);
 
-      // Find the failed billing record with paymentActionUrl
+      // Find the pending billing record with paymentActionUrl (3DS stays pending)
       const records = await db.select()
         .from(billingRecords)
         .where(eq(billingRecords.customerId, customerId));
 
-      const failedRecord = records.find(r => r.status === 'failed' && r.paymentActionUrl);
-      if (!failedRecord) throw new Error('No failed billing record with paymentActionUrl found');
+      const failedRecord = records.find(r => r.status === 'pending' && r.paymentActionUrl);
+      if (!failedRecord) throw new Error('No pending billing record with paymentActionUrl found');
 
       // Extract the mock invoice ID from the paymentActionUrl
       // URL format: https://invoice.stripe.com/i/mock/in_mock_X
@@ -513,6 +511,69 @@ describe('API: Stripe Webhook', () => {
         .where(eq(invoicePayments.billingRecordId, billingRecordId));
       const stripePayments = payments.filter(p => p.sourceType === 'stripe');
       expect(stripePayments.length).toBe(1);
+    });
+
+    it('should auto-refund when billing record is already paid by another provider', async () => {
+      const { billingRecordId, stripeInvoiceId } = await subscribeWith3DSPending();
+
+      // Simulate: another provider (e.g., escrow) already paid this invoice
+      // before the customer completed 3DS on the Stripe-hosted page.
+      await db.update(billingRecords)
+        .set({ status: 'paid', amountPaidUsdCents: 900 })
+        .where(eq(billingRecords.id, billingRecordId));
+
+      // Send invoice.paid webhook (customer completed 3DS on stale page)
+      const event = {
+        id: `evt_inv_double_${Date.now()}`,
+        type: 'invoice.paid',
+        data: {
+          object: {
+            id: stripeInvoiceId,
+            amount_paid: 900,
+            metadata: { billing_record_id: String(billingRecordId) },
+          },
+        },
+      };
+
+      const result = await sendWebhookEvent(event);
+      expect(result.status).toBe(200);
+
+      // Verify: admin_notifications has DOUBLE_CHARGE_AUTO_REFUNDED
+      const notifications = await db.select()
+        .from(adminNotifications)
+        .where(
+          and(
+            eq(adminNotifications.code, 'DOUBLE_CHARGE_AUTO_REFUNDED'),
+            eq(adminNotifications.invoiceId, billingRecordId),
+          )
+        );
+      expect(notifications.length).toBeGreaterThanOrEqual(1);
+
+      // Verify: billing record stays paid (not double-credited)
+      const [record] = await db.select()
+        .from(billingRecords)
+        .where(eq(billingRecords.id, billingRecordId));
+      expect(record.status).toBe('paid');
+      expect(Number(record.amountPaidUsdCents)).toBe(900);
+    });
+  });
+
+  // =========================================================================
+  // Signature Failure — Admin Notification
+  // =========================================================================
+  describe('Signature failure notification', () => {
+    it('should create admin notification on invalid webhook signature', async () => {
+      const event = { id: 'evt_sig_fail_1', type: 'test', data: { object: {} } };
+      const result = await sendWebhookEvent(event, 't=1234567890,v1=invalidsignature');
+
+      expect(result.status).toBe(400);
+
+      // Verify: admin_notifications has WEBHOOK_SIGNATURE_FAILED
+      const notifications = await db.select()
+        .from(adminNotifications)
+        .where(eq(adminNotifications.code, 'WEBHOOK_SIGNATURE_FAILED'));
+      expect(notifications.length).toBeGreaterThanOrEqual(1);
+      expect(notifications[0].category).toBe('security');
     });
   });
 });

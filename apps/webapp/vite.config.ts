@@ -22,6 +22,11 @@ export default defineConfig({
         target: 'http://localhost:22700',
         changeOrigin: true,
       },
+      // Proxy test/stripe endpoints to backend (dev only, for mock card dialog)
+      '/test/stripe': {
+        target: 'http://localhost:22700',
+        changeOrigin: true,
+      },
     },
   },
 });

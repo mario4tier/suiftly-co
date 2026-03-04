@@ -15,10 +15,13 @@
  * This is called during the periodic billing job.
  */
 
-import { eq, and, sql, lt } from 'drizzle-orm';
+import { eq, and, sql, lt, isNull, isNotNull } from 'drizzle-orm';
 import type { Database } from '../db';
-import { billingRecords, ledgerEntries } from '../schema';
+import { billingRecords, ledgerEntries, serviceInstances, customers } from '../schema';
 import { voidInvoice } from './invoices';
+import { withCustomerLock } from './locking';
+import { logInternalError } from './admin-notifications';
+import { getStripeService } from '../stripe-mock/index.js';
 import type { DBClock } from '@suiftly/shared/db-clock';
 
 // ============================================================================
@@ -30,6 +33,14 @@ import type { DBClock } from '@suiftly/shared/db-clock';
  * Should be longer than the longest expected transaction (on-chain + network latency)
  */
 const STUCK_INVOICE_THRESHOLD_MINUTES = 10;
+
+/**
+ * How long to wait before timing out a 3DS-pending invoice.
+ * After this period, the Stripe invoice is voided and the billing record
+ * is marked as 'failed' so normal retry cycle picks it up with a fresh
+ * idempotency key.
+ */
+const THREEDS_TIMEOUT_HOURS = 48;
 
 // ============================================================================
 // Types
@@ -71,50 +82,83 @@ export async function reconcileStuckInvoices(
   const threshold = new Date(now.getTime() - STUCK_INVOICE_THRESHOLD_MINUTES * 60 * 1000);
 
   try {
-    // Find 'immediate' invoices that are 'pending' and older than threshold
+    // Find 'immediate' invoices that are 'pending' and older than threshold.
+    // Exclude invoices with a paymentActionUrl — these are waiting for the
+    // customer to complete 3DS verification on a Stripe-hosted page and should
+    // not be voided. The invoice.paid webhook will reconcile them.
     const stuckInvoices = await db
       .select()
       .from(billingRecords)
       .where(and(
         eq(billingRecords.billingType, 'immediate'),
         eq(billingRecords.status, 'pending'),
-        lt(billingRecords.createdAt, threshold)
+        lt(billingRecords.createdAt, threshold),
+        isNull(billingRecords.paymentActionUrl),
       ));
 
     for (const invoice of stuckInvoices) {
       try {
-        // Check if a ledger entry exists for this invoice (payment was processed)
-        const [ledgerEntry] = await db
-          .select()
-          .from(ledgerEntries)
-          .where(eq(ledgerEntries.invoiceId, invoice.id))
-          .limit(1);
+        // Acquire customer lock to prevent races with concurrent webhook handlers
+        await withCustomerLock(db, invoice.customerId, async (tx) => {
+          // Re-check invoice status after acquiring lock (may have been resolved by webhook)
+          const [freshInvoice] = await tx
+            .select()
+            .from(billingRecords)
+            .where(eq(billingRecords.id, invoice.id))
+            .limit(1);
 
-        if (ledgerEntry) {
-          // Payment was processed - mark invoice as paid
-          await db
-            .update(billingRecords)
-            .set({
-              status: 'paid',
-              amountPaidUsdCents: Number(invoice.amountUsdCents),
-              txDigest: ledgerEntry.txDigest,
-            })
-            .where(eq(billingRecords.id, invoice.id));
+          if (!freshInvoice || freshInvoice.status !== 'pending') {
+            return; // Already resolved
+          }
 
-          result.invoicesMarkedPaid++;
-          console.log(`[RECONCILIATION] Marked invoice ${invoice.id} as paid (found ledger entry)`);
-        } else {
-          // No payment found - crash occurred before on-chain charge
-          // Void the invoice (operation was never completed)
-          await db.transaction(async (tx) => {
+          // Check if a ledger entry exists for this invoice (payment was processed)
+          const [ledgerEntry] = await tx
+            .select()
+            .from(ledgerEntries)
+            .where(eq(ledgerEntries.invoiceId, invoice.id))
+            .limit(1);
+
+          if (ledgerEntry) {
+            // Payment was processed - mark invoice as paid and clear pending state
+            await tx
+              .update(billingRecords)
+              .set({
+                status: 'paid',
+                amountPaidUsdCents: Number(invoice.amountUsdCents),
+                txDigest: ledgerEntry.txDigest,
+              })
+              .where(eq(billingRecords.id, invoice.id));
+
+            // Clear subPendingInvoiceId on services referencing this invoice
+            await tx
+              .update(serviceInstances)
+              .set({ subPendingInvoiceId: null, paidOnce: true })
+              .where(
+                and(
+                  eq(serviceInstances.customerId, invoice.customerId),
+                  eq(serviceInstances.subPendingInvoiceId, invoice.id),
+                )
+              );
+
+            // Mark customer as having paid
+            await tx
+              .update(customers)
+              .set({ paidOnce: true })
+              .where(eq(customers.customerId, invoice.customerId));
+
+            result.invoicesMarkedPaid++;
+            console.log(`[RECONCILIATION] Marked invoice ${invoice.id} as paid (found ledger entry)`);
+          } else {
+            // No payment found - crash occurred before on-chain charge
+            // Void the invoice (operation was never completed)
             await voidInvoice(tx, invoice.id, 'Reconciliation: No payment found after timeout - operation incomplete');
-          });
 
-          result.invoicesMarkedVoided++;
-          console.log(`[RECONCILIATION] Voided invoice ${invoice.id} (no payment found after ${STUCK_INVOICE_THRESHOLD_MINUTES} minutes)`);
-        }
+            result.invoicesMarkedVoided++;
+            console.log(`[RECONCILIATION] Voided invoice ${invoice.id} (no payment found after ${STUCK_INVOICE_THRESHOLD_MINUTES} minutes)`);
+          }
 
-        result.invoicesReconciled++;
+          result.invoicesReconciled++;
+        });
       } catch (error) {
         const errorMsg = `Failed to reconcile invoice ${invoice.id}: ${error instanceof Error ? error.message : String(error)}`;
         result.errors.push(errorMsg);
@@ -124,6 +168,106 @@ export async function reconcileStuckInvoices(
 
     if (stuckInvoices.length > 0) {
       console.log(`[RECONCILIATION] Processed ${stuckInvoices.length} stuck invoices: ${result.invoicesMarkedPaid} paid, ${result.invoicesMarkedVoided} voided`);
+    }
+
+    // Handle 3DS invoices that exceeded the timeout.
+    // These are pending invoices with a paymentActionUrl (Stripe-hosted 3DS page)
+    // that the customer never completed. After timeout, void the Stripe invoice
+    // and mark as failed so normal retry cycle picks it up.
+    const threeDSThreshold = new Date(now.getTime() - THREEDS_TIMEOUT_HOURS * 60 * 60 * 1000);
+
+    const stale3DSInvoices = await db
+      .select()
+      .from(billingRecords)
+      .where(and(
+        eq(billingRecords.status, 'pending'),
+        isNotNull(billingRecords.paymentActionUrl),
+        lt(billingRecords.createdAt, threeDSThreshold),
+      ));
+
+    for (const invoice of stale3DSInvoices) {
+      try {
+        await withCustomerLock(db, invoice.customerId, async (tx) => {
+          // Re-check after acquiring lock
+          const [freshInvoice] = await tx
+            .select()
+            .from(billingRecords)
+            .where(eq(billingRecords.id, invoice.id))
+            .limit(1);
+
+          if (!freshInvoice || freshInvoice.status !== 'pending' || !freshInvoice.paymentActionUrl) {
+            return; // Already resolved
+          }
+
+          // Void the Stripe invoice to prevent late 3DS completion.
+          // Fire-and-forget: if voidInvoice fails, the auto-refund in
+          // handleInvoicePaid is the safety net.
+          try {
+            // Extract Stripe invoice ID from the hosted URL or billing record context.
+            // The paymentActionUrl is a Stripe-hosted invoice URL containing the invoice ID.
+            const stripeService = getStripeService();
+            // The Stripe invoice ID was stored as the providerReferenceId on the
+            // requires_action charge, but since the charge didn't succeed, no
+            // invoice_payments row was created. We need to void by the URL's invoice.
+            // For now, void is best-effort via the stripeInvoiceId if available.
+            // The stripeInvoiceId is embedded in the hosted URL path.
+            const urlMatch = freshInvoice.paymentActionUrl.match(/\/i\/([^/?]+)/);
+            const stripeInvoiceId = urlMatch?.[1];
+            if (stripeInvoiceId) {
+              await stripeService.voidInvoice(stripeInvoiceId);
+            }
+          } catch (voidErr) {
+            // Non-fatal — auto-refund in webhook handler is the safety net.
+            // But notify ops so they can manually void the Stripe invoice
+            // before the user completes the stale 3DS link.
+            console.error(`[RECONCILIATION] Failed to void Stripe invoice for 3DS timeout on invoice ${invoice.id}:`, voidErr);
+            const stripeInvoiceId = freshInvoice.paymentActionUrl.match(/\/i\/([^/?]+)/)?.[1];
+            try {
+              await logInternalError(tx, {
+                severity: 'warning',
+                category: 'billing',
+                code: 'THREEDS_VOID_FAILED',
+                message: `Failed to void Stripe invoice for 3DS timeout on billing record ${invoice.id} — stale 3DS link remains live`,
+                details: {
+                  stripeInvoiceId,
+                  paymentActionUrl: freshInvoice.paymentActionUrl,
+                  error: voidErr instanceof Error ? voidErr.message : String(voidErr),
+                },
+                customerId: invoice.customerId,
+                invoiceId: invoice.id,
+              });
+            } catch { /* don't let notification failure break reconciliation */ }
+          }
+
+          // Mark as failed so normal retry cycle picks it up with a fresh idempotency key
+          await tx.update(billingRecords).set({
+            status: 'failed',
+            paymentActionUrl: null,
+            failureReason: `3DS verification timed out after ${THREEDS_TIMEOUT_HOURS} hours`,
+          }).where(eq(billingRecords.id, invoice.id));
+
+          await logInternalError(tx, {
+            severity: 'warning',
+            category: 'billing',
+            code: 'THREEDS_TIMEOUT',
+            message: `3DS invoice ${invoice.id} timed out after ${THREEDS_TIMEOUT_HOURS}h — marked as failed for retry`,
+            details: { customerId: invoice.customerId, paymentActionUrl: invoice.paymentActionUrl },
+            customerId: invoice.customerId,
+            invoiceId: invoice.id,
+          });
+
+          result.invoicesReconciled++;
+          console.log(`[RECONCILIATION] 3DS timeout: invoice ${invoice.id} marked as failed after ${THREEDS_TIMEOUT_HOURS}h`);
+        });
+      } catch (error) {
+        const errorMsg = `Failed to reconcile 3DS invoice ${invoice.id}: ${error instanceof Error ? error.message : String(error)}`;
+        result.errors.push(errorMsg);
+        console.error(`[RECONCILIATION] ${errorMsg}`);
+      }
+    }
+
+    if (stale3DSInvoices.length > 0) {
+      console.log(`[RECONCILIATION] Processed ${stale3DSInvoices.length} stale 3DS invoices`);
     }
   } catch (error) {
     const errorMsg = `Reconciliation failed: ${error instanceof Error ? error.message : String(error)}`;

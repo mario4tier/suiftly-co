@@ -63,6 +63,16 @@ const getVaultDisplayName = (vaultType: string): string => {
   return vaultType.toUpperCase();
 };
 
+interface Notification {
+  notificationId: number;
+  severity: string;
+  code: string;
+  message: string;
+  details: any;
+  acknowledged: boolean;
+  createdAt: string;
+}
+
 export function KVCryptDebug() {
   const [gmVaults, setGmVaults] = useState<GMVaultStatus | null>(null);
   const [lmStatuses, setLmStatuses] = useState<LMStatus[]>([]);
@@ -70,6 +80,8 @@ export function KVCryptDebug() {
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [expandedLM, setExpandedLM] = useState<string | null>(null);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [showAcknowledged, setShowAcknowledged] = useState(false);
 
   // Adaptive polling based on user activity
   const { pollingInterval, markUpdated } = useAdminPollingContext();
@@ -97,9 +109,48 @@ export function KVCryptDebug() {
     }
   }, []);
 
+  const fetchNotifications = useCallback(async () => {
+    try {
+      const ack = showAcknowledged ? '' : '&acknowledged=false';
+      const [vaultRes, lmRes] = await Promise.all([
+        fetch(`/api/notifications?category=vault${ack}`),
+        fetch(`/api/notifications?category=lm-sync${ack}`),
+      ]);
+      const vaultData = vaultRes.ok ? await vaultRes.json() : { notifications: [] };
+      const lmData = lmRes.ok ? await lmRes.json() : { notifications: [] };
+      const all = [...(vaultData.notifications ?? []), ...(lmData.notifications ?? [])];
+      all.sort((a: Notification, b: Notification) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      setNotifications(all);
+    } catch {
+      setNotifications([]);
+    }
+  }, [showAcknowledged]);
+
+  const acknowledgeNotification = async (id: number) => {
+    await fetch(`/api/notifications/${id}/acknowledge`, { method: 'POST' });
+    fetchNotifications();
+  };
+
+  const acknowledgeAllVault = async () => {
+    await Promise.all([
+      fetch('/api/notifications/acknowledge-all?category=vault', { method: 'POST' }),
+      fetch('/api/notifications/acknowledge-all?category=lm-sync', { method: 'POST' }),
+    ]);
+    fetchNotifications();
+  };
+
+  const deleteAllAcknowledged = async () => {
+    await Promise.all([
+      fetch('/api/notifications/acknowledged?category=vault', { method: 'DELETE' }),
+      fetch('/api/notifications/acknowledged?category=lm-sync', { method: 'DELETE' }),
+    ]);
+    fetchNotifications();
+  };
+
   const handleRefresh = () => {
     setRefreshing(true);
     fetchData();
+    fetchNotifications();
   };
 
   const triggerSync = async () => {
@@ -135,13 +186,13 @@ export function KVCryptDebug() {
 
   useEffect(() => {
     const fetchAndMark = async () => {
-      await fetchData();
+      await Promise.all([fetchData(), fetchNotifications()]);
       markUpdated();
     };
     fetchAndMark();
     const interval = setInterval(fetchAndMark, pollingInterval);
     return () => clearInterval(interval);
-  }, [fetchData, pollingInterval, markUpdated]);
+  }, [fetchData, fetchNotifications, pollingInterval, markUpdated]);
 
   if (loading) {
     return (
@@ -471,6 +522,139 @@ export function KVCryptDebug() {
           </p>
         )}
       </div>
+
+      {/* Vault Notifications */}
+      {(notifications.length > 0 || showAcknowledged) && (
+        <div style={{
+          background: '#1e293b',
+          borderRadius: '0.5rem',
+          padding: '1rem',
+          marginTop: '1.5rem',
+        }}>
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            marginBottom: '0.75rem',
+            paddingBottom: '0.75rem',
+            borderBottom: '1px solid #334155',
+          }}>
+            <h2 style={{ fontSize: '1rem', color: '#f59e0b', margin: 0 }}>
+              Vault Notifications ({notifications.length})
+            </h2>
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+              <label style={{ color: '#64748b', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.25rem', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={showAcknowledged}
+                  onChange={(e) => setShowAcknowledged(e.target.checked)}
+                />
+                Show acknowledged
+              </label>
+              {notifications.some(n => !n.acknowledged) && (
+                <button
+                  onClick={acknowledgeAllVault}
+                  style={{
+                    background: '#3b82f6',
+                    color: 'white',
+                    border: 'none',
+                    padding: '0.25rem 0.625rem',
+                    borderRadius: '0.25rem',
+                    cursor: 'pointer',
+                    fontSize: '0.75rem',
+                  }}
+                >
+                  Acknowledge All
+                </button>
+              )}
+              {showAcknowledged && notifications.some(n => n.acknowledged) && (
+                <button
+                  onClick={deleteAllAcknowledged}
+                  style={{
+                    background: '#ef4444',
+                    color: 'white',
+                    border: 'none',
+                    padding: '0.25rem 0.625rem',
+                    borderRadius: '0.25rem',
+                    cursor: 'pointer',
+                    fontSize: '0.75rem',
+                  }}
+                >
+                  Delete Acknowledged
+                </button>
+              )}
+            </div>
+          </div>
+
+          {notifications.map((n) => (
+            <div
+              key={n.notificationId}
+              style={{
+                background: n.acknowledged ? '#0f172a' : '#1e3a5f22',
+                padding: '0.5rem 0.75rem',
+                borderRadius: '0.25rem',
+                borderLeft: `3px solid ${n.severity === 'error' ? '#ef4444' : n.severity === 'warning' ? '#f59e0b' : '#3b82f6'}`,
+                marginBottom: '0.375rem',
+                opacity: n.acknowledged ? 0.6 : 1,
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.125rem' }}>
+                    <span style={{
+                      color: n.severity === 'error' ? '#ef4444' : n.severity === 'warning' ? '#f59e0b' : '#3b82f6',
+                      fontWeight: 700,
+                      textTransform: 'uppercase',
+                      fontSize: '0.6875rem',
+                    }}>
+                      {n.severity}
+                    </span>
+                    <span style={{ color: '#475569', fontSize: '0.6875rem' }}>{n.code}</span>
+                    <span style={{ color: '#64748b', fontSize: '0.6875rem', marginLeft: 'auto' }}>
+                      {new Date(n.createdAt).toLocaleString()}
+                    </span>
+                  </div>
+                  <div style={{ color: '#e2e8f0', fontSize: '0.8125rem' }}>{n.message}</div>
+                  {n.details && (
+                    <pre style={{
+                      color: '#94a3b8',
+                      fontSize: '0.6875rem',
+                      margin: '0.375rem 0 0',
+                      background: '#0f172a',
+                      padding: '0.375rem',
+                      borderRadius: '0.25rem',
+                      overflow: 'auto',
+                      maxHeight: '80px',
+                      whiteSpace: 'pre-wrap',
+                      wordBreak: 'break-word',
+                    }}>
+                      {JSON.stringify(n.details, null, 2)}
+                    </pre>
+                  )}
+                </div>
+                {!n.acknowledged && (
+                  <div style={{ flexShrink: 0, marginLeft: '0.5rem' }}>
+                    <button
+                      onClick={() => acknowledgeNotification(n.notificationId)}
+                      style={{
+                        background: '#22c55e',
+                        color: 'white',
+                        border: 'none',
+                        padding: '0.125rem 0.5rem',
+                        borderRadius: '0.25rem',
+                        cursor: 'pointer',
+                        fontSize: '0.6875rem',
+                      }}
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Legend */}
       <div style={{

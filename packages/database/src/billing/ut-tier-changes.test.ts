@@ -41,6 +41,9 @@ import {
 import { unsafeAsLockedTransaction, toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData } from './test-helpers';
 import { processCancellationCleanup } from './cancellation-cleanup';
 import { processCustomerBilling } from './processor';
+import { processInvoicePayment } from './payments';
+import { issueCredit } from './credits';
+import { getCustomerProviders } from './providers';
 import type { BillingProcessorConfig } from './types';
 import { eq, and, sql } from 'drizzle-orm';
 
@@ -238,6 +241,198 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         where: eq(serviceInstances.instanceId, testInstanceId),
       });
       expect(service?.tier).toBe('pro'); // Still Pro
+    });
+
+    it('should void upgrade invoice on payment failure to prevent orphan retry', async () => {
+      // BUG: When upgrade payment fails, the FAILED invoice was left in the DB.
+      // The periodic retry job would later charge the customer for the pro-rated
+      // upgrade WITHOUT actually applying the tier change — customer pays for
+      // an upgrade they never receive.
+      // FIX: Void the invoice on failure so it's never retried.
+
+      suiService.setFailure(true, 'Insufficient balance');
+
+      const result = await handleTierUpgrade(
+        db,
+        testCustomerId,
+        'seal',
+        'enterprise',
+        paymentServices,
+        clock
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.invoiceId).toBeDefined();
+
+      // The upgrade invoice should be VOIDED, not left as FAILED
+      const invoice = await db.query.billingRecords.findFirst({
+        where: eq(billingRecords.id, result.invoiceId!),
+      });
+      expect(invoice?.status).toBe('voided');
+
+      // Tier should still be Pro (not upgraded)
+      const service = await db.query.serviceInstances.findFirst({
+        where: eq(serviceInstances.instanceId, testInstanceId),
+      });
+      expect(service?.tier).toBe('pro');
+
+      // Verify: no FAILED invoices remain that could be retried
+      const failedInvoices = await db
+        .select()
+        .from(billingRecords)
+        .where(and(
+          eq(billingRecords.customerId, testCustomerId),
+          eq(billingRecords.status, 'failed'),
+        ));
+      expect(failedInvoices).toHaveLength(0);
+    });
+
+    it('should restore credits when voiding upgrade invoice after payment failure (single-phase)', async () => {
+      // BUG: When upgrade payment fails, the invoice is voided (correct) but
+      // any credits that processInvoicePayment applied are NOT restored.
+      // The customer loses credit value attached to a voided invoice.
+      // FIX: Issue a reconciliation credit for consumed credits before voiding.
+
+      const CREDIT_AMOUNT_CENTS = 3000; // $30 credit
+
+      // 1. Issue a credit
+      const creditId = await issueCredit(
+        db,
+        testCustomerId,
+        CREDIT_AMOUNT_CENTS,
+        'promo',
+        'Test credit for upgrade failure'
+      );
+      expect(creditId).toBeGreaterThan(0);
+
+      // 2. Ensure escrow payment method exists (so provider chain has escrow)
+      await ensureEscrowPaymentMethod(db, testCustomerId);
+
+      // 3. Force escrow to fail — credits will be applied but payment won't complete
+      suiService.setFailure(true, 'Insufficient balance');
+
+      // 4. Attempt upgrade Pro → Enterprise (will partially pay with credits, then fail)
+      const result = await handleTierUpgrade(
+        db,
+        testCustomerId,
+        'seal',
+        'enterprise',
+        paymentServices,
+        clock
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.invoiceId).toBeDefined();
+
+      // 5. Invoice should be voided
+      const invoice = await db.query.billingRecords.findFirst({
+        where: eq(billingRecords.id, result.invoiceId!),
+      });
+      expect(invoice?.status).toBe('voided');
+
+      // 6. Verify: original credit was consumed (remainingAmountUsdCents = 0)
+      const originalCredit = await db.query.customerCredits.findFirst({
+        where: eq(customerCredits.creditId, creditId),
+      });
+      expect(Number(originalCredit?.remainingAmountUsdCents)).toBe(0);
+
+      // 7. Verify: reconciliation credit was issued to restore the consumed amount
+      const reconciliationCredits = await db.query.customerCredits.findMany({
+        where: and(
+          eq(customerCredits.customerId, testCustomerId),
+          eq(customerCredits.reason, 'reconciliation'),
+        ),
+      });
+
+      const restoredCredit = reconciliationCredits.find(c =>
+        Number(c.originalAmountUsdCents) === CREDIT_AMOUNT_CENTS
+      );
+      expect(restoredCredit).toBeDefined();
+      expect(Number(restoredCredit!.remainingAmountUsdCents)).toBe(CREDIT_AMOUNT_CENTS);
+    });
+
+    it('should restore credits when voiding upgrade invoice after payment failure (two-phase)', async () => {
+      // BUG: Two-phase upgrade path uses deleteUnpaidInvoice after payment failure,
+      // which hits FK violation from invoicePayments (credits applied) or silently
+      // burns credits. Should void + restore credits instead.
+
+      const CREDIT_AMOUNT_CENTS = 2500; // $25 credit
+
+      // Need to import the two-phase functions
+      const { prepareTierUpgradePhase1Locked, createUpgradeInvoiceCommitted, executeTierUpgradePhase2Locked } = await import('./tier-changes');
+
+      // 1. Issue a credit
+      const creditId = await issueCredit(
+        db,
+        testCustomerId,
+        CREDIT_AMOUNT_CENTS,
+        'promo',
+        'Test credit for two-phase upgrade failure'
+      );
+
+      // 2. Ensure escrow payment method
+      await ensureEscrowPaymentMethod(db, testCustomerId);
+
+      // 3. Phase 1: Prepare (with lock)
+      const tx = unsafeAsLockedTransaction(db);
+      const phase1 = await prepareTierUpgradePhase1Locked(
+        tx,
+        testCustomerId,
+        'seal',
+        'enterprise',
+        clock
+      );
+      expect(phase1.canProceed).toBe(true);
+
+      // Phase 1.5: Create invoice (outside lock, commits immediately)
+      const invoiceId = await createUpgradeInvoiceCommitted(
+        testCustomerId,
+        phase1,
+        clock
+      );
+
+      // 4. Force escrow to fail
+      suiService.setFailure(true, 'Insufficient balance');
+
+      // 5. Phase 2: Execute (with lock) — payment will fail
+      const result = await executeTierUpgradePhase2Locked(
+        tx,
+        testCustomerId,
+        'seal',
+        'enterprise',
+        'pro',
+        invoiceId,
+        paymentServices,
+        clock
+      );
+
+      expect(result.success).toBe(false);
+
+      // 6. Invoice should be voided (not deleted, not left as failed)
+      const invoice = await db.query.billingRecords.findFirst({
+        where: eq(billingRecords.id, invoiceId),
+      });
+      expect(invoice?.status).toBe('voided');
+
+      // 7. Original credit was consumed
+      const originalCredit = await db.query.customerCredits.findFirst({
+        where: eq(customerCredits.creditId, creditId),
+      });
+      expect(Number(originalCredit?.remainingAmountUsdCents)).toBe(0);
+
+      // 8. Reconciliation credit restores the consumed amount
+      const reconciliationCredits = await db.query.customerCredits.findMany({
+        where: and(
+          eq(customerCredits.customerId, testCustomerId),
+          eq(customerCredits.reason, 'reconciliation'),
+        ),
+      });
+
+      const restoredCredit = reconciliationCredits.find(c =>
+        Number(c.originalAmountUsdCents) === CREDIT_AMOUNT_CENTS
+      );
+      expect(restoredCredit).toBeDefined();
+      expect(Number(restoredCredit!.remainingAmountUsdCents)).toBe(CREDIT_AMOUNT_CENTS);
     });
 
     it('should reject downgrade attempt as upgrade', async () => {
@@ -1168,6 +1363,98 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         expect(service?.paidOnce).toBe(false);
       });
 
+      it('should recalculate FAILED monthly invoices on paidOnce=false immediate downgrade', async () => {
+        // Scenario: Customer subscribed Enterprise, paidOnce=false, has a FAILED monthly
+        // billing invoice at Enterprise price. Immediate downgrade to Starter should
+        // recalculate both the subPendingInvoiceId invoice AND the FAILED monthly invoice.
+
+        const ENTERPRISE_PRICE_CENTS = 18500; // $185
+        const STARTER_PRICE_CENTS = 900;      // $9
+
+        // 1. Create a pending billing record (subPendingInvoiceId)
+        const [pendingInvoice] = await db.insert(billingRecords).values({
+          customerId: testCustomerId,
+          billingPeriodStart: clock.now(),
+          billingPeriodEnd: clock.addDays(30),
+          amountUsdCents: ENTERPRISE_PRICE_CENTS,
+          type: 'charge',
+          status: 'pending',
+          dueDate: clock.now(),
+        }).returning();
+
+        await db.insert(invoiceLineItems).values({
+          billingRecordId: pendingInvoice.id,
+          itemType: 'subscription_enterprise',
+          serviceType: 'seal',
+          amountUsdCents: ENTERPRISE_PRICE_CENTS,
+          unitPriceUsdCents: ENTERPRISE_PRICE_CENTS,
+          quantity: 1,
+        });
+
+        // 2. Create a separate FAILED monthly billing invoice at Enterprise price
+        const [failedInvoice] = await db.insert(billingRecords).values({
+          customerId: testCustomerId,
+          billingPeriodStart: new Date('2025-01-01'),
+          billingPeriodEnd: new Date('2025-02-01'),
+          amountUsdCents: ENTERPRISE_PRICE_CENTS,
+          type: 'charge',
+          status: 'failed',
+          billingType: 'scheduled',
+          dueDate: new Date('2025-02-01'),
+        }).returning();
+
+        await db.insert(invoiceLineItems).values({
+          billingRecordId: failedInvoice.id,
+          itemType: 'subscription_enterprise',
+          serviceType: 'seal',
+          amountUsdCents: ENTERPRISE_PRICE_CENTS,
+          unitPriceUsdCents: ENTERPRISE_PRICE_CENTS,
+          quantity: 1,
+        });
+
+        // 3. Set service state to paidOnce=false with Enterprise tier
+        await db.update(serviceInstances)
+          .set({
+            tier: 'enterprise',
+            paidOnce: false,
+            subPendingInvoiceId: pendingInvoice.id,
+          })
+          .where(eq(serviceInstances.instanceId, testInstanceId));
+
+        // 4. Downgrade to Starter (immediate because paidOnce=false)
+        const result = await scheduleTierDowngrade(
+          db,
+          testCustomerId,
+          'seal',
+          'starter',
+          clock
+        );
+
+        expect(result.success).toBe(true);
+        expect(result.scheduledTier).toBe('starter');
+
+        // 5. Verify subPendingInvoiceId invoice was updated (existing behavior)
+        const updatedPending = await db.query.billingRecords.findFirst({
+          where: eq(billingRecords.id, pendingInvoice.id),
+        });
+        expect(updatedPending?.amountUsdCents).toBe(STARTER_PRICE_CENTS);
+
+        // 6. Verify FAILED monthly invoice was ALSO recalculated (new behavior)
+        const updatedFailed = await db.query.billingRecords.findFirst({
+          where: eq(billingRecords.id, failedInvoice.id),
+        });
+        expect(updatedFailed?.amountUsdCents).toBe(STARTER_PRICE_CENTS);
+        expect(updatedFailed?.status).toBe('failed'); // Status unchanged
+
+        // 7. Verify the FAILED invoice line item was updated
+        const failedLineItems = await db.query.invoiceLineItems.findMany({
+          where: eq(invoiceLineItems.billingRecordId, failedInvoice.id),
+        });
+        expect(failedLineItems).toHaveLength(1);
+        expect(failedLineItems[0]?.itemType).toBe('subscription_starter');
+        expect(failedLineItems[0]?.amountUsdCents).toBe(STARTER_PRICE_CENTS);
+      });
+
       it('should update pending billing record amount when upgrading (Copilot bug scenario)', async () => {
         // This test verifies the fix for the potential bug identified by Copilot:
         // When a user upgrades while having a pending payment, the pending billing
@@ -1250,6 +1537,253 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         // The pending billing record's amount now matches what reconcilePayments
         // will look for when it calculates: getTierPriceUsdCents('enterprise') = $185
       });
+    });
+  });
+
+  // ==========================================================================
+  // Credit Overpayment on Recalculated Invoice
+  // ==========================================================================
+
+  describe('Credit Overpayment Recovery', () => {
+    it('should mark invoice paid and issue refund credit when credits exceed recalculated amount', async () => {
+      // Scenario:
+      // 1. Customer on Enterprise (paidOnce=true), has $50 in credits
+      // 2. Monthly billing applies $50 credit, escrow charge for remaining $135 fails
+      // 3. Invoice: amountUsdCents=18500, amountPaidUsdCents=5000, status='failed'
+      // 4. Customer downgrades to Starter ($9)
+      // 5. recalculateFailedInvoiceSubscription lowers amountUsdCents to 900
+      // 6. Now amountPaidUsdCents(5000) > amountUsdCents(900)
+      // 7. On retry: should mark invoice paid AND issue $41 refund credit
+
+      const ENTERPRISE_PRICE_CENTS = 18500;
+      const STARTER_PRICE_CENTS = 900;
+      const CREDIT_AMOUNT_CENTS = 5000; // $50
+
+      // Set up: Enterprise tier, paidOnce=true
+      await db.update(serviceInstances)
+        .set({ tier: 'enterprise', paidOnce: true })
+        .where(eq(serviceInstances.instanceId, testInstanceId));
+
+      // 1. Issue credits to the customer
+      const tx = unsafeAsLockedTransaction(db);
+      const creditId = await issueCredit(tx, testCustomerId, CREDIT_AMOUNT_CENTS, 'reconciliation', 'Test credit');
+      // Mark the credit as consumed (to simulate applyCreditsToInvoice)
+      await db.update(customerCredits)
+        .set({ remainingAmountUsdCents: 0 })
+        .where(eq(customerCredits.creditId, creditId));
+
+      // 2. Create FAILED invoice at Enterprise price with credits already applied
+      const [failedInvoice] = await db.insert(billingRecords).values({
+        customerId: testCustomerId,
+        billingPeriodStart: new Date('2025-01-01'),
+        billingPeriodEnd: new Date('2025-02-01'),
+        amountUsdCents: ENTERPRISE_PRICE_CENTS,
+        amountPaidUsdCents: CREDIT_AMOUNT_CENTS, // $50 already paid via credits
+        type: 'charge',
+        status: 'failed',
+        billingType: 'scheduled',
+        dueDate: new Date('2025-02-01'),
+        failureReason: 'Insufficient balance',
+        retryCount: 1,
+      }).returning();
+
+      await db.insert(invoiceLineItems).values({
+        billingRecordId: failedInvoice.id,
+        itemType: 'subscription_enterprise',
+        serviceType: 'seal',
+        amountUsdCents: ENTERPRISE_PRICE_CENTS,
+        unitPriceUsdCents: ENTERPRISE_PRICE_CENTS,
+        quantity: 1,
+      });
+
+      // Record the credit payment in invoicePayments
+      await db.insert(invoicePayments).values({
+        billingRecordId: failedInvoice.id,
+        sourceType: 'credit',
+        creditId: creditId,
+        amountUsdCents: CREDIT_AMOUNT_CENTS,
+      });
+
+      // 3. Schedule downgrade to Starter → recalculates FAILED invoice
+      const result = await scheduleTierDowngrade(
+        db,
+        testCustomerId,
+        'seal',
+        'starter',
+        clock
+      );
+      expect(result.success).toBe(true);
+
+      // Verify: invoice amount was recalculated to Starter price
+      const recalcedInvoice = await db.query.billingRecords.findFirst({
+        where: eq(billingRecords.id, failedInvoice.id),
+      });
+      expect(recalcedInvoice?.amountUsdCents).toBe(STARTER_PRICE_CENTS);
+      // amountPaidUsdCents is still $50 — exceeds the new $9 total
+      expect(recalcedInvoice?.amountPaidUsdCents).toBe(CREDIT_AMOUNT_CENTS);
+
+      // 4. Retry the invoice — should detect overpayment
+      const providers = await getCustomerProviders(testCustomerId, paymentServices, tx, clock);
+      const payResult = await processInvoicePayment(tx, failedInvoice.id, providers, clock);
+
+      // Should be marked as fully paid
+      expect(payResult.fullyPaid).toBe(true);
+
+      // 5. Verify invoice is now marked 'paid' (not stuck as 'failed')
+      const finalInvoice = await db.query.billingRecords.findFirst({
+        where: eq(billingRecords.id, failedInvoice.id),
+      });
+      expect(finalInvoice?.status).toBe('paid');
+
+      // 6. Verify refund credit was issued for the overpayment ($50 - $9 = $41)
+      const overpaymentCents = CREDIT_AMOUNT_CENTS - STARTER_PRICE_CENTS; // 4100
+      const refundCredits = await db.query.customerCredits.findMany({
+        where: and(
+          eq(customerCredits.customerId, testCustomerId),
+          eq(customerCredits.reason, 'reconciliation'),
+        ),
+      });
+
+      // Find the refund credit (not the original test credit)
+      const refundCredit = refundCredits.find(c =>
+        Number(c.originalAmountUsdCents) === overpaymentCents
+      );
+      expect(refundCredit).toBeDefined();
+      expect(Number(refundCredit!.originalAmountUsdCents)).toBe(overpaymentCents);
+      expect(Number(refundCredit!.remainingAmountUsdCents)).toBe(overpaymentCents);
+    });
+  });
+
+  describe('Overpayment Credit Idempotency', () => {
+    it('should NOT issue duplicate overpayment credit when processInvoicePayment is called twice on a paid invoice', async () => {
+      // BUG: processInvoicePayment's early-return path issues a reconciliation
+      // credit every time it's called on an invoice where alreadyPaid >= totalAmount.
+      // A second call on an already-paid invoice mints a duplicate credit.
+
+      const ENTERPRISE_PRICE_CENTS = 18500; // $185
+      const STARTER_PRICE_CENTS = 900;    // $9
+      const CREDIT_AMOUNT_CENTS = 5000; // $50
+
+      const tx = unsafeAsLockedTransaction(db);
+
+      // 1. Create a FAILED invoice at Enterprise price with $50 credit already applied
+      const creditId = await issueCredit(db, testCustomerId, CREDIT_AMOUNT_CENTS, 'promo', 'Test credit for idempotency');
+
+      const [failedInvoice] = await db.insert(billingRecords).values({
+        customerId: testCustomerId,
+        amountUsdCents: ENTERPRISE_PRICE_CENTS,
+        amountPaidUsdCents: CREDIT_AMOUNT_CENTS, // $50 already paid via credits
+        status: 'failed',
+        type: 'charge',
+        billingPeriodStart: new Date('2025-01-01'),
+        billingPeriodEnd: new Date('2025-01-31'),
+        dueDate: new Date('2025-02-01'),
+      }).returning();
+
+      await db.insert(invoiceLineItems).values({
+        billingRecordId: failedInvoice.id,
+        itemType: 'subscription_enterprise',
+        serviceType: 'seal',
+        amountUsdCents: ENTERPRISE_PRICE_CENTS,
+        unitPriceUsdCents: ENTERPRISE_PRICE_CENTS,
+        quantity: 1,
+      });
+
+      await db.insert(invoicePayments).values({
+        billingRecordId: failedInvoice.id,
+        sourceType: 'credit',
+        creditId: creditId,
+        amountUsdCents: CREDIT_AMOUNT_CENTS,
+      });
+
+      // 2. Downgrade to Starter → recalculates to $9
+      await scheduleTierDowngrade(db, testCustomerId, 'seal', 'starter', clock);
+
+      // 3. First call to processInvoicePayment → should mark paid + issue overpayment credit
+      const providers = await getCustomerProviders(testCustomerId, paymentServices, tx, clock);
+      const result1 = await processInvoicePayment(tx, failedInvoice.id, providers, clock);
+      expect(result1.fullyPaid).toBe(true);
+
+      // Count reconciliation credits after first call
+      const creditsAfterFirst = await db.query.customerCredits.findMany({
+        where: and(
+          eq(customerCredits.customerId, testCustomerId),
+          eq(customerCredits.reason, 'reconciliation'),
+        ),
+      });
+      const overpaymentCreditsAfterFirst = creditsAfterFirst.filter(c =>
+        (c.description ?? '').includes('Overpayment refund')
+      );
+      expect(overpaymentCreditsAfterFirst).toHaveLength(1);
+
+      // 4. Second call to processInvoicePayment on same (now paid) invoice
+      const result2 = await processInvoicePayment(tx, failedInvoice.id, providers, clock);
+      expect(result2.fullyPaid).toBe(true);
+
+      // 5. Should NOT have minted a second overpayment credit
+      const creditsAfterSecond = await db.query.customerCredits.findMany({
+        where: and(
+          eq(customerCredits.customerId, testCustomerId),
+          eq(customerCredits.reason, 'reconciliation'),
+        ),
+      });
+      const overpaymentCreditsAfterSecond = creditsAfterSecond.filter(c =>
+        (c.description ?? '').includes('Overpayment refund')
+      );
+      expect(overpaymentCreditsAfterSecond).toHaveLength(1); // Still exactly 1, not 2
+    });
+  });
+
+  describe('Repriced Invoice Retry Reset', () => {
+    it('should reset retryCount on repriced FAILED invoices so periodic job can retry them', async () => {
+      // BUG: recalculateFailedInvoiceSubscription lowers the invoice amount
+      // but doesn't reset retryCount/lastRetryAt. If the invoice already
+      // exhausted max retries, the periodic job skips it permanently even
+      // though it's now affordable after the tier downgrade.
+
+      const ENTERPRISE_PRICE_CENTS = 18500; // $185
+      const STARTER_PRICE_CENTS = 900;    // $9
+
+      // 1. Create a FAILED invoice that has exhausted retries
+      const [failedInvoice] = await db.insert(billingRecords).values({
+        customerId: testCustomerId,
+        amountUsdCents: ENTERPRISE_PRICE_CENTS,
+        amountPaidUsdCents: 0,
+        status: 'failed',
+        type: 'charge',
+        billingPeriodStart: new Date('2025-01-01'),
+        billingPeriodEnd: new Date('2025-01-31'),
+        dueDate: new Date('2025-02-01'),
+        retryCount: 10, // Exhausted max retries
+        lastRetryAt: new Date('2025-02-10'),
+        failureReason: 'Insufficient balance',
+      }).returning();
+
+      await db.insert(invoiceLineItems).values({
+        billingRecordId: failedInvoice.id,
+        itemType: 'subscription_enterprise',
+        serviceType: 'seal',
+        amountUsdCents: ENTERPRISE_PRICE_CENTS,
+        unitPriceUsdCents: ENTERPRISE_PRICE_CENTS,
+        quantity: 1,
+      });
+
+      // 2. Downgrade to Starter → recalculates invoice to $9
+      const result = await scheduleTierDowngrade(
+        db, testCustomerId, 'seal', 'starter', clock
+      );
+      expect(result.success).toBe(true);
+
+      // 3. Verify invoice amount was recalculated
+      const recalcedInvoice = await db.query.billingRecords.findFirst({
+        where: eq(billingRecords.id, failedInvoice.id),
+      });
+      expect(recalcedInvoice?.amountUsdCents).toBe(STARTER_PRICE_CENTS);
+
+      // 4. Verify retry metadata was reset so periodic job can pick it up
+      expect(recalcedInvoice?.retryCount).toBe(0);
+      expect(recalcedInvoice?.lastRetryAt).toBeNull();
+      expect(recalcedInvoice?.failureReason).toBeNull();
     });
   });
 });

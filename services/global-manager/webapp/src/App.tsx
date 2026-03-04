@@ -289,8 +289,8 @@ function App() {
                     )}
                     <div style={{ color: '#475569', fontSize: '0.7rem', marginTop: '0.25rem' }}>
                       {new Date(n.createdAt).toLocaleString()}
-                      {n.customerId && ` | Customer: ${n.customerId}`}
-                      {n.invoiceId && ` | Invoice: ${n.invoiceId}`}
+                      {n.customerId && <> | Customer: <a href={`/customer?id=${n.customerId}`} target="_blank" rel="noopener noreferrer" style={{ color: '#60a5fa', textDecoration: 'none' }}>{n.customerId}</a></>}
+                      {n.invoiceId && <> | Invoice: <a href={`/invoice?id=${n.invoiceId}`} target="_blank" rel="noopener noreferrer" style={{ color: '#60a5fa', textDecoration: 'none' }}>#{n.invoiceId}</a></>}
                     </div>
                   </div>
                   <div style={{ display: 'flex', gap: '0.25rem' }}>

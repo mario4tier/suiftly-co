@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useAdminPollingContext } from '../contexts/AdminPollingContext';
+import { formatCents, statusBadgeColor } from '../components/DetailComponents';
 
 // ============================================================================
 // Types
@@ -102,10 +103,6 @@ interface Notification {
 // Helpers
 // ============================================================================
 
-function formatCents(cents: number): string {
-  return `$${(cents / 100).toFixed(2)}`;
-}
-
 function alarmTypeColor(type: string): string {
   switch (type) {
     case 'failed_exhausted': return '#ef4444';
@@ -143,17 +140,6 @@ function severityBorderColor(severity: string): string {
     case 'warning': return '#78350f';
     case 'info': return '#1e3a5f';
     default: return '#334155';
-  }
-}
-
-function statusBadgeColor(color: string): { bg: string; text: string } {
-  switch (color) {
-    case 'green': return { bg: '#064e3b', text: '#34d399' };
-    case 'red': return { bg: '#7f1d1d', text: '#fca5a5' };
-    case 'amber': return { bg: '#78350f', text: '#fcd34d' };
-    case 'blue': return { bg: '#1e3a5f', text: '#93c5fd' };
-    case 'gray': return { bg: '#374151', text: '#9ca3af' };
-    default: return { bg: '#374151', text: '#9ca3af' };
   }
 }
 
@@ -245,13 +231,13 @@ export function BillingMonitor() {
     fetchNotifications();
   };
 
-  const deleteNotification = async (id: number) => {
-    await fetch(`/api/notifications/${id}`, { method: 'DELETE' });
+  const acknowledgeAllBilling = async () => {
+    await fetch('/api/notifications/acknowledge-all?category=billing', { method: 'POST' });
     fetchNotifications();
   };
 
-  const acknowledgeAllBilling = async () => {
-    await fetch('/api/notifications/acknowledge-all?category=billing', { method: 'POST' });
+  const deleteAllAcknowledged = async () => {
+    await fetch('/api/notifications/acknowledged?category=billing', { method: 'DELETE' });
     fetchNotifications();
   };
 
@@ -453,7 +439,7 @@ export function BillingMonitor() {
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ color: '#e2e8f0', fontSize: '0.8125rem' }}>{item.message}</div>
                     <div style={{ color: '#64748b', fontSize: '0.75rem', marginTop: '0.125rem' }}>
-                      Customer {item.customerId}
+                      Customer <a href={`/customer?id=${item.customerId}`} target="_blank" rel="noopener noreferrer" style={{ color: '#60a5fa', textDecoration: 'none' }}>{item.customerId}</a>
                       {item.amountCents > 0 && <> &middot; {formatCents(item.amountCents)}</>}
                       {item.daysSinceLastRetry !== null && <> &middot; {item.daysSinceLastRetry}d since last retry</>}
                       {item.daysSinceLastRetry === null && item.daysSinceCreated !== null && <> &middot; {item.daysSinceCreated}d since created</>}
@@ -540,6 +526,22 @@ export function BillingMonitor() {
                   Acknowledge All
                 </button>
               )}
+              {showAcknowledged && notifications.some(n => n.acknowledged) && (
+                <button
+                  onClick={deleteAllAcknowledged}
+                  style={{
+                    background: '#ef4444',
+                    color: 'white',
+                    border: 'none',
+                    padding: '0.25rem 0.625rem',
+                    borderRadius: '0.25rem',
+                    cursor: 'pointer',
+                    fontSize: '0.75rem',
+                  }}
+                >
+                  Delete Acknowledged
+                </button>
+              )}
             </div>
 
             {notifications.length === 0 ? (
@@ -592,12 +594,12 @@ export function BillingMonitor() {
                       )}
                       <div style={{ color: '#475569', fontSize: '0.6875rem', marginTop: '0.125rem' }}>
                         {new Date(n.createdAt).toLocaleString()}
-                        {n.customerId && ` | Customer: ${n.customerId}`}
-                        {n.invoiceId && ` | Invoice: ${n.invoiceId}`}
+                        {n.customerId && <> | Customer: <a href={`/customer?id=${n.customerId}`} target="_blank" rel="noopener noreferrer" style={{ color: '#60a5fa', textDecoration: 'none' }}>{n.customerId}</a></>}
+                        {n.invoiceId && <> | Invoice: <a href={`/invoice?id=${n.invoiceId}`} target="_blank" rel="noopener noreferrer" style={{ color: '#60a5fa', textDecoration: 'none' }}>#{n.invoiceId}</a></>}
                       </div>
                     </div>
-                    <div style={{ display: 'flex', gap: '0.25rem', flexShrink: 0, marginLeft: '0.5rem' }}>
-                      {!n.acknowledged && (
+                    {!n.acknowledged && (
+                      <div style={{ flexShrink: 0, marginLeft: '0.5rem' }}>
                         <button
                           onClick={() => acknowledgeNotification(n.notificationId)}
                           style={{
@@ -612,22 +614,8 @@ export function BillingMonitor() {
                         >
                           Dismiss
                         </button>
-                      )}
-                      <button
-                        onClick={() => deleteNotification(n.notificationId)}
-                        style={{
-                          background: '#64748b',
-                          color: 'white',
-                          border: 'none',
-                          padding: '0.125rem 0.5rem',
-                          borderRadius: '0.25rem',
-                          cursor: 'pointer',
-                          fontSize: '0.6875rem',
-                        }}
-                      >
-                        Delete
-                      </button>
-                    </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               ))
@@ -768,11 +756,11 @@ function InvoiceRow({ invoice: inv, badge, isExpanded, onToggle }: {
         onMouseEnter={(e) => { if (!isExpanded) e.currentTarget.style.background = '#1a2540'; }}
         onMouseLeave={(e) => { if (!isExpanded) e.currentTarget.style.background = 'transparent'; }}
       >
-        <td style={{ padding: '0.5rem 0.75rem', color: '#e2e8f0', whiteSpace: 'nowrap' }}>
-          #{inv.id}
+        <td style={{ padding: '0.5rem 0.75rem', whiteSpace: 'nowrap' }}>
+          <a href={`/invoice?id=${inv.id}`} target="_blank" rel="noopener noreferrer" style={{ color: '#60a5fa', textDecoration: 'none' }}>#{inv.id}</a>
         </td>
         <td style={{ padding: '0.5rem 0.75rem', color: '#94a3b8' }}>
-          {inv.customerId}
+          <a href={`/customer?id=${inv.customerId}`} target="_blank" rel="noopener noreferrer" style={{ color: '#60a5fa', textDecoration: 'none' }}>{inv.customerId}</a>
         </td>
         <td style={{ padding: '0.5rem 0.75rem', color: '#e2e8f0', whiteSpace: 'nowrap' }}>
           {formatCents(inv.amountCents)}

@@ -64,7 +64,7 @@ export const billingStatusEnum = pgEnum('billing_status', [
 // Billing type (distinguishes invoice creation context)
 // Used for reconciliation: immediate invoices need on-chain verification if stuck pending
 export const billingTypeEnum = pgEnum('billing_type', [
-  'immediate', // Mid-cycle charges (upgrades, first subscription) - void on failure
+  'immediate', // Mid-cycle charges (upgrades, first subscription) - voided by reconciliation if stuck pending with no payment evidence
   'scheduled'  // Monthly billing (from DRAFT) - retry until paid
 ]);
 
