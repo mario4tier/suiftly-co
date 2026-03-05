@@ -17,8 +17,9 @@
 
 import { eq, and, sql, lt, isNull, isNotNull } from 'drizzle-orm';
 import type { Database } from '../db';
-import { billingRecords, ledgerEntries, serviceInstances, customers } from '../schema';
+import { billingRecords, ledgerEntries, escrowTransactions, invoicePayments } from '../schema';
 import { voidInvoice } from './invoices';
+import { finalizeSuccessfulPayment } from './payments';
 import { withCustomerLock } from './locking';
 import { logInternalError } from './admin-notifications';
 import { getStripeService } from '../stripe-mock/index.js';
@@ -119,32 +120,44 @@ export async function reconcileStuckInvoices(
             .limit(1);
 
           if (ledgerEntry) {
-            // Payment was processed - mark invoice as paid and clear pending state
+            // Payment was processed - mark invoice as paid
+            const invoiceAmountCents = Number(invoice.amountUsdCents);
+
             await tx
               .update(billingRecords)
               .set({
                 status: 'paid',
-                amountPaidUsdCents: Number(invoice.amountUsdCents),
+                amountPaidUsdCents: invoiceAmountCents,
                 txDigest: ledgerEntry.txDigest,
               })
               .where(eq(billingRecords.id, invoice.id));
 
-            // Clear subPendingInvoiceId on services referencing this invoice
-            await tx
-              .update(serviceInstances)
-              .set({ subPendingInvoiceId: null, paidOnce: true })
-              .where(
-                and(
-                  eq(serviceInstances.customerId, invoice.customerId),
-                  eq(serviceInstances.subPendingInvoiceId, invoice.id),
-                )
-              );
+            // Create invoice_payments row for audit trail.
+            // Without this, "paid" invoices have zero payment history, causing
+            // getInvoicePaidAmount to return 0 and blocking refund/excess-credit logic.
+            if (ledgerEntry.txDigest) {
+              // Find the escrow_transactions row matching this on-chain tx digest
+              const [escrowTx] = await tx
+                .select({ txId: escrowTransactions.txId })
+                .from(escrowTransactions)
+                .where(eq(escrowTransactions.txDigest, ledgerEntry.txDigest))
+                .limit(1);
 
-            // Mark customer as having paid
-            await tx
-              .update(customers)
-              .set({ paidOnce: true })
-              .where(eq(customers.customerId, invoice.customerId));
+              if (escrowTx) {
+                await tx.insert(invoicePayments).values({
+                  billingRecordId: invoice.id,
+                  sourceType: 'escrow',
+                  escrowTransactionId: escrowTx.txId,
+                  creditId: null,
+                  providerReferenceId: null,
+                  amountUsdCents: invoiceAmountCents,
+                });
+              }
+            }
+
+            // Finalize: clear subPendingInvoiceId, set paidOnce, clear grace
+            // period, issue reconciliation credit, recalculate DRAFT.
+            await finalizeSuccessfulPayment(tx, invoice.customerId, invoice.id, clock);
 
             result.invoicesMarkedPaid++;
             console.log(`[RECONCILIATION] Marked invoice ${invoice.id} as paid (found ledger entry)`);

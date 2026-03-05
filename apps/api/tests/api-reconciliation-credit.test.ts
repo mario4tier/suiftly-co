@@ -139,7 +139,14 @@ describe('API: Reconciliation Credit Calculation', () => {
       });
       expect(credits.length).toBe(0);
 
-      // ---- Step 3: Deposit funds - triggers reconcilePayments ----
+      // ---- Step 3: Add escrow payment method + deposit funds ----
+      // An escrow payment method is required for the provider chain to have a provider
+      await trpcMutation<any>(
+        'billing.addPaymentMethod',
+        { providerType: 'escrow' },
+        accessToken
+      );
+
       const depositResult = await trpcMutation<any>(
         'billing.deposit',
         { amountUsd: 300 }, // $300 to cover enterprise ($185)
@@ -284,7 +291,13 @@ describe('API: Reconciliation Credit Calculation', () => {
       });
       expect(service?.tier).toBe('starter');
 
-      // ---- Deposit and pay ----
+      // ---- Add escrow payment method + deposit and pay ----
+      await trpcMutation<any>(
+        'billing.addPaymentMethod',
+        { providerType: 'escrow' },
+        accessToken
+      );
+
       const depositResult = await trpcMutation<any>(
         'billing.deposit',
         { amountUsd: 50 }, // $50 to cover starter ($9)
@@ -336,7 +349,13 @@ describe('API: Reconciliation Credit Calculation', () => {
         accessToken
       );
 
-      // ---- Step 2: Deposit funds and reconcile ----
+      // ---- Step 2: Add escrow payment method, deposit funds and reconcile ----
+      await trpcMutation<any>(
+        'billing.addPaymentMethod',
+        { providerType: 'escrow' },
+        accessToken
+      );
+
       await trpcMutation<any>(
         'billing.deposit',
         { amountUsd: 50 },

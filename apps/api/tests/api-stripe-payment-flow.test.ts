@@ -565,7 +565,7 @@ describe('API: Stripe Payment Flow', () => {
   // Monthly billing clears subPendingInvoiceId gate
   // =========================================================================
   describe('Monthly billing clears pending invoice gate', () => {
-    it('should allow service enable after monthly billing pays even if initial invoice failed', async () => {
+    it('should allow service enable after monthly billing pays and toggleService retries initial invoice', async () => {
       await setClockTime('2025-01-15T00:00:00Z');
 
       // Subscribe WITHOUT a payment method → initial payment fails
@@ -604,7 +604,31 @@ describe('API: Stripe Payment Flow', () => {
         );
       expect(paidRecords.length).toBeGreaterThanOrEqual(1);
 
-      // Verify: subPendingInvoiceId is cleared by monthly billing
+      // Monthly billing does NOT blanket-clear subPendingInvoiceId — the initial
+      // subscription invoice is a separate debt. The gate clears only when that
+      // specific invoice is paid, preserving reconciliation credit correctness.
+      service = await db.query.serviceInstances.findFirst({
+        where: and(
+          eq(serviceInstances.customerId, customerId),
+          eq(serviceInstances.serviceType, 'seal'),
+        ),
+      });
+      // subPendingInvoiceId may or may not be cleared depending on whether the
+      // periodic retry picked up the initial invoice (GM's async retry may have
+      // poisoned lastRetryAt with real time). Either way, toggleService will
+      // retry the pending invoice.
+
+      // Toggle service → triggers retryPendingInvoice → pays initial invoice
+      // via Stripe (API mock, forceMock=true) → clears gate + issues
+      // reconciliation credit for the partial first month.
+      const toggleResult = await trpcMutation<any>(
+        'services.toggleService',
+        { serviceType: 'seal', enabled: true },
+        accessToken
+      );
+      expect(toggleResult.result?.data?.isUserEnabled).toBe(true);
+
+      // Verify: gate is now cleared
       service = await db.query.serviceInstances.findFirst({
         where: and(
           eq(serviceInstances.customerId, customerId),
@@ -614,19 +638,11 @@ describe('API: Stripe Payment Flow', () => {
       expect(service?.subPendingInvoiceId).toBeNull();
       expect(service?.paidOnce).toBe(true);
 
-      // Verify: user can now enable the service
-      const toggleResult = await trpcMutation<any>(
-        'services.toggleService',
-        { serviceType: 'seal', enabled: true },
-        accessToken
-      );
-      expect(toggleResult.result?.data?.isUserEnabled).toBe(true);
-
-      // The old initial invoice is still failed — it's a collections matter, not a gate
+      // The initial invoice was paid via toggleService's retryPendingInvoice
       const [oldInvoice] = await db.select()
         .from(billingRecords)
         .where(eq(billingRecords.id, pendingInvoiceId!));
-      expect(oldInvoice.status).toBe('failed');
+      expect(oldInvoice.status).toBe('paid');
     });
   });
 

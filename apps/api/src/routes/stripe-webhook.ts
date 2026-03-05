@@ -13,10 +13,10 @@
 import type { FastifyInstance } from 'fastify';
 import crypto from 'crypto';
 import { db } from '@suiftly/database';
-import { withCustomerLock, issueReconciliationCredit, recalculateDraftInvoice, clearGracePeriod, logInternalError, logInternalErrorOnce } from '@suiftly/database/billing';
+import { withCustomerLock, finalizeSuccessfulPayment, logInternalError, logInternalErrorOnce } from '@suiftly/database/billing';
 import { getStripeService } from '@suiftly/database/stripe-mock';
-import { paymentWebhookEvents, customerPaymentMethods, customers, billingRecords, serviceInstances, invoicePayments } from '@suiftly/database/schema';
-import { eq, and, inArray, gt } from 'drizzle-orm';
+import { paymentWebhookEvents, customerPaymentMethods, customers, billingRecords, invoicePayments } from '@suiftly/database/schema';
+import { eq, and, gt } from 'drizzle-orm';
 import { dbClockProvider } from '@suiftly/shared/db-clock';
 import { config } from '../lib/config';
 
@@ -249,10 +249,8 @@ export async function registerStripeWebhook(server: FastifyInstance) {
  * Full reconciliation:
  * 1. Create invoice_payments row (sourceType='stripe')
  * 2. Update billing_records: status='paid', amountPaidUsdCents, paymentActionUrl=null
- * 3. Clear subPendingInvoiceId on matching service_instances
- * 4. Set paidOnce on service_instances and customers
- * 5. Issue reconciliation credit (partial month pro-rata)
- * 6. Recalculate DRAFT invoice
+ * 3. Finalize: clear subPendingInvoiceId, set paidOnce, clear grace period,
+ *    issue reconciliation credit, recalculate DRAFT (via finalizeSuccessfulPayment)
  *
  * Uses metadata.billing_record_id (set by StripePaymentProvider) to find the
  * matching billing_records row.
@@ -408,64 +406,9 @@ async function handleInvoicePaid(invoice: Record<string, unknown>) {
       })
       .where(eq(billingRecords.id, billingRecordId));
 
-    // 3. Clear subPendingInvoiceId on service_instances that reference this invoice,
-    //    and set paidOnce ONLY on those specific services (not all customer services).
-    const pendingServices = await tx
-      .select({ instanceId: serviceInstances.instanceId, serviceType: serviceInstances.serviceType })
-      .from(serviceInstances)
-      .where(
-        and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.subPendingInvoiceId, billingRecordId)
-        )
-      );
-
-    if (pendingServices.length > 0) {
-      const instanceIds = pendingServices.map(s => s.instanceId);
-      await tx
-        .update(serviceInstances)
-        .set({ subPendingInvoiceId: null, paidOnce: true })
-        .where(inArray(serviceInstances.instanceId, instanceIds));
-    }
-
-    // 4. Set paidOnce on customer and clear grace period.
-    //    If the customer entered grace period due to the failed 3DS charge,
-    //    completing 3DS should lift the grace period (just like retryFailedPayments does).
-    await tx
-      .update(customers)
-      .set({ paidOnce: true })
-      .where(eq(customers.customerId, customerId));
-    await clearGracePeriod(tx, customerId);
-
-    // 5. Issue reconciliation credit for partial month (deferred payment).
-    //    Only for subscription invoices linked to a pending service.
-    //    Uses the shared issueReconciliationCredit which guards on billingType='immediate'
-    //    and billingPeriodStart presence.
-    if (pendingServices.length > 0) {
-      await issueReconciliationCredit(
-        tx, customerId, freshRecord, pendingServices[0].serviceType,
-      );
-    }
-
-    // 6. Recalculate DRAFT invoice
-    try {
-      await recalculateDraftInvoice(tx, customerId, clock);
-    } catch (err) {
-      // Non-fatal: DRAFT recalculation failure shouldn't block payment reconciliation.
-      // But notify admin — a stale DRAFT could go unnoticed for a full billing cycle.
-      console.error(`[Stripe Webhook] invoice.paid: failed to recalculate DRAFT for customer ${customerId}:`, err);
-      try {
-        await logInternalError(tx, {
-          severity: 'warning',
-          category: 'billing',
-          code: 'WEBHOOK_DRAFT_RECALC_FAILED',
-          message: `DRAFT recalculation failed after webhook reconciliation for customer ${customerId}`,
-          details: { error: err instanceof Error ? err.message : String(err), billingRecordId },
-          customerId,
-          invoiceId: billingRecordId,
-        });
-      } catch { /* don't let notification failure break reconciliation */ }
-    }
+    // 3. Finalize: clear subPendingInvoiceId, set paidOnce, clear grace period,
+    //    issue reconciliation credit, and recalculate DRAFT — all via shared function.
+    await finalizeSuccessfulPayment(tx, customerId, billingRecordId, clock);
 
     console.log(`[Stripe Webhook] invoice.paid: fully reconciled billing record ${billingRecordId} for customer ${customerId}`);
   });

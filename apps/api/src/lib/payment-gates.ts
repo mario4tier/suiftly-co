@@ -7,16 +7,16 @@
  */
 
 import { TRPCError } from '@trpc/server';
-import { serviceInstances, customers, billingRecords } from '@suiftly/database/schema';
+import { billingRecords } from '@suiftly/database/schema';
 import { eq } from 'drizzle-orm';
 import { getSuiService } from '@suiftly/database/sui-mock';
 import { getStripeService } from '@suiftly/database/stripe-mock';
-import { getCustomerProviders, processInvoicePayment, issueReconciliationCredit, clearGracePeriod, recalculateDraftInvoice } from '@suiftly/database/billing';
+import { getCustomerProviders, processInvoicePayment, finalizeSuccessfulPayment } from '@suiftly/database/billing';
 import type { LockedTransaction } from '@suiftly/database/billing';
 import { dbClock } from '@suiftly/shared/db-clock';
 
 /**
- * Retry a pending invoice payment via the provider chain.
+ * Retry a pending invoice payment via credits + provider chain.
  *
  * On success: clears subPendingInvoiceId, sets paidOnce on both service and customer.
  * On failure: throws TRPCError with PRECONDITION_FAILED.
@@ -31,13 +31,8 @@ export async function retryPendingInvoice(
   const paymentServices = { suiService: getSuiService(), stripeService: getStripeService() };
   const providers = await getCustomerProviders(customerId, paymentServices, tx, dbClock);
 
-  if (providers.length === 0) {
-    throw new TRPCError({
-      code: 'PRECONDITION_FAILED',
-      message: 'No payment method configured. Add a payment method via Billing page.',
-    });
-  }
-
+  // Always attempt payment — credits are applied first inside processInvoicePayment.
+  // A customer with sufficient credits but no payment method can still pay.
   const result = await processInvoicePayment(tx, service.subPendingInvoiceId, providers, dbClock);
 
   if (!result.fullyPaid) {
@@ -54,7 +49,9 @@ export async function retryPendingInvoice(
       code: 'PRECONDITION_FAILED',
       message: paymentActionUrl
         ? 'Payment requires authentication. Complete 3D Secure verification to continue.'
-        : 'Payment failed. Check your payment methods via Billing page.',
+        : providers.length === 0
+          ? 'Insufficient credits and no payment method configured. Add funds or a payment method via Billing page.'
+          : 'Payment failed. Check your payment methods via Billing page.',
       cause: {
         errorCode: result.error?.errorCode,
         paymentActionUrl,
@@ -62,42 +59,7 @@ export async function retryPendingInvoice(
     });
   }
 
-  // Payment succeeded — clear the pending invoice gate and mark paidOnce.
-  // paidOnce is critical: it controls whether tier changes are scheduled (true)
-  // or applied immediately (false). See tier-changes.ts.
-  await tx.update(serviceInstances)
-    .set({ subPendingInvoiceId: null, paidOnce: true })
-    .where(eq(serviceInstances.instanceId, service.instanceId));
-
-  await tx.update(customers)
-    .set({ paidOnce: true })
-    .where(eq(customers.customerId, customerId));
-
-  // Clear grace period if the customer was in one due to previous payment failure.
-  await clearGracePeriod(tx, customerId);
-
-  // Issue reconciliation credit for partial month (deferred payment).
-  const [invoice] = await tx
-    .select()
-    .from(billingRecords)
-    .where(eq(billingRecords.id, service.subPendingInvoiceId))
-    .limit(1);
-
-  if (invoice) {
-    const [si] = await tx.select({ serviceType: serviceInstances.serviceType })
-      .from(serviceInstances)
-      .where(eq(serviceInstances.instanceId, service.instanceId))
-      .limit(1);
-    if (si) {
-      await issueReconciliationCredit(tx, customerId, invoice, si.serviceType);
-    }
-  }
-
-  // Recalculate DRAFT invoice to reflect the paid invoice.
-  // Non-fatal: stale DRAFT will self-correct on next billing cycle.
-  try {
-    await recalculateDraftInvoice(tx, customerId, dbClock);
-  } catch (err) {
-    console.error(`[retryPendingInvoice] Failed to recalculate DRAFT for customer ${customerId}:`, err);
-  }
+  // Payment succeeded — clear pending state, set paidOnce, clear grace period,
+  // issue reconciliation credit, and recalculate DRAFT via shared finalization.
+  await finalizeSuccessfulPayment(tx, customerId, service.subPendingInvoiceId, dbClock);
 }

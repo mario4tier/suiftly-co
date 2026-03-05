@@ -115,6 +115,7 @@ export async function cleanupCustomerData(
   await db.execute(sql`DELETE FROM mock_sui_transactions WHERE customer_id = ${customerId}`);
   await db.execute(sql`DELETE FROM customer_payment_methods WHERE customer_id = ${customerId}`);
   await db.execute(sql`DELETE FROM payment_webhook_events WHERE customer_id = ${customerId}`);
+  await db.execute(sql`DELETE FROM ledger_entries WHERE customer_id = ${customerId}`);
   // customers last
   await db.execute(sql`DELETE FROM customers WHERE customer_id = ${customerId}`);
 }

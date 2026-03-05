@@ -9,9 +9,10 @@
 import { eq, and, sql } from 'drizzle-orm';
 import type { Database, DatabaseOrTransaction } from '../db';
 import type { LockedTransaction } from './locking';
-import { billingRecords, customers, invoiceLineItems, billingIdempotency } from '../schema';
+import { billingRecords, customers, invoiceLineItems, billingIdempotency, invoicePayments, customerCredits } from '../schema';
 import type { DBClock } from '@suiftly/shared/db-clock';
 import type { InvoiceLineItemType, ServiceType } from '../schema/enums';
+import { issueCredit } from './credits';
 
 /**
  * Line item for an invoice
@@ -231,6 +232,39 @@ export async function voidInvoice(
   invoiceId: number,
   reason: string
 ): Promise<void> {
+  // Guard: paid invoices must never be voided (use refund instead)
+  const [invoice] = await tx
+    .select({ status: billingRecords.status, customerId: billingRecords.customerId })
+    .from(billingRecords)
+    .where(eq(billingRecords.id, invoiceId))
+    .limit(1);
+  if (invoice?.status === 'paid') {
+    throw new Error(`Cannot void paid invoice ${invoiceId}`);
+  }
+
+  // Restore any credits consumed by this invoice.
+  // Credits are permanently decremented by applyCreditsToInvoice and recorded
+  // in invoice_payments. Without restoration, voiding an invoice with partial
+  // credit payments silently loses the customer's credit balance.
+  if (invoice) {
+    const creditPayments = await tx
+      .select({ total: sql<number>`COALESCE(SUM(amount_usd_cents), 0)` })
+      .from(invoicePayments)
+      .where(
+        and(
+          eq(invoicePayments.billingRecordId, invoiceId),
+          eq(invoicePayments.sourceType, 'credit'),
+        )
+      );
+    const creditAmount = Number(creditPayments[0]?.total ?? 0);
+    if (creditAmount > 0) {
+      await issueCredit(
+        tx, invoice.customerId, creditAmount, 'reconciliation',
+        `Credit restoration: invoice ${invoiceId} voided (${reason})`,
+      );
+    }
+  }
+
   await tx
     .update(billingRecords)
     .set({

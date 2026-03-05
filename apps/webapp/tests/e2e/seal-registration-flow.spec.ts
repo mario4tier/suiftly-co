@@ -481,6 +481,9 @@ test.describe('Seal Key Registration Flow', () => {
   });
 
   test('error state shows popover with details', async ({ page }) => {
+    // Extend timeout: retry loop may need up to 60s to win the race with GM
+    test.setTimeout(90000);
+
     // Create a seal key via UI
     await createSealKeyViaUI(page);
     await waitForToastsToDisappear(page);
@@ -494,24 +497,56 @@ test.describe('Seal Key Registration Flow', () => {
     const customerId = await getCustomerId(page);
     const sealKey = await getLatestSealKey(customerId);
 
-    // Simulate a registration error (force back to registering state with error)
-    await db.update(sealKeys)
-      .set({
-        registrationStatus: 'registering',
-        registrationError: 'Insufficient gas funds',
-        registrationAttempts: 2,
-        nextRetryAt: new Date(Date.now() + 30000), // 30 seconds from now
-        // Clear objectId to indicate not yet registered
-        objectId: null,
-      })
-      .where(eq(sealKeys.sealKeyId, sealKey!.sealKeyId));
+    // Seal keys heading locator — used to confirm the list has loaded after reload
+    const sealKeysHeading = page.locator('h3:has-text("Seal Keys & Packages")');
 
-    // Reload page to fetch updated data
-    await page.reload();
-    await waitAfterMutation(page);
+    // Race-resilient loop: GM may re-register the key between our DB mutation
+    // and the page reload. If that happens (objectId changes → GM raced us),
+    // retry. If we never catch the "registering" badge within 60s, fail.
+    const deadline = Date.now() + 60000;
+    let caught = false;
 
-    // Should see "On-chain Registering..." badge with error indicator (AlertCircle icon)
-    await expect(registeringBadge).toBeVisible({ timeout: 5000 });
+    while (Date.now() < deadline) {
+      // Snapshot objectId before mutation to detect GM race
+      const keyBefore = await getLatestSealKey(customerId);
+      const objectIdBefore = keyBefore?.objectId?.toString('hex');
+
+      // Force registering state with error details.
+      // Keep objectId intact — clearing it is not needed to show the
+      // "registering" badge and can cause the tRPC query to return stale data.
+      await db.update(sealKeys)
+        .set({
+          registrationStatus: 'registering',
+          registrationError: 'Insufficient gas funds',
+          registrationAttempts: 2,
+          nextRetryAt: new Date(Date.now() + 30000),
+        })
+        .where(eq(sealKeys.sealKeyId, sealKey!.sealKeyId));
+
+      // Reload page and wait for seal keys list to actually render
+      // (not just networkidle — the tRPC query must complete)
+      await page.reload();
+      await expect(sealKeysHeading).toBeVisible({ timeout: 10000 });
+
+      // Check if the "registering" badge appeared
+      const isRegistering = await registeringBadge.isVisible().catch(() => false);
+      if (isRegistering) {
+        caught = true;
+        break;
+      }
+
+      // GM raced us — verify by checking if objectId was restored
+      const keyAfter = await getLatestSealKey(customerId);
+      const objectIdAfter = keyAfter?.objectId?.toString('hex');
+
+      if (objectIdAfter && objectIdAfter !== objectIdBefore) {
+        console.log(`[error-state-test] GM raced: objectId changed ${objectIdBefore} → ${objectIdAfter}, retrying...`);
+      } else {
+        console.log(`[error-state-test] Badge not visible but no objectId change, retrying...`);
+      }
+    }
+
+    expect(caught, 'Should have caught "On-chain Registering..." badge within 60s').toBe(true);
 
     // Click on the badge to open the popover
     await registeringBadge.click();

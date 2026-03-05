@@ -21,8 +21,7 @@ import {
   voidInvoice,
 } from './invoices';
 import { processInvoicePayment } from './payments';
-import { issueCredit } from './credits';
-import { recalculateDraftInvoice, calculateProRatedUpgradeCharge } from './service-billing';
+import { recalculateDraftInvoice, calculateProRatedUpgradeCharge } from './draft-invoice';
 import { getTierPriceUsdCents, TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
 import { INVOICE_LINE_ITEM_TYPE, TIER_TO_SUBSCRIPTION_ITEM } from '@suiftly/shared/constants';
 import type { DBClock } from '@suiftly/shared/db-clock';
@@ -286,17 +285,8 @@ export async function handleTierUpgradeLocked(
     // job from charging the customer without applying the tier change.
     // Use voidInvoice (not deleteUnpaidInvoice) because credits may have been
     // partially applied, creating invoicePayments FK references.
+    // voidInvoice automatically restores any consumed credits.
     await voidInvoice(tx, invoiceId, 'Tier upgrade payment failed');
-
-    // Restore any credits consumed by processInvoicePayment — they're attached
-    // to a voided invoice that will never retry, so the customer would lose them.
-    const creditsConsumedCents = paymentResult.paymentSources
-      .filter(s => s.type === 'credit')
-      .reduce((sum, s) => sum + s.amountCents, 0);
-    if (creditsConsumedCents > 0) {
-      await issueCredit(tx, customerId, creditsConsumedCents, 'reconciliation',
-        `Credit restoration: upgrade invoice ${invoiceId} voided after payment failure`);
-    }
 
     return {
       success: false,
@@ -582,16 +572,8 @@ export async function executeTierUpgradePhase2Locked(
   if (!paymentResult.fullyPaid) {
     // Payment failed - void the invoice (not deleteUnpaidInvoice which hits FK
     // violations when credits created invoicePayments records).
+    // voidInvoice automatically restores any consumed credits.
     await voidInvoice(tx, invoiceId, 'Tier upgrade payment failed');
-
-    // Restore any credits consumed — voided invoice won't retry.
-    const creditsConsumedCents = paymentResult.paymentSources
-      .filter(s => s.type === 'credit')
-      .reduce((sum, s) => sum + s.amountCents, 0);
-    if (creditsConsumedCents > 0) {
-      await issueCredit(tx, customerId, creditsConsumedCents, 'reconciliation',
-        `Credit restoration: upgrade invoice ${invoiceId} voided after payment failure`);
-    }
 
     return {
       success: false,

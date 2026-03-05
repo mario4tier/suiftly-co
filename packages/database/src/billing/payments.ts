@@ -14,6 +14,7 @@ import type { LockedTransaction } from './locking';
 import { billingRecords, invoicePayments, serviceInstances, customers } from '../schema';
 import { applyCreditsToInvoice, issueReconciliationCredit, issueCredit } from './credits';
 import { clearGracePeriod } from './grace-period';
+import { recalculateDraftInvoice } from './draft-invoice';
 import { logInternalError } from './admin-notifications';
 import { getStripeService } from '../stripe-mock/index.js';
 import type { InvoicePaymentResult, BillingError } from './types';
@@ -57,6 +58,24 @@ export async function processInvoicePayment(
         type: 'validation_error',
         message: 'Invoice not found',
         customerId: 0,
+        invoiceId: billingRecordId,
+        retryable: false,
+      },
+    };
+  }
+
+  // Guard: voided invoices should never be processed
+  if (invoice.status === 'voided') {
+    return {
+      invoiceId: billingRecordId,
+      initialAmountCents: Number(invoice.amountUsdCents),
+      amountPaidCents: Number(invoice.amountPaidUsdCents ?? 0),
+      fullyPaid: false,
+      paymentSources: [],
+      error: {
+        type: 'validation_error',
+        message: 'Invoice has been voided',
+        customerId: invoice.customerId,
         invoiceId: billingRecordId,
         retryable: false,
       },
@@ -304,6 +323,93 @@ export async function processInvoicePayment(
 }
 
 /**
+ * Finalize a successful payment: clear pending state, set paidOnce, clear grace period,
+ * issue reconciliation credit, and recalculate DRAFT invoice.
+ *
+ * Called after any path confirms an invoice is paid:
+ * - processInvoicePayment (provider chain succeeded)
+ * - Stripe webhook (invoice.paid from 3DS completion)
+ * - retryUnpaidInvoices (background retry succeeded)
+ *
+ * @param tx Transaction handle (must have customer lock)
+ * @param customerId Customer ID
+ * @param billingRecordId The paid invoice ID
+ * @param clock DBClock for DRAFT recalculation timestamps
+ */
+export async function finalizeSuccessfulPayment(
+  tx: LockedTransaction,
+  customerId: number,
+  billingRecordId: number,
+  clock: DBClock,
+): Promise<void> {
+  // 1. Clear subPendingInvoiceId + set paidOnce on services referencing this invoice
+  const pendingServices = await tx
+    .select({ instanceId: serviceInstances.instanceId, serviceType: serviceInstances.serviceType })
+    .from(serviceInstances)
+    .where(
+      and(
+        eq(serviceInstances.customerId, customerId),
+        eq(serviceInstances.subPendingInvoiceId, billingRecordId),
+      )
+    );
+
+  if (pendingServices.length > 0) {
+    await tx.update(serviceInstances)
+      .set({ subPendingInvoiceId: null, paidOnce: true })
+      .where(
+        and(
+          eq(serviceInstances.customerId, customerId),
+          eq(serviceInstances.subPendingInvoiceId, billingRecordId),
+        )
+      );
+  }
+
+  // 2. Set paidOnce on customer (enables grace period on future payment failures)
+  await tx.update(customers)
+    .set({ paidOnce: true })
+    .where(eq(customers.customerId, customerId));
+
+  // 3. Clear grace period (customer may have been suspended due to previous failure)
+  await clearGracePeriod(tx, customerId);
+
+  // 4. Issue reconciliation credit for partial month (deferred subscription payment).
+  //    Only for invoices linked to a pending service — avoids minting credits for
+  //    non-subscription invoices (usage, add-on) that have no linked service.
+  if (pendingServices.length > 0) {
+    const [invoice] = await tx
+      .select()
+      .from(billingRecords)
+      .where(eq(billingRecords.id, billingRecordId))
+      .limit(1);
+
+    if (invoice) {
+      await issueReconciliationCredit(
+        tx, customerId, invoice, pendingServices[0].serviceType,
+      );
+    }
+  }
+
+  // 5. Recalculate DRAFT invoice to reflect the newly-paid invoice.
+  //    Non-fatal: a stale DRAFT will self-correct on the next billing cycle.
+  try {
+    await recalculateDraftInvoice(tx, customerId, clock);
+  } catch (err) {
+    console.error(`[finalizeSuccessfulPayment] Failed to recalculate DRAFT for customer ${customerId}:`, err);
+    try {
+      await logInternalError(tx, {
+        severity: 'warning',
+        category: 'billing',
+        code: 'DRAFT_RECALC_FAILED',
+        message: `DRAFT recalculation failed after payment for customer ${customerId}`,
+        details: { error: err instanceof Error ? err.message : String(err), billingRecordId },
+        customerId,
+        invoiceId: billingRecordId,
+      });
+    } catch { /* don't let notification failure break payment flow */ }
+  }
+}
+
+/**
  * Get total amount paid for an invoice from all sources
  *
  * @param tx Transaction handle
@@ -432,46 +538,7 @@ export async function retryUnpaidInvoices(
     if (result.fullyPaid) {
       paidCount++;
 
-      // Clear subPendingInvoiceId on services referencing this invoice
-      const pendingServices = await tx
-        .select({ instanceId: serviceInstances.instanceId, serviceType: serviceInstances.serviceType })
-        .from(serviceInstances)
-        .where(
-          and(
-            eq(serviceInstances.customerId, customerId),
-            eq(serviceInstances.subPendingInvoiceId, invoice.id),
-          )
-        );
-
-      if (pendingServices.length > 0) {
-        await tx.update(serviceInstances)
-          .set({ subPendingInvoiceId: null, paidOnce: true })
-          .where(
-            and(
-              eq(serviceInstances.customerId, customerId),
-              eq(serviceInstances.subPendingInvoiceId, invoice.id),
-            )
-          );
-      }
-
-      await tx.update(customers)
-        .set({ paidOnce: true })
-        .where(eq(customers.customerId, customerId));
-
-      await clearGracePeriod(tx, customerId);
-
-      // Issue reconciliation credit for partial month (deferred payment).
-      // When the original subscription charge was deferred (e.g., no payment method,
-      // 3DS pending), handleSubscriptionBillingLocked skipped the credit because
-      // paymentResult.fullyPaid was false. Now that the deferred payment succeeded,
-      // we issue the credit using the invoice's billingPeriodStart (not today).
-      // Only issue when a pending service was matched — avoids minting credits for
-      // non-subscription invoices (usage, add-on) that have no linked service.
-      if (pendingServices.length > 0) {
-        await issueReconciliationCredit(
-          tx, customerId, invoice, pendingServices[0].serviceType,
-        );
-      }
+      await finalizeSuccessfulPayment(tx, customerId, invoice.id, clock);
 
       details.push({
         invoiceId: invoice.id,

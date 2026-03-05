@@ -15,15 +15,14 @@
  * IMPORTANT: All operations use customer-level locking to prevent race conditions.
  */
 
-import { eq, and, sql, inArray, desc, gt } from 'drizzle-orm';
+import { eq, and, sql, inArray, desc, gt, lte } from 'drizzle-orm';
 import { billingRecords, customers, serviceInstances, invoicePayments, customerCredits } from '../schema';
 import type { Database } from '../db';
 import { withCustomerLock, type LockedTransaction } from './locking';
-import { processInvoicePayment, retryUnpaidInvoices } from './payments';
-import { getAvailableCredits } from './credits';
+import { processInvoicePayment, finalizeSuccessfulPayment, retryUnpaidInvoices } from './payments';
+import { getAvailableCredits, issueCredit } from './credits';
 import {
   startGracePeriod,
-  clearGracePeriod,
   getCustomersWithExpiredGracePeriod,
   suspendCustomerForNonPayment,
   resumeCustomerAccount,
@@ -31,9 +30,10 @@ import {
 import { withIdempotency, generateMonthlyBillingKey } from './idempotency';
 import { ensureInvoiceValid } from './validation';
 import { ValidationError } from './errors';
+import { voidInvoice, createInvoice, deleteUnpaidInvoice } from './invoices';
 import { logInternalError, logInternalErrorOnce } from './admin-notifications';
 import { applyScheduledTierChanges, processScheduledCancellations } from './tier-changes';
-import { recalculateDraftInvoice } from './service-billing';
+import { recalculateDraftInvoice } from './draft-invoice';
 import { finalizeUsageChargesForBilling, syncUsageToDraft } from './usage-charges';
 import type { BillingProcessorConfig, CustomerBillingResult, BillingOperation } from './types';
 import type { DBClock } from '@suiftly/shared/db-clock';
@@ -87,6 +87,81 @@ export async function processCustomerBilling(
       );
       result.operations.push(...monthlyResult.operations);
       result.errors.push(...monthlyResult.errors);
+    } else {
+      // Catch-up: check for DRAFTs whose billing period has started (missed billing day).
+      // This handles the case where the processor was down on the 1st.
+      // processMonthlyBilling has idempotency protection, so if billing already ran
+      // for this month, the catch-up is a no-op.
+      const staleDraft = await tx.query.billingRecords.findFirst({
+        where: and(
+          eq(billingRecords.customerId, customerId),
+          eq(billingRecords.status, 'draft'),
+          lte(billingRecords.billingPeriodStart, now),
+        ),
+      });
+      if (staleDraft) {
+        const monthlyResult = await processMonthlyBilling(tx, customerId, config, services);
+        result.operations.push(...monthlyResult.operations);
+        result.errors.push(...monthlyResult.errors);
+
+        // If the stale DRAFT was for a month BEFORE the current month, we need
+        // to also create a DRAFT for the current month. Without this, the current
+        // month is permanently skipped: recalculateDraftInvoice (called inside
+        // processMonthlyBilling) creates a DRAFT for "next month from today",
+        // which is the month AFTER current — leaving a billing gap.
+        //
+        // Example: processor down on Jan 1, catches up Feb 5.
+        //   - January DRAFT processed ✓
+        //   - recalculateDraftInvoice creates March DRAFT (next month from Feb 5)
+        //   - February has no DRAFT — permanently unbilled!
+        //
+        // The fix: explicitly create a February DRAFT. The next billing run
+        // (5 min later) finds it stale and processes it via this same catch-up path.
+        const stalePeriodStart = new Date(staleDraft.billingPeriodStart);
+        const currentMonthStart = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
+
+        if (stalePeriodStart < currentMonthStart) {
+          // Check if a DRAFT already exists for the current month
+          const currentMonthEnd = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 1, 0));
+          const existingCurrentDraft = await tx.query.billingRecords.findFirst({
+            where: and(
+              eq(billingRecords.customerId, customerId),
+              eq(billingRecords.status, 'draft'),
+              sql`${billingRecords.billingPeriodStart} >= ${currentMonthStart}
+                AND ${billingRecords.billingPeriodStart} <= ${currentMonthEnd}`,
+            ),
+          });
+
+          if (!existingCurrentDraft) {
+            // Delete premature future-month DRAFTs created by recalculateDraftInvoice
+            // during the stale DRAFT processing. The system expects at most one DRAFT
+            // per customer; having two causes MULTIPLE_DRAFT_INVOICES validation failures.
+            // These will be recreated correctly after the current month is processed.
+            const futureDrafts = await tx.query.billingRecords.findMany({
+              where: and(
+                eq(billingRecords.customerId, customerId),
+                eq(billingRecords.status, 'draft'),
+                sql`${billingRecords.billingPeriodStart} > ${currentMonthEnd}`,
+              ),
+            });
+            for (const draft of futureDrafts) {
+              await deleteUnpaidInvoice(tx, draft.id);
+            }
+
+            const currentMonthLastDay = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 1, 0));
+            await createInvoice(tx, {
+              customerId,
+              amountUsdCents: 0, // recalculateDraftInvoice in processMonthlyBilling will populate
+              type: 'charge',
+              status: 'draft',
+              description: 'Monthly subscription charges',
+              billingPeriodStart: currentMonthStart,
+              billingPeriodEnd: currentMonthLastDay,
+              dueDate: currentMonthStart,
+            }, config.clock);
+          }
+        }
+      }
     }
 
     // Retry failed payments
@@ -150,21 +225,29 @@ async function processMonthlyBilling(
     errors: [],
   };
 
-  const today = config.clock.today();
-  const year = today.getUTCFullYear();
-  const month = today.getUTCMonth() + 1; // JavaScript months are 0-indexed
-
-  // Find DRAFT invoices for this customer
+  // Find DRAFT invoices for this customer whose billing period has started.
+  // The date filter prevents premature billing of future-month DRAFTs that can
+  // exist when catch-up creates the current month's DRAFT while
+  // recalculateDraftInvoice already created next month's DRAFT.
   const draftInvoices = await tx.query.billingRecords.findMany({
     where: and(
       eq(billingRecords.customerId, customerId),
-      eq(billingRecords.status, 'draft')
+      eq(billingRecords.status, 'draft'),
+      lte(billingRecords.billingPeriodStart, config.clock.now()),
     ),
   });
 
   if (draftInvoices.length === 0) {
     return result; // No draft invoices, nothing to do
   }
+
+  // Derive idempotency key from the DRAFT's billing period, NOT from today's date.
+  // This is critical for catch-up billing: if a stale January DRAFT is processed
+  // on February 1st, the key must be monthly-X-2025-01 (January's key), not
+  // monthly-X-2025-02 (which would consume February's slot and skip February billing).
+  const billingPeriodStart = new Date(draftInvoices[0].billingPeriodStart);
+  const year = billingPeriodStart.getUTCFullYear();
+  const month = billingPeriodStart.getUTCMonth() + 1; // JavaScript months are 0-indexed
 
   // Check for idempotency (prevent double-billing)
   const idempotencyKey = generateMonthlyBillingKey(customerId, year, month);
@@ -199,6 +282,14 @@ async function processMonthlyBilling(
         // Recalculate DRAFT invoice after cancellations
         await recalculateDraftInvoice(tx, customerId, config.clock);
       }
+
+      // Ensure all DRAFTs have up-to-date line items and amounts.
+      // This is critical for catch-up DRAFTs which are created bare ($0, no line items)
+      // by the catch-up code in processCustomerBilling. Without this, the amount check
+      // below sees $0 and voids the DRAFT — skipping the entire billing month.
+      // Safe: recalculateDraftInvoice is idempotent, so this is a no-op for DRAFTs
+      // that were already populated by tier changes or cancellations above.
+      await recalculateDraftInvoice(tx, customerId, config.clock);
 
       // Phase: ADD USAGE CHARGES (STATS_DESIGN.md D3)
       // Finalize usage charges for the PREVIOUS month (the month that just ended)
@@ -240,6 +331,21 @@ async function processMonthlyBilling(
           }
         }
 
+        // Re-read amount after tier changes and cancellations recalculated the DRAFT.
+        // Skip $0 invoices — transitioning and "paying" a $0 invoice incorrectly
+        // sets paidOnce=true via finalizeSuccessfulPayment.
+        const [freshInvoice] = await tx
+          .select({ amountUsdCents: billingRecords.amountUsdCents })
+          .from(billingRecords)
+          .where(eq(billingRecords.id, invoice.id))
+          .limit(1);
+        const currentAmount = Number(freshInvoice?.amountUsdCents ?? 0);
+        if (currentAmount <= 0) {
+          // Void the $0 DRAFT — nothing to charge
+          await voidInvoice(tx, invoice.id, 'No charges for this billing period');
+          continue;
+        }
+
         // Update status to PENDING
         await tx
           .update(billingRecords)
@@ -266,23 +372,18 @@ async function processMonthlyBilling(
             success: true,
           });
 
-          // Clear grace period if customer was in one
-          await clearGracePeriod(tx, customerId);
-
-          // Mark customer as having paid at least once (for grace period eligibility)
-          await tx
-            .update(customers)
-            .set({ paidOnce: true })
-            .where(eq(customers.customerId, customerId));
-
-          // Mark all active services as having paid at least once (for tier change/cancellation behavior).
-          // Also clear subPendingInvoiceId: if a service had a failed initial invoice,
-          // the monthly billing payment proves the customer can pay — the stale pending
-          // invoice is now just a collections matter, not a service-enable gate.
-          await tx
-            .update(serviceInstances)
-            .set({ paidOnce: true, subPendingInvoiceId: null })
-            .where(eq(serviceInstances.customerId, customerId));
+          // Shared finalization: set customer paidOnce, clear grace period,
+          // recalculate DRAFT for upcoming month, and issue reconciliation credit
+          // if any service's subPendingInvoiceId matches this invoice.
+          //
+          // NOTE: We do NOT blanket-set paidOnce/subPendingInvoiceId on all services.
+          // A monthly billing invoice is a separate charge from initial subscription
+          // invoices. Clearing subPendingInvoiceId here would break reconciliation
+          // credits: when the initial invoice is later retried and paid,
+          // finalizeSuccessfulPayment wouldn't find the pending service and would
+          // skip the credit. Each service's gate clears only when its own initial
+          // invoice (subPendingInvoiceId) is actually paid.
+          await finalizeSuccessfulPayment(tx, customerId, invoice.id, config.clock);
         } else {
           // Payment failed
           result.operations.push({
@@ -320,6 +421,18 @@ async function processMonthlyBilling(
             });
           }
         }
+      }
+
+      // Ensure a DRAFT exists for the next billing cycle.
+      // The success path creates one via finalizeSuccessfulPayment, but the failure
+      // path does not. Without this, a failed month means no DRAFT exists, and the
+      // next 1st of month skips billing entirely (processMonthlyBilling line 164).
+      // Safe: recalculateDraftInvoice is idempotent — if a DRAFT already exists
+      // (success path already created one), it just recalculates it.
+      try {
+        await recalculateDraftInvoice(tx, customerId, config.clock);
+      } catch (err) {
+        console.error(`[processMonthlyBilling] Failed to create next DRAFT for customer ${customerId}:`, err);
       }
 
       // Process excess credit refunds when tier downgrade was applied
@@ -423,13 +536,28 @@ async function processExcessCreditRefunds(
 
   let monthlyCostCents = 0;
   for (const svc of activeServices) {
-    if (!svc.cancellationScheduledFor) {
+    // Skip cancelled services: cancellationScheduledFor is set during the month,
+    // then cleared by processScheduledCancellations on the 1st (which sets state='cancellation_pending')
+    if (!svc.cancellationScheduledFor && svc.state !== 'cancellation_pending') {
       monthlyCostCents += getTierPriceUsdCents(svc.tier as ServiceTier);
     }
   }
 
-  // Only refund if reconciliation credits exceed monthly cost (leave 1 month buffer)
-  if (availableReconciliationCredits <= monthlyCostCents) {
+  // Account for outstanding unpaid invoices — don't refund credits needed to pay them
+  const [unpaidTotal] = await tx
+    .select({ total: sql<number>`COALESCE(SUM(amount_usd_cents - COALESCE(amount_paid_usd_cents, 0)), 0)` })
+    .from(billingRecords)
+    .where(
+      and(
+        eq(billingRecords.customerId, customerId),
+        inArray(billingRecords.status, ['pending', 'failed']),
+      )
+    );
+  const unpaidAmountCents = Number(unpaidTotal?.total ?? 0);
+  const reserveAmountCents = monthlyCostCents + unpaidAmountCents;
+
+  // Only refund if reconciliation credits exceed reserve (monthly cost + unpaid invoices)
+  if (availableReconciliationCredits <= reserveAmountCents) {
     return result;
   }
 
@@ -461,7 +589,7 @@ async function processExcessCreditRefunds(
   // that weren't paid via Stripe.
   const originalChargeAmountCents = Number(stripePayment.invoice_payments.amountUsdCents);
   const originalBillingRecordId = stripePayment.invoice_payments.billingRecordId;
-  const excessCreditCents = availableReconciliationCredits - monthlyCostCents;
+  const excessCreditCents = availableReconciliationCredits - reserveAmountCents;
   const refundAmountCents = Math.min(excessCreditCents, originalChargeAmountCents);
 
   if (refundAmountCents <= 0) {
@@ -578,7 +706,59 @@ async function retryFailedPayments(
 
   const now = config.clock.now();
   const providers = await getCustomerProviders(customerId, services, tx, config.clock);
-  if (providers.length === 0) return result;
+
+  // Skip retries when customer has no payment methods AND no credits.
+  // Without this guard, each periodic cycle would increment retryCount until
+  // maxRetryAttempts is exhausted, stranding the invoice and spamming alerts.
+  // But if credits exist, proceed — processInvoicePayment applies credits first.
+  if (providers.length === 0) {
+    const availableCredits = await getAvailableCredits(tx, customerId, config.clock);
+    if (availableCredits <= 0) {
+      // Check if there are actually failed invoices being skipped.
+      // If so, emit an operation and a one-time notification so ops can see
+      // non-paying accounts with outstanding debt (instead of silent skipping).
+      const failedInvoices = await tx
+        .select({
+          count: sql<number>`COUNT(*)`,
+          totalCents: sql<number>`COALESCE(SUM(amount_usd_cents - COALESCE(amount_paid_usd_cents, 0)), 0)`,
+          firstId: sql<number>`MIN(id)`,
+        })
+        .from(billingRecords)
+        .where(
+          and(
+            eq(billingRecords.customerId, customerId),
+            eq(billingRecords.status, 'failed'),
+          )
+        );
+      const failedCount = Number(failedInvoices[0]?.count ?? 0);
+      const failedTotalCents = Number(failedInvoices[0]?.totalCents ?? 0);
+      const firstFailedInvoiceId = Number(failedInvoices[0]?.firstId ?? 0);
+
+      if (failedCount > 0) {
+        result.operations.push({
+          type: 'payment_retry',
+          timestamp: now,
+          amountUsdCents: failedTotalCents,
+          description: `Skipped retry: ${failedCount} failed invoice(s) ($${(failedTotalCents / 100).toFixed(2)}) — no payment methods and no credits`,
+          success: false,
+        });
+
+        try {
+          await logInternalErrorOnce(tx, {
+            severity: 'warning',
+            category: 'billing',
+            code: 'NO_PAYMENT_METHODS_FOR_RETRY',
+            message: `Customer ${customerId} has ${failedCount} failed invoice(s) totalling $${(failedTotalCents / 100).toFixed(2)} but no payment methods or credits`,
+            details: { failedCount, failedTotalCents },
+            customerId,
+            invoiceId: firstFailedInvoiceId,
+          });
+        } catch { /* don't let notification failure block billing */ }
+      }
+
+      return result;
+    }
+  }
 
   const retryResult = await retryUnpaidInvoices(tx, customerId, providers, config.clock, {
     maxRetries: config.maxRetryAttempts,
@@ -631,6 +811,68 @@ async function retryFailedPayments(
           });
         } catch (notifErr) {
           console.error(`[Billing] Failed to create retry-exhausted notification for invoice ${detail.invoiceId}:`, notifErr);
+        }
+
+        // Restore credits consumed by this abandoned invoice.
+        // Credits were applied by applyCreditsToInvoice but the invoice was never
+        // paid. Without restoration, the customer loses real credit balance.
+        //
+        // IMPORTANT: We must also reverse the invoice's credit payment records
+        // and reset amountPaidUsdCents. Otherwise, if a reactive retry later runs
+        // (e.g., customer adds a payment method), the invoice still shows the old
+        // credits as "applied" (amountPaidUsdCents > 0), so remainingAmount is too
+        // low. Combined with the restored credit being available again, the customer
+        // gets double-credited — the old applied amount reduces the invoice AND the
+        // restored credit applies fresh.
+        try {
+          const creditPayments = await tx
+            .select({ total: sql<number>`COALESCE(SUM(amount_usd_cents), 0)` })
+            .from(invoicePayments)
+            .where(
+              and(
+                eq(invoicePayments.billingRecordId, detail.invoiceId),
+                eq(invoicePayments.sourceType, 'credit'),
+              )
+            );
+          const creditAmount = Number(creditPayments[0]?.total ?? 0);
+          if (creditAmount > 0) {
+            // ORDER MATTERS: Issue compensating credit FIRST, before modifying
+            // the invoice. If issueCredit fails and the catch swallows the error,
+            // we haven't touched the invoice — no partial state. If we deleted
+            // invoice_payments first and issueCredit then failed, the customer
+            // would permanently lose their credits.
+            //
+            // 1. Issue compensating credit so customer's balance is restored
+            await issueCredit(
+              tx, customerId, creditAmount, 'reconciliation',
+              `Credit restoration: retries exhausted for invoice ${detail.invoiceId}`,
+            );
+
+            // 2. Delete credit invoice_payments rows so they don't count on retry
+            await tx.delete(invoicePayments)
+              .where(
+                and(
+                  eq(invoicePayments.billingRecordId, detail.invoiceId),
+                  eq(invoicePayments.sourceType, 'credit'),
+                )
+              );
+
+            // 3. Reset amountPaidUsdCents by subtracting the reversed credits
+            const [invoiceRow] = await tx
+              .select({ amountPaidUsdCents: billingRecords.amountPaidUsdCents })
+              .from(billingRecords)
+              .where(eq(billingRecords.id, detail.invoiceId))
+              .limit(1);
+            const currentPaid = Number(invoiceRow?.amountPaidUsdCents ?? 0);
+            const adjustedPaid = Math.max(0, currentPaid - creditAmount);
+
+            await tx
+              .update(billingRecords)
+              .set({ amountPaidUsdCents: adjustedPaid })
+              .where(eq(billingRecords.id, detail.invoiceId));
+          }
+        } catch (creditErr) {
+          console.error(`[Billing] Failed to restore credits for exhausted invoice ${detail.invoiceId}:`, creditErr);
         }
       }
     }

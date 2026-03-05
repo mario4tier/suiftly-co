@@ -24,6 +24,7 @@ export {
 // Payment processing
 export {
   processInvoicePayment,
+  finalizeSuccessfulPayment,
   getInvoicePaidAmount,
   retryUnpaidInvoices,
 } from './payments';
@@ -148,9 +149,6 @@ export {
 export type {
   ReconciliationResult,
 } from './reconciliation';
-
-// Payment reconciliation moved to Global Manager (services/global-manager/src/reconcile-payments.ts)
-// to ensure single-threaded execution via task queue
 
 export type {
   TierUpgradeResult,
