@@ -79,8 +79,8 @@ export async function cleanupCustomerData(
 ): Promise<void> {
   // Guard against undefined (e.g., beforeEach failed before assigning customerId)
   if (customerId == null || Number.isNaN(customerId)) return;
-  // admin_notifications uses varchar customer_id (may be null)
-  await db.execute(sql`DELETE FROM admin_notifications WHERE customer_id = ${String(customerId)}`);
+  // admin_notifications (integer customer_id, may be null for system errors)
+  await db.execute(sql`DELETE FROM admin_notifications WHERE customer_id = ${customerId}`);
   // user_activity_logs
   await db.execute(sql`DELETE FROM user_activity_logs WHERE customer_id = ${customerId}`);
   // billing_idempotency — delete by billing_record_id FK AND by customer-keyed entries
@@ -116,6 +116,21 @@ export async function cleanupCustomerData(
   await db.execute(sql`DELETE FROM customer_payment_methods WHERE customer_id = ${customerId}`);
   await db.execute(sql`DELETE FROM payment_webhook_events WHERE customer_id = ${customerId}`);
   await db.execute(sql`DELETE FROM ledger_entries WHERE customer_id = ${customerId}`);
+  // Re-delete records that the GM process may have inserted during cleanup.
+  // The GM runs concurrently and can create billing_records (with children) and
+  // admin_notifications between our initial deletes and the final customers delete.
+  await db.execute(sql`DELETE FROM billing_idempotency WHERE billing_record_id IN (
+    SELECT id FROM billing_records WHERE customer_id = ${customerId}
+  )`);
+  await db.execute(sql`DELETE FROM invoice_payments WHERE billing_record_id IN (
+    SELECT id FROM billing_records WHERE customer_id = ${customerId}
+  )`);
+  await db.execute(sql`DELETE FROM invoice_line_items WHERE billing_record_id IN (
+    SELECT id FROM billing_records WHERE customer_id = ${customerId}
+  )`);
+  await db.execute(sql`DELETE FROM service_instances WHERE customer_id = ${customerId}`);
+  await db.execute(sql`DELETE FROM billing_records WHERE customer_id = ${customerId}`);
+  await db.execute(sql`DELETE FROM admin_notifications WHERE customer_id = ${customerId}`);
   // customers last
   await db.execute(sql`DELETE FROM customers WHERE customer_id = ${customerId}`);
 }

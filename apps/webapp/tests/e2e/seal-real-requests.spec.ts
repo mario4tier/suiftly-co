@@ -335,13 +335,14 @@ async function waitForHAProxyReady(
 
 // Helper to wait for health check to return expected status
 // Used after toggle changes to ensure HAProxy has fully applied the config
-// Max wait time is 3 seconds (6 retries x 500ms)
+// Default max wait: 12 seconds (12 retries x 1000ms)
+// HAProxy backend recovery needs rise 3 x inter 1s = 3s minimum, plus reload time
 async function waitForHealthCheckStatus(
   apiKey: string,
   expectedStatus: number
 ): Promise<{ status: number; ok: boolean }> {
-  const maxRetries = 6;
-  const retryDelay = 500;
+  const maxRetries = 12;
+  const retryDelay = 1000;
 
   for (let retry = 0; retry < maxRetries; retry++) {
     const response = await sealHealthCheck({

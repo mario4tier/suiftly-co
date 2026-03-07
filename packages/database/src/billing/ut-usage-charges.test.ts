@@ -14,11 +14,9 @@ import {
   refreshStatsAggregate,
   clearAllLogs,
 } from '../stats/test-helpers';
-import {
-  updateUsageChargesToDraft,
-  type UsageChargeResult,
-} from './usage-charges';
-import { unsafeAsLockedTransaction, ensureEscrowPaymentMethod, cleanupCustomerData } from './test-helpers';
+import { updateUsageChargesToDraft } from './usage-charges';
+import { ensureEscrowPaymentMethod, cleanupCustomerData } from './test-helpers';
+import { withCustomerLock, type LockedTransaction } from '../locking';
 
 // Test customer data — wallet must be unique across ALL test files
 const TEST_CUSTOMER_ID = 99902;
@@ -26,6 +24,24 @@ const TEST_WALLET = '0x' + 'b'.repeat(62) + '02';
 
 describe('Usage Charges', () => {
   let testInvoiceId: number;
+
+  /**
+   * Run test logic inside a customer advisory lock, resetting the DRAFT invoice
+   * to a clean state first. The GM process runs concurrently and can change DRAFT
+   * status to 'failed'; this helper prevents that interference.
+   */
+  async function withCleanDraft<T>(
+    fn: (tx: LockedTransaction) => Promise<T>,
+  ): Promise<T> {
+    return withCustomerLock(db, TEST_CUSTOMER_ID, async (tx) => {
+      // Undo any GM modifications: delete child records and restore draft status
+      await tx.execute(sql`DELETE FROM invoice_payments WHERE billing_record_id = ${testInvoiceId}`);
+      await tx.execute(sql`DELETE FROM billing_idempotency WHERE billing_record_id = ${testInvoiceId}`);
+      await tx.execute(sql`DELETE FROM invoice_line_items WHERE billing_record_id = ${testInvoiceId}`);
+      await tx.execute(sql`UPDATE billing_records SET status = 'draft', amount_usd_cents = 0 WHERE id = ${testInvoiceId}`);
+      return fn(tx);
+    });
+  }
 
   beforeAll(async () => {
     // Clean up any stale data from previous runs, then create test customer
@@ -79,10 +95,8 @@ describe('Usage Charges', () => {
 
   describe('updateUsageChargesToDraft', () => {
     it('should add no line items when no usage exists', async () => {
-      const result = await updateUsageChargesToDraft(
-        unsafeAsLockedTransaction(db),
-        TEST_CUSTOMER_ID,
-        testInvoiceId
+      const result = await withCleanDraft((tx) =>
+        updateUsageChargesToDraft(tx, TEST_CUSTOMER_ID, testInvoiceId)
       );
 
       expect(result.success).toBe(true);
@@ -107,10 +121,8 @@ describe('Usage Charges', () => {
       });
       await refreshStatsAggregate(db);
 
-      const result = await updateUsageChargesToDraft(
-        unsafeAsLockedTransaction(db),
-        TEST_CUSTOMER_ID,
-        testInvoiceId
+      const result = await withCleanDraft((tx) =>
+        updateUsageChargesToDraft(tx, TEST_CUSTOMER_ID, testInvoiceId)
       );
 
       expect(result.success).toBe(true);
@@ -146,10 +158,8 @@ describe('Usage Charges', () => {
       });
       await refreshStatsAggregate(db);
 
-      const result = await updateUsageChargesToDraft(
-        unsafeAsLockedTransaction(db),
-        TEST_CUSTOMER_ID,
-        testInvoiceId
+      const result = await withCleanDraft((tx) =>
+        updateUsageChargesToDraft(tx, TEST_CUSTOMER_ID, testInvoiceId)
       );
 
       // Should only charge for 5000 requests
@@ -182,10 +192,8 @@ describe('Usage Charges', () => {
         ON CONFLICT (customer_id, service_type) DO NOTHING
       `);
 
-      const result = await updateUsageChargesToDraft(
-        unsafeAsLockedTransaction(db),
-        TEST_CUSTOMER_ID,
-        testInvoiceId
+      const result = await withCleanDraft((tx) =>
+        updateUsageChargesToDraft(tx, TEST_CUSTOMER_ID, testInvoiceId)
       );
 
       // Should have line items for both services
@@ -209,10 +217,8 @@ describe('Usage Charges', () => {
       });
       await refreshStatsAggregate(db);
 
-      const result = await updateUsageChargesToDraft(
-        unsafeAsLockedTransaction(db),
-        TEST_CUSTOMER_ID,
-        testInvoiceId
+      const result = await withCleanDraft((tx) =>
+        updateUsageChargesToDraft(tx, TEST_CUSTOMER_ID, testInvoiceId)
       );
 
       // Verify invoice amount was updated
@@ -235,19 +241,12 @@ describe('Usage Charges', () => {
       });
       await refreshStatsAggregate(db);
 
-      // Call first time
-      const result1 = await updateUsageChargesToDraft(
-        unsafeAsLockedTransaction(db),
-        TEST_CUSTOMER_ID,
-        testInvoiceId
-      );
-
-      // Call second time
-      const result2 = await updateUsageChargesToDraft(
-        unsafeAsLockedTransaction(db),
-        TEST_CUSTOMER_ID,
-        testInvoiceId
-      );
+      // Both calls inside one lock to prevent GM interference between them
+      const { result1, result2 } = await withCleanDraft(async (tx) => {
+        const r1 = await updateUsageChargesToDraft(tx, TEST_CUSTOMER_ID, testInvoiceId);
+        const r2 = await updateUsageChargesToDraft(tx, TEST_CUSTOMER_ID, testInvoiceId);
+        return { result1: r1, result2: r2 };
+      });
 
       // Both results should be identical
       expect(result1.success).toBe(true);
@@ -272,11 +271,9 @@ describe('Usage Charges', () => {
       });
       await refreshStatsAggregate(db);
 
-      // First call
-      const result1 = await updateUsageChargesToDraft(
-        unsafeAsLockedTransaction(db),
-        TEST_CUSTOMER_ID,
-        testInvoiceId
+      // First call (lock prevents GM from modifying the draft)
+      const result1 = await withCleanDraft((tx) =>
+        updateUsageChargesToDraft(tx, TEST_CUSTOMER_ID, testInvoiceId)
       );
       expect(result1.requestCounts?.seal).toBe(3000);
 
@@ -289,11 +286,9 @@ describe('Usage Charges', () => {
       });
       await refreshStatsAggregate(db);
 
-      // Second call - should now include ALL requests
-      const result2 = await updateUsageChargesToDraft(
-        unsafeAsLockedTransaction(db),
-        TEST_CUSTOMER_ID,
-        testInvoiceId
+      // Second call - should now include ALL requests (reset undoes any GM interference)
+      const result2 = await withCleanDraft((tx) =>
+        updateUsageChargesToDraft(tx, TEST_CUSTOMER_ID, testInvoiceId)
       );
       expect(result2.requestCounts?.seal).toBe(5000); // 3000 + 2000
 
@@ -324,10 +319,8 @@ describe('Usage Charges', () => {
       });
       await refreshStatsAggregate(db);
 
-      const result = await updateUsageChargesToDraft(
-        unsafeAsLockedTransaction(db),
-        TEST_CUSTOMER_ID,
-        testInvoiceId
+      const result = await withCleanDraft((tx) =>
+        updateUsageChargesToDraft(tx, TEST_CUSTOMER_ID, testInvoiceId)
       );
 
       // Should only count 3000 requests (within billing period)
@@ -352,10 +345,8 @@ describe('Usage Charges', () => {
       });
       await refreshStatsAggregate(db);
 
-      const result = await updateUsageChargesToDraft(
-        unsafeAsLockedTransaction(db),
-        TEST_CUSTOMER_ID,
-        testInvoiceId
+      const result = await withCleanDraft((tx) =>
+        updateUsageChargesToDraft(tx, TEST_CUSTOMER_ID, testInvoiceId)
       );
 
       // Should only count 3000 requests (within billing period)
@@ -372,10 +363,8 @@ describe('Usage Charges', () => {
       });
       await refreshStatsAggregate(db);
 
-      const result = await updateUsageChargesToDraft(
-        unsafeAsLockedTransaction(db),
-        TEST_CUSTOMER_ID,
-        testInvoiceId
+      const result = await withCleanDraft((tx) =>
+        updateUsageChargesToDraft(tx, TEST_CUSTOMER_ID, testInvoiceId)
       );
 
       // Should count requests at exactly the start (>= start)
@@ -400,10 +389,8 @@ describe('Usage Charges', () => {
       });
       await refreshStatsAggregate(db);
 
-      const result = await updateUsageChargesToDraft(
-        unsafeAsLockedTransaction(db),
-        TEST_CUSTOMER_ID,
-        testInvoiceId
+      const result = await withCleanDraft((tx) =>
+        updateUsageChargesToDraft(tx, TEST_CUSTOMER_ID, testInvoiceId)
       );
 
       // Should NOT count requests at exactly the end (< end, not <=)
@@ -421,10 +408,8 @@ describe('Usage Charges', () => {
       });
       await refreshStatsAggregate(db);
 
-      const result = await updateUsageChargesToDraft(
-        unsafeAsLockedTransaction(db),
-        TEST_CUSTOMER_ID,
-        testInvoiceId
+      const result = await withCleanDraft((tx) =>
+        updateUsageChargesToDraft(tx, TEST_CUSTOMER_ID, testInvoiceId)
       );
 
       // Verify pricing is applied (exact rate TBD)
@@ -435,10 +420,8 @@ describe('Usage Charges', () => {
   describe('Edge cases', () => {
     it('should handle empty billing period gracefully', async () => {
       // No logs inserted
-      const result = await updateUsageChargesToDraft(
-        unsafeAsLockedTransaction(db),
-        TEST_CUSTOMER_ID,
-        testInvoiceId
+      const result = await withCleanDraft((tx) =>
+        updateUsageChargesToDraft(tx, TEST_CUSTOMER_ID, testInvoiceId)
       );
 
       expect(result.success).toBe(true);
@@ -446,10 +429,8 @@ describe('Usage Charges', () => {
     });
 
     it('should handle non-existent invoice', async () => {
-      const result = await updateUsageChargesToDraft(
-        unsafeAsLockedTransaction(db),
-        TEST_CUSTOMER_ID,
-        999999999 // Non-existent invoice ID (bigint)
+      const result = await withCleanDraft((tx) =>
+        updateUsageChargesToDraft(tx, TEST_CUSTOMER_ID, 999999999)
       );
 
       expect(result.success).toBe(false);
@@ -457,11 +438,6 @@ describe('Usage Charges', () => {
     });
 
     it('should not add charges to non-DRAFT invoice', async () => {
-      // Change invoice to PENDING
-      await db.update(billingRecords)
-        .set({ status: 'pending' })
-        .where(eq(billingRecords.id, testInvoiceId));
-
       await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
         serviceType: 1,
         network: 1,
@@ -470,11 +446,13 @@ describe('Usage Charges', () => {
       });
       await refreshStatsAggregate(db);
 
-      const result = await updateUsageChargesToDraft(
-        unsafeAsLockedTransaction(db),
-        TEST_CUSTOMER_ID,
-        testInvoiceId
-      );
+      // Set to PENDING inside lock to prevent GM from changing it
+      const result = await withCustomerLock(db, TEST_CUSTOMER_ID, async (tx) => {
+        await tx.update(billingRecords)
+          .set({ status: 'pending' })
+          .where(eq(billingRecords.id, testInvoiceId));
+        return updateUsageChargesToDraft(tx, TEST_CUSTOMER_ID, testInvoiceId);
+      });
 
       expect(result.success).toBe(false);
       expect(result.error).toContain('not in draft');
