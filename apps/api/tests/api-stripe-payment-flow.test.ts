@@ -842,6 +842,13 @@ describe('API: Stripe Payment Flow', () => {
         forceCardDeclined: true,
       });
 
+      // Wait for any in-flight GM async webhooks (triggered by addStripePaymentMethod)
+      // to complete before advancing the clock. Without this, GM's sync-customer
+      // could fire after the clock change and process billing with GM's own mock
+      // Stripe (which doesn't have forceCardDeclined), paying the DRAFT before
+      // our periodic job runs.
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
       // Advance to 1st of next month to trigger monthly billing → payment fails
       await setClockTime('2025-02-01T00:05:00Z');
       await runPeriodicBillingJob(customerId);
@@ -899,6 +906,9 @@ describe('API: Stripe Payment Flow', () => {
       await restCall('POST', '/test/stripe/config', {
         forceCardDeclined: true,
       });
+
+      // Wait for any in-flight GM async webhooks to complete before advancing clock
+      await new Promise(resolve => setTimeout(resolve, 2000));
 
       // Advance to 1st of Feb → monthly billing fails → grace period starts
       await setClockTime('2025-02-01T00:05:00Z');
