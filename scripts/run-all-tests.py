@@ -22,6 +22,7 @@ Exit Codes:
 See: ~/mhaxbe/scripts/tests/README.md for full documentation
 """
 
+import fcntl
 import json
 import os
 import subprocess
@@ -33,6 +34,52 @@ from typing import Any, Optional
 # Summary file location - standardized across all repos
 REPO_NAME = "suiftly-co"
 SUMMARY_FILE = f"/tmp/{REPO_NAME}-test-summary.json"
+
+# Cross-repo lock file — shared between mhaxbe and suiftly-co to prevent
+# parallel test execution. Tests share a real database and real services;
+# running them concurrently causes DB state pollution and phantom failures.
+TEST_LOCK_FILE = "/tmp/suiftly-test-suite.lock"
+
+
+def acquire_test_lock() -> Optional[int]:
+    """
+    Acquire an exclusive cross-repo lock to prevent parallel test execution.
+
+    Tests across mhaxbe and suiftly-co share a real database and services.
+    Running them in parallel causes DB state pollution and phantom failures.
+
+    Returns:
+        File descriptor on success, None on failure (lock already held).
+    """
+    fd = os.open(TEST_LOCK_FILE, os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        # Lock is held by another process — read who holds it
+        try:
+            content = os.pread(fd, 256, 0).decode().strip()
+        except Exception:
+            content = "(unknown)"
+        os.close(fd)
+        print()
+        print("!" * 70)
+        print("  FATAL: Another test suite is already running!")
+        print("!" * 70)
+        print()
+        print(f"  Lock file: {TEST_LOCK_FILE}")
+        print(f"  Held by: {content}")
+        print()
+        print("  Tests MUST run sequentially — never in parallel.")
+        print("  Wait for the other test suite to finish, or kill it first.")
+        print("!" * 70)
+        return None
+
+    # Write our identity into the lock file for diagnostics
+    identity = f"{REPO_NAME} (pid={os.getpid()}, started={datetime.now().isoformat()})"
+    os.ftruncate(fd, 0)
+    os.pwrite(fd, identity.encode(), 0)
+
+    return fd
 
 
 def get_repo_root() -> Path:
@@ -194,6 +241,11 @@ def main() -> int:
     print_header(f"SUIFTLY-CO TEST RUNNER")
     print(f"  Repository: {repo_root}")
     print(f"  Summary file: {SUMMARY_FILE}")
+
+    # Acquire cross-repo test lock (prevents parallel execution)
+    lock_fd = acquire_test_lock()
+    if lock_fd is None:
+        return 1
 
     # Production environment check
     is_prod, reason = is_production_environment()

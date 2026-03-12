@@ -40,6 +40,7 @@ Initial setup phase - no code scaffolded yet.
 - Keep it simple (rapid development principle)
 - TypeScript strict mode
 - Update this file only when adding commands or major patterns
+- **CRITICAL: Tests must ALWAYS run sequentially, NEVER in parallel.** Tests share a real PostgreSQL database and real services (GM, LM, API). Parallel execution causes DB state pollution, duplicate key violations, and phantom failures. This applies both within this repo and across repos (suiftly-co and mhaxbe). The test runner's stop-on-first-failure design is intentional.
 
 ## Configuration Management
 
