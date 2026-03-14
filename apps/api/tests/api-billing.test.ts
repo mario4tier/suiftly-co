@@ -25,6 +25,7 @@ import {
   subscribeAndEnable,
 } from './helpers/http.js';
 import { login, TEST_WALLET } from './helpers/auth.js';
+import { clearNotifications, expectNoNotifications } from './helpers/notifications.js';
 
 describe('API: Billing Flow', () => {
   let accessToken: string;
@@ -51,6 +52,8 @@ describe('API: Billing Flow', () => {
 
     // THEN ensure balance (after customer exists)
     await ensureTestBalance(100, { walletAddress: TEST_WALLET });
+
+    await clearNotifications(customerId);
   });
 
   afterEach(async () => {
@@ -75,6 +78,8 @@ describe('API: Billing Flow', () => {
       console.log('[DEBUG] Billing job result:', JSON.stringify(result, null, 2));
       expect(result.success).toBe(true);
       expect(result.result).toBeDefined();
+
+      await expectNoNotifications(customerId);
     });
 
     it('should apply scheduled tier downgrade on 1st of month', async () => {
@@ -117,6 +122,8 @@ describe('API: Billing Flow', () => {
       });
       expect(service?.tier).toBe('starter');
       expect(service?.scheduledTier).toBeNull();
+
+      await expectNoNotifications(customerId);
     });
 
     it('should process scheduled cancellation on 1st of month', async () => {
@@ -161,6 +168,8 @@ describe('API: Billing Flow', () => {
       expect(service?.state).toBe('cancellation_pending');
       expect(service?.cancellationScheduledFor).toBeNull();
       expect(service?.cancellationEffectiveAt).toBeTruthy();
+
+      await expectNoNotifications(customerId);
     });
   });
 
@@ -184,6 +193,8 @@ describe('API: Billing Flow', () => {
 
       // Should have at least one DRAFT invoice for next billing period
       expect(drafts.length).toBeGreaterThanOrEqual(1);
+
+      await expectNoNotifications(customerId);
     });
   });
 
@@ -217,6 +228,8 @@ describe('API: Billing Flow', () => {
       // Should have at least one non-draft invoice (either pending or paid)
       const nonDraft = allRecords.filter(r => r.status !== 'draft');
       expect(nonDraft.length).toBeGreaterThanOrEqual(1);
+
+      await expectNoNotifications(customerId);
     });
   });
 });

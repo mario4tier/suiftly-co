@@ -18,7 +18,6 @@ import {
   customers,
   serviceInstances,
   customerPaymentMethods,
-  adminNotifications,
 } from '@suiftly/database/schema';
 import { billingRecords } from '@suiftly/database/schema';
 import { invoicePayments } from '@suiftly/database/schema';
@@ -35,6 +34,7 @@ import {
   addStripePaymentMethod,
 } from './helpers/http.js';
 import { login, TEST_WALLET } from './helpers/auth.js';
+import { clearNotifications, expectNotifications, expectNoNotifications } from './helpers/notifications.js';
 
 describe('API: Stripe Payment Flow', () => {
   let accessToken: string;
@@ -55,6 +55,9 @@ describe('API: Stripe Payment Flow', () => {
     await restCall('POST', '/test/stripe/force-mock', { enabled: true });
     // Clear stripe mock config
     await restCall('POST', '/test/stripe/config/clear');
+
+    // Clear any notifications from setup (e.g., GM background processing)
+    await clearNotifications(customerId);
   });
 
   afterEach(async () => {
@@ -105,6 +108,8 @@ describe('API: Stripe Payment Flow', () => {
       expect(stripePayment).toBeDefined();
       expect(stripePayment!.providerReferenceId).toBeDefined();
       expect(stripePayment!.amountUsdCents).toBeGreaterThan(0);
+
+      await expectNoNotifications(customerId, { tolerateGM: true });
     });
   });
 
@@ -141,6 +146,7 @@ describe('API: Stripe Payment Flow', () => {
         ),
       });
       expect(service?.subPendingInvoiceId).not.toBeNull();
+      await expectNoNotifications(customerId, { tolerateGM: true });
     });
 
     it('should leave payment pending when Stripe charge fails with generic error', async () => {
@@ -162,6 +168,7 @@ describe('API: Stripe Payment Flow', () => {
 
       expect(result.result?.data).toBeDefined();
       expect(result.result?.data.paymentPending).toBe(true);
+      await expectNoNotifications(customerId, { tolerateGM: true });
     });
   });
 
@@ -215,6 +222,8 @@ describe('API: Stripe Payment Flow', () => {
       const stripePayment = payments.find(p => p.sourceType === 'stripe');
       expect(stripePayment).toBeDefined();
       expect(stripePayment!.providerReferenceId).toBeDefined();
+
+      await expectNoNotifications(customerId, { tolerateGM: true });
     });
   });
 
@@ -262,6 +271,7 @@ describe('API: Stripe Payment Flow', () => {
       const stripePayment = payments.find(p => p.sourceType === 'stripe');
       expect(stripePayment).toBeDefined();
       expect(stripePayment!.providerReferenceId).toBeDefined();
+      await expectNoNotifications(customerId, { tolerateGM: true });
     });
   });
 
@@ -300,6 +310,7 @@ describe('API: Stripe Payment Flow', () => {
       const pendingRecords = records.filter(r => r.status === 'pending' && r.paymentActionUrl);
       expect(pendingRecords.length).toBeGreaterThanOrEqual(1);
       expect(pendingRecords[0].paymentActionUrl).toContain('https://invoice.stripe.com/');
+      await expectNoNotifications(customerId, { tolerateGM: true });
     });
 
     it('should return paymentActionUrl in error when Stripe requires 3DS on retry', async () => {
@@ -334,6 +345,8 @@ describe('API: Stripe Payment Flow', () => {
 
       // Error message should mention authentication/3DS
       expect(toggleResult.error.message).toContain('authentication');
+
+      await expectNoNotifications(customerId, { tolerateGM: true });
     });
   });
 
@@ -375,6 +388,7 @@ describe('API: Stripe Payment Flow', () => {
         ),
       });
       expect(service?.subPendingInvoiceId).not.toBeNull();
+      await expectNoNotifications(customerId, { tolerateGM: true });
     });
   });
 
@@ -403,6 +417,7 @@ describe('API: Stripe Payment Flow', () => {
         ));
       expect(methods).toHaveLength(1);
       expect(methods[0].providerRef).toContain('pm_mock_');
+      await expectNoNotifications(customerId, { tolerateGM: true });
     });
   });
 
@@ -438,6 +453,7 @@ describe('API: Stripe Payment Flow', () => {
       const failedRecord = records.find(r => r.status === 'failed');
       expect(failedRecord).toBeDefined();
       expect(failedRecord!.failureReason).toContain('declined');
+      await expectNoNotifications(customerId, { tolerateGM: true });
     });
   });
 
@@ -499,6 +515,7 @@ describe('API: Stripe Payment Flow', () => {
         ),
       });
       expect(service?.subPendingInvoiceId).toBeNull();
+      await expectNoNotifications(customerId, { tolerateGM: true });
     });
   });
 
@@ -558,6 +575,7 @@ describe('API: Stripe Payment Flow', () => {
         ),
       });
       expect(service?.subPendingInvoiceId).toBeNull();
+      await expectNoNotifications(customerId, { tolerateGM: true });
     });
   });
 
@@ -643,6 +661,8 @@ describe('API: Stripe Payment Flow', () => {
         .from(billingRecords)
         .where(eq(billingRecords.id, pendingInvoiceId!));
       expect(oldInvoice.status).toBe('paid');
+
+      await expectNoNotifications(customerId, { tolerateGM: true });
     });
   });
 
@@ -690,6 +710,7 @@ describe('API: Stripe Payment Flow', () => {
       expect(records).toHaveLength(1);
       expect(records[0].status).toBe('pending');
       expect(records[0].paymentActionUrl).not.toBeNull();
+      await expectNoNotifications(customerId, { tolerateGM: true });
     });
   });
 
@@ -741,16 +762,10 @@ describe('API: Stripe Payment Flow', () => {
       // Verify: paymentActionUrl is cleared
       expect(record.paymentActionUrl).toBeNull();
 
-      // Verify: admin_notifications has THREEDS_TIMEOUT
-      const notifications = await db.select()
-        .from(adminNotifications)
-        .where(
-          and(
-            eq(adminNotifications.code, 'THREEDS_TIMEOUT'),
-            eq(adminNotifications.invoiceId, invoiceId),
-          )
-        );
-      expect(notifications.length).toBeGreaterThanOrEqual(1);
+      // Verify: THREEDS_TIMEOUT on this specific invoice
+      await expectNotifications(customerId, ['warning:THREEDS_TIMEOUT'], { forInvoice: invoiceId, tolerateGM: true });
+      // Verify: no unexpected notifications on other invoices (customer-wide check)
+      await expectNotifications(customerId, ['warning:THREEDS_TIMEOUT'], { tolerateGM: true });
     });
   });
 
@@ -803,6 +818,7 @@ describe('API: Stripe Payment Flow', () => {
         .where(eq(invoicePayments.billingRecordId, paidRecords[0].id));
       const escrowPayment = payments.find(p => p.sourceType === 'escrow');
       expect(escrowPayment).toBeDefined();
+      await expectNoNotifications(customerId, { tolerateGM: true });
     });
   });
 
@@ -853,16 +869,8 @@ describe('API: Stripe Payment Flow', () => {
       await setClockTime('2025-02-01T00:05:00Z');
       await runPeriodicBillingJob(customerId);
 
-      // Verify: GRACE_PERIOD_STARTED notification exists
-      const graceNotifications = await db.select()
-        .from(adminNotifications)
-        .where(
-          and(
-            eq(adminNotifications.code, 'GRACE_PERIOD_STARTED'),
-            eq(adminNotifications.customerId, customerId),
-          )
-        );
-      expect(graceNotifications.length).toBeGreaterThanOrEqual(1);
+      // Verify: GRACE_PERIOD_STARTED notification exists (and nothing unexpected)
+      await expectNotifications(customerId, ['warning:GRACE_PERIOD_STARTED'], { tolerateGM: true });
 
       // Advance 15 days past grace period (14-day grace)
       await advanceClock({ days: 15 });
@@ -870,16 +878,11 @@ describe('API: Stripe Payment Flow', () => {
       // Run periodic billing again — grace period has expired
       await runPeriodicBillingJob(customerId);
 
-      // Verify: CUSTOMER_SUSPENDED notification exists
-      const suspendNotifications = await db.select()
-        .from(adminNotifications)
-        .where(
-          and(
-            eq(adminNotifications.code, 'CUSTOMER_SUSPENDED'),
-            eq(adminNotifications.customerId, customerId),
-          )
-        );
-      expect(suspendNotifications.length).toBeGreaterThanOrEqual(1);
+      // Verify: both grace period and suspension notifications
+      await expectNotifications(customerId, [
+        'warning:GRACE_PERIOD_STARTED',
+        'error:CUSTOMER_SUSPENDED',
+      ], { tolerateGM: true });
     });
 
     it('should resume suspended customer when payment retry succeeds after adding new card', async () => {
@@ -987,6 +990,12 @@ describe('API: Stripe Payment Flow', () => {
         );
       // Should have at least 2 paid invoices: original subscription + retried monthly billing
       expect(paidInvoices.length).toBeGreaterThanOrEqual(2);
+
+      // Both grace period and suspension notifications remain from the suspend phase
+      await expectNotifications(customerId, [
+        'warning:GRACE_PERIOD_STARTED',
+        'error:CUSTOMER_SUSPENDED',
+      ], { tolerateGM: true });
     });
   });
 });

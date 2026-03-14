@@ -21,7 +21,7 @@ import {
   customerCredits,
   adminNotifications,
 } from '@suiftly/database/schema';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, isNull } from 'drizzle-orm';
 import {
   resetTestData,
   restCall,
@@ -32,6 +32,7 @@ import {
   addStripePaymentMethod,
 } from './helpers/http.js';
 import { login, TEST_WALLET } from './helpers/auth.js';
+import { clearNotifications, expectNotifications, expectNoNotifications } from './helpers/notifications.js';
 
 const API_BASE = 'http://localhost:22700';
 const WEBHOOK_SECRET = 'whsec_test_secret_for_development_only';
@@ -92,6 +93,9 @@ describe('API: Stripe Webhook', () => {
     });
     if (!customer) throw new Error('Test customer not found');
     customerId = customer.customerId;
+
+    // Clear any notifications from setup (e.g., GM background processing)
+    await clearNotifications(customerId);
   });
 
   afterEach(async () => {
@@ -131,7 +135,7 @@ describe('API: Stripe Webhook', () => {
 
     it('should accept valid signature', async () => {
       const event = {
-        id: 'evt_test_3',
+        id: `evt_test_3_${Date.now()}`,
         type: 'unknown.event',
         data: { object: {} },
       };
@@ -140,6 +144,7 @@ describe('API: Stripe Webhook', () => {
 
       expect(result.status).toBe(200);
       expect(result.data?.received).toBe(true);
+      await expectNoNotifications(customerId);
     });
   });
 
@@ -161,8 +166,9 @@ describe('API: Stripe Webhook', () => {
       });
       expect(customer?.stripeCustomerId).toBeDefined();
 
+      const eventId = `evt_setup_1_${Date.now()}`;
       const event = {
-        id: 'evt_setup_1',
+        id: eventId,
         type: 'setup_intent.succeeded',
         data: {
           object: {
@@ -179,13 +185,29 @@ describe('API: Stripe Webhook', () => {
       const result = await sendWebhookEvent(event);
       expect(result.status).toBe(200);
 
-      // Verify event was recorded
+      // Verify event was recorded and processed
       const webhookEvent = await db.query.paymentWebhookEvents.findFirst({
-        where: eq(paymentWebhookEvents.eventId, 'evt_setup_1'),
+        where: eq(paymentWebhookEvents.eventId, eventId),
       });
       expect(webhookEvent).toBeDefined();
       expect(webhookEvent?.processed).toBe(true);
       expect(webhookEvent?.eventType).toBe('setup_intent.succeeded');
+
+      // Verify payment method was saved to customer_payment_methods
+      const paymentMethod = await db.query.customerPaymentMethods.findFirst({
+        where: and(
+          eq(customerPaymentMethods.customerId, customerId),
+          eq(customerPaymentMethods.providerType, 'stripe'),
+          eq(customerPaymentMethods.status, 'active'),
+        ),
+      });
+      expect(paymentMethod).toBeDefined();
+      expect(paymentMethod?.providerRef).toBe('pm_test_visa_4242');
+
+      // Only tolerate STRIPE_API_UNREACHABLE (GM's mock doesn't know the customer).
+      // Do NOT tolerate WEBHOOK_GM_QUEUE_FAILED here — this test exercises the
+      // webhook path that queues GM sync-customer, so GM unreachable is a real failure.
+      await expectNoNotifications(customerId, { tolerateCodes: ['warning:STRIPE_API_UNREACHABLE'] });
     });
 
     it('should handle duplicate events idempotently', async () => {
@@ -200,7 +222,7 @@ describe('API: Stripe Webhook', () => {
       });
 
       const event = {
-        id: 'evt_setup_idem',
+        id: `evt_setup_idem_${Date.now()}`,
         type: 'setup_intent.succeeded',
         data: {
           object: {
@@ -218,6 +240,8 @@ describe('API: Stripe Webhook', () => {
       const result2 = await sendWebhookEvent(event);
       expect(result2.status).toBe(200);
       expect(result2.data?.duplicate).toBe(true);
+      // Same rationale: only tolerate the expected GM mock mismatch, not GM unreachable
+      await expectNoNotifications(customerId, { tolerateCodes: ['warning:STRIPE_API_UNREACHABLE'] });
     });
   });
 
@@ -226,8 +250,9 @@ describe('API: Stripe Webhook', () => {
   // =========================================================================
   describe('payment_intent.succeeded', () => {
     it('should process and return 200', async () => {
+      const eventId = `evt_pi_success_1_${Date.now()}`;
       const event = {
-        id: 'evt_pi_success_1',
+        id: eventId,
         type: 'payment_intent.succeeded',
         data: {
           object: {
@@ -246,10 +271,11 @@ describe('API: Stripe Webhook', () => {
 
       // Verify event was recorded
       const webhookEvent = await db.query.paymentWebhookEvents.findFirst({
-        where: eq(paymentWebhookEvents.eventId, 'evt_pi_success_1'),
+        where: eq(paymentWebhookEvents.eventId, eventId),
       });
       expect(webhookEvent).toBeDefined();
       expect(webhookEvent?.processed).toBe(true);
+      await expectNoNotifications(customerId);
     });
   });
 
@@ -258,8 +284,16 @@ describe('API: Stripe Webhook', () => {
   // =========================================================================
   describe('payment_intent.payment_failed', () => {
     it('should process and return 200', async () => {
+      // Clear stale system-level STRIPE_PAYMENT_FAILED_NO_METADATA from prior runs
+      await db.delete(adminNotifications)
+        .where(and(
+          eq(adminNotifications.code, 'STRIPE_PAYMENT_FAILED_NO_METADATA'),
+          isNull(adminNotifications.customerId),
+        ));
+
+      const eventId = `evt_pi_failed_1_${Date.now()}`;
       const event = {
-        id: 'evt_pi_failed_1',
+        id: eventId,
         type: 'payment_intent.payment_failed',
         data: {
           object: {
@@ -280,10 +314,24 @@ describe('API: Stripe Webhook', () => {
 
       // Verify event was recorded
       const webhookEvent = await db.query.paymentWebhookEvents.findFirst({
-        where: eq(paymentWebhookEvents.eventId, 'evt_pi_failed_1'),
+        where: eq(paymentWebhookEvents.eventId, eventId),
       });
       expect(webhookEvent).toBeDefined();
       expect(webhookEvent?.processed).toBe(true);
+
+      // Verify: exactly one system-level STRIPE_PAYMENT_FAILED_NO_METADATA notification.
+      // This event has no billing_record_id metadata and uses a fake Stripe customer,
+      // so the handler logs a system-level (null customerId) notification.
+      const sysNotifs = await db.select()
+        .from(adminNotifications)
+        .where(and(
+          eq(adminNotifications.code, 'STRIPE_PAYMENT_FAILED_NO_METADATA'),
+          isNull(adminNotifications.customerId),
+        ));
+      expect(sysNotifs.length).toBe(1);
+
+      // No customer-scoped notifications
+      await expectNoNotifications(customerId);
     });
   });
 
@@ -332,6 +380,9 @@ describe('API: Stripe Webhook', () => {
       // Clear 3DS config so it doesn't interfere with other tests
       await restCall('POST', '/test/stripe/config/clear');
 
+      // Clear notifications from setup (GM sync-customer may fire STRIPE_API_UNREACHABLE)
+      await clearNotifications(customerId);
+
       return {
         billingRecordId: failedRecord.id,
         stripeInvoiceId,
@@ -375,6 +426,7 @@ describe('API: Stripe Webhook', () => {
       expect(stripePayment).toBeDefined();
       expect(stripePayment!.providerReferenceId).toBe(stripeInvoiceId);
       expect(Number(stripePayment!.amountUsdCents)).toBe(900);
+      await expectNoNotifications(customerId, { tolerateGM: true });
     });
 
     it('should set paidOnce on service and customer', async () => {
@@ -408,6 +460,7 @@ describe('API: Stripe Webhook', () => {
         ),
       });
       expect(service?.paidOnce).toBe(true);
+      await expectNoNotifications(customerId, { tolerateGM: true });
     });
 
     it('should clear subPendingInvoiceId', async () => {
@@ -444,6 +497,7 @@ describe('API: Stripe Webhook', () => {
         ),
       });
       expect(serviceAfter?.subPendingInvoiceId).toBeNull();
+      await expectNoNotifications(customerId, { tolerateGM: true });
     });
 
     it('should issue reconciliation credit', async () => {
@@ -479,6 +533,7 @@ describe('API: Stripe Webhook', () => {
       expect(credits.length).toBeGreaterThanOrEqual(1);
       const totalCredit = credits.reduce((sum, c) => sum + Number(c.originalAmountUsdCents), 0);
       expect(totalCredit).toBeGreaterThan(0);
+      await expectNoNotifications(customerId, { tolerateGM: true });
     });
 
     it('should be idempotent (duplicate delivery)', async () => {
@@ -511,6 +566,163 @@ describe('API: Stripe Webhook', () => {
         .where(eq(invoicePayments.billingRecordId, billingRecordId));
       const stripePayments = payments.filter(p => p.sourceType === 'stripe');
       expect(stripePayments.length).toBe(1);
+      await expectNoNotifications(customerId, { tolerateGM: true });
+    });
+
+    it('should block while stale claim exists, then reprocess after row is deleted', async () => {
+      // Tests the idempotency contract:
+      // 1. A claimed (processed=false) row blocks reprocessing
+      // 2. Deleting the stale row (as the catch block does on failure) unblocks retry
+      // 3. The next attempt processes successfully
+      //
+      // Note: this simulates the catch-block cleanup via direct DB manipulation
+      // because forcing a real handler exception requires test infrastructure
+      // that would add production complexity. The catch-block delete is 3 lines
+      // of straightforward code (db.delete where eventId).
+      const { billingRecordId, stripeInvoiceId } = await subscribeWith3DSPending();
+      const eventId = `evt_inv_retry_${Date.now()}`;
+
+      const event = {
+        id: eventId,
+        type: 'invoice.paid',
+        data: {
+          object: {
+            id: stripeInvoiceId,
+            amount_paid: 900,
+            metadata: { billing_record_id: String(billingRecordId) },
+          },
+        },
+      };
+
+      // Step 1: Insert a stale claimed row (simulates failed prior attempt
+      // where the catch-block delete also failed — the stuck-event edge case)
+      await db.insert(paymentWebhookEvents).values({
+        eventId,
+        providerType: 'stripe',
+        eventType: 'invoice.paid',
+        processed: false,
+        data: JSON.stringify(event),
+      });
+
+      // Step 2: Retry arrives — blocked by existing row
+      const stuckResult = await sendWebhookEvent(event);
+      expect(stuckResult.status).toBe(200);
+      expect(stuckResult.data?.duplicate).toBe(true);
+
+      // Verify: billing record still pending (event wasn't processed)
+      let [record] = await db.select()
+        .from(billingRecords)
+        .where(eq(billingRecords.id, billingRecordId));
+      expect(record.status).toBe('pending');
+
+      // Step 3: Delete stale row (simulates catch-block cleanup or admin intervention)
+      await db.delete(paymentWebhookEvents)
+        .where(eq(paymentWebhookEvents.eventId, eventId));
+
+      // Step 4: Next retry succeeds — fresh insert, full processing
+      const retryResult = await sendWebhookEvent(event);
+      expect(retryResult.status).toBe(200);
+      expect(retryResult.data?.duplicate).toBeUndefined();
+
+      // Verify: billing record is now paid
+      [record] = await db.select()
+        .from(billingRecords)
+        .where(eq(billingRecords.id, billingRecordId));
+      expect(record.status).toBe('paid');
+
+      // Verify: event row is marked processed
+      const webhookEvent = await db.query.paymentWebhookEvents.findFirst({
+        where: eq(paymentWebhookEvents.eventId, eventId),
+      });
+      expect(webhookEvent?.processed).toBe(true);
+
+      await expectNoNotifications(customerId, { tolerateGM: true });
+    });
+
+    it('should skip refund when webhook confirms same Stripe charge already processed synchronously', async () => {
+      const { billingRecordId, stripeInvoiceId } = await subscribeWith3DSPending();
+
+      // Simulate: the synchronous invoices.pay() path already reconciled this charge.
+      // This creates the invoice_payments row that processInvoicePayment would create,
+      // AND marks the billing record as paid.
+      await db.insert(invoicePayments).values({
+        billingRecordId,
+        sourceType: 'stripe',
+        providerReferenceId: stripeInvoiceId,
+        creditId: null,
+        escrowTransactionId: null,
+        amountUsdCents: 900,
+      });
+      await db.update(billingRecords)
+        .set({ status: 'paid', amountPaidUsdCents: 900 })
+        .where(eq(billingRecords.id, billingRecordId));
+
+      // Send invoice.paid webhook for the SAME Stripe invoice
+      const event = {
+        id: `evt_inv_same_charge_${Date.now()}`,
+        type: 'invoice.paid',
+        data: {
+          object: {
+            id: stripeInvoiceId,
+            amount_paid: 900,
+            metadata: { billing_record_id: String(billingRecordId) },
+          },
+        },
+      };
+
+      const result = await sendWebhookEvent(event);
+      expect(result.status).toBe(200);
+
+      // Verify: no notifications at all (not a double charge)
+      await expectNoNotifications(customerId, { tolerateGM: true });
+
+      // Verify: billing record unchanged
+      const [record] = await db.select()
+        .from(billingRecords)
+        .where(eq(billingRecords.id, billingRecordId));
+      expect(record.status).toBe('paid');
+      expect(Number(record.amountPaidUsdCents)).toBe(900);
+    });
+
+    it('should auto-refund when non-Stripe provider has same reference ID (cross-provider collision)', async () => {
+      const { billingRecordId, stripeInvoiceId } = await subscribeWith3DSPending();
+
+      // Simulate: a non-Stripe provider (e.g., PayPal) paid with the same reference ID.
+      // This is unlikely in practice but tests that the sourceType filter prevents
+      // a cross-provider collision from suppressing the refund.
+      await db.insert(invoicePayments).values({
+        billingRecordId,
+        sourceType: 'paypal',
+        providerReferenceId: stripeInvoiceId, // Same reference as the Stripe invoice
+        creditId: null,
+        escrowTransactionId: null,
+        amountUsdCents: 900,
+      });
+      await db.update(billingRecords)
+        .set({ status: 'paid', amountPaidUsdCents: 900 })
+        .where(eq(billingRecords.id, billingRecordId));
+
+      // Send invoice.paid webhook — should refund because the existing payment
+      // is PayPal, not Stripe, despite having the same providerReferenceId
+      const event = {
+        id: `evt_inv_cross_provider_${Date.now()}`,
+        type: 'invoice.paid',
+        data: {
+          object: {
+            id: stripeInvoiceId,
+            amount_paid: 900,
+            metadata: { billing_record_id: String(billingRecordId) },
+          },
+        },
+      };
+
+      const result = await sendWebhookEvent(event);
+      expect(result.status).toBe(200);
+
+      // Verify: DOUBLE_CHARGE_AUTO_REFUNDED on this specific invoice
+      await expectNotifications(customerId, ['error:DOUBLE_CHARGE_AUTO_REFUNDED'], { forInvoice: billingRecordId, tolerateGM: true });
+      // Verify: no unexpected notifications on other invoices (customer-wide check)
+      await expectNotifications(customerId, ['error:DOUBLE_CHARGE_AUTO_REFUNDED'], { tolerateGM: true });
     });
 
     it('should auto-refund when billing record is already paid by another provider', async () => {
@@ -538,16 +750,10 @@ describe('API: Stripe Webhook', () => {
       const result = await sendWebhookEvent(event);
       expect(result.status).toBe(200);
 
-      // Verify: admin_notifications has DOUBLE_CHARGE_AUTO_REFUNDED
-      const notifications = await db.select()
-        .from(adminNotifications)
-        .where(
-          and(
-            eq(adminNotifications.code, 'DOUBLE_CHARGE_AUTO_REFUNDED'),
-            eq(adminNotifications.invoiceId, billingRecordId),
-          )
-        );
-      expect(notifications.length).toBeGreaterThanOrEqual(1);
+      // Verify: DOUBLE_CHARGE_AUTO_REFUNDED on this specific invoice
+      await expectNotifications(customerId, ['error:DOUBLE_CHARGE_AUTO_REFUNDED'], { forInvoice: billingRecordId, tolerateGM: true });
+      // Verify: no unexpected notifications on other invoices (customer-wide check)
+      await expectNotifications(customerId, ['error:DOUBLE_CHARGE_AUTO_REFUNDED'], { tolerateGM: true });
 
       // Verify: billing record stays paid (not double-credited)
       const [record] = await db.select()
@@ -563,16 +769,27 @@ describe('API: Stripe Webhook', () => {
   // =========================================================================
   describe('Signature failure notification', () => {
     it('should create admin notification on invalid webhook signature', async () => {
+      // Clear stale system-level WEBHOOK_SIGNATURE_FAILED rows from prior runs
+      // so we can assert exactly 1 was created by this test
+      await db.delete(adminNotifications)
+        .where(and(
+          eq(adminNotifications.code, 'WEBHOOK_SIGNATURE_FAILED'),
+          isNull(adminNotifications.customerId),
+        ));
+
       const event = { id: 'evt_sig_fail_1', type: 'test', data: { object: {} } };
       const result = await sendWebhookEvent(event, 't=1234567890,v1=invalidsignature');
 
       expect(result.status).toBe(400);
 
-      // Verify: admin_notifications has WEBHOOK_SIGNATURE_FAILED
+      // Verify: exactly one WEBHOOK_SIGNATURE_FAILED was created by this test
       const notifications = await db.select()
         .from(adminNotifications)
-        .where(eq(adminNotifications.code, 'WEBHOOK_SIGNATURE_FAILED'));
-      expect(notifications.length).toBeGreaterThanOrEqual(1);
+        .where(and(
+          eq(adminNotifications.code, 'WEBHOOK_SIGNATURE_FAILED'),
+          isNull(adminNotifications.customerId),
+        ));
+      expect(notifications.length).toBe(1);
       expect(notifications[0].category).toBe('security');
     });
   });

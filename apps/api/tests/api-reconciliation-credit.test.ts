@@ -30,6 +30,7 @@ import {
 } from './helpers/http.js';
 import { login, TEST_WALLET } from './helpers/auth.js';
 import { TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
+import { clearNotifications, expectNoNotifications } from './helpers/notifications.js';
 
 describe('API: Reconciliation Credit Calculation', () => {
   let accessToken: string;
@@ -63,6 +64,8 @@ describe('API: Reconciliation Credit Calculation', () => {
         amountUsd: balanceResult.data.balanceUsd,
       });
     }
+
+    await clearNotifications(customerId);
   });
 
   afterEach(async () => {
@@ -197,6 +200,8 @@ describe('API: Reconciliation Credit Calculation', () => {
       });
       expect(service?.paidOnce).toBe(true);
       expect(service?.subPendingInvoiceId).toBeNull();
+
+      await expectNoNotifications(customerId);
     });
 
     it('should update pending billing record when tier changes while unpaid', async () => {
@@ -244,6 +249,8 @@ describe('API: Reconciliation Credit Calculation', () => {
       expect(records.length).toBe(1);
       // BUG: Currently returns 900 (starter) instead of 18500 (enterprise)
       expect(Number(records[0].amountUsdCents)).toBe(TIER_PRICES_USD_CENTS.enterprise);
+
+      await expectNoNotifications(customerId);
     });
 
     it('should calculate correct credit when downgrading while unpaid', async () => {
@@ -328,6 +335,8 @@ describe('API: Reconciliation Credit Calculation', () => {
       );
 
       expect(Number(credits[0].originalAmountUsdCents)).toBe(expectedCreditCents);
+
+      await expectNoNotifications(customerId);
     });
   });
 
@@ -386,6 +395,8 @@ describe('API: Reconciliation Credit Calculation', () => {
       });
       expect(credits.length).toBe(1);
       expect(Number(credits[0].originalAmountUsdCents)).toBe(firstCreditAmount);
+
+      await expectNoNotifications(customerId);
     });
   });
 });

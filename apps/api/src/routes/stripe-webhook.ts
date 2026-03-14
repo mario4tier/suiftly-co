@@ -84,6 +84,40 @@ function verifyStripeSignature(
   return { valid: true };
 }
 
+/**
+ * Resolve customerId from a Stripe event object's metadata.
+ * Tries billing_record_id first (authoritative), then stripeCustomerId fallback.
+ * Returns null if neither resolves. Non-throwing.
+ */
+async function resolveCustomerIdFromEvent(
+  obj: Record<string, unknown> | undefined,
+): Promise<number | null> {
+  if (!obj) return null;
+  try {
+    const metadata = obj.metadata as Record<string, string> | undefined;
+    const billingRecordIdStr = metadata?.billing_record_id;
+    if (billingRecordIdStr) {
+      const brId = parseInt(billingRecordIdStr, 10);
+      if (!isNaN(brId)) {
+        const rec = await db.query.billingRecords.findFirst({
+          columns: { customerId: true },
+          where: eq(billingRecords.id, brId),
+        });
+        if (rec) return rec.customerId;
+      }
+    }
+    const stripeCustomerId = obj.customer as string | undefined;
+    if (stripeCustomerId) {
+      const cust = await db.query.customers.findFirst({
+        columns: { customerId: true },
+        where: eq(customers.stripeCustomerId, stripeCustomerId),
+      });
+      if (cust) return cust.customerId;
+    }
+  } catch { /* non-fatal */ }
+  return null;
+}
+
 export async function registerStripeWebhook(server: FastifyInstance) {
   // Skip registration if Stripe is not configured
   // Note: webhookSecretOverride may be set later by tests, so we still register
@@ -153,31 +187,52 @@ export async function registerStripeWebhook(server: FastifyInstance) {
       return reply.status(400).send({ error: 'Invalid JSON' });
     }
 
-    // 2. Idempotency check — skip if already processed
-    const existing = await db.query.paymentWebhookEvents.findFirst({
-      where: eq(paymentWebhookEvents.eventId, event.id),
-    });
+    // 2. Atomic idempotency — INSERT ON CONFLICT DO NOTHING ensures exactly one
+    // request processes each event. All conflicts return 200 (duplicate).
+    //
+    // Retry-after-failure: the catch block deletes the row on failure, so
+    // Stripe's next retry (sequential, ~1 min+ later) inserts fresh.
+    //
+    // Architecture note: Stripe delivers events sequentially to a single
+    // endpoint with exponential backoff. True concurrent delivery only occurs
+    // with multi-instance deployments behind a load balancer. If we scale to
+    // multiple instances, this should be replaced with a PostgreSQL advisory
+    // lock (pg_advisory_xact_lock) on a hash of the event ID.
+    const insertResult = await db.insert(paymentWebhookEvents).values({
+      eventId: event.id,
+      providerType: 'stripe',
+      eventType: event.type,
+      processed: false,
+      data: rawBody,
+    }).onConflictDoNothing();
 
-    if (existing?.processed) {
-      console.log(`[Stripe Webhook] Event ${event.id} already processed, skipping`);
+    if (insertResult.rowCount === 0) {
+      console.log(`[Stripe Webhook] Event ${event.id} already claimed, skipping`);
       return reply.status(200).send({ received: true, duplicate: true });
     }
 
-    // Record the event (if not already recorded)
-    if (!existing) {
-      await db.insert(paymentWebhookEvents).values({
-        eventId: event.id,
-        providerType: 'stripe',
-        eventType: event.type,
-        processed: false,
-        data: rawBody,
-      });
+    // Resolve customerId from event payload for the webhook event row.
+    // This enables customer-scoped cleanup in resetTestData.
+    const webhookCustomerId = await resolveCustomerIdFromEvent(
+      event.data?.object as Record<string, unknown> | undefined,
+    );
+
+    // Set customerId on the webhook event row (for customer-scoped cleanup)
+    if (webhookCustomerId) {
+      await db.update(paymentWebhookEvents)
+        .set({ customerId: webhookCustomerId })
+        .where(eq(paymentWebhookEvents.eventId, event.id));
     }
 
     // 3. Handle event types
     try {
       if (!event.data?.object) {
         console.error(`[Stripe Webhook] Event ${event.id} missing data.object`);
+        // Mark processed so retries don't get stuck — a malformed event won't
+        // become valid on retry, and leaving it unprocessed blocks the event ID.
+        await db.update(paymentWebhookEvents)
+          .set({ processed: true, processedAt: new Date() })
+          .where(eq(paymentWebhookEvents.eventId, event.id));
         return reply.status(200).send({ received: true });
       }
 
@@ -212,8 +267,20 @@ export async function registerStripeWebhook(server: FastifyInstance) {
       const stack = error instanceof Error ? error.stack : undefined;
       console.error(`[Stripe Webhook] Error processing event ${event.id}:`, error);
 
-      // Notify admin with stack trace. Stripe will retry (we return 500),
-      // but persistent failures need human investigation.
+      // Delete the event row so Stripe's next retry inserts fresh and reprocesses.
+      // If this delete fails (extremely unlikely — same DB connection), the row
+      // stays processed=false and the event is stuck. A periodic cleanup job
+      // could handle that edge case if needed.
+      try {
+        await db.delete(paymentWebhookEvents)
+          .where(eq(paymentWebhookEvents.eventId, event.id));
+      } catch {
+        // Non-fatal — event stays claimed but unprocessed
+      }
+
+      // Notify admin. Each failed attempt logs separately (Stripe retries ~7
+      // times over 3 days), which gives admins visibility into persistent vs
+      // transient failures. The eventId in details links related notifications.
       try {
         await logInternalError(db, {
           severity: 'error',
@@ -226,9 +293,7 @@ export async function registerStripeWebhook(server: FastifyInstance) {
         // Don't let notification failure affect the 500 response
       }
 
-      // Return 500 so Stripe retries delivery. The idempotency check at the top
-      // (existing?.processed) ensures re-delivery of already-processed events is
-      // a no-op. Unprocessed events (processed=false) will be retried correctly.
+      // Return 500 so Stripe retries delivery.
       return reply.status(500).send({ error: 'Internal error processing webhook event' });
     }
 
@@ -299,16 +364,36 @@ async function handleInvoicePaid(invoice: Record<string, unknown>) {
     return;
   }
 
-  // Already paid — another provider succeeded before Stripe (e.g., customer completed 3DS
-  // on a stale Stripe-hosted page after escrow already paid). Auto-refund to prevent double charge.
+  // Already paid — check whether this webhook is confirming the same Stripe charge
+  // that was already processed synchronously (via invoices.pay() in the provider chain),
+  // or whether it's a genuine double charge (e.g., customer completed 3DS on a stale
+  // Stripe-hosted page after escrow already paid).
   if (record.status === 'paid') {
-    console.log(`[Stripe Webhook] invoice.paid: billing record ${billingRecordId} already paid — auto-refunding Stripe charge`);
+    // Check if an invoice_payments row already exists for this exact Stripe invoice ID.
+    // If so, this webhook is just the async confirmation of a charge we already reconciled
+    // synchronously — not a double charge. No refund needed.
+    const [existingPayment] = await db.select({ paymentId: invoicePayments.paymentId })
+      .from(invoicePayments)
+      .where(and(
+        eq(invoicePayments.billingRecordId, billingRecordId),
+        eq(invoicePayments.sourceType, 'stripe'),
+        eq(invoicePayments.providerReferenceId, stripeInvoiceId),
+      ))
+      .limit(1);
+
+    if (existingPayment) {
+      console.log(`[Stripe Webhook] invoice.paid: billing record ${billingRecordId} already paid by same Stripe invoice ${stripeInvoiceId} — webhook confirmation, no action needed`);
+      return;
+    }
+
+    // Genuine double charge: a different provider (or different Stripe invoice) already paid.
+    console.log(`[Stripe Webhook] invoice.paid: billing record ${billingRecordId} already paid by another source — auto-refunding Stripe charge ${stripeInvoiceId}`);
     const stripeService = getStripeService();
     try {
       const refundResult = await stripeService.refund({
         stripeInvoiceId: stripeInvoiceId,
         amountUsdCents: amountPaid ?? Number(record.amountUsdCents),
-        reason: `Auto-refund: billing record ${billingRecordId} already paid by another provider`,
+        reason: `Auto-refund: billing record ${billingRecordId} already paid by another source`,
       });
       await logInternalError(db, {
         severity: 'error',
@@ -458,20 +543,13 @@ async function handlePaymentIntentFailed(paymentIntent: Record<string, unknown>)
 
   console.log(`[Stripe Webhook] payment_intent.payment_failed: ${intentId}, error: ${errorMessage}, decline: ${declineCode}`);
 
+  // Resolve customerId once for admin notification triage
+  const customerId = await resolveCustomerIdFromEvent(paymentIntent) ?? undefined;
+
   // Log to admin notifications for visibility into Stripe-side failure details.
   // Uses logInternalErrorOnce keyed on invoiceId to avoid noise from Stripe retries.
   const parsedInvoiceId = billingRecordId ? parseInt(billingRecordId, 10) : undefined;
   if (parsedInvoiceId && !isNaN(parsedInvoiceId)) {
-    // Resolve customerId from the billing record for faster admin triage
-    let customerId: number | undefined;
-    try {
-      const record = await db.query.billingRecords.findFirst({
-        columns: { customerId: true },
-        where: eq(billingRecords.id, parsedInvoiceId),
-      });
-      customerId = record?.customerId;
-    } catch { /* non-fatal lookup */ }
-
     try {
       await logInternalErrorOnce(db, {
         severity: 'warning',
@@ -488,25 +566,13 @@ async function handlePaymentIntentFailed(paymentIntent: Record<string, unknown>)
     // or a payment intent from a different integration. Log for admin triage.
     // Use logInternalError (not Once) because each distinct intentId is a separate event
     // worth investigating — the synthetic invoiceId:-2 dedup key was too coarse.
-    const stripeCustomerId = paymentIntent.customer as string | null;
-    // Resolve customerId from stripeCustomerId for faster admin triage
-    let customerId: number | undefined;
-    if (stripeCustomerId) {
-      try {
-        const cust = await db.query.customers.findFirst({
-          columns: { customerId: true },
-          where: eq(customers.stripeCustomerId, stripeCustomerId),
-        });
-        customerId = cust?.customerId;
-      } catch { /* non-fatal lookup */ }
-    }
     try {
       await logInternalError(db, {
         severity: 'info',
         category: 'billing',
         code: 'STRIPE_PAYMENT_FAILED_NO_METADATA',
         message: `Stripe payment_intent.payment_failed without billing_record_id: ${intentId}`,
-        details: { intentId, stripeCustomerId, errorMessage, declineCode, metadata },
+        details: { intentId, stripeCustomerId: paymentIntent.customer, errorMessage, declineCode, metadata },
         customerId,
       });
     } catch { /* don't block webhook response */ }

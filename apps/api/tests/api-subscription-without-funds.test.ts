@@ -26,6 +26,7 @@ import {
   reconcilePendingPayments,
 } from './helpers/http.js';
 import { login, TEST_WALLET } from './helpers/auth.js';
+import { clearNotifications, expectNoNotifications } from './helpers/notifications.js';
 
 describe('API: Subscription Without Funds', () => {
   let accessToken: string;
@@ -51,6 +52,8 @@ describe('API: Subscription Without Funds', () => {
       throw new Error('Test customer not found after login');
     }
     customerId = customer.customerId;
+
+    await clearNotifications(customerId);
   });
 
   afterEach(async () => {
@@ -203,6 +206,8 @@ describe('API: Subscription Without Funds', () => {
     // BUG: The billing history should show this entry
     expect(firstMonthEntry).toBeDefined();
     expect(firstMonthEntry?.status).toBe('paid');
+
+    await expectNoNotifications(customerId);
   });
 
   it('should delete pending invoice when cancelling unpaid subscription (BUG: subscribe→cancel→subscribe leaves orphaned invoice)', async () => {
@@ -348,6 +353,8 @@ describe('API: Subscription Without Funds', () => {
     const starterInvoiceInDb = allInvoices.find(inv => inv.amountUsdCents === 900);
     expect(starterInvoiceInDb).toBeUndefined();
     console.log('[TEST] Starter invoice properly deleted: OK');
+
+    await expectNoNotifications(customerId);
   });
 
   it('should show correct tier in billing history after subscribe→upgrade→deposit (BUG: shows old tier)', async () => {
@@ -514,5 +521,7 @@ describe('API: Subscription Without Funds', () => {
     // Description should show "Seal Enterprise tier subscription" for the correct tier
     expect(enterpriseCharge?.description).toBe('Seal Enterprise tier subscription');
     console.log(`[TEST] Billing history description: ${enterpriseCharge?.description}`);
+
+    await expectNoNotifications(customerId);
   });
 });

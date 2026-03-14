@@ -24,6 +24,7 @@ import {
   reconcilePendingPayments,
 } from './helpers/http.js';
 import { login, TEST_WALLET } from './helpers/auth.js';
+import { clearNotifications, expectNoNotifications } from './helpers/notifications.js';
 
 describe('API: Provider Chain & Service Gates', () => {
   let accessToken: string;
@@ -44,6 +45,8 @@ describe('API: Provider Chain & Service Gates', () => {
     await restCall('POST', '/test/stripe/force-mock', { enabled: true });
     // Clear stripe mock config
     await restCall('POST', '/test/stripe/config/clear');
+
+    await clearNotifications(customerId);
   });
 
   afterEach(async () => {
@@ -78,6 +81,8 @@ describe('API: Provider Chain & Service Gates', () => {
       expect(subscribeResult.result?.data).toBeDefined();
       expect(subscribeResult.result?.data.paymentPending).toBe(false);
       expect(subscribeResult.result?.data.tier).toBe('starter');
+
+      await expectNoNotifications(customerId);
     });
 
     it('should leave invoice pending when no payment methods configured', async () => {
@@ -101,6 +106,8 @@ describe('API: Provider Chain & Service Gates', () => {
         ),
       });
       expect(service?.subPendingInvoiceId).not.toBeNull();
+
+      await expectNoNotifications(customerId);
     });
 
     it('should fallback to stripe when escrow has insufficient funds', async () => {
@@ -128,24 +135,22 @@ describe('API: Provider Chain & Service Gates', () => {
 
       expect(subscribeResult.result?.data).toBeDefined();
       expect(subscribeResult.result?.data.paymentPending).toBe(false);
+
+      await expectNoNotifications(customerId, { tolerateGM: true });
     });
 
-    it('should handle 3DS-requiring stripe gracefully (falls through)', async () => {
+    it('should leave payment pending with action URL when Stripe requires 3DS', async () => {
       await setClockTime('2025-01-05T00:00:00Z');
 
-      // Configure stripe mock to require 3DS
+      // Configure stripe mock to require 3DS on charges (not setup intents)
       await restCall('POST', '/test/stripe/config', {
         forceChargeRequiresAction: true,
       });
 
-      // Add only stripe as payment method
-      await trpcMutation<any>(
-        'billing.addPaymentMethod',
-        { providerType: 'stripe' },
-        accessToken
-      );
+      // Add stripe as payment method (full setup + webhook → creates payment method row)
+      await addStripePaymentMethod(accessToken);
 
-      // Subscribe — stripe requires action, so payment should be pending
+      // Subscribe — Stripe charge requires 3DS action, so payment should be pending
       const subscribeResult = await trpcMutation<any>(
         'services.subscribe',
         { serviceType: 'seal', tier: 'starter' },
@@ -154,6 +159,17 @@ describe('API: Provider Chain & Service Gates', () => {
 
       expect(subscribeResult.result?.data).toBeDefined();
       expect(subscribeResult.result?.data.paymentPending).toBe(true);
+
+      // Verify: billing record has paymentActionUrl — proves Stripe was reached and
+      // returned requires_action, not just "no payment method found"
+      const records = await db.select()
+        .from(billingRecords)
+        .where(eq(billingRecords.customerId, customerId));
+      const pendingRecords = records.filter(r => r.status === 'pending' && r.paymentActionUrl);
+      expect(pendingRecords.length).toBe(1);
+      expect(pendingRecords[0].paymentActionUrl).toContain('https://invoice.stripe.com/');
+
+      await expectNoNotifications(customerId, { tolerateGM: true });
     });
   });
 
@@ -200,6 +216,8 @@ describe('API: Provider Chain & Service Gates', () => {
         ),
       });
       expect(service?.subPendingInvoiceId).toBeNull();
+
+      await expectNoNotifications(customerId);
     });
 
     it('should fail when no payment methods configured', async () => {
@@ -221,6 +239,8 @@ describe('API: Provider Chain & Service Gates', () => {
 
       expect(toggleResult.error).toBeDefined();
       expect(toggleResult.error.data?.code).toBe('PRECONDITION_FAILED');
+
+      await expectNoNotifications(customerId);
     });
   });
 });

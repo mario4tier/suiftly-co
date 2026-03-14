@@ -24,6 +24,7 @@ import {
   subscribeAndEnable,
 } from './helpers/http.js';
 import { login, TEST_WALLET } from './helpers/auth.js';
+import { clearNotifications, expectNoNotifications } from './helpers/notifications.js';
 
 describe('API: Subscription Flow', () => {
   let accessToken: string;
@@ -50,6 +51,8 @@ describe('API: Subscription Flow', () => {
 
     // THEN ensure balance (after customer exists)
     await ensureTestBalance(100, { walletAddress: TEST_WALLET });
+
+    await clearNotifications(customerId);
   });
 
   afterEach(async () => {
@@ -86,6 +89,8 @@ describe('API: Subscription Flow', () => {
       });
       expect(service).toBeDefined();
       expect(service?.tier).toBe('starter');
+
+      await expectNoNotifications(customerId);
     });
 
     it('should start in disabled state by default (requires manual enable)', async () => {
@@ -138,6 +143,8 @@ describe('API: Subscription Flow', () => {
       });
       expect(enabledService?.state).toBe('enabled');
       expect(enabledService?.isUserEnabled).toBe(true);
+
+      await expectNoNotifications(customerId);
     });
 
     it('should return existing instance on duplicate subscription (idempotent)', async () => {
@@ -162,6 +169,8 @@ describe('API: Subscription Flow', () => {
       expect(second.result?.data).toBeDefined();
       expect(second.result?.data.tier).toBe('starter'); // Original tier preserved
       expect(second.result?.data.apiKey).toBeNull(); // API key not returned again
+
+      await expectNoNotifications(customerId);
     });
 
     it('should subscribe to different services independently', async () => {
@@ -193,6 +202,8 @@ describe('API: Subscription Flow', () => {
       const grpcService = services.find(s => s.serviceType === 'grpc');
       expect(sealService?.tier).toBe('starter');
       expect(grpcService?.tier).toBe('pro');
+
+      await expectNoNotifications(customerId);
     });
   });
 
@@ -218,6 +229,8 @@ describe('API: Subscription Flow', () => {
       expect(Array.isArray(listResult.result?.data)).toBe(true);
       expect(listResult.result?.data.length).toBe(1);
       expect(listResult.result?.data[0].serviceType).toBe('seal');
+
+      await expectNoNotifications(customerId);
     });
 
     it('should return empty list when no services', async () => {
@@ -230,6 +243,8 @@ describe('API: Subscription Flow', () => {
       expect(listResult.result?.data).toBeDefined();
       expect(Array.isArray(listResult.result?.data)).toBe(true);
       expect(listResult.result?.data.length).toBe(0);
+
+      await expectNoNotifications(customerId);
     });
   });
 
@@ -254,6 +269,8 @@ describe('API: Subscription Flow', () => {
       expect(result.result?.data).toBeDefined();
       expect(result.result?.data.serviceType).toBe('seal');
       expect(result.result?.data.tier).toBe('pro');
+
+      await expectNoNotifications(customerId);
     });
 
     it('should return null for non-existent service', async () => {
@@ -264,6 +281,8 @@ describe('API: Subscription Flow', () => {
       );
 
       expect(result.result?.data).toBeNull();
+
+      await expectNoNotifications(customerId);
     });
   });
 
@@ -303,6 +322,8 @@ describe('API: Subscription Flow', () => {
       expect(enableResult.result?.data).toBeDefined();
       expect(enableResult.result?.data.isUserEnabled).toBe(true);
       expect(enableResult.result?.data.state).toBe('enabled');
+
+      await expectNoNotifications(customerId);
     });
   });
 
@@ -326,6 +347,8 @@ describe('API: Subscription Flow', () => {
 
       expect(updateResult.result?.data).toBeDefined();
       expect(updateResult.result?.data.config.burstEnabled).toBe(true);
+
+      await expectNoNotifications(customerId);
     });
 
     it('should reject burst for starter tier', async () => {
@@ -347,6 +370,8 @@ describe('API: Subscription Flow', () => {
 
       expect(updateResult.error).toBeDefined();
       expect(updateResult.error?.message).toContain('only available for Pro');
+
+      await expectNoNotifications(customerId);
     });
   });
 
@@ -360,6 +385,8 @@ describe('API: Subscription Flow', () => {
 
       expect(result.result?.data).toBeDefined();
       expect(result.result?.data.allowed).toBe(true);
+
+      await expectNoNotifications(customerId);
     });
 
     it('should reject provisioning when already subscribed', async () => {
@@ -378,6 +405,8 @@ describe('API: Subscription Flow', () => {
       expect(result.result?.data).toBeDefined();
       expect(result.result?.data.allowed).toBe(false);
       expect(result.result?.data.reason).toBe('already_subscribed');
+
+      await expectNoNotifications(customerId);
     });
   });
 });

@@ -25,6 +25,7 @@ import {
 } from './helpers/http.js';
 import { login, TEST_WALLET } from './helpers/auth.js';
 import { INVOICE_LINE_ITEM_TYPE } from '@suiftly/shared/constants';
+import { clearNotifications, expectNoNotifications } from './helpers/notifications.js';
 
 const SUBSCRIPTION_ITEM_TYPES = [
   INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_STARTER,
@@ -58,6 +59,8 @@ describe('API: Tier Changes Flow', () => {
 
     // THEN ensure balance (after customer exists)
     await ensureTestBalance(100, { walletAddress: TEST_WALLET });
+
+    await clearNotifications(customerId);
   });
 
   afterEach(async () => {
@@ -105,6 +108,8 @@ describe('API: Tier Changes Flow', () => {
         where: eq(serviceInstances.instanceId, service!.instanceId),
       });
       expect(service?.tier).toBe('pro');
+
+      await expectNoNotifications(customerId);
     });
 
     it('should reject upgrade to same tier', async () => {
@@ -122,6 +127,8 @@ describe('API: Tier Changes Flow', () => {
 
       // Should fail
       expect(upgradeResult.error).toBeDefined();
+
+      await expectNoNotifications(customerId);
     });
 
     it('should reject upgrade to lower tier (use downgrade instead)', async () => {
@@ -140,6 +147,8 @@ describe('API: Tier Changes Flow', () => {
 
       // Should fail - must use downgrade for this
       expect(upgradeResult.error).toBeDefined();
+
+      await expectNoNotifications(customerId);
     });
   });
 
@@ -172,6 +181,8 @@ describe('API: Tier Changes Flow', () => {
       });
       expect(service?.tier).toBe('pro');
       expect(service?.scheduledTier).toBe('starter');
+
+      await expectNoNotifications(customerId);
     });
 
     it('should update DRAFT invoice line items to show scheduled tier price', async () => {
@@ -241,6 +252,8 @@ describe('API: Tier Changes Flow', () => {
       // Line items should show the SCHEDULED tier (starter = $9), not current tier (enterprise = $185)
       expect(subscriptionItem?.itemType).toBe(INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_STARTER);
       expect(subscriptionItem?.amountUsd).toBe(9); // Starter = $9, NOT Enterprise = $185
+
+      await expectNoNotifications(customerId);
     });
 
     it('should allow canceling scheduled downgrade', async () => {
@@ -283,6 +296,8 @@ describe('API: Tier Changes Flow', () => {
       });
       expect(service?.scheduledTier).toBeNull();
       expect(service?.tier).toBe('pro'); // Still at pro
+
+      await expectNoNotifications(customerId);
     });
   });
 
@@ -324,6 +339,8 @@ describe('API: Tier Changes Flow', () => {
 
       expect(enterpriseOption?.isUpgrade).toBe(true);
       expect(enterpriseOption?.isDowngrade).toBe(false);
+
+      await expectNoNotifications(customerId);
     });
 
     it('should return scheduled tier when downgrade is scheduled (bug reproduction)', async () => {
@@ -404,6 +421,8 @@ describe('API: Tier Changes Flow', () => {
       // Now Starter should be scheduled, Pro should not
       expect(starterOption2.isScheduled).toBe(true);
       expect(proOption2.isScheduled).toBe(false);
+
+      await expectNoNotifications(customerId);
     });
   });
 });
