@@ -435,17 +435,15 @@ async function processMonthlyBilling(
         console.error(`[processMonthlyBilling] Failed to create next DRAFT for customer ${customerId}:`, err);
       }
 
-      // Process excess credit refunds when tier downgrade was applied
-      if (tierChangesApplied > 0) {
-        const refundResult = await processExcessCreditRefunds(
-          tx,
-          customerId,
-          config,
-          services
-        );
-        result.operations.push(...refundResult.operations);
-        result.errors.push(...refundResult.errors);
-      }
+      // Process excess credit refunds. Idempotent — safe to call every billing cycle.
+      const refundResult = await processExcessCreditRefunds(
+        tx,
+        customerId,
+        config,
+        services
+      );
+      result.operations.push(...refundResult.operations);
+      result.errors.push(...refundResult.errors);
 
       return { processed: true, invoiceCount: draftInvoices.length };
     }
@@ -464,11 +462,11 @@ async function processMonthlyBilling(
 }
 
 /**
- * Process excess credit refunds after tier downgrade
+ * Process excess credit refunds when reconciliation credits exceed future obligations
  *
- * When a customer downgrades (e.g., Enterprise $185 → Starter $9), the reconciliation
- * credit from the original tier can vastly exceed future charges. This function refunds
- * the excess back to the original Stripe payment.
+ * When a customer downgrades or cancels, the reconciliation credit from the original
+ * tier can vastly exceed future charges. This function refunds the excess back to the
+ * original Stripe payment. Idempotent — safe to call every billing cycle.
  *
  * Key constraints:
  * - Only reconciliation credits are considered (not promo/goodwill/outage)
@@ -609,11 +607,10 @@ async function processExcessCreditRefunds(
       type: 'payment_failed',
       message: refundResult.error ?? 'Stripe refund failed',
       customerId,
-      retryable: false, // Not retried — tier change trigger won't fire again; admin handles via STRIPE_REFUND_FAILED notification
+      retryable: false, // Not retried within this billing run; will auto-retry next cycle (credits remain until refund succeeds)
     });
 
-    // Notify admin — refund won't be retried next cycle (tier change already applied),
-    // so the customer loses excess credit permanently without human intervention.
+    // Notify admin — will auto-retry next billing cycle but flag for visibility.
     await logInternalErrorOnce(tx, {
       severity: 'error',
       category: 'billing',

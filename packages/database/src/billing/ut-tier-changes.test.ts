@@ -45,6 +45,7 @@ import { processInvoicePayment } from './payments';
 import { issueCredit } from './credits';
 import { getCustomerProviders } from './providers';
 import type { BillingProcessorConfig } from './types';
+import { TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
 import { eq, and, sql } from 'drizzle-orm';
 
 // ============================================================================
@@ -1784,6 +1785,179 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       expect(recalcedInvoice?.retryCount).toBe(0);
       expect(recalcedInvoice?.lastRetryAt).toBeNull();
       expect(recalcedInvoice?.failureReason).toBeNull();
+    });
+  });
+
+  // ==========================================================================
+  // Bug: Downgrade then Cancel loses scheduled refund
+  // ==========================================================================
+
+  describe('Downgrade then Cancel - Refund Preservation', () => {
+    it('should still process excess credit refund when downgrade is followed by cancellation', async () => {
+      // BUG: Subscribe Pro → Downgrade to Starter → Cancel → refund for partial
+      // month disappears. The cancellation clears scheduledTier, so on Feb 1
+      // applyScheduledTierChanges returns 0 and processExcessCreditRefunds is
+      // never called, leaving the reconciliation credit stranded.
+
+      const PRO_PRICE_CENTS = TIER_PRICES_USD_CENTS.pro;
+
+      // ---- Jan 5: Subscribe at Pro tier ----
+      clock.setTime(new Date('2025-01-05T00:00:00Z'));
+
+      // Compute reconciliation credit the same way production does:
+      // daysUsed = 31 - 5 + 1 = 27, daysNotUsed = 31 - 27 = 4
+      // credit = floor(2900 * 4 / 31) = floor(374.19) = 374 cents
+      const daysInJan = 31;
+      const subscribeDay = 5;
+      const daysUsed = daysInJan - subscribeDay + 1;
+      const daysNotUsed = daysInJan - daysUsed;
+      const expectedCreditCents = Math.floor((PRO_PRICE_CENTS * daysNotUsed) / daysInJan);
+      expect(expectedCreditCents).toBe(374); // $3.74 sanity check
+
+      // Simulate subscription payment: create an immediate invoice (paid)
+      const [subInvoice] = await db.insert(billingRecords).values({
+        customerId: testCustomerId,
+        billingPeriodStart: clock.now(),
+        billingPeriodEnd: new Date('2025-02-04'),
+        amountUsdCents: PRO_PRICE_CENTS,
+        amountPaidUsdCents: PRO_PRICE_CENTS,
+        type: 'charge',
+        status: 'paid',
+        billingType: 'immediate',
+        createdAt: clock.now(),
+      }).returning({ id: billingRecords.id });
+
+      // Create a Stripe invoice_payments row so processExcessCreditRefunds has
+      // a Stripe charge to refund against
+      await db.insert(invoicePayments).values({
+        billingRecordId: subInvoice.id,
+        sourceType: 'stripe',
+        providerReferenceId: 'in_test_stripe_refund_bug',
+        creditId: null,
+        escrowTransactionId: null,
+        amountUsdCents: PRO_PRICE_CENTS,
+      });
+
+      // Issue reconciliation credit using the clock-derived amount
+      await issueCredit(
+        db,
+        testCustomerId,
+        expectedCreditCents,
+        'reconciliation',
+        `Partial month credit for seal (${daysNotUsed}/${daysInJan} days unused)`,
+        null,
+      );
+
+      // Verify credit exists with correct amount
+      const creditsAfterSubscribe = await db.select().from(customerCredits)
+        .where(and(
+          eq(customerCredits.customerId, testCustomerId),
+          eq(customerCredits.reason, 'reconciliation'),
+        ));
+      expect(creditsAfterSubscribe).toHaveLength(1);
+      expect(Number(creditsAfterSubscribe[0].remainingAmountUsdCents)).toBe(expectedCreditCents);
+
+      // ---- Jan 15: Downgrade Pro → Starter ----
+      clock.setTime(new Date('2025-01-15T00:00:00Z'));
+
+      const downgradeResult = await scheduleTierDowngrade(
+        db,
+        testCustomerId,
+        'seal',
+        'starter',
+        clock
+      );
+      expect(downgradeResult.success).toBe(true);
+      expect(downgradeResult.scheduledTier).toBe('starter');
+
+      // Verify scheduled tier is set
+      let service = await db.query.serviceInstances.findFirst({
+        where: eq(serviceInstances.instanceId, testInstanceId),
+      });
+      expect(service?.scheduledTier).toBe('starter');
+      expect(service?.scheduledTierEffectiveDate).toBeTruthy();
+
+      // ---- Jan 20: Cancel subscription ----
+      clock.setTime(new Date('2025-01-20T00:00:00Z'));
+
+      const cancelResult = await scheduleCancellation(
+        db,
+        testCustomerId,
+        'seal',
+        clock
+      );
+      expect(cancelResult.success).toBe(true);
+
+      // Verify: cancellation cleared the scheduled tier (this is the bug trigger)
+      service = await db.query.serviceInstances.findFirst({
+        where: eq(serviceInstances.instanceId, testInstanceId),
+      });
+      expect(service?.cancellationScheduledFor).toBeTruthy();
+      expect(service?.scheduledTier).toBeNull(); // Bug: this was cleared
+
+      // Reconciliation credit should still exist
+      const creditsBeforeBilling = await db.select().from(customerCredits)
+        .where(and(
+          eq(customerCredits.customerId, testCustomerId),
+          eq(customerCredits.reason, 'reconciliation'),
+        ));
+      expect(Number(creditsBeforeBilling[0].remainingAmountUsdCents)).toBe(expectedCreditCents);
+
+      // ---- Feb 1: Monthly billing runs ----
+      clock.setTime(new Date('2025-02-01T00:00:00Z'));
+
+      // A DRAFT invoice already exists — created by scheduleTierDowngrade's
+      // recalculateDraftInvoice call. Verify it's there.
+      const existingDrafts = await db.select().from(billingRecords)
+        .where(and(
+          eq(billingRecords.customerId, testCustomerId),
+          eq(billingRecords.status, 'draft'),
+        ));
+      expect(existingDrafts.length).toBeGreaterThanOrEqual(1);
+
+      const billingConfig: BillingProcessorConfig = {
+        clock,
+        gracePeriodDays: 14,
+        maxRetryAttempts: 3,
+        retryIntervalHours: 24,
+        usageChargeThresholdCents: 100,
+      };
+
+      await processCustomerBilling(
+        db,
+        testCustomerId,
+        billingConfig,
+        paymentServices
+      );
+
+      // ---- Verify: The excess reconciliation credit should have been refunded ----
+      // After cancellation, monthly cost is $0. All reconciliation credit is excess.
+      //
+      // BUG: processExcessCreditRefunds is gated behind tierChangesApplied > 0.
+      // Cancellation cleared scheduledTier, so no tier changes applied on Feb 1,
+      // and the refund is never processed. Credit stays at 374.
+
+      const creditsAfterBilling = await db.select().from(customerCredits)
+        .where(and(
+          eq(customerCredits.customerId, testCustomerId),
+          eq(customerCredits.reason, 'reconciliation'),
+        ));
+
+      const totalRemainingCredits = creditsAfterBilling.reduce(
+        (sum, c) => sum + Number(c.remainingAmountUsdCents), 0
+      );
+
+      // After refund: credit should be 0 (all excess refunded to Stripe).
+      expect(totalRemainingCredits).toBe(0);
+
+      // Verify a refund billing record was created
+      const refundRecords = await db.select().from(billingRecords)
+        .where(and(
+          eq(billingRecords.customerId, testCustomerId),
+          eq(billingRecords.type, 'credit'),
+        ));
+      expect(refundRecords).toHaveLength(1);
+      expect(Number(refundRecords[0].amountUsdCents)).toBe(expectedCreditCents);
     });
   });
 });
