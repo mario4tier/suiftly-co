@@ -466,6 +466,73 @@ export async function clearAllLogs(db: Database): Promise<void> {
 }
 
 /**
+ * Insert pre-aggregated stats directly into the stats_per_hour materialization
+ * table, bypassing the continuous aggregate refresh entirely.
+ *
+ * Use this when tests need deterministic stats data without the race conditions
+ * inherent in refresh_continuous_aggregate (which runs in its own transaction
+ * snapshot and may not see recently-committed raw log data).
+ *
+ * @param db Database instance
+ * @param customerId Customer ID
+ * @param options Stats row options
+ */
+export async function insertMockStats(
+  db: Database,
+  customerId: number,
+  options: {
+    serviceType: 1 | 2 | 3;
+    network: 0 | 1;
+    timestamp: Date;
+    billableRequests: number;
+  }
+): Promise<void> {
+  // Truncate to hour boundary (stats_per_hour uses 1-hour buckets)
+  const ts = options.timestamp;
+  const bucket = new Date(Date.UTC(
+    ts.getUTCFullYear(), ts.getUTCMonth(), ts.getUTCDate(), ts.getUTCHours()
+  ));
+
+  // Use upsert to handle re-runs: if the same bucket+customer+service+network
+  // already exists (from a prior failed run), update instead of failing.
+  // The materialization table has no unique constraint, so we delete-then-insert.
+  await db.execute(sql`
+    DELETE FROM _timescaledb_internal._materialized_hypertable_4
+    WHERE bucket = ${bucket}
+      AND customer_id = ${customerId}
+      AND service_type = ${options.serviceType}
+      AND network = ${options.network}
+  `);
+
+  await db.execute(sql`
+    INSERT INTO _timescaledb_internal._materialized_hypertable_4
+      (bucket, customer_id, service_type, network, billable_requests,
+       guaranteed_success_count, burst_success_count, dropped_count,
+       client_error_count, server_error_count, success_count,
+       avg_response_time_ms, min_response_time_ms, max_response_time_ms,
+       total_bytes)
+    VALUES
+      (${bucket}, ${customerId}, ${options.serviceType}, ${options.network},
+       ${options.billableRequests},
+       ${options.billableRequests}, 0, 0, 0, 0, ${options.billableRequests},
+       50.0, 10, 200, ${options.billableRequests * 1024})
+  `);
+}
+
+/**
+ * Clear pre-aggregated stats for a customer from the materialization table.
+ */
+export async function clearMockStats(
+  db: Database,
+  customerId: number
+): Promise<void> {
+  await db.execute(sql`
+    DELETE FROM _timescaledb_internal._materialized_hypertable_4
+    WHERE customer_id = ${customerId}
+  `);
+}
+
+/**
  * Options for inserting infrastructure log entries (for InfraStats page testing)
  */
 export interface InfraLogOptions {

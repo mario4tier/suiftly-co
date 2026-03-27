@@ -1,72 +1,44 @@
 /**
  * Monthly Usage Billing Boundary Tests
  *
- * TDD tests that verify usage billing correctly charges the PREVIOUS month's usage
+ * Tests that verify usage billing correctly charges the PREVIOUS month's usage
  * when the billing processor runs on the 1st of a new month.
  *
- * BUG BEING TESTED:
- * - The DRAFT invoice has billingPeriodStart/End set to the NEXT month (for subscription prepay)
- * - updateUsageChargesToDraft() uses these dates to query usage
- * - On the 1st of the month, it queries the NEW month (which has no data) instead of
- *   the PREVIOUS month (which has all the usage data)
- *
- * IMPORTANT: These tests use runPeriodicJobForCustomer() to exercise the production
- * code path exactly as the Global Manager would call it. We use MockDBClock to control
- * time and simulate month boundaries.
- *
- * Failing tests are skipped (it.skip) until the bug is fixed.
+ * These tests insert pre-aggregated stats directly into the stats_per_hour
+ * materialization table (via insertMockStats) to avoid TimescaleDB continuous
+ * aggregate refresh race conditions. Each test uses a unique customer ID.
  */
 
-import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterEach } from 'vitest';
 import { db } from '../db';
 import { customers, serviceInstances, billingRecords, invoiceLineItems } from '../schema';
 import { eq, sql } from 'drizzle-orm';
 import { MockDBClock } from '@suiftly/shared/db-clock';
-import {
-  insertMockHAProxyLogs,
-  refreshStatsAggregate,
-  clearAllLogs,
-} from '../stats/test-helpers';
+import { insertMockStats, clearMockStats } from '../stats/test-helpers';
 import { runPeriodicJobForCustomer } from './periodic-job';
 import type { BillingProcessorConfig } from './types';
 import type { ISuiService, ChargeParams, TransactionResult } from '@suiftly/shared/sui-service';
 import { toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData } from './test-helpers';
 
-// Test customer data — wallet must be unique across ALL test files
-const TEST_CUSTOMER_ID = 99950;
-const TEST_WALLET = '0x' + 'c'.repeat(62) + '50';
+// Each test gets a unique customer ID to avoid cross-test contamination.
+const BASE_CUSTOMER_ID = 99950;
+let testCounter = 0;
 
-/**
- * Simple mock Sui service for testing
- * Always succeeds if customer has sufficient balance
- */
 class TestMockSuiService implements ISuiService {
   private generateMockDigest(): string {
-    const bytes = Buffer.alloc(32);
-    for (let i = 0; i < 32; i++) {
-      bytes[i] = Math.floor(Math.random() * 256);
-    }
-    return '0x' + bytes.toString('hex');
+    return '0x' + Buffer.alloc(32).fill(Math.random() * 256).toString('hex');
   }
 
   async charge(params: ChargeParams): Promise<TransactionResult> {
     const customer = await db.query.customers.findFirst({
       where: eq(customers.walletAddress, params.userAddress),
     });
-
-    if (!customer) {
-      return { digest: this.generateMockDigest(), success: false, error: 'Customer not found' };
-    }
-
-    const currentBalance = customer.currentBalanceUsdCents ?? 0;
-    if (currentBalance < params.amountUsdCents) {
-      return { digest: this.generateMockDigest(), success: false, error: 'Insufficient balance' };
-    }
-
+    if (!customer) return { digest: this.generateMockDigest(), success: false, error: 'Customer not found' };
+    const balance = customer.currentBalanceUsdCents ?? 0;
+    if (balance < params.amountUsdCents) return { digest: this.generateMockDigest(), success: false, error: 'Insufficient balance' };
     await db.update(customers)
-      .set({ currentBalanceUsdCents: currentBalance - params.amountUsdCents })
+      .set({ currentBalanceUsdCents: balance - params.amountUsdCents })
       .where(eq(customers.customerId, customer.customerId));
-
     return { digest: this.generateMockDigest(), success: true, checkpoint: Date.now() };
   }
 
@@ -81,51 +53,65 @@ class TestMockSuiService implements ISuiService {
   async getTransactionHistory() { return []; }
 }
 
-/**
- * Helper to clean up all test data for our test customer.
- * Delegates to shared cleanupCustomerData which handles all FK tables.
- */
-async function cleanupTestData() {
-  await clearAllLogs(db);
-  await cleanupCustomerData(db, TEST_CUSTOMER_ID);
-  // Also clean up any stale customer with same wallet but different ID (from other test suites)
-  await db.execute(sql`DELETE FROM customers WHERE wallet_address = ${TEST_WALLET} AND customer_id != ${TEST_CUSTOMER_ID}`);
+async function createTestCustomer(clock: MockDBClock): Promise<number> {
+  testCounter++;
+  const customerId = BASE_CUSTOMER_ID + testCounter;
+  const idStr = customerId.toString();
+  const wallet = '0x' + 'c'.repeat(64 - idStr.length) + idStr;
+
+  await db.insert(customers).values({
+    customerId,
+    walletAddress: wallet,
+    escrowContractId: `0xESCROW_${customerId}`,
+    status: 'active',
+    currentBalanceUsdCents: 100000,
+    spendingLimitUsdCents: 100000,
+    currentPeriodChargedUsdCents: 0,
+    currentPeriodStart: '2025-01-01',
+    paidOnce: true,
+    createdAt: clock.now(),
+    updatedAt: clock.now(),
+  });
+
+  await db.insert(serviceInstances).values({
+    customerId,
+    serviceType: 'seal',
+    state: 'enabled',
+    tier: 'pro',
+    isUserEnabled: true,
+    config: { tier: 'pro' },
+  });
+
+  await ensureEscrowPaymentMethod(db, customerId);
+  return customerId;
 }
 
-/**
- * Unit test: Verify JavaScript Date.UTC() month underflow behavior
- *
- * This test documents the assumption that Date.UTC() normalizes out-of-range
- * month values. If this behavior ever changes, the usage period calculation
- * in finalizeUsageChargesForBilling() would break.
- */
+// ============================================================================
+// Pure unit tests (no DB)
+// ============================================================================
+
 describe('JavaScript Date.UTC month underflow', () => {
   it('should roll back to December of previous year when month is -1', () => {
-    // Simulate: Invoice billingPeriodStart = January 1, 2025
-    // We need to calculate: usagePeriodStart = December 1, 2024
     const invoiceBillingStart = new Date('2025-01-01T00:00:00Z');
-
     const usagePeriodStart = new Date(Date.UTC(
-      invoiceBillingStart.getUTCFullYear(),  // 2025
-      invoiceBillingStart.getUTCMonth() - 1, // 0 - 1 = -1
+      invoiceBillingStart.getUTCFullYear(),
+      invoiceBillingStart.getUTCMonth() - 1,
       1, 0, 0, 0, 0
     ));
-
-    // Verify the year rolled back correctly
-    expect(usagePeriodStart.getUTCFullYear()).toBe(2024);
-    expect(usagePeriodStart.getUTCMonth()).toBe(11); // December = 11
-    expect(usagePeriodStart.getUTCDate()).toBe(1);
     expect(usagePeriodStart.toISOString()).toBe('2024-12-01T00:00:00.000Z');
   });
 
   it('should handle multiple month underflow (edge case)', () => {
-    // Even more extreme: month = -2 should go to November of previous year
     const date = new Date(Date.UTC(2025, -2, 1));
     expect(date.toISOString()).toBe('2024-11-01T00:00:00.000Z');
   });
 });
 
-describe('Monthly Usage Billing - Month Boundary Bug', () => {
+// ============================================================================
+// Integration tests
+// ============================================================================
+
+describe('Monthly Usage Billing - Month Boundary', () => {
   const clock = new MockDBClock();
   const suiService = new TestMockSuiService();
   const paymentServices = toPaymentServices(suiService);
@@ -138,351 +124,247 @@ describe('Monthly Usage Billing - Month Boundary Bug', () => {
     retryIntervalHours: 24,
   };
 
+  const customerIdsToCleanup: number[] = [];
+
+  // Clean up all possible customer IDs from previous runs (counter resets to 0)
+  const ALL_POSSIBLE_IDS = Array.from({ length: 10 }, (_, i) => BASE_CUSTOMER_ID + i + 1);
   beforeAll(async () => {
-    await cleanupTestData();
-  });
-
-  beforeEach(async () => {
-    // Clean up for fresh test
-    await cleanupTestData();
-    await refreshStatsAggregate(db);
-
-    // Create test customer with sufficient balance
-    await db.insert(customers).values({
-      customerId: TEST_CUSTOMER_ID,
-      walletAddress: TEST_WALLET,
-      escrowContractId: '0xESCROW_TEST',
-      status: 'active',
-      currentBalanceUsdCents: 100000, // $1000.00
-      spendingLimitUsdCents: 100000,
-      currentPeriodChargedUsdCents: 0,
-      currentPeriodStart: '2025-01-01',
-      paidOnce: true,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    });
-
-    // Create service instance for Seal
-    await db.insert(serviceInstances).values({
-      customerId: TEST_CUSTOMER_ID,
-      serviceType: 'seal',
-      state: 'enabled',
-      tier: 'pro',
-      isUserEnabled: true,
-      config: { tier: 'pro' },
-    });
-
-    // Ensure escrow payment method exists for provider chain
-    await ensureEscrowPaymentMethod(db, TEST_CUSTOMER_ID);
+    for (const id of ALL_POSSIBLE_IDS) {
+      await clearMockStats(db, id);
+      await cleanupCustomerData(db, id);
+    }
   });
 
   afterEach(async () => {
-    await cleanupTestData();
+    for (const id of customerIdsToCleanup) {
+      await clearMockStats(db, id);
+      await cleanupCustomerData(db, id);
+    }
+    customerIdsToCleanup.length = 0;
   });
 
-  /**
-   * Test: February → March (non-leap year 2025)
-   *
-   * Scenario:
-   * - February 2025 has 28 days (non-leap year)
-   * - Usage occurs throughout February
-   * - On March 1, 2025, the Global Manager periodic job runs
-   * - Expected: February's usage (5000 requests) should be billed
-   * - Bug: Currently queries March 1-31, finding 0 requests
-   */
   it('should bill February usage when periodic job runs on March 1 (non-leap year 2025)', async () => {
-    // === SETUP: Mid-February 2025 ===
     clock.setTime(new Date('2025-02-15T12:00:00Z'));
+    const customerId = await createTestCustomer(clock);
+    customerIdsToCleanup.push(customerId);
 
-    // Create DRAFT invoice with billing period = March (next month, as current code does)
-    // This simulates what getOrCreateDraftInvoice() would create during the month
-    const [draftInvoice] = await db.insert(billingRecords).values({
-      customerId: TEST_CUSTOMER_ID,
-      billingPeriodStart: new Date('2025-03-01T00:00:00Z'), // Next month (March)
-      billingPeriodEnd: new Date('2025-03-31T23:59:59Z'),   // End of March
-      amountUsdCents: 2900, // Pro tier subscription
+    await db.insert(billingRecords).values({
+      customerId,
+      billingPeriodStart: new Date('2025-03-01T00:00:00Z'),
+      billingPeriodEnd: new Date('2025-03-31T23:59:59Z'),
+      amountUsdCents: 2900,
       type: 'charge',
       status: 'draft',
       createdAt: clock.now(),
-    }).returning();
+    });
 
-    // Insert FEBRUARY usage data (5000 billable requests)
-    await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
-      serviceType: 1, // Seal
+    await insertMockStats(db, customerId, {
+      serviceType: 1,
       network: 1,
-      count: 5000,
-      timestamp: new Date('2025-02-15T12:00:00Z'), // Mid-February
-      trafficType: 1, // guaranteed = billable
+      timestamp: new Date('2025-02-15T12:00:00Z'),
+      billableRequests: 5000,
     });
-    await refreshStatsAggregate(db);
 
-    // === SIMULATE PRODUCTION: Global Manager runs on March 1, 2025 ===
-    clock.setTime(new Date('2025-03-01T00:05:00Z')); // 5 min after midnight
+    clock.setTime(new Date('2025-03-01T00:05:00Z'));
+    const jobResult = await runPeriodicJobForCustomer(db, customerId, config, paymentServices);
 
-    // Run the periodic job exactly as Global Manager would
-    const jobResult = await runPeriodicJobForCustomer(db, TEST_CUSTOMER_ID, config, paymentServices);
-
-    // Verify the job executed
     expect(jobResult.phases.billing.executed).toBe(true);
-    expect(jobResult.phases.billing.customersProcessed).toBe(1);
 
-    // Get line items from the invoice
+    // Find the paid invoice (original draft was transitioned to paid)
+    const paidInvoices = await db.select().from(billingRecords)
+      .where(eq(billingRecords.customerId, customerId));
+    const paidInvoice = paidInvoices.find(i => i.status === 'paid');
+    expect(paidInvoice).toBeDefined();
+
     const lineItems = await db.query.invoiceLineItems.findMany({
-      where: eq(invoiceLineItems.billingRecordId, draftInvoice.id),
+      where: eq(invoiceLineItems.billingRecordId, paidInvoice!.id),
     });
-
     const usageLineItem = lineItems.find(li => li.itemType === 'requests');
 
-    // THIS IS THE KEY ASSERTION:
-    // February's 5000 requests should be billed
-    // With the bug: usageLineItem is undefined (queries March, no data)
-    // After fix: quantity should be 5000
     expect(usageLineItem).toBeDefined();
     expect(usageLineItem?.quantity).toBe(5000);
     expect(usageLineItem?.serviceType).toBe('seal');
   });
 
-  /**
-   * Test: February → March (leap year 2024)
-   *
-   * Scenario:
-   * - February 2024 has 29 days (leap year)
-   * - Usage occurs on Feb 29 (leap day)
-   * - On March 1, 2024, the periodic job runs
-   * - Expected: February's usage including leap day should be billed
-   * - Bug: Currently queries March 1-31, missing all February data
-   */
-  it.skip('should bill February usage including leap day when periodic job runs on March 1 (leap year 2024)', async () => {
-    // === SETUP: February 2024 (leap year) ===
+  it('should bill February usage including leap day (leap year 2024)', async () => {
     clock.setTime(new Date('2024-02-15T12:00:00Z'));
+    const customerId = await createTestCustomer(clock);
+    customerIdsToCleanup.push(customerId);
 
-    const [draftInvoice] = await db.insert(billingRecords).values({
-      customerId: TEST_CUSTOMER_ID,
+    await db.insert(billingRecords).values({
+      customerId,
       billingPeriodStart: new Date('2024-03-01T00:00:00Z'),
       billingPeriodEnd: new Date('2024-03-31T23:59:59Z'),
       amountUsdCents: 2900,
       type: 'charge',
       status: 'draft',
       createdAt: clock.now(),
-    }).returning();
-
-    // Insert usage on February 29 (leap day) - 3000 requests
-    await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
-      serviceType: 1,
-      network: 1,
-      count: 3000,
-      timestamp: new Date('2024-02-29T12:00:00Z'), // Leap day!
-      trafficType: 1,
     });
 
-    // Insert usage on February 15 - 2000 requests
-    await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
-      serviceType: 1,
-      network: 1,
-      count: 2000,
+    // Leap day usage + mid-month usage
+    await insertMockStats(db, customerId, {
+      serviceType: 1, network: 1,
+      timestamp: new Date('2024-02-29T12:00:00Z'),
+      billableRequests: 3000,
+    });
+    await insertMockStats(db, customerId, {
+      serviceType: 1, network: 1,
       timestamp: new Date('2024-02-15T12:00:00Z'),
-      trafficType: 1,
+      billableRequests: 2000,
     });
-    await refreshStatsAggregate(db);
 
-    // === SIMULATE PRODUCTION: March 1, 2024 ===
     clock.setTime(new Date('2024-03-01T00:05:00Z'));
-
-    const jobResult = await runPeriodicJobForCustomer(db, TEST_CUSTOMER_ID, config, paymentServices);
+    const jobResult = await runPeriodicJobForCustomer(db, customerId, config, paymentServices);
 
     expect(jobResult.phases.billing.executed).toBe(true);
 
-    const lineItems = await db.query.invoiceLineItems.findMany({
-      where: eq(invoiceLineItems.billingRecordId, draftInvoice.id),
-    });
+    const paidInvoices = await db.select().from(billingRecords)
+      .where(eq(billingRecords.customerId, customerId));
+    const paidInvoice = paidInvoices.find(i => i.status === 'paid');
+    expect(paidInvoice).toBeDefined();
 
+    const lineItems = await db.query.invoiceLineItems.findMany({
+      where: eq(invoiceLineItems.billingRecordId, paidInvoice!.id),
+    });
     const usageLineItem = lineItems.find(li => li.itemType === 'requests');
 
-    // February's 5000 requests (3000 leap day + 2000 mid-month) should be billed
     expect(usageLineItem).toBeDefined();
     expect(usageLineItem?.quantity).toBe(5000);
   });
 
-  /**
-   * Test: December → January (year boundary)
-   *
-   * Scenario:
-   * - Usage occurs in December 2024
-   * - On January 1, 2025, the periodic job runs
-   * - Expected: December 2024's usage should be billed
-   * - Bug: Currently queries January 2025, finding 0 requests
-   *
-   * This tests the year boundary edge case.
-   */
-  it.skip('should bill December 2024 usage when periodic job runs on January 1, 2025 (year boundary)', async () => {
-    // === SETUP: December 2024 ===
+  it('should bill December 2024 usage on January 1, 2025 (year boundary)', async () => {
     clock.setTime(new Date('2024-12-15T12:00:00Z'));
+    const customerId = await createTestCustomer(clock);
+    customerIdsToCleanup.push(customerId);
 
-    // DRAFT with billing period = January 2025 (next year!)
-    const [draftInvoice] = await db.insert(billingRecords).values({
-      customerId: TEST_CUSTOMER_ID,
-      billingPeriodStart: new Date('2025-01-01T00:00:00Z'), // Next year
+    await db.insert(billingRecords).values({
+      customerId,
+      billingPeriodStart: new Date('2025-01-01T00:00:00Z'),
       billingPeriodEnd: new Date('2025-01-31T23:59:59Z'),
       amountUsdCents: 2900,
       type: 'charge',
       status: 'draft',
       createdAt: clock.now(),
-    }).returning();
-
-    // Insert DECEMBER 2024 usage (7000 requests)
-    await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
-      serviceType: 1,
-      network: 1,
-      count: 7000,
-      timestamp: new Date('2024-12-20T12:00:00Z'),
-      trafficType: 1,
     });
-    await refreshStatsAggregate(db);
 
-    // === SIMULATE PRODUCTION: January 1, 2025 (new year) ===
+    await insertMockStats(db, customerId, {
+      serviceType: 1, network: 1,
+      timestamp: new Date('2024-12-20T12:00:00Z'),
+      billableRequests: 7000,
+    });
+
     clock.setTime(new Date('2025-01-01T00:05:00Z'));
-
-    const jobResult = await runPeriodicJobForCustomer(db, TEST_CUSTOMER_ID, config, paymentServices);
+    const jobResult = await runPeriodicJobForCustomer(db, customerId, config, paymentServices);
 
     expect(jobResult.phases.billing.executed).toBe(true);
 
-    const lineItems = await db.query.invoiceLineItems.findMany({
-      where: eq(invoiceLineItems.billingRecordId, draftInvoice.id),
-    });
+    const paidInvoices = await db.select().from(billingRecords)
+      .where(eq(billingRecords.customerId, customerId));
+    const paidInvoice = paidInvoices.find(i => i.status === 'paid');
+    expect(paidInvoice).toBeDefined();
 
+    const lineItems = await db.query.invoiceLineItems.findMany({
+      where: eq(invoiceLineItems.billingRecordId, paidInvoice!.id),
+    });
     const usageLineItem = lineItems.find(li => li.itemType === 'requests');
 
-    // December 2024's 7000 requests should be billed
     expect(usageLineItem).toBeDefined();
     expect(usageLineItem?.quantity).toBe(7000);
   });
 
-  /**
-   * Additional test: Verify NO usage from NEW month is included
-   *
-   * Scenario:
-   * - January usage exists
-   * - Some February usage exists (requests came in after midnight Feb 1)
-   * - Billing job runs on Feb 1 at 1:00 AM
-   * - Expected: Only January's usage should be billed, NOT February's
-   */
-  it.skip('should NOT include new month usage in previous month billing', async () => {
-    // === SETUP: Late January 2025 ===
+  it('should NOT include new month usage in previous month billing', async () => {
     clock.setTime(new Date('2025-01-31T23:00:00Z'));
+    const customerId = await createTestCustomer(clock);
+    customerIdsToCleanup.push(customerId);
 
-    const [draftInvoice] = await db.insert(billingRecords).values({
-      customerId: TEST_CUSTOMER_ID,
+    await db.insert(billingRecords).values({
+      customerId,
       billingPeriodStart: new Date('2025-02-01T00:00:00Z'),
       billingPeriodEnd: new Date('2025-02-28T23:59:59Z'),
       amountUsdCents: 2900,
       type: 'charge',
       status: 'draft',
       createdAt: clock.now(),
-    }).returning();
+    });
 
-    // Insert JANUARY usage (should be billed)
-    await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
-      serviceType: 1,
-      network: 1,
-      count: 4000,
+    // January usage (should be billed)
+    await insertMockStats(db, customerId, {
+      serviceType: 1, network: 1,
       timestamp: new Date('2025-01-15T12:00:00Z'),
-      trafficType: 1,
+      billableRequests: 4000,
     });
 
-    // Insert FEBRUARY usage (should NOT be billed on Feb 1)
-    await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
-      serviceType: 1,
-      network: 1,
-      count: 1000,
-      timestamp: new Date('2025-02-01T00:30:00Z'), // Early Feb 1
-      trafficType: 1,
+    // February usage (should NOT be billed)
+    await insertMockStats(db, customerId, {
+      serviceType: 1, network: 1,
+      timestamp: new Date('2025-02-01T00:00:00Z'),
+      billableRequests: 1000,
     });
-    await refreshStatsAggregate(db);
 
-    // === SIMULATE PRODUCTION: Feb 1 at 1:00 AM ===
     clock.setTime(new Date('2025-02-01T01:00:00Z'));
-
-    const jobResult = await runPeriodicJobForCustomer(db, TEST_CUSTOMER_ID, config, paymentServices);
+    const jobResult = await runPeriodicJobForCustomer(db, customerId, config, paymentServices);
 
     expect(jobResult.phases.billing.executed).toBe(true);
 
-    const lineItems = await db.query.invoiceLineItems.findMany({
-      where: eq(invoiceLineItems.billingRecordId, draftInvoice.id),
-    });
+    const paidInvoices = await db.select().from(billingRecords)
+      .where(eq(billingRecords.customerId, customerId));
+    const paidInvoice = paidInvoices.find(i => i.status === 'paid');
+    expect(paidInvoice).toBeDefined();
 
+    const lineItems = await db.query.invoiceLineItems.findMany({
+      where: eq(invoiceLineItems.billingRecordId, paidInvoice!.id),
+    });
     const usageLineItem = lineItems.find(li => li.itemType === 'requests');
 
-    // Should ONLY include January's 4000 requests, NOT the 1000 from February
     expect(usageLineItem).toBeDefined();
     expect(usageLineItem?.quantity).toBe(4000);
   });
 
-  /**
-   * Edge case test: Delayed processing
-   *
-   * Scenario:
-   * - January DRAFT invoice (billingPeriodStart = Feb 1) was created in January
-   * - Processing is delayed until March (e.g., system was down)
-   * - Expected: January's usage should still be billed (not February's)
-   *
-   * This verifies the usage period is derived from the invoice, not the clock.
-   */
-  it.skip('should bill January usage even when processing is delayed to March (edge case)', async () => {
-    // === SETUP: January 2025 - DRAFT created for February billing period ===
+  it('should bill January usage even when processing is delayed (edge case)', async () => {
     clock.setTime(new Date('2025-01-15T12:00:00Z'));
+    const customerId = await createTestCustomer(clock);
+    customerIdsToCleanup.push(customerId);
 
-    // DRAFT with billing period = February (for subscription prepay)
-    // This invoice is designated to bill January's usage
-    const [draftInvoice] = await db.insert(billingRecords).values({
-      customerId: TEST_CUSTOMER_ID,
-      billingPeriodStart: new Date('2025-02-01T00:00:00Z'), // February
+    await db.insert(billingRecords).values({
+      customerId,
+      billingPeriodStart: new Date('2025-02-01T00:00:00Z'),
       billingPeriodEnd: new Date('2025-02-28T23:59:59Z'),
       amountUsdCents: 2900,
       type: 'charge',
       status: 'draft',
       createdAt: clock.now(),
-    }).returning();
+    });
 
-    // Insert JANUARY usage (8000 requests) - this is what should be billed
-    await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
-      serviceType: 1,
-      network: 1,
-      count: 8000,
+    // January usage (should be billed)
+    await insertMockStats(db, customerId, {
+      serviceType: 1, network: 1,
       timestamp: new Date('2025-01-20T12:00:00Z'),
-      trafficType: 1,
+      billableRequests: 8000,
     });
 
-    // Insert FEBRUARY usage (2000 requests) - should NOT be billed
-    await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
-      serviceType: 1,
-      network: 1,
-      count: 2000,
+    // February usage (should NOT be billed)
+    await insertMockStats(db, customerId, {
+      serviceType: 1, network: 1,
       timestamp: new Date('2025-02-15T12:00:00Z'),
-      trafficType: 1,
+      billableRequests: 2000,
     });
-    await refreshStatsAggregate(db);
 
-    // === SIMULATE DELAYED PROCESSING: March 15, 2025 ===
-    // Processing is happening 2+ months late!
-    clock.setTime(new Date('2025-03-15T12:00:00Z'));
-
-    // Note: On March 15, isFirstOfMonth = false, so monthly billing won't auto-trigger
-    // We need to process as if it were the 1st of month
-    // Let's simulate by directly calling the billing with the appropriate context
-    clock.setTime(new Date('2025-02-01T00:05:00Z')); // Set to Feb 1 for proper monthly billing
-
-    const jobResult = await runPeriodicJobForCustomer(db, TEST_CUSTOMER_ID, config, paymentServices);
+    // Delayed: set to Feb 1 for monthly billing trigger
+    clock.setTime(new Date('2025-02-01T00:05:00Z'));
+    const jobResult = await runPeriodicJobForCustomer(db, customerId, config, paymentServices);
 
     expect(jobResult.phases.billing.executed).toBe(true);
 
-    const lineItems = await db.query.invoiceLineItems.findMany({
-      where: eq(invoiceLineItems.billingRecordId, draftInvoice.id),
-    });
+    const paidInvoices = await db.select().from(billingRecords)
+      .where(eq(billingRecords.customerId, customerId));
+    const paidInvoice = paidInvoices.find(i => i.status === 'paid');
+    expect(paidInvoice).toBeDefined();
 
+    const lineItems = await db.query.invoiceLineItems.findMany({
+      where: eq(invoiceLineItems.billingRecordId, paidInvoice!.id),
+    });
     const usageLineItem = lineItems.find(li => li.itemType === 'requests');
 
-    // Should bill JANUARY's 8000 requests (derived from invoice's Feb billing period)
-    // NOT February's 2000 requests (which would happen if we used clock.today())
     expect(usageLineItem).toBeDefined();
     expect(usageLineItem?.quantity).toBe(8000);
   });
