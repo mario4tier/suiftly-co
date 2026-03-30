@@ -24,7 +24,7 @@ import { MockDBClock } from '@suiftly/shared/db-clock';
 import { handleSubscriptionBilling } from './service-billing';
 import { eq, and, sql } from 'drizzle-orm';
 import type { ISuiService, TransactionResult, ChargeParams } from '@suiftly/shared/sui-service';
-import { toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData } from './test-helpers';
+import { toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData, resetTestState } from './test-helpers';
 
 // Simple mock Sui service
 class TestMockSuiService implements ISuiService {
@@ -68,9 +68,16 @@ describe('DRAFT Invoice Date and Credit Bugs', () => {
   const testWalletAddress = '0xBUG4000567890abcdefABCDEF1234567890abcdefABCDEF1234567890abc';
   let testCustomerId: number;
 
+  beforeAll(async () => {
+    await resetTestState(db);
+  });
+
   beforeEach(async () => {
     // Set time to November 24, 2025 (7 days before end of month)
     clock.setTime(new Date('2025-11-24T00:00:00Z'));
+
+    // Defensive cleanup: remove stale data from previous crashed runs
+    await cleanupCustomerData(db, 4000);
 
     const [customer] = await db.insert(customers).values({
       customerId: 4000,

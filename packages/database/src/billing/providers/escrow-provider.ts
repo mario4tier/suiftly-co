@@ -48,17 +48,22 @@ export class EscrowPaymentProvider implements IPaymentProvider {
       return { success: false, error: 'No escrow account configured', retryable: false };
     }
 
-    // Charge escrow via ISuiService.
     // Wrap in try-catch so transient RPC/network errors return a retryable
     // failure instead of throwing and aborting the entire provider chain.
+    // withActiveDb scopes the mock's DB override to this async context,
+    // preventing deadlocks without shared mutable state on the singleton.
+    const doCharge = async () => this.suiService.charge({
+      userAddress: customer.walletAddress,
+      amountUsdCents: params.amountUsdCents,
+      description: params.description,
+      escrowAddress: customer.escrowContractId!, // validated non-null above
+    });
+
     let chargeResult;
     try {
-      chargeResult = await this.suiService.charge({
-        userAddress: customer.walletAddress,
-        amountUsdCents: params.amountUsdCents,
-        description: params.description,
-        escrowAddress: customer.escrowContractId,
-      });
+      chargeResult = this.suiService.withActiveDb
+        ? await this.suiService.withActiveDb(this.db, doCharge)
+        : await doCharge();
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       console.error(`[EscrowProvider] charge failed for customer ${params.customerId}, invoice ${params.invoiceId}: ${msg}`);

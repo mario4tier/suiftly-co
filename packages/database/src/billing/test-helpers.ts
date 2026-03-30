@@ -62,6 +62,59 @@ export async function ensureEscrowPaymentMethod(
 }
 
 /**
+ * All customer IDs used by unit tests. Used by resetTestState to clean
+ * up stale data from crashed runs across all test files.
+ */
+export const ALL_TEST_CUSTOMER_IDS = [
+  1000,      // ut-billing
+  2000,      // ut-service-billing
+  3000,      // ut-tier-changes
+  3100,      // ut-validation
+  4000,      // ut-draft-invoice
+  5000,      // ut-edge-cases
+  8888,      // ut-upgrade-while-downgrade-scheduled
+  99901,     // ut-stats-queries
+  99902,     // ut-usage-charges
+  999888,    // ut-billing (second customer in dedup test)
+  9999001,   // ut-full-upgrade-scenario
+  // ut-monthly-usage-billing-boundary uses 99950+1..10
+  ...Array.from({ length: 10 }, (_, i) => 99951 + i),
+];
+
+/**
+ * Nuclear cleanup: reset ALL test state across ALL tables.
+ *
+ * Call this in beforeAll to guarantee a clean slate regardless of what
+ * a previous crashed test run left behind. Cleans up:
+ * - All known test customers and their related data
+ * - HAProxy raw logs (TRUNCATE)
+ * - Stats materialized view (per-customer DELETE)
+ * - Admin notifications for test customers
+ *
+ * This is intentionally aggressive — it's better to over-clean than
+ * to chase intermittent pollution failures.
+ */
+export async function resetTestState(
+  db: DatabaseOrTransaction,
+): Promise<void> {
+  // Clean up all known test customers
+  for (const customerId of ALL_TEST_CUSTOMER_IDS) {
+    await cleanupCustomerData(db, customerId);
+  }
+
+  // Truncate shared tables that aren't customer-keyed
+  await db.execute(sql`TRUNCATE TABLE haproxy_raw_logs`);
+
+  // Clear materialized stats for all test customers
+  for (const customerId of ALL_TEST_CUSTOMER_IDS) {
+    await db.execute(sql`
+      DELETE FROM _timescaledb_internal._materialized_hypertable_4
+      WHERE customer_id = ${customerId}
+    `);
+  }
+}
+
+/**
  * Clean up all test data for a specific customer.
  * Uses customer-specific DELETEs (row-level locks) instead of TRUNCATE
  * (table-level AccessExclusiveLock) to avoid deadlocks when test files

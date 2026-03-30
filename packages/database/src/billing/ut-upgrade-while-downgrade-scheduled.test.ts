@@ -45,7 +45,7 @@ import {
   cancelScheduledTierChange,
 } from './tier-changes';
 import { TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
-import { toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData } from './test-helpers';
+import { toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData, resetTestState } from './test-helpers';
 
 // ============================================================================
 // Test Utilities
@@ -117,10 +117,17 @@ describe('Bug: Upgrade while downgrade is scheduled', () => {
   const testWalletAddress = '0xUPGRADEDOWNGRADE567890abcdefABCDEF1234567890abcdefABCDEF12345';
   let testCustomerId: number;
 
+  beforeAll(async () => {
+    await resetTestState(db);
+  });
+
   beforeEach(async () => {
     suiService.setFailure(false);
     suiService.setBalance(100000);
     clock.setTime(new Date('2025-01-15T00:00:00Z'));
+
+    // Defensive cleanup: remove stale data from previous crashed runs
+    await cleanupCustomerData(db, 8888);
 
     const [customer] = await db.insert(customers).values({
       customerId: 8888,

@@ -16,6 +16,7 @@ import {
   refreshStatsAggregate,
   clearAllLogs,
 } from './test-helpers';
+import { resetTestState } from '../billing/test-helpers';
 import {
   getStatsSummary,
   getUsageStats,
@@ -33,6 +34,8 @@ describe('Stats Queries', () => {
   let clock: MockDBClock;
 
   beforeAll(async () => {
+    await resetTestState(db);
+
     // Clean up any stale data from previous runs, then create test customer
     await db.execute(sql`DELETE FROM customers WHERE wallet_address = ${TEST_WALLET} AND customer_id != ${TEST_CUSTOMER_ID}`);
     await db.execute(sql`

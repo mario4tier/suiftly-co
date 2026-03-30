@@ -143,4 +143,6 @@ export interface ISuiService {
   buildTransaction(operation: 'deposit' | 'withdraw' | 'updateSpendingLimit', params: any): Promise<Transaction | null>;
   isMock(): boolean;
   getTransactionHistory(userAddress: string, limit?: number): Promise<TransactionHistoryEntry[]>;
+  /** Mock-only: run fn with a DB override so mock operations use the billing transaction. Returns fn() directly in production. */
+  withActiveDb?<T>(db: unknown, fn: () => Promise<T>): Promise<T>;
 }

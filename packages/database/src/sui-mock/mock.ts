@@ -21,7 +21,9 @@
  * - Deterministic failure injection
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { db } from '../index.js';
+import type { DatabaseOrTransaction } from '../db.js';
 import { customers, mockSuiTransactions, mockTrackingObjects } from '../schema/index.js';
 import { eq, desc } from 'drizzle-orm';
 import { SPENDING_LIMIT } from '@suiftly/shared/constants';
@@ -51,7 +53,22 @@ const SUIFTLY_ADDRESS = '0xSUIFTLY1234567890abcdefABCDEF1234567890abcdefABCDEF12
  */
 const PERIOD_DURATION_MS = 28 * 24 * 60 * 60 * 1000; // 2,419,200,000 ms
 
+/**
+ * Per-async-context DB override so mock operations run within billing
+ * transactions, preventing application-level deadlocks. Uses AsyncLocalStorage
+ * instead of instance state to avoid concurrency issues on the singleton.
+ */
+const mockDbContext = new AsyncLocalStorage<DatabaseOrTransaction>();
+
 export class MockSuiService implements ISuiService {
+  /** Get the database to use: per-context override if set, global db otherwise. */
+  private get activeDb(): DatabaseOrTransaction { return mockDbContext.getStore() ?? db; }
+
+  /** Run fn with a DB override scoped to this async context. */
+  async withActiveDb<T>(dbOverride: unknown, fn: () => Promise<T>): Promise<T> {
+    return mockDbContext.run(dbOverride as DatabaseOrTransaction, fn);
+  }
+
   /**
    * Get escrow account for user
    * Queries database (mock blockchain state)
@@ -65,7 +82,7 @@ export class MockSuiService implements ISuiService {
       return null;
     }
 
-    const customer = await db.query.customers.findFirst({
+    const customer = await this.activeDb.query.customers.findFirst({
       where: eq(customers.walletAddress, userAddress),
     });
 
@@ -138,7 +155,7 @@ export class MockSuiService implements ISuiService {
     let customer;
     if (escrowAddress) {
       // If escrowAddress provided, use it to find the account
-      customer = await db.query.customers.findFirst({
+      customer = await this.activeDb.query.customers.findFirst({
         where: eq(customers.escrowContractId, escrowAddress),
       });
 
@@ -154,7 +171,7 @@ export class MockSuiService implements ISuiService {
       }
     } else {
       // No escrowAddress provided - look up by userAddress (for creation or existing)
-      customer = await db.query.customers.findFirst({
+      customer = await this.activeDb.query.customers.findFirst({
         where: eq(customers.walletAddress, userAddress),
       });
     }
@@ -170,7 +187,7 @@ export class MockSuiService implements ISuiService {
       if (!customer) {
         // Customer record doesn't exist at all - create it
         const customerId = this.generateCustomerId();
-        [customer] = await db.insert(customers).values({
+        [customer] = await this.activeDb.insert(customers).values({
           customerId,
           walletAddress: userAddress,
           escrowContractId: accountAddress,
@@ -187,7 +204,7 @@ export class MockSuiService implements ISuiService {
         }).returning();
       } else {
         // Customer exists but no escrow account - add it
-        [customer] = await db
+        [customer] = await this.activeDb
           .update(customers)
           .set({
             escrowContractId: accountAddress,
@@ -223,7 +240,7 @@ export class MockSuiService implements ISuiService {
       };
     }
 
-    await db
+    await this.activeDb
       .update(customers)
       .set({
         currentBalanceUsdCents: newBalance,
@@ -287,7 +304,7 @@ export class MockSuiService implements ISuiService {
     let customer;
     if (escrowAddress) {
       // If escrowAddress provided, use it to find the account
-      customer = await db.query.customers.findFirst({
+      customer = await this.activeDb.query.customers.findFirst({
         where: eq(customers.escrowContractId, escrowAddress),
       });
 
@@ -303,7 +320,7 @@ export class MockSuiService implements ISuiService {
       }
     } else {
       // No escrowAddress provided - look up by userAddress (for creation or existing)
-      customer = await db.query.customers.findFirst({
+      customer = await this.activeDb.query.customers.findFirst({
         where: eq(customers.walletAddress, userAddress),
       });
     }
@@ -318,7 +335,7 @@ export class MockSuiService implements ISuiService {
 
       if (!customer) {
         const customerId = this.generateCustomerId();
-        [customer] = await db.insert(customers).values({
+        [customer] = await this.activeDb.insert(customers).values({
           customerId,
           walletAddress: userAddress,
           escrowContractId: accountAddress,
@@ -334,7 +351,7 @@ export class MockSuiService implements ISuiService {
           updatedAt: now,
         }).returning();
       } else {
-        [customer] = await db
+        [customer] = await this.activeDb
           .update(customers)
           .set({
             escrowContractId: accountAddress,
@@ -382,7 +399,7 @@ export class MockSuiService implements ISuiService {
 
     // Withdraw funds (subtract from balance)
     const newBalance = currentBalance - amountUsdCents;
-    await db
+    await this.activeDb
       .update(customers)
       .set({
         currentBalanceUsdCents: newBalance,
@@ -459,12 +476,12 @@ export class MockSuiService implements ISuiService {
 
     if (escrowAddress) {
       // If escrowAddress is provided, look up by that
-      customer = await db.query.customers.findFirst({
+      customer = await this.activeDb.query.customers.findFirst({
         where: eq(customers.escrowContractId, escrowAddress),
       });
     } else {
       // If no escrowAddress provided, look up by wallet address
-      customer = await db.query.customers.findFirst({
+      customer = await this.activeDb.query.customers.findFirst({
         where: eq(customers.walletAddress, userAddress),
       });
     }
@@ -544,7 +561,7 @@ export class MockSuiService implements ISuiService {
       updateData.currentPeriodStart = dbClock.now().toISOString().split('T')[0];
     }
 
-    await db
+    await this.activeDb
       .update(customers)
       .set(updateData)
       .where(eq(customers.escrowContractId, escrowAddress));
@@ -596,7 +613,7 @@ export class MockSuiService implements ISuiService {
 
     // IMPORTANT: Unlike real blockchain, we validate that the provided escrowAddress
     // belongs to the specified user. This simulates the smart contract's capability check.
-    const customer = await db.query.customers.findFirst({
+    const customer = await this.activeDb.query.customers.findFirst({
       where: eq(customers.escrowContractId, escrowAddress),
     });
 
@@ -623,7 +640,7 @@ export class MockSuiService implements ISuiService {
 
     // Add to balance
     const newBalance = (customer.currentBalanceUsdCents ?? 0) + amountUsdCents;
-    await db
+    await this.activeDb
       .update(customers)
       .set({
         currentBalanceUsdCents: newBalance,
@@ -662,7 +679,7 @@ export class MockSuiService implements ISuiService {
     let customer;
     if (escrowAddress) {
       // If escrowAddress provided, use it to find the account
-      customer = await db.query.customers.findFirst({
+      customer = await this.activeDb.query.customers.findFirst({
         where: eq(customers.escrowContractId, escrowAddress),
       });
 
@@ -676,7 +693,7 @@ export class MockSuiService implements ISuiService {
       }
     } else {
       // No escrowAddress provided - look up by userAddress (for creation or existing)
-      customer = await db.query.customers.findFirst({
+      customer = await this.activeDb.query.customers.findFirst({
         where: eq(customers.walletAddress, userAddress),
       });
     }
@@ -691,7 +708,7 @@ export class MockSuiService implements ISuiService {
 
       if (!customer) {
         const customerId = this.generateCustomerId();
-        [customer] = await db.insert(customers).values({
+        [customer] = await this.activeDb.insert(customers).values({
           customerId,
           walletAddress: userAddress,
           escrowContractId: accountAddress,
@@ -704,7 +721,7 @@ export class MockSuiService implements ISuiService {
           updatedAt: now,
         }).returning();
       } else {
-        [customer] = await db
+        [customer] = await this.activeDb
           .update(customers)
           .set({
             escrowContractId: accountAddress,
@@ -717,7 +734,7 @@ export class MockSuiService implements ISuiService {
       }
     } else {
       // Update existing account
-      await db
+      await this.activeDb
         .update(customers)
         .set({
           spendingLimitUsdCents: newLimitUsdCents,
@@ -779,7 +796,7 @@ export class MockSuiService implements ISuiService {
     userAddress: string,
     limit: number = 100
   ): Promise<TransactionHistoryEntry[]> {
-    const customer = await db.query.customers.findFirst({
+    const customer = await this.activeDb.query.customers.findFirst({
       where: eq(customers.walletAddress, userAddress),
     });
 
@@ -787,7 +804,7 @@ export class MockSuiService implements ISuiService {
       return [];
     }
 
-    const transactions = await db.query.mockSuiTransactions.findMany({
+    const transactions = await this.activeDb.query.mockSuiTransactions.findMany({
       where: eq(mockSuiTransactions.customerId, customer.customerId),
       orderBy: [desc(mockSuiTransactions.createdAt)],
       limit,
@@ -821,7 +838,7 @@ export class MockSuiService implements ISuiService {
     periodChargedAfter?: number
   ): Promise<void> {
     // Get customer ID
-    const customer = await db.query.customers.findFirst({
+    const customer = await this.activeDb.query.customers.findFirst({
       where: eq(customers.walletAddress, userAddress),
     });
 
@@ -831,7 +848,7 @@ export class MockSuiService implements ISuiService {
       return;
     }
 
-    await db.insert(mockSuiTransactions).values({
+    await this.activeDb.insert(mockSuiTransactions).values({
       customerId: customer.customerId,
       txDigest: result.digest,
       txType,
@@ -892,7 +909,7 @@ export class MockSuiService implements ISuiService {
     const suiftlyTrackingAddress = this.generateMockAccountAddress();
 
     // Create both tracking objects in the database
-    await db.insert(mockTrackingObjects).values([
+    await this.activeDb.insert(mockTrackingObjects).values([
       {
         trackingAddress: userTrackingAddress,
         owner: 'user',

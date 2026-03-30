@@ -15,7 +15,7 @@ import {
   clearAllLogs,
 } from '../stats/test-helpers';
 import { updateUsageChargesToDraft } from './usage-charges';
-import { ensureEscrowPaymentMethod, cleanupCustomerData } from './test-helpers';
+import { ensureEscrowPaymentMethod, cleanupCustomerData, resetTestState } from './test-helpers';
 import { withCustomerLock, type LockedTransaction } from '../locking';
 
 // Test customer data — wallet must be unique across ALL test files
@@ -44,6 +44,11 @@ describe('Usage Charges', () => {
   }
 
   beforeAll(async () => {
+    await resetTestState(db);
+
+    // Defensive cleanup: remove stale data from previous crashed runs
+    await cleanupCustomerData(db, TEST_CUSTOMER_ID);
+
     // Clean up any stale data from previous runs, then create test customer
     await db.execute(sql`DELETE FROM customers WHERE wallet_address = ${TEST_WALLET} AND customer_id != ${TEST_CUSTOMER_ID}`);
     await db.execute(sql`

@@ -25,7 +25,7 @@ import {
   calculateProRatedUpgradeCharge,
 } from './service-billing';
 import { getOrCreateDraftInvoice } from './invoices';
-import { unsafeAsLockedTransaction, toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData } from './test-helpers';
+import { unsafeAsLockedTransaction, toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData, resetTestState } from './test-helpers';
 import { eq, and, sql } from 'drizzle-orm';
 
 // Simple mock Sui service for testing
@@ -79,9 +79,16 @@ describe('Service Billing Integration (Phase 2)', () => {
   const testWalletAddress = '0xSVC2000567890abcdefABCDEF1234567890abcdefABCDEF1234567890abc';
   let testCustomerId: number;
 
+  beforeAll(async () => {
+    await resetTestState(db);
+  });
+
   beforeEach(async () => {
     // Set time to Jan 15, 2025 (mid-month)
     clock.setTime(new Date('2025-01-15T00:00:00Z'));
+
+    // Defensive cleanup: remove stale data from previous crashed runs
+    await cleanupCustomerData(db, 2000);
 
     // Create test customer with balance
     const [customer] = await db.insert(customers).values({

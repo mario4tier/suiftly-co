@@ -22,7 +22,7 @@ import { validateInvoiceBeforeCharging } from './validation';
 import { handleSubscriptionBilling, recalculateDraftInvoice } from './service-billing';
 import { issueCredit } from './credits';
 import { logInternalError } from './admin-notifications';
-import { unsafeAsLockedTransaction, toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData } from './test-helpers';
+import { unsafeAsLockedTransaction, toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData, resetTestState } from './test-helpers';
 import { eq, and, sql } from 'drizzle-orm';
 import type { ISuiService, TransactionResult, ChargeParams } from '@suiftly/shared/sui-service';
 import { adminNotifications } from '../schema/admin';
@@ -69,8 +69,15 @@ describe('Invoice Validation', () => {
   const testWalletAddress = '0xVAL3100567890abcdefABCDEF1234567890abcdefABCDEF1234567890abc';
   let testCustomerId: number;
 
+  beforeAll(async () => {
+    await resetTestState(db);
+  });
+
   beforeEach(async () => {
     clock.setTime(new Date('2025-01-15T00:00:00Z'));
+
+    // Defensive cleanup: remove stale data from previous crashed runs
+    await cleanupCustomerData(db, 3100);
 
     const [customer] = await db.insert(customers).values({
       customerId: 3100,

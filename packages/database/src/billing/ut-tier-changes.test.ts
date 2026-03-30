@@ -38,7 +38,7 @@ import {
   applyScheduledTierChanges,
   processScheduledCancellations,
 } from './tier-changes';
-import { unsafeAsLockedTransaction, toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData } from './test-helpers';
+import { unsafeAsLockedTransaction, toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData, resetTestState } from './test-helpers';
 import { processCancellationCleanup } from './cancellation-cleanup';
 import { processCustomerBilling } from './processor';
 import { processInvoicePayment } from './payments';
@@ -121,12 +121,21 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
   let testCustomerId: number;
   let testInstanceId: number;
 
+  beforeAll(async () => {
+    await resetTestState(db);
+  });
+
   beforeEach(async () => {
     // Reset mock service
     suiService.setFailure(false);
 
     // Set time to Jan 15, 2025 (mid-month)
     clock.setTime(new Date('2025-01-15T00:00:00Z'));
+
+    // Defensive cleanup: remove stale data from previous crashed runs.
+    // Without this, a plain INSERT fails on duplicate key if a previous
+    // test run left orphaned customer 3000 in the database.
+    await cleanupCustomerData(db, 3000);
 
     // Create test customer with balance
     const [customer] = await db.insert(customers).values({

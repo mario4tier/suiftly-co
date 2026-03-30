@@ -24,7 +24,7 @@ import {
   retryUnpaidInvoices,
   reconcileStuckInvoices,
 } from './index';
-import { unsafeAsLockedTransaction, toPaymentServices, toEscrowProviders, ensureEscrowPaymentMethod, cleanupCustomerData } from './test-helpers';
+import { unsafeAsLockedTransaction, toPaymentServices, toEscrowProviders, ensureEscrowPaymentMethod, cleanupCustomerData, resetTestState } from './test-helpers';
 import type { BillingProcessorConfig } from './types';
 import { eq, sql, and } from 'drizzle-orm';
 import { voidInvoice } from './invoices';
@@ -95,6 +95,10 @@ describe('Billing Processor (Phase 1B)', () => {
   const suiService = new TestMockSuiService();
   const paymentServices = toPaymentServices(suiService);
 
+  beforeAll(async () => {
+    await resetTestState(db);
+  });
+
   const config: BillingProcessorConfig = {
     clock,
     usageChargeThresholdCents: 500, // $5.00
@@ -110,6 +114,9 @@ describe('Billing Processor (Phase 1B)', () => {
   beforeEach(async () => {
     // Set initial time to Jan 1, 2025
     clock.setTime(new Date('2025-01-01T00:00:00Z'));
+
+    // Defensive cleanup: remove stale data from previous crashed runs
+    await cleanupCustomerData(db, 1000);
 
     // Create test customer with escrow account
     const [customer] = await db.insert(customers).values({

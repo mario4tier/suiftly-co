@@ -26,7 +26,7 @@ import { cleanupIdempotencyRecords } from './idempotency';
 import { calculateProRatedUpgradeCharge, handleSubscriptionBilling } from './service-billing';
 import { eq, sql } from 'drizzle-orm';
 import type { ISuiService, TransactionResult, ChargeParams } from '@suiftly/shared/sui-service';
-import { toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData } from './test-helpers';
+import { toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData, resetTestState } from './test-helpers';
 
 // Simple mock Sui service
 class TestMockSuiService implements ISuiService {
@@ -67,8 +67,15 @@ describe('Billing Edge Cases', () => {
   const testWalletAddress = '0xEDGE5000567890abcdefABCDEF1234567890abcdefABCDEF1234567890abc';
   let testCustomerId: number;
 
+  beforeAll(async () => {
+    await resetTestState(db);
+  });
+
   beforeEach(async () => {
     clock.setTime(new Date('2025-01-15T00:00:00Z'));
+
+    // Defensive cleanup: remove stale data from previous crashed runs
+    await cleanupCustomerData(db, 5000);
 
     const [customer] = await db.insert(customers).values({
       customerId: 5000,

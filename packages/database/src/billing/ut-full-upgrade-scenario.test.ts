@@ -36,7 +36,7 @@ import {
 } from './tier-changes';
 import { handleSubscriptionBilling } from './service-billing';
 import { TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
-import { toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData } from './test-helpers';
+import { toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData, resetTestState } from './test-helpers';
 
 // ============================================================================
 // Mock SuiService with balance tracking
@@ -121,11 +121,18 @@ describe('Full Upgrade Scenario: Deposit → Pro → Schedule Downgrade → Ente
   const testWalletAddress = '0xFULLSCENARIO890abcdefABCDEF1234567890abcdefABCDEF12345678901234';
   let testCustomerId: number;
 
+  beforeAll(async () => {
+    await resetTestState(db);
+  });
+
   beforeEach(async () => {
     // Start with $200 balance (20000 cents)
     suiService = new FullScenarioMockSuiService(20000);
     paymentServices = toPaymentServices(suiService);
     clock.setTime(new Date('2025-12-02T00:00:00Z'));
+
+    // Defensive cleanup: remove stale data from previous crashed runs
+    await cleanupCustomerData(db, 9999001);
 
     const [customer] = await db.insert(customers).values({
       customerId: 9999001,
