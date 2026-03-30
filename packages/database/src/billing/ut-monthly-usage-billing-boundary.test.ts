@@ -18,7 +18,7 @@ import { insertMockStats, clearMockStats } from '../stats/test-helpers';
 import { runPeriodicJobForCustomer } from './periodic-job';
 import type { BillingProcessorConfig } from './types';
 import type { ISuiService, ChargeParams, TransactionResult } from '@suiftly/shared/sui-service';
-import { toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData, resetTestState } from './test-helpers';
+import { toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData, resetTestState, suspendGMProcessing } from './test-helpers';
 
 // Each test gets a unique customer ID to avoid cross-test contamination.
 const BASE_CUSTOMER_ID = 99950;
@@ -129,6 +129,8 @@ describe('Monthly Usage Billing - Month Boundary', () => {
   // Clean up all possible customer IDs from previous runs (counter resets to 0)
   const ALL_POSSIBLE_IDS = Array.from({ length: 10 }, (_, i) => BASE_CUSTOMER_ID + i + 1);
   beforeAll(async () => {
+    await suspendGMProcessing();
+
     await resetTestState(db);
     for (const id of ALL_POSSIBLE_IDS) {
       await clearMockStats(db, id);

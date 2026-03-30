@@ -22,7 +22,7 @@ import { validateInvoiceBeforeCharging } from './validation';
 import { handleSubscriptionBilling, recalculateDraftInvoice } from './service-billing';
 import { issueCredit } from './credits';
 import { logInternalError } from './admin-notifications';
-import { unsafeAsLockedTransaction, toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData, resetTestState } from './test-helpers';
+import { unsafeAsLockedTransaction, toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData, resetTestState, suspendGMProcessing } from './test-helpers';
 import { eq, and, sql } from 'drizzle-orm';
 import type { ISuiService, TransactionResult, ChargeParams } from '@suiftly/shared/sui-service';
 import { adminNotifications } from '../schema/admin';
@@ -74,6 +74,8 @@ describe('Invoice Validation', () => {
   });
 
   beforeEach(async () => {
+    await suspendGMProcessing();
+
     clock.setTime(new Date('2025-01-15T00:00:00Z'));
 
     // Defensive cleanup: remove stale data from previous crashed runs

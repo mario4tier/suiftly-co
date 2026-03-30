@@ -24,7 +24,7 @@ import { MockDBClock } from '@suiftly/shared/db-clock';
 import { handleSubscriptionBilling } from './service-billing';
 import { eq, and, sql } from 'drizzle-orm';
 import type { ISuiService, TransactionResult, ChargeParams } from '@suiftly/shared/sui-service';
-import { toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData, resetTestState } from './test-helpers';
+import { toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData, resetTestState, suspendGMProcessing } from './test-helpers';
 
 // Simple mock Sui service
 class TestMockSuiService implements ISuiService {
@@ -73,6 +73,8 @@ describe('DRAFT Invoice Date and Credit Bugs', () => {
   });
 
   beforeEach(async () => {
+    await suspendGMProcessing();
+
     // Set time to November 24, 2025 (7 days before end of month)
     clock.setTime(new Date('2025-11-24T00:00:00Z'));
 

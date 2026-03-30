@@ -36,7 +36,7 @@ import {
 } from './tier-changes';
 import { handleSubscriptionBilling } from './service-billing';
 import { TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
-import { toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData, resetTestState } from './test-helpers';
+import { toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData, resetTestState, suspendGMProcessing } from './test-helpers';
 
 // ============================================================================
 // Mock SuiService with balance tracking
@@ -126,6 +126,8 @@ describe('Full Upgrade Scenario: Deposit → Pro → Schedule Downgrade → Ente
   });
 
   beforeEach(async () => {
+    await suspendGMProcessing();
+
     // Start with $200 balance (20000 cents)
     suiService = new FullScenarioMockSuiService(20000);
     paymentServices = toPaymentServices(suiService);

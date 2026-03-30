@@ -15,7 +15,7 @@ import {
   clearAllLogs,
 } from '../stats/test-helpers';
 import { updateUsageChargesToDraft } from './usage-charges';
-import { ensureEscrowPaymentMethod, cleanupCustomerData, resetTestState } from './test-helpers';
+import { ensureEscrowPaymentMethod, cleanupCustomerData, resetTestState, suspendGMProcessing } from './test-helpers';
 import { withCustomerLock, type LockedTransaction } from '../locking';
 
 // Test customer data — wallet must be unique across ALL test files
@@ -44,6 +44,8 @@ describe('Usage Charges', () => {
   }
 
   beforeAll(async () => {
+    await suspendGMProcessing();
+
     await resetTestState(db);
 
     // Defensive cleanup: remove stale data from previous crashed runs

@@ -102,6 +102,10 @@ let syncLMStatusLastSource: QueuedTask['source'] = 'periodic';
 let syncLMStatusCompletionPromise: Promise<void> | null = null;
 let syncLMStatusResolveCompletion: (() => void) | null = null;
 
+// Processing suspension (for tests — prevents GM from interfering with test DB state)
+let processingEnabled = true;
+let drainResolvers: (() => void)[] = []; // Resolved when all in-flight work completes
+
 // Stats
 let lastProcessedAt: Date | null = null;
 let totalProcessed = 0;
@@ -144,6 +148,8 @@ export function queueSyncCustomer(
   customerId: number,
   source: QueuedTask['source'] = 'api'
 ): QueuedTask | null {
+  if (!processingEnabled) return null; // Suspended — drop silently
+
   const state = getCustomerState(customerId);
 
   if (!state.processing) {
@@ -215,6 +221,8 @@ export async function queueSyncCustomerAwait(
  * Returns the task if queued/will run, null if deduplicated
  */
 export function queueSyncAll(source: QueuedTask['source'] = 'periodic'): QueuedTask | null {
+  if (!processingEnabled) return null; // Suspended — drop silently
+
   if (!syncAllProcessing) {
     // Not processing - start immediately
     syncAllProcessing = true;
@@ -409,15 +417,16 @@ async function processCustomerSync(
     // Create admin notification for failed task
     await createFailureNotification('sync-customer', customerId, error);
   } finally {
-    // Check if there's a pending request
-    if (state.pendingAfterCurrent) {
+    // Check if there's a pending request (and processing isn't suspended)
+    if (state.pendingAfterCurrent && processingEnabled) {
       state.pendingAfterCurrent = false;
       const newTaskId = generateTaskId();
       console.log(`[QUEUE] Running pending sync-customer ${newTaskId} for customer ${customerId}`);
       // Recursively process the pending one (await to chain completion)
       await processCustomerSync(customerId, state, newTaskId);
     } else {
-      // No more pending - mark as not processing and resolve completion
+      // No more pending (or suspended) - mark as not processing and resolve completion
+      state.pendingAfterCurrent = false;
       state.processing = false;
       if (state.resolveCompletion) {
         state.resolveCompletion();
@@ -426,6 +435,7 @@ async function processCustomerSync(
       }
       // Clean up state if idle
       customerSyncStates.delete(customerId);
+      notifyDrainWaiters();
     }
   }
 }
@@ -450,21 +460,23 @@ async function processSyncAllTask(taskId: string): Promise<void> {
     // Create admin notification for failed task
     await createFailureNotification('sync-all', undefined, error);
   } finally {
-    // Check if there's a pending request
-    if (syncAllPendingAfterCurrent) {
+    // Check if there's a pending request (and processing isn't suspended)
+    if (syncAllPendingAfterCurrent && processingEnabled) {
       syncAllPendingAfterCurrent = false;
       const newTaskId = generateTaskId();
       console.log(`[QUEUE] Running pending sync-all ${newTaskId}`);
       // Recursively process the pending one (await to chain completion)
       await processSyncAllTask(newTaskId);
     } else {
-      // No more pending - mark as not processing and resolve completion
+      // No more pending (or suspended) - mark as not processing and resolve completion
+      syncAllPendingAfterCurrent = false;
       syncAllProcessing = false;
       if (syncAllResolveCompletion) {
         syncAllResolveCompletion();
         syncAllResolveCompletion = null;
         syncAllCompletionPromise = null;
       }
+      notifyDrainWaiters();
     }
   }
 }
@@ -883,4 +895,69 @@ export function stopPeriodicSync(): void {
     periodicLMStatusInterval = null;
   }
   console.log('[QUEUE] Stopped all periodic sync');
+}
+
+// ============================================================================
+// Processing Suspension (Test Support)
+// ============================================================================
+
+/**
+ * Check if any billing/sync tasks are currently in-flight.
+ */
+function isProcessingActive(): boolean {
+  if (syncAllProcessing) return true;
+  for (const state of customerSyncStates.values()) {
+    if (state.processing) return true;
+  }
+  return false;
+}
+
+/**
+ * Resolve all pending drain waiters (called when last in-flight task completes).
+ */
+function notifyDrainWaiters(): void {
+  if (drainResolvers.length > 0 && !isProcessingActive()) {
+    const resolvers = drainResolvers.splice(0);
+    for (const resolve of resolvers) resolve();
+  }
+}
+
+/**
+ * Suspend billing/sync processing. New tasks are silently dropped.
+ * Blocks until all in-flight work completes (drain), so the caller
+ * is guaranteed no GM processing is touching the database on return.
+ *
+ * LM status polling is NOT suspended (it's read-only and harmless).
+ */
+export async function suspendProcessing(): Promise<void> {
+  if (!processingEnabled) return; // Already suspended
+  processingEnabled = false;
+  // Clear pending tasks so they don't run after current work finishes
+  syncAllPendingAfterCurrent = false;
+  for (const state of customerSyncStates.values()) {
+    state.pendingAfterCurrent = false;
+  }
+  console.log('[QUEUE] Processing suspended — waiting for in-flight tasks to drain');
+
+  if (isProcessingActive()) {
+    await new Promise<void>(resolve => drainResolvers.push(resolve));
+  }
+
+  console.log('[QUEUE] Processing suspended — all tasks drained');
+}
+
+/**
+ * Resume billing/sync processing. Queued tasks will start executing again.
+ */
+export function resumeProcessing(): void {
+  if (processingEnabled) return; // Already running
+  processingEnabled = true;
+  console.log('[QUEUE] Processing resumed');
+}
+
+/**
+ * Check if processing is currently suspended.
+ */
+export function isProcessingSuspended(): boolean {
+  return !processingEnabled;
 }

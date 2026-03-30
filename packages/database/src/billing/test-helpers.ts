@@ -97,6 +97,9 @@ export const ALL_TEST_CUSTOMER_IDS = [
 export async function resetTestState(
   db: DatabaseOrTransaction,
 ): Promise<void> {
+  // Suspend GM processing first to prevent interference during cleanup
+  await suspendGMProcessing();
+
   // Clean up all known test customers
   for (const customerId of ALL_TEST_CUSTOMER_IDS) {
     await cleanupCustomerData(db, customerId);
@@ -105,12 +108,38 @@ export async function resetTestState(
   // Truncate shared tables that aren't customer-keyed
   await db.execute(sql`TRUNCATE TABLE haproxy_raw_logs`);
 
-  // Clear materialized stats for all test customers
-  for (const customerId of ALL_TEST_CUSTOMER_IDS) {
-    await db.execute(sql`
-      DELETE FROM _timescaledb_internal._materialized_hypertable_4
-      WHERE customer_id = ${customerId}
-    `);
+  // Clear ALL materialized stats (not just per-customer — continuous aggregate
+  // data can bleed between files via shared time buckets and refreshes)
+  await db.execute(sql`DELETE FROM _timescaledb_internal._materialized_hypertable_4`);
+}
+
+// GM port for test control endpoints
+const GM_PORT = 22600;
+
+/**
+ * Suspend GM billing/sync processing. Blocks until all in-flight tasks
+ * drain, so the caller is guaranteed exclusive DB access on return.
+ * Idempotent — safe to call multiple times (no-op if already suspended).
+ */
+export async function suspendGMProcessing(): Promise<void> {
+  try {
+    const res = await fetch(`http://localhost:${GM_PORT}/api/test/processing/suspend`, { method: 'POST' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  } catch {
+    // GM not running — nothing to suspend
+  }
+}
+
+/**
+ * Resume GM billing/sync processing.
+ * Idempotent — safe to call multiple times (no-op if already running).
+ */
+export async function resumeGMProcessing(): Promise<void> {
+  try {
+    const res = await fetch(`http://localhost:${GM_PORT}/api/test/processing/resume`, { method: 'POST' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  } catch {
+    // GM not running — nothing to resume
   }
 }
 

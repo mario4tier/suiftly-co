@@ -38,7 +38,7 @@ import {
   applyScheduledTierChanges,
   processScheduledCancellations,
 } from './tier-changes';
-import { unsafeAsLockedTransaction, toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData, resetTestState } from './test-helpers';
+import { unsafeAsLockedTransaction, toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData, resetTestState, suspendGMProcessing } from './test-helpers';
 import { processCancellationCleanup } from './cancellation-cleanup';
 import { processCustomerBilling } from './processor';
 import { processInvoicePayment } from './payments';
@@ -126,6 +126,8 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
   });
 
   beforeEach(async () => {
+    await suspendGMProcessing();
+
     // Reset mock service
     suiService.setFailure(false);
 

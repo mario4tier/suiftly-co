@@ -25,6 +25,9 @@ import {
   getPendingTasks,
   startPeriodicSync,
   stopPeriodicSync,
+  suspendProcessing,
+  resumeProcessing,
+  isProcessingSuspended,
   SYNC_ALL_INTERVAL_DEV_MS,
   SYNC_ALL_INTERVAL_PROD_MS,
 } from './task-queue.js';
@@ -567,6 +570,21 @@ if (isTestDeployment()) {
   // NOTE: DB truncation has been moved to sudob (/api/test/reset-all)
   // sudob owns ALL destructive test operations and does truncation directly via pg.
   // This keeps dangerous operations in one place (sudob, which never runs in production).
+
+  // Suspend/resume billing processing (for unit tests that need exclusive DB access)
+  server.post('/api/test/processing/suspend', async () => {
+    await suspendProcessing();
+    return { success: true, suspended: true };
+  });
+
+  server.post('/api/test/processing/resume', async () => {
+    resumeProcessing();
+    return { success: true, suspended: false };
+  });
+
+  server.get('/api/test/processing/status', async () => {
+    return { suspended: isProcessingSuspended() };
+  });
 }
 
 // ============================================================================

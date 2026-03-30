@@ -45,7 +45,7 @@ import {
   cancelScheduledTierChange,
 } from './tier-changes';
 import { TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
-import { toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData, resetTestState } from './test-helpers';
+import { toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData, resetTestState, suspendGMProcessing } from './test-helpers';
 
 // ============================================================================
 // Test Utilities
@@ -122,6 +122,8 @@ describe('Bug: Upgrade while downgrade is scheduled', () => {
   });
 
   beforeEach(async () => {
+    await suspendGMProcessing();
+
     suiService.setFailure(false);
     suiService.setBalance(100000);
     clock.setTime(new Date('2025-01-15T00:00:00Z'));
