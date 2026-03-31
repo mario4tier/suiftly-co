@@ -15,6 +15,7 @@ import {
   insertMockMixedLogs,
   refreshStatsAggregate,
   clearAllLogs,
+  clearAllStats,
 } from './test-helpers';
 import { resetTestState, suspendGMProcessing } from '../billing/test-helpers';
 import {
@@ -58,9 +59,8 @@ describe('Stats Queries', () => {
     // Reset clock to a known time
     clock = new MockDBClock({ currentTime: new Date('2024-01-15T12:00:00Z') });
 
-    // Clear existing logs, materialized stats, and refresh aggregate for clean state
-    await clearAllLogs(db);
-    await db.execute(sql`DELETE FROM _timescaledb_internal._materialized_hypertable_4`);
+    // Clear all stats data (raw logs + materialized aggregate) for clean state
+    await clearAllStats(db);
     await refreshStatsAggregate(db);
   });
 

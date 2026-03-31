@@ -2258,6 +2258,13 @@ async function start() {
     const syncAllInterval = isTestDeployment()
       ? SYNC_ALL_INTERVAL_DEV_MS   // 30 seconds (test/dev)
       : SYNC_ALL_INTERVAL_PROD_MS; // 5 minutes (production)
+
+    // Start suspended in test mode — tests explicitly resume when needed.
+    // Prevents GM from processing stale test data before tests can clean up.
+    if (isTestDeployment()) {
+      suspendProcessing();
+    }
+
     startPeriodicSync(syncAllInterval);
   } catch (err) {
     server.log.error(err);

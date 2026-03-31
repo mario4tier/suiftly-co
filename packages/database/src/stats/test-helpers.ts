@@ -6,7 +6,7 @@
  */
 
 import { sql } from 'drizzle-orm';
-import type { Database } from '../db';
+import type { Database, DatabaseOrTransaction } from '../db';
 import { haproxyRawLogs } from '../schema/logs';
 
 /**
@@ -463,6 +463,19 @@ export async function clearCustomerLogs(
  */
 export async function clearAllLogs(db: Database): Promise<void> {
   await db.execute(sql`TRUNCATE TABLE haproxy_raw_logs`);
+}
+
+/**
+ * Clear all stats data: raw logs AND materialized continuous aggregate.
+ * Use this in beforeEach for any test that reads from stats_per_hour.
+ *
+ * The materialized table must be cleared directly because
+ * refresh_continuous_aggregate does NOT remove stale materialized rows
+ * when the underlying raw data is deleted.
+ */
+export async function clearAllStats(db: Database | DatabaseOrTransaction): Promise<void> {
+  await db.execute(sql`TRUNCATE TABLE haproxy_raw_logs`);
+  await db.execute(sql`DELETE FROM _timescaledb_internal._materialized_hypertable_4`);
 }
 
 /**

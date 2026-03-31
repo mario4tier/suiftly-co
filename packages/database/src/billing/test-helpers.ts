@@ -15,6 +15,7 @@ import { MockStripeService } from '../stripe-mock/mock.js';
 import { EscrowPaymentProvider } from './providers/escrow-provider.js';
 import type { PaymentServices } from './providers/index.js';
 import type { DatabaseOrTransaction } from '../db.js';
+import { clearAllStats } from '../stats/test-helpers.js';
 import { sql } from 'drizzle-orm';
 
 export { unsafeAsLockedTransaction } from './locking';
@@ -105,12 +106,8 @@ export async function resetTestState(
     await cleanupCustomerData(db, customerId);
   }
 
-  // Truncate shared tables that aren't customer-keyed
-  await db.execute(sql`TRUNCATE TABLE haproxy_raw_logs`);
-
-  // Clear ALL materialized stats (not just per-customer — continuous aggregate
-  // data can bleed between files via shared time buckets and refreshes)
-  await db.execute(sql`DELETE FROM _timescaledb_internal._materialized_hypertable_4`);
+  // Clear raw logs + materialized aggregate
+  await clearAllStats(db);
 }
 
 // GM port for test control endpoints

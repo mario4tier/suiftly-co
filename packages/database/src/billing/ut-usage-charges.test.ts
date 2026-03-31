@@ -12,7 +12,7 @@ import { eq, sql } from 'drizzle-orm';
 import {
   insertMockHAProxyLogs,
   refreshStatsAggregate,
-  clearAllLogs,
+  clearAllStats,
 } from '../stats/test-helpers';
 import { updateUsageChargesToDraft } from './usage-charges';
 import { ensureEscrowPaymentMethod, cleanupCustomerData, resetTestState, suspendGMProcessing } from './test-helpers';
@@ -72,7 +72,7 @@ describe('Usage Charges', () => {
 
   beforeEach(async () => {
     // Clear logs and refresh aggregate to ensure clean state
-    await clearAllLogs(db);
+    await clearAllStats(db);
     await refreshStatsAggregate(db);
 
     // Clear line items and billing records
@@ -96,7 +96,7 @@ describe('Usage Charges', () => {
   });
 
   afterAll(async () => {
-    await clearAllLogs(db);
+    await clearAllStats(db);
     await cleanupCustomerData(db, TEST_CUSTOMER_ID);
   });
 
