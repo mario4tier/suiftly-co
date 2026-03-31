@@ -9,6 +9,7 @@ export default defineConfig({
     include: ['tests/**/*.test.ts', 'src/**/*.test.ts'],
     // Run tests sequentially to avoid database conflicts (like E2E tests)
     // All tests share the same database and may use the same wallet addresses
+    fileParallelism: false,
     pool: 'forks',
     maxWorkers: 1,
     isolate: false,
