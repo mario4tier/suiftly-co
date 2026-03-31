@@ -27,6 +27,9 @@ import json
 import os
 import subprocess
 import sys
+import time
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -220,6 +223,78 @@ def run_command(cmd: list[str], cwd: Path, env: Optional[dict] = None) -> tuple[
     return exit_code, duration
 
 
+def is_server_healthy(url: str) -> bool:
+    """Check if a server is responding to health checks."""
+    try:
+        with urllib.request.urlopen(url, timeout=2) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
+def _check_servers_parallel(gm_url: str, api_url: str) -> tuple[bool, bool]:
+    """Check GM and API health in parallel."""
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        gm_fut = ex.submit(is_server_healthy, gm_url)
+        api_fut = ex.submit(is_server_healthy, api_url)
+        return gm_fut.result(), api_fut.result()
+
+
+def _format_missing(gm_ok: bool, api_ok: bool) -> str:
+    return ", ".join(
+        (["GM :22600"] if not gm_ok else []) +
+        (["API :22700"] if not api_ok else [])
+    )
+
+
+def ensure_dev_servers(repo_root: Path) -> bool:
+    """
+    Check that GM and API are running; start them via start-dev.sh if not.
+
+    Returns True if servers are healthy, False if startup failed.
+    """
+    gm_url = "http://localhost:22600/health"
+    api_url = "http://localhost:22700/health"
+
+    gm_ok, api_ok = _check_servers_parallel(gm_url, api_url)
+
+    if gm_ok and api_ok:
+        print("  Dev servers already running (GM :22600, API :22700)")
+        return True
+
+    print(f"  Dev servers not running ({_format_missing(gm_ok, api_ok)}) — launching start-dev.sh...")
+
+    start_script = repo_root / "scripts" / "dev" / "start-dev.sh"
+    try:
+        subprocess.run(
+            [str(start_script)],
+            cwd=repo_root,
+            timeout=120,
+            check=True,
+        )
+    except FileNotFoundError:
+        print(f"  ERROR: start-dev.sh not found at {start_script}")
+        return False
+    except subprocess.CalledProcessError as e:
+        print(f"  ERROR: start-dev.sh failed (exit {e.returncode})")
+        return False
+    except subprocess.TimeoutExpired:
+        print("  ERROR: start-dev.sh timed out after 120s")
+        return False
+
+    print("  Waiting for servers to be ready...", flush=True)
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        gm_ok, api_ok = _check_servers_parallel(gm_url, api_url)
+        if gm_ok and api_ok:
+            print("  Dev servers ready")
+            return True
+        time.sleep(1)
+
+    print(f"  ERROR: Servers still not responding after 30s ({_format_missing(gm_ok, api_ok)})")
+    return False
+
+
 def print_header(text: str) -> None:
     """Print a styled header."""
     print()
@@ -263,6 +338,11 @@ def main() -> int:
         return 2
 
     print(f"  Environment: {reason}")
+
+    print_phase("Pre-flight: Dev Server Check")
+    if not ensure_dev_servers(repo_root):
+        print("  FATAL: Could not start dev servers. Aborting tests.")
+        return 1
 
     # Define test phases
     # Suiftly-co uses the TypeScript runner which handles:
