@@ -110,7 +110,7 @@ export async function recalculateDraftInvoice(
     const serviceType = service.serviceType as ServiceType;
     // Use scheduled tier if present (for scheduled downgrades), otherwise current tier
     const effectiveTier = (service.scheduledTier || service.tier) as ServiceTier;
-    const tierPriceCents = getTierPriceUsdCents(effectiveTier);
+    const tierPriceCents = getTierPriceUsdCents(effectiveTier, serviceType);
     const subscriptionItemType = TIER_TO_SUBSCRIPTION_ITEM[effectiveTier];
 
     // Insert subscription line item

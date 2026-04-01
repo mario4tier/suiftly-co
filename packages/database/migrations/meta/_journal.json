@@ -15,6 +15,13 @@
       "when": 1771543237448,
       "tag": "0001_gifted_master_chief",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1775059523618,
+      "tag": "0002_platform_subscription",
+      "breakpoints": true
     }
   ]
 }

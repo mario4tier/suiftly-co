@@ -62,6 +62,7 @@ export const SERVICE_TYPE = {
   SEAL: 'seal',
   GRPC: 'grpc',
   GRAPHQL: 'graphql',
+  PLATFORM: 'platform',
 } as const satisfies Record<string, ServiceType>;
 
 // Service Type to Database Number Mapping
@@ -70,6 +71,7 @@ export const SERVICE_TYPE_NUMBER = {
   [SERVICE_TYPE.SEAL]: 1,
   [SERVICE_TYPE.GRPC]: 2,
   [SERVICE_TYPE.GRAPHQL]: 3,
+  [SERVICE_TYPE.PLATFORM]: 4,
 } as const satisfies Record<ServiceType, number>;
 
 // Service Type to Single Character Mapping
@@ -79,6 +81,7 @@ export const SERVICE_TYPE_CHAR = {
   [SERVICE_TYPE.SEAL]: 's',
   [SERVICE_TYPE.GRPC]: 'r',
   [SERVICE_TYPE.GRAPHQL]: 'g',
+  [SERVICE_TYPE.PLATFORM]: 'p',
 } as const satisfies Record<ServiceType, string>;
 
 // Reverse mapping: number to service type
@@ -86,6 +89,7 @@ export const SERVICE_NUMBER_TO_TYPE = {
   1: SERVICE_TYPE.SEAL,
   2: SERVICE_TYPE.GRPC,
   3: SERVICE_TYPE.GRAPHQL,
+  4: SERVICE_TYPE.PLATFORM,
 } as const satisfies Record<number, ServiceType>;
 
 // Service States (6 distinct states - see UI_DESIGN.md)
@@ -197,6 +201,7 @@ export const USAGE_PRICING_CENTS_PER_1000 = {
   [SERVICE_TYPE.SEAL]: 10,      // 10 cents per 1000 requests = $0.0001/request
   [SERVICE_TYPE.GRPC]: 10,      // Same pricing
   [SERVICE_TYPE.GRAPHQL]: 10,   // Same pricing
+  [SERVICE_TYPE.PLATFORM]: 0,   // Platform is subscription-only, no usage charges
 } as const satisfies Record<ServiceType, number>;
 
 // Port Allocations - Single source of truth: ~/mhaxbe/PORT_MAP.md

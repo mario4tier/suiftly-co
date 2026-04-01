@@ -22,7 +22,7 @@ import {
 } from './invoices';
 import { processInvoicePayment } from './payments';
 import { recalculateDraftInvoice, calculateProRatedUpgradeCharge } from './draft-invoice';
-import { getTierPriceUsdCents, TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
+import { getTierPriceUsdCents, getAvailableTiers } from '@suiftly/shared/pricing';
 import { INVOICE_LINE_ITEM_TYPE, TIER_TO_SUBSCRIPTION_ITEM } from '@suiftly/shared/constants';
 import type { DBClock } from '@suiftly/shared/db-clock';
 import type { PaymentServices } from './providers';
@@ -157,8 +157,8 @@ export async function handleTierUpgradeLocked(
   }
 
   // 2. Validate upgrade (new tier must be higher priced)
-  const currentTierPrice = getTierPriceUsdCents(service.tier);
-  const newTierPrice = getTierPriceUsdCents(newTier);
+  const currentTierPrice = getTierPriceUsdCents(service.tier, serviceType);
+  const newTierPrice = getTierPriceUsdCents(newTier, serviceType);
 
   if (newTierPrice <= currentTierPrice) {
     return {
@@ -406,8 +406,8 @@ export async function prepareTierUpgradePhase1Locked(
   }
 
   // Validate upgrade (new tier must be higher priced)
-  const currentTierPrice = getTierPriceUsdCents(service.tier);
-  const newTierPrice = getTierPriceUsdCents(newTier);
+  const currentTierPrice = getTierPriceUsdCents(service.tier, serviceType);
+  const newTierPrice = getTierPriceUsdCents(newTier, serviceType);
 
   if (newTierPrice <= currentTierPrice) {
     return {
@@ -665,8 +665,8 @@ export async function scheduleTierDowngradeLocked(
   }
 
   // 2. Validate downgrade (new tier must be lower priced)
-  const currentTierPrice = getTierPriceUsdCents(service.tier);
-  const newTierPrice = getTierPriceUsdCents(newTier);
+  const currentTierPrice = getTierPriceUsdCents(service.tier, serviceType);
+  const newTierPrice = getTierPriceUsdCents(newTier, serviceType);
 
   if (newTierPrice >= currentTierPrice) {
     return {
@@ -780,7 +780,7 @@ async function recalculateFailedInvoiceSubscription(
   if (failedInvoices.length === 0) return;
 
   const newSubscriptionItemType = TIER_TO_SUBSCRIPTION_ITEM[newTier];
-  const newTierPrice = getTierPriceUsdCents(newTier);
+  const newTierPrice = getTierPriceUsdCents(newTier, serviceType);
 
   // All subscription item types to match against
   const subscriptionItemTypes = [
@@ -1211,8 +1211,8 @@ export async function getTierChangeOptions(
     return null;
   }
 
-  const currentTierPrice = getTierPriceUsdCents(service.tier);
-  const tiers: ServiceTier[] = ['starter', 'pro', 'enterprise'];
+  const currentTierPrice = getTierPriceUsdCents(service.tier, serviceType);
+  const tiers = getAvailableTiers(serviceType) as ServiceTier[];
 
   // Get currently scheduled tier (if any) from the service
   const scheduledTier = service.scheduledTier as ServiceTier | null;
@@ -1221,7 +1221,7 @@ export async function getTierChangeOptions(
     : undefined;
 
   const availableTiers = tiers.map((tier) => {
-    const priceUsdCents = TIER_PRICES_USD_CENTS[tier];
+    const priceUsdCents = getTierPriceUsdCents(tier, serviceType);
     const isCurrentTier = tier === service.tier;
     const isUpgrade = priceUsdCents > currentTierPrice;
     const isDowngrade = priceUsdCents < currentTierPrice;

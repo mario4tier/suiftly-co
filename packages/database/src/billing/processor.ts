@@ -40,7 +40,7 @@ import type { DBClock } from '@suiftly/shared/db-clock';
 import type { PaymentServices } from './providers';
 import { getCustomerProviders } from './providers';
 import { getTierPriceUsdCents } from '@suiftly/shared/pricing';
-import type { ServiceTier } from '@suiftly/shared/constants';
+import type { ServiceTier, ServiceType } from '@suiftly/shared/constants';
 
 // How often to sync usage to DRAFT invoices (in milliseconds)
 const USAGE_SYNC_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
@@ -537,7 +537,7 @@ async function processExcessCreditRefunds(
     // Skip cancelled services: cancellationScheduledFor is set during the month,
     // then cleared by processScheduledCancellations on the 1st (which sets state='cancellation_pending')
     if (!svc.cancellationScheduledFor && svc.state !== 'cancellation_pending') {
-      monthlyCostCents += getTierPriceUsdCents(svc.tier as ServiceTier);
+      monthlyCostCents += getTierPriceUsdCents(svc.tier as ServiceTier, svc.serviceType as ServiceType);
     }
   }
 

@@ -53,6 +53,17 @@ const DEFAULT_FRONTEND_CONFIG: Record<string, string> = {
   fmax_apikey: '10',
   fmax_ipv4: '20',
   fmax_cidr: '20',
+
+  // Platform subscription prices (USD)
+  fpsubs_usd_sta: '1',
+  fpsubs_usd_pro: '29',
+
+  // Feature flags: require subscription for each service type
+  // '1' = required, '0' = not required
+  freq_platform_sub: '0',
+  freq_seal_sub: '1',
+  freq_grpc_sub: '1',
+  freq_graphql_sub: '1',
 };
 
 /**

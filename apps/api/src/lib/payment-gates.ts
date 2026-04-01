@@ -7,8 +7,10 @@
  */
 
 import { TRPCError } from '@trpc/server';
-import { billingRecords } from '@suiftly/database/schema';
-import { eq } from 'drizzle-orm';
+import { billingRecords, serviceInstances } from '@suiftly/database/schema';
+import { eq, and } from 'drizzle-orm';
+import { SERVICE_TYPE, SERVICE_STATE } from '@suiftly/shared/constants';
+import { requiresPlatformSub } from './config-cache';
 import { getSuiService } from '@suiftly/database/sui-mock';
 import { getStripeService } from '@suiftly/database/stripe-mock';
 import { getCustomerProviders, processInvoicePayment, finalizeSuccessfulPayment } from '@suiftly/database/billing';
@@ -62,4 +64,40 @@ export async function retryPendingInvoice(
   // Payment succeeded — clear pending state, set paidOnce, clear grace period,
   // issue reconciliation credit, and recalculate DRAFT via shared finalization.
   await finalizeSuccessfulPayment(tx, customerId, service.subPendingInvoiceId, dbClock);
+}
+
+/**
+ * Assert that the customer has an active platform subscription.
+ * No-op if platform subscription is not required (feature flag off).
+ *
+ * @param requireEnabled If true, also requires platform state to be ENABLED
+ *   (use for service enable; subscribe only needs paid subscription)
+ */
+export async function assertPlatformSubscription(
+  tx: LockedTransaction,
+  customerId: number,
+  opts: { requireEnabled?: boolean } = {},
+): Promise<void> {
+  if (!requiresPlatformSub()) return;
+
+  const platformSvc = await tx.query.serviceInstances.findFirst({
+    where: and(
+      eq(serviceInstances.customerId, customerId),
+      eq(serviceInstances.serviceType, SERVICE_TYPE.PLATFORM)
+    ),
+  });
+
+  if (!platformSvc || platformSvc.subPendingInvoiceId !== null) {
+    throw new TRPCError({
+      code: 'PRECONDITION_FAILED',
+      message: 'Platform subscription required. Subscribe to a platform plan first.',
+    });
+  }
+
+  if (opts.requireEnabled && platformSvc.state !== SERVICE_STATE.ENABLED) {
+    throw new TRPCError({
+      code: 'PRECONDITION_FAILED',
+      message: 'Active platform subscription required to enable services',
+    });
+  }
 }

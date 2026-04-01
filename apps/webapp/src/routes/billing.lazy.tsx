@@ -304,7 +304,7 @@ function BillingPage() {
   // Calculate pending subscription charges
   const pendingServices = services?.filter(s => s.subPendingInvoiceId != null) ?? [];
   const totalPendingUsd = pendingServices.reduce((sum, service) => {
-    const priceUsdCents = getTierPriceUsdCents(service.tier);
+    const priceUsdCents = getTierPriceUsdCents(service.tier, service.serviceType);
     return sum + (priceUsdCents / 100);
   }, 0);
   const shortfallUsd = Math.max(0, totalPendingUsd - balance);
@@ -333,7 +333,7 @@ function BillingPage() {
                 <p>
                   {pendingServices.length === 1 ? (
                     <>
-                      Your {pendingServices[0].serviceType.charAt(0).toUpperCase() + pendingServices[0].serviceType.slice(1)} subscription ({formatTierName(pendingServices[0].tier)} tier - ${(getTierPriceUsdCents(pendingServices[0].tier) / 100).toFixed(2)}/month) requires payment.
+                      Your {pendingServices[0].serviceType.charAt(0).toUpperCase() + pendingServices[0].serviceType.slice(1)} subscription ({formatTierName(pendingServices[0].tier)} tier - ${(getTierPriceUsdCents(pendingServices[0].tier, pendingServices[0].serviceType) / 100).toFixed(2)}/month) requires payment.
                     </>
                   ) : (
                     <>

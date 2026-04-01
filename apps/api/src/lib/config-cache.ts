@@ -157,27 +157,53 @@ export function getConfigInt(key: string): number {
 /**
  * Get tier price in USD cents
  * Fast O(1) lookup from memory cache
+ *
+ * @param tier Tier name (starter, pro, enterprise)
+ * @param serviceType Optional service type. When 'platform', uses platform pricing keys.
  */
-export function getTierPriceUsdCents(tier: string): number {
+export function getTierPriceUsdCents(tier: string, serviceType?: string): number {
+  const isPlatform = serviceType === 'platform';
   let configKey: string;
 
   switch (tier.toLowerCase()) {
     case 'starter':
-      configKey = 'fsubs_usd_sta';
+      configKey = isPlatform ? 'fpsubs_usd_sta' : 'fsubs_usd_sta';
       break;
     case 'pro':
-      configKey = 'fsubs_usd_pro';
+      configKey = isPlatform ? 'fpsubs_usd_pro' : 'fsubs_usd_pro';
       break;
     case 'enterprise':
+      if (isPlatform) throw new Error('Enterprise tier is not available for platform');
       configKey = 'fsubs_usd_ent';
       break;
     default:
       throw new Error(`Invalid tier: ${tier}`);
   }
 
-  // Get price from cache and convert to cents
   const priceUsd = getConfigNumber(configKey);
   return Math.round(priceUsd * 100);
+}
+
+/**
+ * Check if platform subscription is required to use services.
+ * Defaults to false (permissive) if config not loaded — platform gating
+ * is an opt-in feature, so absence of config means "not required".
+ */
+export function requiresPlatformSub(): boolean {
+  try { return getConfig('freq_platform_sub') === '1'; }
+  catch { return false; }
+}
+
+/**
+ * Check if per-service subscription is required for a given service type.
+ * Defaults to true (restrictive) if config not loaded — safer to require
+ * payment than to accidentally give free access.
+ */
+export function requiresServiceSub(serviceType: string): boolean {
+  if (serviceType === 'platform') return true;
+  try {
+    return getConfig(`freq_${serviceType}_sub`) === '1';
+  } catch { return true; }
 }
 
 /**

@@ -9,8 +9,8 @@ import { router, protectedProcedure } from '../lib/trpc';
 import { db, withCustomerLockForAPI } from '@suiftly/database';
 import { customers, serviceInstances, systemControl, lmStatus, apiKeys, sealKeys, sealPackages } from '@suiftly/database/schema';
 import { eq, and, sql, min, ne, isNull, count } from 'drizzle-orm';
-import { SERVICE_TYPE, SERVICE_TIER, SERVICE_STATE, BALANCE_LIMITS } from '@suiftly/shared/constants';
-import type { ValidationResult, ValidationError, ValidationWarning } from '@suiftly/shared/types';
+import { SERVICE_TYPE, SERVICE_TIER, SERVICE_STATE } from '@suiftly/shared/constants';
+import type { ServiceType } from '@suiftly/shared/constants';
 import { testDelayManager } from '../lib/test-delays';
 import { getTierPriceUsdCents } from '../lib/config-cache';
 import { getSuiService } from '@suiftly/database/sui-mock';
@@ -28,11 +28,12 @@ import {
   getTierChangeOptions,
 } from '@suiftly/database/billing';
 import { dbClock } from '@suiftly/shared/db-clock';
+import { getAvailableTiers } from '@suiftly/shared/pricing';
 import { triggerVaultSync, markConfigChanged } from '../lib/gm-sync';
-import { retryPendingInvoice } from '../lib/payment-gates';
+import { retryPendingInvoice, assertPlatformSubscription } from '../lib/payment-gates';
 
 // Zod schemas for input validation
-const serviceTypeSchema = z.enum([SERVICE_TYPE.SEAL, SERVICE_TYPE.GRPC, SERVICE_TYPE.GRAPHQL]);
+const serviceTypeSchema = z.enum([SERVICE_TYPE.SEAL, SERVICE_TYPE.GRPC, SERVICE_TYPE.GRAPHQL, SERVICE_TYPE.PLATFORM]);
 const serviceTierSchema = z.enum([SERVICE_TIER.STARTER, SERVICE_TIER.PRO, SERVICE_TIER.ENTERPRISE]);
 
 const subscribeInputSchema = z.object({
@@ -40,115 +41,6 @@ const subscribeInputSchema = z.object({
   tier: serviceTierSchema,
   config: z.any().optional(),
 });
-
-/**
- * Shared validation logic
- * Checks balance, limits, and business rules
- */
-async function validateSubscription(
-  customerId: number,
-  serviceType: string,
-  tier: string
-): Promise<ValidationResult> {
-  const errors: ValidationError[] = [];
-  const warnings: ValidationWarning[] = [];
-
-  // 1. Check if service already exists
-  const existing = await db.query.serviceInstances.findFirst({
-    where: and(
-      eq(serviceInstances.customerId, customerId),
-      eq(serviceInstances.serviceType, serviceType as 'seal' | 'grpc' | 'graphql')
-    ),
-  });
-
-  if (existing) {
-    return {
-      valid: false,
-      errors: [{
-        code: 'ALREADY_SUBSCRIBED',
-        message: `Already subscribed to ${serviceType}`,
-        field: 'serviceType',
-      }],
-    };
-  }
-
-  // 2. Get customer balance
-  const customer = await db.query.customers.findFirst({
-    where: eq(customers.customerId, customerId),
-  });
-
-  if (!customer) {
-    return {
-      valid: false,
-      errors: [{
-        code: 'CUSTOMER_NOT_FOUND',
-        message: 'Customer not found',
-      }],
-    };
-  }
-
-  // 3. Get tier price (from in-memory cache - O(1) lookup, no database query)
-  const priceUsdCents = getTierPriceUsdCents(tier);
-
-  // 4. Get balance info for warnings only
-  // NOTE: Balance/spending limit enforcement happens at charge time (service-first pattern)
-  const currentBalance = customer.currentBalanceUsdCents ?? 0;
-  const required = priceUsdCents;
-  const currentPeriodCharged = customer.currentPeriodChargedUsdCents ?? 0;
-  const spendingLimit = customer.spendingLimitUsdCents ?? 25000; // $250 default
-
-  // 5. Add warnings for low balance or spending limit concerns
-  if (currentBalance < required) {
-    warnings.push({
-      code: 'INSUFFICIENT_BALANCE_WARNING',
-      message: `Balance may be insufficient. Need $${required / 100}, have $${currentBalance / 100}. Service will be created but may fail to charge.`,
-      details: {
-        required: required / 100,
-        current: currentBalance / 100,
-        shortfall: (required - currentBalance) / 100,
-      },
-    });
-  }
-
-  if (spendingLimit > 0 && currentPeriodCharged + required > spendingLimit) {
-    warnings.push({
-      code: 'SPENDING_LIMIT_WARNING',
-      message: `May exceed spending limit of $${spendingLimit / 100}. Service will be created but may fail to charge.`,
-      details: {
-        limit: spendingLimit / 100,
-        currentSpent: currentPeriodCharged / 100,
-        additionalCharge: required / 100,
-        total: (currentPeriodCharged + required) / 100,
-      },
-    });
-  }
-
-  // 6. Check remaining balance after charge
-  const remainingBalance = currentBalance - required;
-  const minimumBalanceUsdCents = BALANCE_LIMITS.MINIMUM_ACTIVE_SERVICES_USD * 100;
-
-  if (remainingBalance < minimumBalanceUsdCents) {
-    warnings.push({
-      code: 'LOW_BALANCE_WARNING',
-      message: `Balance after subscription will be $${remainingBalance / 100} (minimum recommended: $${minimumBalanceUsdCents / 100})`,
-      details: {
-        remainingBalance: remainingBalance / 100,
-        minimumRecommended: minimumBalanceUsdCents / 100,
-      },
-    });
-  }
-
-  // All checks passed
-  return {
-    valid: true,
-    warnings: warnings.length > 0 ? warnings : undefined,
-    balance: {
-      current: currentBalance / 100,
-      required: required / 100,
-      remaining: remainingBalance / 100,
-    },
-  };
-}
 
 /**
  * Services router
@@ -176,8 +68,17 @@ export const servicesRouter = router({
       // Apply test delay if configured
       await testDelayManager.applyDelay('subscribe');
 
+      // Validate tier is available for this service type
+      const availableTiers = getAvailableTiers(input.serviceType);
+      if (!availableTiers.includes(input.tier)) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: `${input.tier} tier is not available for ${input.serviceType}. Available: ${availableTiers.join(', ')}`,
+        });
+      }
+
       // Get tier price upfront (from in-memory cache - O(1) lookup, no database query)
-      const priceUsdCents = getTierPriceUsdCents(input.tier);
+      const priceUsdCents = getTierPriceUsdCents(input.tier, input.serviceType);
       const paymentServices = { suiService: getSuiService(), stripeService: getStripeService() };
 
       // Wrap entire operation in customer advisory lock
@@ -220,50 +121,61 @@ export const servicesRouter = router({
           };
         }
 
-        // 3. Initialize config with defaults based on tier
-        const defaultConfig = {
-          tier: input.tier,
-          burstEnabled: input.tier !== SERVICE_TIER.STARTER, // Enabled by default for Pro/Enterprise
-          totalSealKeys: 1,
-          packagesPerSealKey: 3,
-          totalApiKeys: 2,
-          purchasedSealKeys: 0,
-          purchasedPackages: 0,
-          purchasedApiKeys: 0,
-          ipAllowlist: [],
-        };
+        // 2.5. Platform gating: require active platform subscription before per-service subscribe
+        if (input.serviceType !== SERVICE_TYPE.PLATFORM) {
+          await assertPlatformSubscription(tx, ctx.user!.customerId);
+        }
 
-        // 4. Create service in DISABLED state (subPendingInvoiceId will be set after billing)
-        // This creates an audit trail BEFORE attempting any payment
+        const isPlatform = input.serviceType === SERVICE_TYPE.PLATFORM;
+
+        // 3. Initialize config with defaults based on service type and tier
+        const defaultConfig = isPlatform
+          ? { tier: input.tier }
+          : {
+              tier: input.tier,
+              burstEnabled: input.tier !== SERVICE_TIER.STARTER, // Enabled by default for Pro/Enterprise
+              totalSealKeys: 1,
+              packagesPerSealKey: 3,
+              totalApiKeys: 2,
+              purchasedSealKeys: 0,
+              purchasedPackages: 0,
+              purchasedApiKeys: 0,
+              ipAllowlist: [],
+            };
+
+        // 4. Create service instance
+        // Platform is auto-enabled (always "on"). Per-service starts DISABLED.
         const [newService] = await tx
           .insert(serviceInstances)
           .values({
             customerId: ctx.user!.customerId,
             serviceType: input.serviceType,
             tier: input.tier,
-            state: SERVICE_STATE.DISABLED,
+            state: isPlatform ? SERVICE_STATE.ENABLED : SERVICE_STATE.DISABLED,
             config: input.config || defaultConfig,
-            isUserEnabled: false,
-            // subPendingInvoiceId will be set if payment fails
+            isUserEnabled: isPlatform, // Platform auto-on, per-service off
           })
           .returning();
 
-        // 5. Generate initial API key immediately (part of service creation)
-        // Only pass sealType for Seal services - other services use default metadata
-        const { plainKey } = await storeApiKey({
-          customerId: ctx.user!.customerId,
-          serviceType: input.serviceType,
-          // sealType is Seal-specific metadata (network + access mode)
-          // Future gRPC/GraphQL services will have their own metadata encoding
-          ...(input.serviceType === SERVICE_TYPE.SEAL && {
-            sealType: { network: 'mainnet', access: 'open' },
-          }),
-          metadata: {
-            generatedAt: 'subscription',
-            instanceId: newService.instanceId,
-          },
-          tx, // Pass locked transaction
-        });
+        // 5. Generate initial API key (skip for platform — no API keys needed)
+        let plainKey: string | null = null;
+        if (!isPlatform) {
+          const result = await storeApiKey({
+            customerId: ctx.user!.customerId,
+            serviceType: input.serviceType,
+            // sealType is Seal-specific metadata (network + access mode)
+            // Future gRPC/GraphQL services will have their own metadata encoding
+            ...(input.serviceType === SERVICE_TYPE.SEAL && {
+              sealType: { network: 'mainnet', access: 'open' },
+            }),
+            metadata: {
+              generatedAt: 'subscription',
+              instanceId: newService.instanceId,
+            },
+            tx, // Pass locked transaction
+          });
+          plainKey = result.plainKey;
+        }
 
         // 6. Process billing (using locked version - we already hold the lock)
         let billingResult;
@@ -324,12 +236,13 @@ export const servicesRouter = router({
         }
 
         // 7. Payment succeeded - keep subPendingInvoiceId as NULL (same transaction)
+        // Platform stays enabled (always "on"), per-service stays disabled until user enables
         await tx
           .update(serviceInstances)
           .set({
-            state: SERVICE_STATE.DISABLED, // Keep disabled - user must manually enable after config
+            state: isPlatform ? SERVICE_STATE.ENABLED : SERVICE_STATE.DISABLED,
             subPendingInvoiceId: null, // Explicitly clear (should already be NULL)
-            isUserEnabled: false, // Service stays OFF - user enables when ready
+            isUserEnabled: isPlatform,
           })
           .where(eq(serviceInstances.instanceId, newService.instanceId));
 
@@ -340,7 +253,7 @@ export const servicesRouter = router({
         return {
           ...newService,
           subPendingInvoiceId: null,
-          isUserEnabled: false, // Service OFF - user must manually enable
+          isUserEnabled: isPlatform,
           apiKey: plainKey,
           paymentPending: false,
         };
@@ -415,11 +328,24 @@ export const servicesRouter = router({
         });
       }
 
+      // Platform subscription cannot be toggled — it is always "on"
+      if (input.serviceType === SERVICE_TYPE.PLATFORM) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Platform subscription cannot be toggled',
+        });
+      }
+
       // Wrap entire operation in customer advisory lock
       const result = await withCustomerLockForAPI(
         ctx.user.customerId,
         'toggleService',
         async (tx) => {
+          // Platform gating: require active+enabled platform subscription to enable services
+          if (input.enabled) {
+            await assertPlatformSubscription(tx, ctx.user!.customerId, { requireEnabled: true });
+          }
+
           const service = await tx.query.serviceInstances.findFirst({
             where: and(
               eq(serviceInstances.customerId, ctx.user!.customerId),
@@ -629,7 +555,7 @@ export const servicesRouter = router({
       const options = await getTierChangeOptions(
         db,
         ctx.user.customerId,
-        input.serviceType as 'seal' | 'grpc' | 'graphql',
+        input.serviceType as ServiceType,
         dbClock
       );
 
@@ -673,7 +599,7 @@ export const servicesRouter = router({
           return await handleTierUpgradeLocked(
             tx,
             ctx.user!.customerId,
-            input.serviceType as 'seal' | 'grpc' | 'graphql',
+            input.serviceType as ServiceType,
             input.newTier as 'starter' | 'pro' | 'enterprise',
             paymentServices,
             dbClock
@@ -724,7 +650,7 @@ export const servicesRouter = router({
           return await scheduleTierDowngradeLocked(
             tx,
             ctx.user!.customerId,
-            input.serviceType as 'seal' | 'grpc' | 'graphql',
+            input.serviceType as ServiceType,
             input.newTier as 'starter' | 'pro' | 'enterprise',
             dbClock
           );
@@ -768,7 +694,7 @@ export const servicesRouter = router({
           return await cancelScheduledTierChangeLocked(
             tx,
             ctx.user!.customerId,
-            input.serviceType as 'seal' | 'grpc' | 'graphql',
+            input.serviceType as ServiceType,
             dbClock
           );
         },
@@ -811,7 +737,7 @@ export const servicesRouter = router({
           return await scheduleCancellationLocked(
             tx,
             ctx.user!.customerId,
-            input.serviceType as 'seal' | 'grpc' | 'graphql',
+            input.serviceType as ServiceType,
             dbClock
           );
         },
@@ -854,7 +780,7 @@ export const servicesRouter = router({
           return await undoCancellationLocked(
             tx,
             ctx.user!.customerId,
-            input.serviceType as 'seal' | 'grpc' | 'graphql',
+            input.serviceType as ServiceType,
             dbClock
           );
         },
@@ -890,7 +816,7 @@ export const servicesRouter = router({
       const result = await canProvisionService(
         db,
         ctx.user.customerId,
-        input.serviceType as 'seal' | 'grpc' | 'graphql',
+        input.serviceType as ServiceType,
         dbClock
       );
 

@@ -37,6 +37,12 @@ export let fmax_pkg = 10;
 export let fmax_apikey = 10;
 export let fmax_ipv4 = 20;
 export let fmax_cidr = 20;
+export let fpsubs_usd_sta = 1;
+export let fpsubs_usd_pro = 29;
+export let freq_platform_sub = 0;
+export let freq_seal_sub = 1;
+export let freq_grpc_sub = 1;
+export let freq_graphql_sub = 1;
 export let mockAuth = false;
 export let stripePublishableKey = '';
 
@@ -109,6 +115,14 @@ export async function loadFrontendConfig(): Promise<void> {
         fmax_apikey = parseInt(config.fmax_apikey);
         fmax_ipv4 = parseInt(config.fmax_ipv4);
         fmax_cidr = parseInt(config.fmax_cidr);
+        // Platform subscription config (optional - defaults used if missing)
+        if (config.fpsubs_usd_sta != null) fpsubs_usd_sta = parseFloat(config.fpsubs_usd_sta);
+        if (config.fpsubs_usd_pro != null) fpsubs_usd_pro = parseFloat(config.fpsubs_usd_pro);
+        if (config.freq_platform_sub != null) freq_platform_sub = parseInt(config.freq_platform_sub);
+        if (config.freq_seal_sub != null) freq_seal_sub = parseInt(config.freq_seal_sub);
+        if (config.freq_grpc_sub != null) freq_grpc_sub = parseInt(config.freq_grpc_sub);
+        if (config.freq_graphql_sub != null) freq_graphql_sub = parseInt(config.freq_graphql_sub);
+
         mockAuth = config.mockAuth === 'true';
         stripePublishableKey = config.stripePublishableKey || '';
 

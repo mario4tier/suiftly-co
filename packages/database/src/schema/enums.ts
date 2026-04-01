@@ -23,7 +23,8 @@ export const customerStatusEnum = pgEnum('customer_status', [
 export const serviceTypeEnum = pgEnum('service_type', [
   'seal',
   'grpc',
-  'graphql'
+  'graphql',
+  'platform'
 ]);
 
 // Service states (7 distinct states - see UI_DESIGN.md and BILLING_DESIGN.md R13)
