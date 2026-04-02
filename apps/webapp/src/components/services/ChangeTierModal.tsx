@@ -69,6 +69,7 @@ export function ChangeTierModal({
     onSuccess: (data) => {
       utils.services.list.invalidate();
       utils.services.getTierOptions.invalidate();
+      utils.billing.getNextScheduledPayment.invalidate();
       const chargeText = data.chargeAmountUsdCents > 0
         ? ` You were charged $${(data.chargeAmountUsdCents / 100).toFixed(2)}.`
         : '';
@@ -85,6 +86,7 @@ export function ChangeTierModal({
     onSuccess: (data) => {
       utils.services.list.invalidate();
       utils.services.getTierOptions.invalidate();
+      utils.billing.getNextScheduledPayment.invalidate();
       // Use paidOnce from tierOptions to determine if change is immediate
       if (!tierOptions?.paidOnce) {
         // Immediate tier change for unpaid subscriptions
@@ -111,6 +113,7 @@ export function ChangeTierModal({
     onSuccess: (data) => {
       utils.services.list.invalidate();
       utils.services.getTierOptions.invalidate();
+      utils.billing.getNextScheduledPayment.invalidate();
       // Use paidOnce from tierOptions to determine if change is immediate
       if (!tierOptions?.paidOnce) {
         // Immediate cancellation for unpaid subscriptions
@@ -137,6 +140,7 @@ export function ChangeTierModal({
     onSuccess: () => {
       utils.services.list.invalidate();
       utils.services.getTierOptions.invalidate();
+      utils.billing.getNextScheduledPayment.invalidate();
       toast.success('Cancellation undone. Your subscription will continue.');
       onSuccess?.();
       onClose();
@@ -150,6 +154,7 @@ export function ChangeTierModal({
     onSuccess: () => {
       utils.services.list.invalidate();
       utils.services.getTierOptions.invalidate();
+      utils.billing.getNextScheduledPayment.invalidate();
       toast.success('Scheduled tier change cancelled. Continuing with current tier.');
       onSuccess?.();
       onClose();

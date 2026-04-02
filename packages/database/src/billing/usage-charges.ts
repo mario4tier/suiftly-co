@@ -612,6 +612,10 @@ export async function syncUsageToDraft(
 
     if (!serviceTypeNum) continue;
 
+    // Skip services with $0 usage pricing before querying stats (e.g. platform)
+    const pricePer1000 = USAGE_PRICING_CENTS_PER_1000[serviceTypeName];
+    if (pricePer1000 === 0) continue;
+
     // Query stats for billable requests from start of month to now
     // Note: We count ALL logs in the billing period, regardless of enabledAt.
     // If HAProxy logged requests, they were served and should be billed.
@@ -624,10 +628,8 @@ export async function syncUsageToDraft(
     );
 
     // 8. Calculate charge (conservative: round down)
-    const pricePer1000 = USAGE_PRICING_CENTS_PER_1000[serviceTypeName];
     const chargeCents = Math.floor((requestCount * pricePer1000) / 1000);
 
-    // 9. Always add line item for transparency (even if 0 requests)
     // Unit price: cents per 1000 requests (stored for precision)
     const unitPriceCents = pricePer1000;
 

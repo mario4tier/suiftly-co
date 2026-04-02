@@ -22,6 +22,8 @@ import { SERVICE_TYPE, SPENDING_LIMIT } from '@suiftly/shared/constants';
 import type { InvoiceLineItem } from '@suiftly/shared/types';
 import { formatLineItemDescription, formatTierName } from '@/lib/billing-utils';
 import { StripeCardDialog } from '@/components/stripe-card-dialog';
+import { PlatformPlanCard } from '@/components/billing/PlatformPlanCard';
+import { freq_platform_sub } from '@/lib/config';
 
 export const Route = createLazyFileRoute('/billing')({
   component: BillingPage,
@@ -316,6 +318,11 @@ function BillingPage() {
   const hasPaypalMethod = activeMethods.some((m: any) => m.providerType === 'paypal');
   const hasNonEscrowMethod = hasStripeMethod || hasPaypalMethod;
 
+  // Platform subscription status
+  const platformService = services?.find(s => s.serviceType === 'platform');
+  const showPlatformCard = freq_platform_sub === 1;
+  const needsPlatformOnboarding = showPlatformCard && !platformService;
+
   return (
     <DashboardLayout>
       <div className="space-y-6">
@@ -323,10 +330,19 @@ function BillingPage() {
           <h2 className="text-3xl font-bold tracking-tight">Billing</h2>
         </div>
 
+        {/* Platform Plan Card — shown when platform subscription is required */}
+        {showPlatformCard && (
+          <PlatformPlanCard platformService={platformService ?? undefined} />
+        )}
+
         {/* Pending Subscription Notification */}
         {pendingServices.length > 0 && (
           <div className="bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-900 rounded-lg px-4 py-3 flex gap-3">
-            <AlertCircle className="h-5 w-5 text-orange-600 dark:text-orange-500 flex-shrink-0 mt-0.5" />
+            {activeMethods.length > 0 ? (
+              <Loader2 className="h-5 w-5 text-orange-600 dark:text-orange-500 flex-shrink-0 mt-0.5 animate-spin" />
+            ) : (
+              <AlertCircle className="h-5 w-5 text-orange-600 dark:text-orange-500 flex-shrink-0 mt-0.5" />
+            )}
             <div className="flex-1">
               <div className="text-sm text-orange-900 dark:text-orange-200">
                 <p className="font-semibold mb-1">Subscription payment pending</p>
@@ -343,7 +359,7 @@ function BillingPage() {
                   {' '}
                   {hasNonEscrowMethod ? (
                     <>
-                      Payment will be attempted with your configured payment methods.
+                      Payment will be soon attempted with your configured payment methods.
                     </>
                   ) : hasEscrowMethod && shortfallUsd > 0 ? (
                     <>
@@ -351,7 +367,7 @@ function BillingPage() {
                     </>
                   ) : hasEscrowMethod ? (
                     <>
-                      You have sufficient balance. The charge will be processed automatically.
+                      You have sufficient balance. The charge will be soon processed automatically.
                     </>
                   ) : (
                     <>
@@ -637,8 +653,8 @@ function BillingPage() {
         </Card>
       )}
 
-      {/* Next Scheduled Payment */}
-      <Card className="p-4 mb-6">
+      {/* Next Scheduled Payment — hidden during platform onboarding */}
+      {!needsPlatformOnboarding && <Card className="p-4 mb-6">
         <button
           onClick={() => setNextPaymentExpanded(!nextPaymentExpanded)}
           className="w-full flex items-center justify-between text-left"
@@ -698,7 +714,7 @@ function BillingPage() {
             </div>
           </div>
         )}
-      </Card>
+      </Card>}
 
       {/* Billing History */}
       <Card className="p-4">

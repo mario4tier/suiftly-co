@@ -8,7 +8,7 @@
  * - Email templates
  */
 
-import { INVOICE_LINE_ITEM_TYPE, SERVICE_TIER } from '@suiftly/shared/constants';
+import { INVOICE_LINE_ITEM_TYPE, SERVICE_TIER, SERVICE_TYPE } from '@suiftly/shared/constants';
 import type { InvoiceLineItem, ServiceTier } from '@suiftly/shared/types';
 
 /**
@@ -40,6 +40,20 @@ export function formatTierName(tier: ServiceTier): string {
 }
 
 /**
+ * Format a date for billing display (UTC, long month format)
+ * @example formatBillingDate('2025-04-30') => 'April 30, 2025'
+ */
+export function formatBillingDate(date: string | Date | null | undefined): string {
+  if (!date) return '';
+  return new Date(date).toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    timeZone: 'UTC',
+  });
+}
+
+/**
  * Format an invoice line item for display
  * Converts structured data to human-readable description
  */
@@ -50,9 +64,9 @@ export function formatLineItemDescription(item: InvoiceLineItem): string {
 
   switch (item.itemType) {
     case INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_STARTER:
-      return `${serviceName} Starter tier`;
+      return item.service === SERVICE_TYPE.PLATFORM ? 'Platform Starter plan' : `${serviceName} Starter tier`;
     case INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_PRO:
-      return `${serviceName} Pro tier`;
+      return item.service === SERVICE_TYPE.PLATFORM ? 'Platform Pro plan' : `${serviceName} Pro tier`;
     case INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_ENTERPRISE:
       return `${serviceName} Enterprise tier`;
     case INVOICE_LINE_ITEM_TYPE.TIER_UPGRADE:

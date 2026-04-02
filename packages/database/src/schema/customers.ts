@@ -25,6 +25,9 @@ export const customers = pgTable('customers', {
   // Stripe account (one per customer, set once — like escrowContractId)
   stripeCustomerId: varchar('stripe_customer_id', { length: 100 }),
 
+  // Terms of Service acceptance (NULL = not accepted)
+  tosAcceptedAt: timestamp('tos_accepted_at', { withTimezone: true }),
+
   // Billing state tracking (Phase 1A)
   paidOnce: boolean('paid_once').notNull().default(false), // Has customer ever paid anything?
   gracePeriodStart: date('grace_period_start'), // When grace period started (NULL = none)

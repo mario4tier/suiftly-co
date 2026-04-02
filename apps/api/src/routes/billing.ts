@@ -106,17 +106,16 @@ export const billingRouter = router({
     const account = await suiService.getAccount(ctx.user.walletAddress);
 
     if (!account) {
-      // No escrow account yet - return zeros but with default spending limit
-      // Also return escrowContractId from DB if we have it (for client to use)
       return {
         found: false,
         balanceUsd: 0,
-        spendingLimitUsd: SPENDING_LIMIT.DEFAULT_USD, // $250 default
+        spendingLimitUsd: SPENDING_LIMIT.DEFAULT_USD,
         currentPeriodChargedUsd: 0,
-        currentPeriodRemainingUsd: SPENDING_LIMIT.DEFAULT_USD, // Full default limit available
+        currentPeriodRemainingUsd: SPENDING_LIMIT.DEFAULT_USD,
         periodEndsAt: null,
         message: 'No escrow account created yet',
-        escrowContractId: customer?.escrowContractId || null, // Return DB value if available
+        escrowContractId: customer?.escrowContractId || null,
+        tosAcceptedAt: customer?.tosAcceptedAt ?? null,
       };
     }
 
@@ -144,8 +143,31 @@ export const billingRouter = router({
       currentPeriodRemainingUsd: remaining,
       periodEndsAt,
       accountAddress: account.accountAddress,
-      escrowContractId: customer?.escrowContractId || account.accountAddress, // Prefer DB value, fallback to on-chain
+      escrowContractId: customer?.escrowContractId || account.accountAddress,
+      tosAcceptedAt: customer?.tosAcceptedAt ?? null,
     };
+  }),
+
+  /**
+   * Accept Terms of Service
+   */
+  acceptTos: protectedProcedure.mutation(async ({ ctx }) => {
+    if (!ctx.user) {
+      throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Not authenticated' });
+    }
+
+    const [updated] = await db
+      .update(customers)
+      .set({ tosAcceptedAt: new Date() })
+      .where(
+        and(
+          eq(customers.customerId, ctx.user.customerId),
+          sql`${customers.tosAcceptedAt} IS NULL` // idempotent — don't overwrite existing acceptance
+        )
+      )
+      .returning({ tosAcceptedAt: customers.tosAcceptedAt });
+
+    return { tosAcceptedAt: updated?.tosAcceptedAt ?? null };
   }),
 
   /**

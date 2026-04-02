@@ -12,7 +12,7 @@ import { eq, and, sql, min, ne, isNull, count } from 'drizzle-orm';
 import { SERVICE_TYPE, SERVICE_TIER, SERVICE_STATE } from '@suiftly/shared/constants';
 import type { ServiceType } from '@suiftly/shared/constants';
 import { testDelayManager } from '../lib/test-delays';
-import { getTierPriceUsdCents } from '../lib/config-cache';
+import { getTierPriceUsdCents, requiresServiceSub } from '../lib/config-cache';
 import { getSuiService } from '@suiftly/database/sui-mock';
 import { getStripeService } from '@suiftly/database/stripe-mock';
 import { storeApiKey } from '../lib/api-keys';
@@ -177,7 +177,28 @@ export const servicesRouter = router({
           plainKey = result.plainKey;
         }
 
-        // 6. Process billing (using locked version - we already hold the lock)
+        // 6. Process billing — skip when per-service subscription is not required
+        const skipBilling = !isPlatform && !requiresServiceSub(input.serviceType);
+
+        if (skipBilling) {
+          // No subscription charge — set paidOnce immediately so service can be enabled
+          await tx
+            .update(serviceInstances)
+            .set({ paidOnce: true })
+            .where(eq(serviceInstances.instanceId, newService.instanceId));
+          await tx
+            .update(customers)
+            .set({ paidOnce: true })
+            .where(eq(customers.customerId, ctx.user!.customerId));
+
+          return {
+            ...newService,
+            subPendingInvoiceId: null,
+            apiKey: plainKey,
+            paymentPending: false,
+          };
+        }
+
         let billingResult;
         try {
           billingResult = await handleSubscriptionBillingLocked(
@@ -190,9 +211,7 @@ export const servicesRouter = router({
             dbClock
           );
         } catch (billingError) {
-          // Unexpected error during billing - service created but payment failed
           console.error('[SUBSCRIBE] Unexpected billing error:', billingError);
-          // Note: Invoice may not exist if billing failed early, so subPendingInvoiceId is null
           return {
             ...newService,
             subPendingInvoiceId: null,
@@ -204,10 +223,8 @@ export const servicesRouter = router({
         }
 
         if (!billingResult.paymentSuccessful) {
-          // Payment failed - service exists but can't be enabled
           console.log('[SUBSCRIBE] Billing failed, returning service with pending payment:', billingResult.error);
 
-          // Map errors to user-friendly messages
           let paymentErrorMessage: string;
           if (billingResult.error?.includes('Account does not exist') ||
               billingResult.error?.includes('Insufficient balance') ||
@@ -217,7 +234,6 @@ export const servicesRouter = router({
             paymentErrorMessage = billingResult.error || 'Payment failed';
           }
 
-          // Store subPendingInvoiceId on the service for later reconciliation
           await tx
             .update(serviceInstances)
             .set({ subPendingInvoiceId: billingResult.subPendingInvoiceId })
@@ -235,19 +251,16 @@ export const servicesRouter = router({
           };
         }
 
-        // 7. Payment succeeded - keep subPendingInvoiceId as NULL (same transaction)
+        // 7. Payment succeeded
         // Platform stays enabled (always "on"), per-service stays disabled until user enables
         await tx
           .update(serviceInstances)
           .set({
             state: isPlatform ? SERVICE_STATE.ENABLED : SERVICE_STATE.DISABLED,
-            subPendingInvoiceId: null, // Explicitly clear (should already be NULL)
+            subPendingInvoiceId: null,
             isUserEnabled: isPlatform,
           })
           .where(eq(serviceInstances.instanceId, newService.instanceId));
-
-        // Note: Charges are recorded in billing_records (invoices), not ledger_entries
-        // Ledger entries are only for deposits/withdrawals from escrow
 
         // 8. Return service with API key
         return {

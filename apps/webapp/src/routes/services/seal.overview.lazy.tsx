@@ -11,11 +11,13 @@ import { SealInteractiveForm } from '../../components/services/SealInteractiveFo
 import { ChangeTierModal } from '../../components/services/ChangeTierModal';
 import { Switch } from '../../components/ui/switch';
 import { TextRoute } from '../../components/ui/text-route';
-import { TextAction } from '../../components/ui/text-action';
+
 import { AlertCircle, PauseCircle, AlertTriangle, Loader2, Clock } from 'lucide-react';
 import { type ServiceState, type ServiceTier } from '@suiftly/shared/constants';
 import { trpc } from '../../lib/trpc';
 import { toast } from 'sonner';
+import { freq_platform_sub } from '../../lib/config';
+import { SubscriptionStatusBanners } from '../../components/billing/SubscriptionStatusBanners';
 import { useServicesStatus } from '../../hooks/useServicesStatus';
 import { ServiceStatusIndicator } from '../../components/ui/service-status-indicator';
 
@@ -89,24 +91,14 @@ function SealOverviewPage() {
   const scheduledTierEffectiveDate = sealService?.scheduledTierEffectiveDate;
   const cancellationScheduledFor = sealService?.cancellationScheduledFor;
 
-  // Format date for display
-  const formatDate = (date: Date | string | null | undefined) => {
-    if (!date) return '';
-    return new Date(date).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-      timeZone: 'UTC', // Dates are stored as UTC dates, display without timezone shift
-    });
-  };
-
-  // Format tier name for display
-  const formatTierName = (tierName: ServiceTier) => {
-    return tierName.charAt(0).toUpperCase() + tierName.slice(1);
-  };
+  // Platform gating: check if platform subscription is required and active
+  const platformService = services?.find(s => s.serviceType === 'platform');
+  const needsPlatform = freq_platform_sub === 1;
+  const hasPlatform = platformService != null && platformService.subPendingInvoiceId == null
+    && platformService.state === 'enabled';
+  const blockedByPlatform = needsPlatform && !hasPlatform;
 
   // Determine which form to show based on service state
-  // Note: 'provisioning' state is reserved for future use and not currently set by backend
   const showOnboardingForm = serviceState === 'not_provisioned';
   const showInteractiveForm = !showOnboardingForm;
 
@@ -259,36 +251,23 @@ function SealOverviewPage() {
           </div>
         )}
 
-        {/* Scheduled Cancellation Banner - matches modal styling */}
-        {cancellationScheduledFor && (
-          <div data-testid="cancellation-scheduled-banner" className="rounded-lg border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-900/20 p-4">
-            <div className="flex items-start gap-3">
-              <AlertTriangle className="h-5 w-5 text-amber-600 dark:text-amber-500 flex-shrink-0 mt-0.5" />
-              <div>
-                <p className="text-sm font-semibold text-amber-800 dark:text-amber-200">
-                  Cancellation Scheduled
-                </p>
-                <p className="text-sm text-amber-700 dark:text-amber-300 mt-1">
-                  Your subscription will end on {formatDate(cancellationScheduledFor)}. <TextAction onClick={() => setChangeTierModalOpen(true)}>Undo cancellation</TextAction>
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
+        <SubscriptionStatusBanners
+          scheduledTier={scheduledTier}
+          scheduledTierEffectiveDate={scheduledTierEffectiveDate}
+          cancellationScheduledFor={cancellationScheduledFor}
+          onManagePlan={() => setChangeTierModalOpen(true)}
+        />
 
-        {/* Scheduled Downgrade Banner - matches modal styling */}
-        {scheduledTier && scheduledTierEffectiveDate && !cancellationScheduledFor && (
-          <div data-testid="downgrade-scheduled-banner" className="rounded-lg border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-900/20 p-4">
-            <div className="flex items-start gap-3">
-              <Clock className="h-5 w-5 text-amber-600 dark:text-amber-500 flex-shrink-0 mt-0.5" />
-              <div>
-                <p className="text-sm font-semibold text-amber-800 dark:text-amber-200">
-                  Downgrade Scheduled
-                </p>
-                <p className="text-sm text-amber-700 dark:text-amber-300 mt-1">
-                  Your plan will change to {formatTierName(scheduledTier)} on {formatDate(scheduledTierEffectiveDate)}. <TextAction onClick={() => setChangeTierModalOpen(true)}>Cancel scheduled change</TextAction>
-                </p>
-              </div>
+        {/* Platform gating banner */}
+        {blockedByPlatform && (
+          <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-900 rounded-lg px-4 py-3 flex gap-3">
+            <AlertCircle className="h-5 w-5 text-blue-600 dark:text-blue-500 flex-shrink-0 mt-0.5" />
+            <div className="text-sm text-blue-900 dark:text-blue-200">
+              <p className="font-semibold mb-1">Platform subscription required</p>
+              <p>
+                A platform plan is required to use Suiftly services.{' '}
+                <TextRoute to="/billing">Subscribe on the Billing page</TextRoute>.
+              </p>
             </div>
           </div>
         )}
