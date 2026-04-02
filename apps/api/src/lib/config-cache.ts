@@ -223,3 +223,13 @@ export function getAllConfig(): Record<string, string> {
 export function isConfigCacheReady(): boolean {
   return isInitialized;
 }
+
+/**
+ * Reset config cache state so initializeConfigCache re-reads from DB.
+ * Test-only — used by /test/config/global endpoint after updating config_global.
+ */
+export function resetConfigCache(): void {
+  isInitialized = false;
+  initPromise = null;
+  configCache.clear();
+}

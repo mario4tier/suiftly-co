@@ -363,6 +363,43 @@ export async function subscribeAndEnable(
 }
 
 /**
+ * Set config_global feature flags and reload the API server's config cache.
+ * Use this in test setup to switch between billing combos.
+ *
+ * Common combos:
+ * - Combo #1 (legacy): { freq_platform_sub: '0', freq_seal_sub: '1' }
+ * - Combo #3 (MVP):    { freq_platform_sub: '1', freq_seal_sub: '0' }
+ */
+export async function setConfigFlags(flags: Record<string, string>): Promise<void> {
+  const result = await restCall('POST', '/test/config/global', flags);
+  if (!result.success) {
+    throw new Error(`Failed to set config flags: ${result.error}`);
+  }
+}
+
+/**
+ * Subscribe to the platform service (combo #3 prerequisite).
+ * Creates a platform subscription so per-service subscribes don't get blocked.
+ * No-op if platform subscription already exists.
+ *
+ * @param tier - Platform tier (default 'starter' = $1/month)
+ */
+export async function subscribePlatform(
+  accessToken: string,
+  tier: string = 'starter'
+): Promise<void> {
+  const result = await trpcMutation<any>(
+    'services.subscribe',
+    { serviceType: 'platform', tier },
+    accessToken
+  );
+  // Ignore ALREADY_SUBSCRIBED (idempotent)
+  if (result.error && !JSON.stringify(result.error).includes('Already subscribed')) {
+    throw new Error(`Platform subscribe failed: ${JSON.stringify(result.error)}`);
+  }
+}
+
+/**
  * Ensure test wallet has specific balance
  */
 export async function ensureTestBalance(

@@ -960,6 +960,33 @@ if (isTestFeaturesEnabled()) {
     reply.send({ success: true, forceMock: enabled });
   });
 
+  // Set config_global values and reload config cache (for feature flag testing)
+  server.post('/test/config/global', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    const body = request.body as Record<string, string>;
+    if (!body || typeof body !== 'object') {
+      reply.code(400).send({ error: 'Body must be a JSON object of key/value pairs' });
+      return;
+    }
+
+    const { configGlobal } = await import('@suiftly/database/schema');
+    const { db } = await import('@suiftly/database');
+    const { resetConfigCache, initializeConfigCache } = await import('./lib/config-cache.js');
+
+    // Upsert each key
+    for (const [key, value] of Object.entries(body)) {
+      await db.insert(configGlobal).values({ key, value })
+        .onConflictDoUpdate({ target: configGlobal.key, set: { value, updatedAt: new Date() } });
+    }
+
+    // Reload config cache so changes take effect immediately
+    resetConfigCache();
+    await initializeConfigCache();
+
+    reply.send({ success: true, updated: Object.keys(body) });
+  });
+
   // ========================================
   // Clock Test Endpoints - REMOVED
   // Clock management moved to Global Manager (GM) only
