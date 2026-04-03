@@ -15,7 +15,7 @@ import {
   customerPaymentMethods, paymentWebhookEvents,
   systemControl,
 } from '@suiftly/database/schema';
-import { eq, and, sql } from 'drizzle-orm';
+import { eq, and, sql, inArray } from 'drizzle-orm';
 import { decryptSecret } from './encryption';
 import { suiMockConfig } from '@suiftly/database/sui-mock';
 import { stripeMockConfig, mockStripeService } from '@suiftly/database/stripe-mock';
@@ -174,8 +174,31 @@ export async function resetCustomerTestData(options: TestDataResetOptions = {}) 
         // 6. Delete all other related data (in correct order for foreign keys)
         // New billing tables (Phase 1A/2) - delete before billing_records
         await tx.delete(adminNotifications).where(eq(adminNotifications.customerId, customerId));
-        await tx.delete(billingIdempotency); // No customer_id column, delete all for simplicity
-        await tx.delete(invoicePayments); // References billing_records, so delete first
+
+        // Scope billing_idempotency and invoice_payments to this customer's records
+        // (previously deleted ALL rows, causing lock conflicts in concurrent E2E tests)
+        const customerBillingIds = tx
+          .select({ id: billingRecords.id })
+          .from(billingRecords)
+          .where(eq(billingRecords.customerId, customerId));
+        const customerCreditIds = tx
+          .select({ id: customerCredits.creditId })
+          .from(customerCredits)
+          .where(eq(customerCredits.customerId, customerId));
+
+        await tx.delete(billingIdempotency).where(
+          inArray(billingIdempotency.billingRecordId, customerBillingIds)
+        );
+        await tx.execute(
+          sql`DELETE FROM billing_idempotency WHERE idempotency_key LIKE ${'monthly-' + customerId + '-%'}`
+        );
+        await tx.delete(invoicePayments).where(
+          inArray(invoicePayments.billingRecordId, customerBillingIds)
+        );
+        // Also delete invoice_payments that reference this customer's credits (FK constraint)
+        await tx.delete(invoicePayments).where(
+          inArray(invoicePayments.creditId, customerCreditIds)
+        );
         await tx.delete(customerCredits).where(eq(customerCredits.customerId, customerId));
         await tx.delete(customerPaymentMethods).where(eq(customerPaymentMethods.customerId, customerId));
         await tx.delete(paymentWebhookEvents).where(eq(paymentWebhookEvents.customerId, customerId));

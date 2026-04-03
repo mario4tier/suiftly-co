@@ -973,8 +973,12 @@ if (isTestFeaturesEnabled()) {
     const { configGlobal } = await import('@suiftly/database/schema');
     const { db } = await import('@suiftly/database');
     const { resetConfigCache, initializeConfigCache } = await import('./lib/config-cache.js');
+    const { initializeFrontendConfig } = await import('./lib/init-config.js');
 
-    // Upsert each key
+    // Re-seed any missing default configs (recovers from truncate-all)
+    await initializeFrontendConfig();
+
+    // Upsert each key (overrides defaults with test-specific values)
     for (const [key, value] of Object.entries(body)) {
       await db.insert(configGlobal).values({ key, value })
         .onConflictDoUpdate({ target: configGlobal.key, set: { value, updatedAt: new Date() } });

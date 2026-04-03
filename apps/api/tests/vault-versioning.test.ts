@@ -27,6 +27,8 @@ import {
   trpcMutation,
   resetTestData,
   subscribeAndEnable,
+  setConfigFlags,
+  subscribePlatform,
 } from './helpers/http.js';
 import { login, TEST_WALLET } from './helpers/auth.js';
 import {
@@ -64,6 +66,8 @@ describe('API: Vault Versioning E2E', () => {
     await resetTestData(TEST_WALLET_2);
     await resetTestData(TEST_WALLET_3);
 
+    await setConfigFlags({ freq_platform_sub: '1', freq_seal_sub: '1' });
+
     // Login and setup first test customer
     accessToken = await login(TEST_WALLET);
 
@@ -77,6 +81,8 @@ describe('API: Vault Versioning E2E', () => {
 
     // Ensure sufficient balance
     await ensureTestBalance(100, { walletAddress: TEST_WALLET });
+
+    await subscribePlatform(accessToken);
   });
 
   afterEach(async () => {
@@ -225,6 +231,7 @@ describe('API: Vault Versioning E2E', () => {
       // Login and subscribe second customer
       await ensureTestBalance(100, { walletAddress: TEST_WALLET_2 });
       const accessToken2 = await login(TEST_WALLET_2);
+      await subscribePlatform(accessToken2);
       await subscribeAndEnable('seal', 'pro', accessToken2);
 
       const customer2 = await db.query.customers.findFirst({
@@ -701,6 +708,7 @@ describe('API: Vault Versioning E2E', () => {
       // 4. Second customer subscribes
       await ensureTestBalance(100, { walletAddress: TEST_WALLET_2 });
       const accessToken2 = await login(TEST_WALLET_2);
+      await subscribePlatform(accessToken2);
       await subscribeAndEnable('seal', 'pro', accessToken2);
 
       const customer2 = await db.query.customers.findFirst({

@@ -20,6 +20,8 @@ import {
   trpcQuery,
   resetTestData,
   subscribeAndEnable,
+  setConfigFlags,
+  subscribePlatform,
 } from './helpers/http.js';
 import { login, TEST_WALLET } from './helpers/auth.js';
 import { INVOICE_LINE_ITEM_TYPE, SERVICE_TYPE } from '@suiftly/shared/constants';
@@ -83,6 +85,8 @@ describe('API: Invoice Line Items', () => {
     // Reset test data
     await resetTestData(TEST_WALLET);
 
+    await setConfigFlags({ freq_platform_sub: '1', freq_seal_sub: '1' });
+
     // Clear existing logs
     await clearLogs();
 
@@ -98,8 +102,15 @@ describe('API: Invoice Line Items', () => {
     }
     customerId = customer.customerId;
 
-    // Ensure balance for subscription
+    // Ensure balance BEFORE subscribing to platform (so escrow payment method exists)
     await ensureTestBalance(100, { walletAddress: TEST_WALLET });
+
+    await setClockTime('2024-01-01T00:00:00Z');
+    await subscribePlatform(accessToken);
+
+    // Restore clock to mid-month (usage tests insert logs at 2024-01-15T11:00:00Z
+    // and expect the clock to be at 12:00 so the bucket is in the past)
+    await setClockTime('2024-01-15T12:00:00Z');
   });
 
   afterEach(async () => {
@@ -185,9 +196,9 @@ describe('API: Invoice Line Items', () => {
         expect(usageItem.amountUsd).toBe(0);
       }
 
-      // Should have subscription line item
+      // Should have seal subscription line item (filter by service to exclude platform subscription)
       const subscriptionItem = lineItems.find(
-        (item: any) => item.itemType === INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_STARTER
+        (item: any) => item.itemType === INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_STARTER && item.service === SERVICE_TYPE.SEAL
       );
       expect(subscriptionItem).toBeDefined();
       expect(subscriptionItem.service).toBe(SERVICE_TYPE.SEAL);
@@ -248,9 +259,9 @@ describe('API: Invoice Line Items', () => {
 
       const lineItems = paymentResult.result?.data?.lineItems;
 
-      // Find subscription line item
+      // Find seal subscription line item (filter by service to exclude platform subscription)
       const subscriptionItem = lineItems?.find(
-        (item: any) => item.itemType === INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_PRO
+        (item: any) => item.itemType === INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_PRO && item.service === SERVICE_TYPE.SEAL
       );
 
       expect(subscriptionItem).toBeDefined();

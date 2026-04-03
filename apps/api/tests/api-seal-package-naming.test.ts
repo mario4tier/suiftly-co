@@ -13,6 +13,8 @@ import {
   ensureTestBalance,
   subscribeAndEnable,
   trpcMutation,
+  setConfigFlags,
+  subscribePlatform,
 } from './helpers/http';
 import { login } from './helpers/auth';
 
@@ -22,10 +24,15 @@ describe('Seal Package Auto-Naming (Integration)', () => {
   beforeAll(async () => {
     // Reset test customer and login
     await resetTestData();
+
+    await setConfigFlags({ freq_platform_sub: '1', freq_seal_sub: '1' });
+
     accessToken = await login();
 
     // Add escrow balance for subscription
     await ensureTestBalance(1000, { spendingLimitUsd: 250 });
+
+    await subscribePlatform(accessToken);
 
     // Subscribe and enable seal service
     await subscribeAndEnable('seal', 'pro', accessToken);

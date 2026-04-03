@@ -12,47 +12,26 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { db } from '@suiftly/database';
-import { serviceInstances, customers, billingRecords } from '@suiftly/database/schema';
+import { serviceInstances, billingRecords } from '@suiftly/database/schema';
 import { eq, and } from 'drizzle-orm';
 import {
   setClockTime,
   resetClock,
-  ensureTestBalance,
   trpcMutation,
   trpcQuery,
   resetTestData,
   subscribeAndEnable,
 } from './helpers/http.js';
-import { login, TEST_WALLET } from './helpers/auth.js';
-import { clearNotifications, expectNoNotifications } from './helpers/notifications.js';
+import { TEST_WALLET } from './helpers/auth.js';
+import { expectNoNotifications } from './helpers/notifications.js';
+import { setupBillingTest } from './helpers/setup.js';
 
 describe('API: Subscription Flow', () => {
   let accessToken: string;
   let customerId: number;
 
   beforeEach(async () => {
-    // Reset clock to real time first
-    await resetClock();
-
-    // Reset test customer data via HTTP (like E2E tests do)
-    await resetTestData(TEST_WALLET);
-
-    // Login FIRST - this creates the customer with production defaults
-    accessToken = await login(TEST_WALLET);
-
-    // Get customer ID for DB assertions
-    const customer = await db.query.customers.findFirst({
-      where: eq(customers.walletAddress, TEST_WALLET),
-    });
-    if (!customer) {
-      throw new Error('Test customer not found after login');
-    }
-    customerId = customer.customerId;
-
-    // THEN ensure balance (after customer exists)
-    await ensureTestBalance(100, { walletAddress: TEST_WALLET });
-
-    await clearNotifications(customerId);
+    ({ accessToken, customerId } = await setupBillingTest());
   });
 
   afterEach(async () => {
@@ -192,11 +171,11 @@ describe('API: Subscription Flow', () => {
       );
       expect(grpcResult.result?.data).toBeDefined();
 
-      // Verify both exist
+      // Verify both exist (plus platform subscription from beforeEach)
       const services = await db.query.serviceInstances.findMany({
         where: eq(serviceInstances.customerId, customerId),
       });
-      expect(services.length).toBe(2);
+      expect(services.length).toBe(3); // platform + seal + grpc
 
       const sealService = services.find(s => s.serviceType === 'seal');
       const grpcService = services.find(s => s.serviceType === 'grpc');
@@ -227,13 +206,15 @@ describe('API: Subscription Flow', () => {
 
       expect(listResult.result?.data).toBeDefined();
       expect(Array.isArray(listResult.result?.data)).toBe(true);
-      expect(listResult.result?.data.length).toBe(1);
-      expect(listResult.result?.data[0].serviceType).toBe('seal');
+      // Platform subscription from beforeEach + seal subscription = 2
+      const nonPlatform = listResult.result?.data.filter((s: any) => s.serviceType !== 'platform');
+      expect(nonPlatform.length).toBe(1);
+      expect(nonPlatform[0].serviceType).toBe('seal');
 
       await expectNoNotifications(customerId);
     });
 
-    it('should return empty list when no services', async () => {
+    it('should return only platform when no per-service subscriptions', async () => {
       const listResult = await trpcQuery<any>(
         'services.list',
         {},
@@ -242,7 +223,9 @@ describe('API: Subscription Flow', () => {
 
       expect(listResult.result?.data).toBeDefined();
       expect(Array.isArray(listResult.result?.data)).toBe(true);
-      expect(listResult.result?.data.length).toBe(0);
+      // Only the platform subscription from beforeEach
+      const nonPlatform = listResult.result?.data.filter((s: any) => s.serviceType !== 'platform');
+      expect(nonPlatform.length).toBe(0);
 
       await expectNoNotifications(customerId);
     });

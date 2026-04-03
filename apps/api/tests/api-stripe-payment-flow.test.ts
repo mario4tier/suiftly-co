@@ -33,30 +33,52 @@ import {
   runPeriodicBillingJob,
   addStripePaymentMethod,
 } from './helpers/http.js';
-import { login, TEST_WALLET } from './helpers/auth.js';
+import { TEST_WALLET } from './helpers/auth.js';
 import { clearNotifications, expectNotifications, expectNoNotifications } from './helpers/notifications.js';
+import { setupBillingTest } from './helpers/setup.js';
+
+/**
+ * Find a Stripe payment across all paid billing records.
+ * Platform subscription is paid via escrow, so the first paid record
+ * may not be the Stripe-charged one.
+ */
+async function findStripePayment(paidRecords: { id: number }[]) {
+  for (const pr of paidRecords) {
+    const payments = await db.select()
+      .from(invoicePayments)
+      .where(eq(invoicePayments.billingRecordId, pr.id));
+    const found = payments.find(p => p.sourceType === 'stripe');
+    if (found) return found;
+  }
+  return undefined;
+}
 
 describe('API: Stripe Payment Flow', () => {
   let accessToken: string;
   let customerId: number;
 
   beforeEach(async () => {
-    await resetClock();
-    await resetTestData(TEST_WALLET);
-    accessToken = await login(TEST_WALLET);
+    ({ accessToken, customerId } = await setupBillingTest({ balance: 2 }));
 
-    const customer = await db.query.customers.findFirst({
-      where: eq(customers.walletAddress, TEST_WALLET),
-    });
-    if (!customer) throw new Error('Test customer not found');
-    customerId = customer.customerId;
+    // Remove escrow payment method (auto-added by ensureTestBalance) so Stripe-specific
+    // tests start with no payment methods as originally intended.
+    const escrowMethods = await db.select()
+      .from(customerPaymentMethods)
+      .where(and(
+        eq(customerPaymentMethods.customerId, customerId),
+        eq(customerPaymentMethods.providerType, 'escrow'),
+        eq(customerPaymentMethods.status, 'active')
+      ));
+    for (const m of escrowMethods) {
+      await trpcMutation<any>('billing.removePaymentMethod', { paymentMethodId: m.id }, accessToken);
+    }
 
     // Force mock Stripe service (even if STRIPE_SECRET_KEY is configured)
     await restCall('POST', '/test/stripe/force-mock', { enabled: true });
     // Clear stripe mock config
     await restCall('POST', '/test/stripe/config/clear');
 
-    // Clear any notifications from setup (e.g., GM background processing)
+    // Clear any notifications from escrow removal
     await clearNotifications(customerId);
   });
 
@@ -97,14 +119,7 @@ describe('API: Stripe Payment Flow', () => {
       const paidRecords = records.filter(r => r.status === 'paid');
       expect(paidRecords.length).toBeGreaterThanOrEqual(1);
 
-      // Verify invoice_payment was created with 'stripe' source type
-      const paidRecord = paidRecords[0];
-      const payments = await db.select()
-        .from(invoicePayments)
-        .where(eq(invoicePayments.billingRecordId, paidRecord.id));
-
-      expect(payments.length).toBeGreaterThanOrEqual(1);
-      const stripePayment = payments.find(p => p.sourceType === 'stripe');
+      const stripePayment = await findStripePayment(paidRecords);
       expect(stripePayment).toBeDefined();
       expect(stripePayment!.providerReferenceId).toBeDefined();
       expect(stripePayment!.amountUsdCents).toBeGreaterThan(0);
@@ -210,16 +225,15 @@ describe('API: Stripe Payment Flow', () => {
       expect(service?.subPendingInvoiceId).toBeNull();
 
       // Verify billing record is now paid with Stripe source
+      // Note: paidRecords may include the platform subscription (paid via escrow),
+      // so search across all paid records for one with a Stripe payment.
       const records = await db.select()
         .from(billingRecords)
         .where(eq(billingRecords.customerId, customerId));
       const paidRecords = records.filter(r => r.status === 'paid');
       expect(paidRecords.length).toBeGreaterThanOrEqual(1);
 
-      const payments = await db.select()
-        .from(invoicePayments)
-        .where(eq(invoicePayments.billingRecordId, paidRecords[0].id));
-      const stripePayment = payments.find(p => p.sourceType === 'stripe');
+      const stripePayment = await findStripePayment(paidRecords);
       expect(stripePayment).toBeDefined();
       expect(stripePayment!.providerReferenceId).toBeDefined();
 
@@ -263,12 +277,7 @@ describe('API: Stripe Payment Flow', () => {
       const paidRecords = records.filter(r => r.status === 'paid');
       expect(paidRecords.length).toBeGreaterThanOrEqual(1);
 
-      const payments = await db.select()
-        .from(invoicePayments)
-        .where(eq(invoicePayments.billingRecordId, paidRecords[0].id));
-
-      // Should have at least one stripe payment (escrow may have partial credit)
-      const stripePayment = payments.find(p => p.sourceType === 'stripe');
+      const stripePayment = await findStripePayment(paidRecords);
       expect(stripePayment).toBeDefined();
       expect(stripePayment!.providerReferenceId).toBeDefined();
       await expectNoNotifications(customerId, { tolerateGM: true });

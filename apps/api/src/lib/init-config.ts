@@ -68,48 +68,60 @@ const DEFAULT_FRONTEND_CONFIG: Record<string, string> = {
 
 /**
  * Initialize frontend configuration in database
- * Ensures all required keys exist, inserting defaults for missing keys
+ * Hard-coded defaults are the source of truth — missing keys are inserted
+ * and stale values are updated to match.
  * Safe to call multiple times (idempotent)
  */
 export async function initializeFrontendConfig(): Promise<void> {
-  console.log('[Config Init] Checking frontend configuration...');
+  console.log('[Config Init] Syncing frontend configuration...');
 
   try {
-    // Get all existing config keys starting with 'f'
+    // Get all existing config values
     const existingConfigs = await db
       .select()
-      .from(configGlobal)
-      .where(eq(configGlobal.key, configGlobal.key)); // Get all rows
+      .from(configGlobal);
 
-    const existingKeys = new Set(
-      existingConfigs
-        .filter(c => c.key.startsWith('f'))
-        .map(c => c.key)
+    const existingMap = new Map(
+      existingConfigs.map(c => [c.key, c.value])
     );
 
-    // Find missing keys
-    const missingKeys = Object.keys(DEFAULT_FRONTEND_CONFIG).filter(
-      key => !existingKeys.has(key)
-    );
+    // Find keys that need inserting or updating
+    const toInsert: { key: string; value: string }[] = [];
+    const toUpdate: { key: string; value: string }[] = [];
 
-    if (missingKeys.length === 0) {
-      console.log('[Config Init] All frontend config keys present ✓');
+    for (const [key, value] of Object.entries(DEFAULT_FRONTEND_CONFIG)) {
+      const existing = existingMap.get(key);
+      if (existing === undefined) {
+        toInsert.push({ key, value });
+      } else if (existing !== value) {
+        toUpdate.push({ key, value });
+      }
+    }
+
+    if (toInsert.length === 0 && toUpdate.length === 0) {
+      console.log('[Config Init] All frontend config keys up to date ✓');
       return;
     }
 
     // Insert missing keys
-    console.log(`[Config Init] Inserting ${missingKeys.length} missing config keys:`, missingKeys);
+    if (toInsert.length > 0) {
+      console.log(`[Config Init] Inserting ${toInsert.length} missing keys:`, toInsert.map(k => k.key));
+      await db.insert(configGlobal).values(toInsert).onConflictDoNothing();
+    }
 
-    await db.insert(configGlobal).values(
-      missingKeys.map(key => ({
-        key,
-        value: DEFAULT_FRONTEND_CONFIG[key],
-      }))
-    ).onConflictDoNothing();
+    // Update stale values
+    if (toUpdate.length > 0) {
+      console.log(`[Config Init] Updating ${toUpdate.length} stale keys:`, toUpdate.map(k => k.key));
+      for (const { key, value } of toUpdate) {
+        await db.update(configGlobal)
+          .set({ value, updatedAt: new Date() })
+          .where(eq(configGlobal.key, key));
+      }
+    }
 
-    console.log('[Config Init] Frontend configuration initialized successfully ✓');
+    console.log('[Config Init] Frontend configuration synced ✓');
   } catch (error) {
-    console.error('[Config Init] Failed to initialize frontend configuration:', error);
-    throw new Error('Failed to initialize frontend configuration - database may be unavailable');
+    console.error('[Config Init] Failed to sync frontend configuration:', error);
+    throw new Error('Failed to sync frontend configuration - database may be unavailable');
   }
 }

@@ -12,7 +12,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { db } from '@suiftly/database';
-import { serviceInstances, customers } from '@suiftly/database/schema';
+import { serviceInstances } from '@suiftly/database/schema';
 import { eq, and } from 'drizzle-orm';
 import {
   setClockTime,
@@ -23,9 +23,10 @@ import {
   resetTestData,
   subscribeAndEnable,
 } from './helpers/http.js';
-import { login, TEST_WALLET } from './helpers/auth.js';
+import { TEST_WALLET } from './helpers/auth.js';
 import { INVOICE_LINE_ITEM_TYPE } from '@suiftly/shared/constants';
-import { clearNotifications, expectNoNotifications } from './helpers/notifications.js';
+import { expectNoNotifications } from './helpers/notifications.js';
+import { setupBillingTest } from './helpers/setup.js';
 
 const SUBSCRIPTION_ITEM_TYPES = [
   INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_STARTER,
@@ -38,29 +39,7 @@ describe('API: Tier Changes Flow', () => {
   let customerId: number;
 
   beforeEach(async () => {
-    // Reset clock to real time first
-    await resetClock();
-
-    // Reset test customer data via HTTP (like E2E tests do)
-    await resetTestData(TEST_WALLET);
-
-    // Login FIRST - this creates the customer with production defaults
-    // Following E2E pattern: reset → login → setup balance
-    accessToken = await login(TEST_WALLET);
-
-    // Get customer ID for DB assertions
-    const customer = await db.query.customers.findFirst({
-      where: eq(customers.walletAddress, TEST_WALLET),
-    });
-    if (!customer) {
-      throw new Error('Test customer not found after login');
-    }
-    customerId = customer.customerId;
-
-    // THEN ensure balance (after customer exists)
-    await ensureTestBalance(100, { walletAddress: TEST_WALLET });
-
-    await clearNotifications(customerId);
+    ({ accessToken, customerId } = await setupBillingTest());
   });
 
   afterEach(async () => {
@@ -220,9 +199,9 @@ describe('API: Tier Changes Flow', () => {
       expect(paymentResult.result?.data?.found).toBe(true);
       expect(paymentResult.result?.data?.lineItems).toBeDefined();
 
-      // Initially should show Enterprise tier
+      // Initially should show Enterprise tier (filter by seal service to exclude platform subscription)
       let lineItems = paymentResult.result?.data?.lineItems;
-      let subscriptionItem = lineItems.find((item: any) => SUBSCRIPTION_ITEM_TYPES.includes(item.itemType));
+      let subscriptionItem = lineItems.find((item: any) => SUBSCRIPTION_ITEM_TYPES.includes(item.itemType) && item.service === 'seal');
       expect(subscriptionItem?.itemType).toBe(INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_ENTERPRISE);
       expect(subscriptionItem?.amountUsd).toBe(185); // Enterprise = $185
 
@@ -247,7 +226,7 @@ describe('API: Tier Changes Flow', () => {
 
       expect(paymentResult.result?.data?.found).toBe(true);
       lineItems = paymentResult.result?.data?.lineItems;
-      subscriptionItem = lineItems.find((item: any) => SUBSCRIPTION_ITEM_TYPES.includes(item.itemType));
+      subscriptionItem = lineItems.find((item: any) => SUBSCRIPTION_ITEM_TYPES.includes(item.itemType) && item.service === 'seal');
 
       // Line items should show the SCHEDULED tier (starter = $9), not current tier (enterprise = $185)
       expect(subscriptionItem?.itemType).toBe(INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_STARTER);

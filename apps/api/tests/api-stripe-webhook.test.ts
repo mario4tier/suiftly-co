@@ -25,14 +25,14 @@ import { eq, and, isNull } from 'drizzle-orm';
 import {
   resetTestData,
   restCall,
-  ensureTestBalance,
   trpcMutation,
   setClockTime,
   resetClock,
   addStripePaymentMethod,
 } from './helpers/http.js';
-import { login, TEST_WALLET } from './helpers/auth.js';
+import { TEST_WALLET } from './helpers/auth.js';
 import { clearNotifications, expectNotifications, expectNoNotifications } from './helpers/notifications.js';
+import { setupBillingTest } from './helpers/setup.js';
 
 const API_BASE = 'http://localhost:22700';
 const WEBHOOK_SECRET = 'whsec_test_secret_for_development_only';
@@ -78,24 +78,13 @@ describe('API: Stripe Webhook', () => {
   let customerId: number;
 
   beforeEach(async () => {
-    await resetClock();
-    await resetTestData(TEST_WALLET);
-    accessToken = await login(TEST_WALLET);
+    ({ accessToken, customerId } = await setupBillingTest({ balance: 2 }));
 
     // Set webhook secret override so tests use our known test secret
     await restCall('POST', '/test/stripe/webhook-secret', { secret: WEBHOOK_SECRET });
     // Force mock Stripe service
     await restCall('POST', '/test/stripe/force-mock', { enabled: true });
     await restCall('POST', '/test/stripe/config/clear');
-
-    const customer = await db.query.customers.findFirst({
-      where: eq(customers.walletAddress, TEST_WALLET),
-    });
-    if (!customer) throw new Error('Test customer not found');
-    customerId = customer.customerId;
-
-    // Clear any notifications from setup (e.g., GM background processing)
-    await clearNotifications(customerId);
   });
 
   afterEach(async () => {

@@ -14,44 +14,25 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { db } from '@suiftly/database';
-import { customers, billingRecords, invoiceLineItems } from '@suiftly/database/schema';
+import { billingRecords, invoiceLineItems } from '@suiftly/database/schema';
 import { eq, and, sql } from 'drizzle-orm';
 import {
   setClockTime,
   resetClock,
-  ensureTestBalance,
   trpcMutation,
   trpcQuery,
   resetTestData,
   subscribeAndEnable,
 } from './helpers/http.js';
-import { login, TEST_WALLET } from './helpers/auth.js';
+import { TEST_WALLET } from './helpers/auth.js';
+import { setupBillingTest } from './helpers/setup.js';
 
 describe('API: Billing Upgrade Duplicate Bug', () => {
   let accessToken: string;
   let customerId: number;
 
   beforeEach(async () => {
-    // Reset clock to real time first
-    await resetClock();
-
-    // Reset test customer data via HTTP
-    await resetTestData(TEST_WALLET);
-
-    // Login - creates customer with production defaults
-    accessToken = await login(TEST_WALLET);
-
-    // Get customer ID for DB assertions
-    const customer = await db.query.customers.findFirst({
-      where: eq(customers.walletAddress, TEST_WALLET),
-    });
-    if (!customer) {
-      throw new Error('Test customer not found after login');
-    }
-    customerId = customer.customerId;
-
-    // Ensure sufficient balance for subscription and upgrade
-    await ensureTestBalance(500, { walletAddress: TEST_WALLET });
+    ({ accessToken, customerId } = await setupBillingTest({ balance: 500 }));
   });
 
   afterEach(async () => {

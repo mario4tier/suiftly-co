@@ -14,7 +14,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { db } from '@suiftly/database';
-import { serviceInstances, customers, billingRecords, invoicePayments, invoiceLineItems } from '@suiftly/database/schema';
+import { serviceInstances, billingRecords, invoicePayments, invoiceLineItems } from '@suiftly/database/schema';
 import { eq, and } from 'drizzle-orm';
 import {
   setClockTime,
@@ -25,35 +25,16 @@ import {
   ensureTestBalance,
   reconcilePendingPayments,
 } from './helpers/http.js';
-import { login, TEST_WALLET } from './helpers/auth.js';
-import { clearNotifications, expectNoNotifications } from './helpers/notifications.js';
+import { TEST_WALLET } from './helpers/auth.js';
+import { expectNoNotifications } from './helpers/notifications.js';
+import { setupBillingTest } from './helpers/setup.js';
 
 describe('API: Subscription Without Funds', () => {
   let accessToken: string;
   let customerId: number;
 
   beforeEach(async () => {
-    // Reset clock to real time first
-    await resetClock();
-
-    // Reset test customer data
-    await restCall('POST', '/test/data/reset', {
-      walletAddress: TEST_WALLET,
-    });
-
-    // Login - this creates the customer
-    accessToken = await login(TEST_WALLET);
-
-    // Get customer ID for DB assertions
-    const customer = await db.query.customers.findFirst({
-      where: eq(customers.walletAddress, TEST_WALLET),
-    });
-    if (!customer) {
-      throw new Error('Test customer not found after login');
-    }
-    customerId = customer.customerId;
-
-    await clearNotifications(customerId);
+    ({ accessToken, customerId } = await setupBillingTest({ balance: 2 }));
   });
 
   afterEach(async () => {

@@ -369,6 +369,7 @@ export async function subscribeAndEnable(
  * Common combos:
  * - Combo #1 (legacy): { freq_platform_sub: '0', freq_seal_sub: '1' }
  * - Combo #3 (MVP):    { freq_platform_sub: '1', freq_seal_sub: '0' }
+ * - Combo both:        { freq_platform_sub: '1', freq_seal_sub: '1' }
  */
 export async function setConfigFlags(flags: Record<string, string>): Promise<void> {
   const result = await restCall('POST', '/test/config/global', flags);

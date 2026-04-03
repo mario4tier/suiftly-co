@@ -21,6 +21,8 @@ import {
   resetTestData,
   ensureTestBalance,
   addStripePaymentMethod,
+  setConfigFlags,
+  subscribePlatform,
 } from './helpers/http.js';
 import { login, TEST_WALLET } from './helpers/auth.js';
 
@@ -31,6 +33,8 @@ describe('API: Payment Method CRUD', () => {
   beforeEach(async () => {
     // Reset test customer data via HTTP
     await resetTestData(TEST_WALLET);
+
+    await setConfigFlags({ freq_platform_sub: '1', freq_seal_sub: '1' });
 
     // Login - this creates the customer with production defaults
     accessToken = await login(TEST_WALLET);
@@ -43,6 +47,9 @@ describe('API: Payment Method CRUD', () => {
       throw new Error('Test customer not found after login');
     }
     customerId = customer.customerId;
+
+    await ensureTestBalance(2, { walletAddress: TEST_WALLET });
+    await subscribePlatform(accessToken);
 
     // Force mock Stripe service (even if STRIPE_SECRET_KEY is configured)
     await restCall('POST', '/test/stripe/force-mock', { enabled: true });
@@ -57,7 +64,9 @@ describe('API: Payment Method CRUD', () => {
   // getPaymentMethods
   // =========================================================================
   describe('getPaymentMethods', () => {
-    it('should return empty list for new customer', async () => {
+    it('should return only escrow method for new customer (auto-added by ensureTestBalance)', async () => {
+      // ensureTestBalance in beforeEach auto-creates an escrow payment method
+      // via /test/wallet/deposit, so the list is not empty — it has exactly 1 escrow method.
       const result = await trpcQuery<any>(
         'billing.getPaymentMethods',
         {},
@@ -65,7 +74,9 @@ describe('API: Payment Method CRUD', () => {
       );
 
       expect(result.result?.data).toBeDefined();
-      expect(result.result?.data.methods).toEqual([]);
+      const methods = result.result?.data.methods;
+      expect(methods).toHaveLength(1);
+      expect(methods[0].providerType).toBe('escrow');
     });
 
     it('should return escrow method with balance info', async () => {

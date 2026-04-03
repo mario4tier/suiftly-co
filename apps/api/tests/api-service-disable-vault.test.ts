@@ -14,6 +14,8 @@ import {
   ensureTestBalance,
   subscribeAndEnable,
   trpcMutation,
+  setConfigFlags,
+  subscribePlatform,
 } from './helpers/http';
 import { login, TEST_WALLET } from './helpers/auth';
 
@@ -24,6 +26,9 @@ describe('Service disable triggers vault update', () => {
   beforeAll(async () => {
     // Reset test customer and login
     await resetTestData();
+
+    await setConfigFlags({ freq_platform_sub: '1', freq_seal_sub: '1' });
+
     accessToken = await login();
 
     // Get customer ID
@@ -34,6 +39,8 @@ describe('Service disable triggers vault update', () => {
 
     // Add escrow balance for subscription
     await ensureTestBalance(1000, { spendingLimitUsd: 250 });
+
+    await subscribePlatform(accessToken);
   });
 
   afterAll(async () => {

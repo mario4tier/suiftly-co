@@ -24,8 +24,11 @@ import {
   trpcMutation,
   restCall,
   resetTestData,
+  ensureTestBalance,
   addStripePaymentMethod,
   runPeriodicBillingJob,
+  setConfigFlags,
+  subscribePlatform,
 } from './helpers/http.js';
 import { login, TEST_WALLET } from './helpers/auth.js';
 
@@ -36,6 +39,9 @@ describe('API: Stripe Refund Flow', () => {
   beforeEach(async () => {
     await resetClock();
     await resetTestData(TEST_WALLET);
+
+    await setConfigFlags({ freq_platform_sub: '1', freq_seal_sub: '1' });
+
     accessToken = await login(TEST_WALLET);
 
     // Force mock Stripe service
@@ -47,6 +53,10 @@ describe('API: Stripe Refund Flow', () => {
     });
     if (!customer) throw new Error('Test customer not found');
     customerId = customer.customerId;
+
+    await ensureTestBalance(2, { walletAddress: TEST_WALLET });
+    await setClockTime('2025-01-01T00:00:00Z');
+    await subscribePlatform(accessToken);
   });
 
   afterEach(async () => {
@@ -138,9 +148,10 @@ describe('API: Stripe Refund Flow', () => {
         (sum, c) => sum + Number(c.remainingAmountUsdCents), 0
       );
 
-      // After refund, remaining credits should be <= starter monthly cost ($9 = 900 cents)
-      // (the refund leaves at most 1 month buffer)
-      expect(remainingCredit).toBeLessThanOrEqual(900);
+      // After refund, remaining credits should be <= total monthly cost
+      // (seal starter $9 + platform starter $1 = $10 = 1000 cents)
+      // The refund leaves at most 1 month buffer.
+      expect(remainingCredit).toBeLessThanOrEqual(1000);
     });
 
     it('should NOT refund when credits are less than monthly cost', async () => {

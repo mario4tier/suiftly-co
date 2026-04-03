@@ -13,47 +13,26 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { db } from '@suiftly/database';
-import { serviceInstances, customers, billingRecords, customerCredits } from '@suiftly/database/schema';
+import { serviceInstances, billingRecords, customerCredits } from '@suiftly/database/schema';
 import { eq, and } from 'drizzle-orm';
 import {
   setClockTime,
   resetClock,
-  ensureTestBalance,
   trpcMutation,
   resetTestData,
   runPeriodicBillingJob,
   subscribeAndEnable,
 } from './helpers/http.js';
-import { login, TEST_WALLET } from './helpers/auth.js';
-import { clearNotifications, expectNoNotifications } from './helpers/notifications.js';
+import { TEST_WALLET } from './helpers/auth.js';
+import { expectNoNotifications } from './helpers/notifications.js';
+import { setupBillingTest } from './helpers/setup.js';
 
 describe('API: Billing Flow', () => {
   let accessToken: string;
   let customerId: number;
 
   beforeEach(async () => {
-    // Reset clock to real time first
-    await resetClock();
-
-    // Reset test customer data via HTTP (like E2E tests do)
-    await resetTestData(TEST_WALLET);
-
-    // Login FIRST - this creates the customer with production defaults
-    accessToken = await login(TEST_WALLET);
-
-    // Get customer ID for DB assertions
-    const customer = await db.query.customers.findFirst({
-      where: eq(customers.walletAddress, TEST_WALLET),
-    });
-    if (!customer) {
-      throw new Error('Test customer not found after login');
-    }
-    customerId = customer.customerId;
-
-    // THEN ensure balance (after customer exists)
-    await ensureTestBalance(100, { walletAddress: TEST_WALLET });
-
-    await clearNotifications(customerId);
+    ({ accessToken, customerId } = await setupBillingTest());
   });
 
   afterEach(async () => {

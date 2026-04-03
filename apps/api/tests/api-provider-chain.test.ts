@@ -9,7 +9,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { db } from '@suiftly/database';
-import { serviceInstances, customers, billingRecords } from '@suiftly/database/schema';
+import { serviceInstances, billingRecords } from '@suiftly/database/schema';
 import { eq, and } from 'drizzle-orm';
 import {
   setClockTime,
@@ -23,30 +23,21 @@ import {
   subscribeAndEnable,
   reconcilePendingPayments,
 } from './helpers/http.js';
-import { login, TEST_WALLET } from './helpers/auth.js';
-import { clearNotifications, expectNoNotifications } from './helpers/notifications.js';
+import { TEST_WALLET } from './helpers/auth.js';
+import { expectNoNotifications } from './helpers/notifications.js';
+import { setupBillingTest } from './helpers/setup.js';
 
 describe('API: Provider Chain & Service Gates', () => {
   let accessToken: string;
   let customerId: number;
 
   beforeEach(async () => {
-    await resetClock();
-    await resetTestData(TEST_WALLET);
-    accessToken = await login(TEST_WALLET);
-
-    const customer = await db.query.customers.findFirst({
-      where: eq(customers.walletAddress, TEST_WALLET),
-    });
-    if (!customer) throw new Error('Test customer not found');
-    customerId = customer.customerId;
+    ({ accessToken, customerId } = await setupBillingTest({ balance: 2 }));
 
     // Force mock Stripe service (even if STRIPE_SECRET_KEY is configured)
     await restCall('POST', '/test/stripe/force-mock', { enabled: true });
     // Clear stripe mock config
     await restCall('POST', '/test/stripe/config/clear');
-
-    await clearNotifications(customerId);
   });
 
   afterEach(async () => {

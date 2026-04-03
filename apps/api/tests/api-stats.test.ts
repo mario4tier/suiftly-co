@@ -19,6 +19,8 @@ import {
   trpcMutation,
   resetTestData,
   restCall,
+  setConfigFlags,
+  subscribePlatform,
 } from './helpers/http.js';
 import { login, TEST_WALLET } from './helpers/auth.js';
 
@@ -88,6 +90,8 @@ describe('API: Stats Endpoints', () => {
     // Reset test data
     await resetTestData(TEST_WALLET);
 
+    await setConfigFlags({ freq_platform_sub: '1', freq_seal_sub: '1' });
+
     // Clear existing logs
     await clearLogs();
 
@@ -105,6 +109,8 @@ describe('API: Stats Endpoints', () => {
 
     // Ensure test balance
     await ensureTestBalance(100, { walletAddress: TEST_WALLET });
+
+    await subscribePlatform(accessToken);
 
     // Subscribe to Seal service
     await trpcMutation<any>(
