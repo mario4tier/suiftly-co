@@ -154,12 +154,16 @@ describe('Cancellation should remove service from DRAFT invoice', () => {
 
     const lineItemsAfter = await db.select().from(invoiceLineItems)
       .where(eq(invoiceLineItems.billingRecordId, draftAfter!.id));
-    const platformItemAfter = lineItemsAfter.find(li => li.serviceType === 'platform');
+    const platformSubItemAfter = lineItemsAfter.find(
+      li => li.serviceType === 'platform' && li.itemType !== 'credit'
+    );
 
-    console.log(`DRAFT after cancellation: $${Number(draftAfter!.amountUsdCents) / 100}, platform line items: ${lineItemsAfter.filter(li => li.serviceType === 'platform').length}`);
+    console.log(`DRAFT after cancellation: $${Number(draftAfter!.amountUsdCents) / 100}, platform sub items: ${lineItemsAfter.filter(li => li.serviceType === 'platform' && li.itemType !== 'credit').length}`);
 
-    expect(platformItemAfter).toBeUndefined();
-    expect(Number(draftAfter!.amountUsdCents)).toBe(0);
+    expect(platformSubItemAfter).toBeUndefined();
+    // DRAFT negative because platform credit remains after sub removed.
+    // Platform Starter on Jan 15: credit = floor(100*14/31) = 45 cents
+    expect(Number(draftAfter!.amountUsdCents)).toBe(-45);
   });
 
   it('should remove seal subscription from DRAFT after cancellation (control test)', async () => {
@@ -213,11 +217,15 @@ describe('Cancellation should remove service from DRAFT invoice', () => {
 
     const lineItemsAfter = await db.select().from(invoiceLineItems)
       .where(eq(invoiceLineItems.billingRecordId, draftAfter!.id));
-    const sealItemAfter = lineItemsAfter.find(li => li.serviceType === 'seal');
+    const sealSubItemAfter = lineItemsAfter.find(
+      li => li.serviceType === 'seal' && li.itemType !== 'credit'
+    );
 
-    console.log(`DRAFT after cancellation: $${Number(draftAfter!.amountUsdCents) / 100}, seal line items: ${lineItemsAfter.filter(li => li.serviceType === 'seal').length}`);
+    console.log(`DRAFT after cancellation: $${Number(draftAfter!.amountUsdCents) / 100}, seal sub items: ${lineItemsAfter.filter(li => li.serviceType === 'seal' && li.itemType !== 'credit').length}`);
 
-    expect(sealItemAfter).toBeUndefined();
-    expect(Number(draftAfter!.amountUsdCents)).toBe(0);
+    expect(sealSubItemAfter).toBeUndefined();
+    // DRAFT negative because seal credit remains after sub removed.
+    // Seal Pro on Jan 15: credit = floor(2900*14/31) = 1309 cents
+    expect(Number(draftAfter!.amountUsdCents)).toBe(-1309);
   });
 });

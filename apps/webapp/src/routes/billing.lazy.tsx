@@ -20,7 +20,7 @@ import { toast } from 'sonner';
 import { getTierPriceUsdCents } from '@suiftly/shared/pricing';
 import { SERVICE_TYPE, SPENDING_LIMIT } from '@suiftly/shared/constants';
 import type { InvoiceLineItem } from '@suiftly/shared/types';
-import { formatLineItemDescription, formatTierName } from '@/lib/billing-utils';
+import { formatLineItemDescription, formatTierName, formatUsd } from '@/lib/billing-utils';
 import { StripeCardDialog } from '@/components/stripe-card-dialog';
 import { PlatformPlanCard } from '@/components/billing/PlatformPlanCard';
 import { freq_platform_sub } from '@/lib/config';
@@ -347,19 +347,12 @@ function BillingPage() {
               <div className="text-sm text-orange-900 dark:text-orange-200">
                 <p className="font-semibold mb-1">Subscription payment pending</p>
                 <p>
-                  {pendingServices.length === 1 ? (
-                    <>
-                      Your {pendingServices[0].serviceType.charAt(0).toUpperCase() + pendingServices[0].serviceType.slice(1)} subscription ({formatTierName(pendingServices[0].tier)} tier - ${(getTierPriceUsdCents(pendingServices[0].tier, pendingServices[0].serviceType) / 100).toFixed(2)}/month) requires payment.
-                    </>
-                  ) : (
-                    <>
-                      You have {pendingServices.length} subscriptions requiring payment (total: ${totalPendingUsd.toFixed(2)}/month).
-                    </>
-                  )}
-                  {' '}
                   {hasNonEscrowMethod ? (
                     <>
-                      Payment will be soon attempted with your configured payment methods.
+                      Payment ({pendingServices.length === 1
+                        ? `${formatTierName(pendingServices[0].tier)} - ${formatUsd(getTierPriceUsdCents(pendingServices[0].tier, pendingServices[0].serviceType) / 100)}/month`
+                        : `${formatUsd(totalPendingUsd)}/month`
+                      }) will be soon attempted with your configured payment methods.
                     </>
                   ) : hasEscrowMethod && shortfallUsd > 0 ? (
                     <>
@@ -653,15 +646,15 @@ function BillingPage() {
         </Card>
       )}
 
-      {/* Next Scheduled Payment — hidden during platform onboarding */}
-      {!needsPlatformOnboarding && <Card className="p-4 mb-6">
+      {/* Next Scheduled Payment — hidden during onboarding or when payments are pending */}
+      {!needsPlatformOnboarding && pendingServices.length === 0 && <Card className="p-4 mb-6">
         <button
           onClick={() => setNextPaymentExpanded(!nextPaymentExpanded)}
           className="w-full flex items-center justify-between text-left"
         >
           <div>
             <div className="font-medium">
-              {(nextPaymentData?.totalUsd ?? 0) < 0 ? 'Next Scheduled Refund' : 'Next Scheduled Payment'}
+              Next Scheduled Payment
             </div>
             <div className="text-sm text-gray-500">
               {nextPaymentData?.dueDate
@@ -681,7 +674,10 @@ function BillingPage() {
           </div>
           <div className="flex items-center gap-2">
             <span className="font-bold">
-              {nextPaymentLoading ? '...' : `$${(nextPaymentData?.totalUsd ?? 0).toFixed(2)}`}
+              {nextPaymentLoading ? '...' : (() => {
+                const total = nextPaymentData?.totalUsd ?? 0;
+                return total < 0 ? `-$${Math.abs(total).toFixed(2)}` : `$${total.toFixed(2)}`;
+              })()}
             </span>
             {nextPaymentExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
           </div>
@@ -704,8 +700,11 @@ function BillingPage() {
                     </div>
                   ))}
                   <div className="flex justify-between pt-2 border-t font-bold">
-                    <span>{(nextPaymentData?.totalUsd ?? 0) < 0 ? 'Total Refund:' : 'Total Charge:'}</span>
-                    <span>${(nextPaymentData?.totalUsd ?? 0).toFixed(2)}</span>
+                    <span>Total:</span>
+                    <span>{(() => {
+                      const total = nextPaymentData?.totalUsd ?? 0;
+                      return total < 0 ? `-$${Math.abs(total).toFixed(2)}` : `$${total.toFixed(2)}`;
+                    })()}</span>
                   </div>
                 </>
               ) : (

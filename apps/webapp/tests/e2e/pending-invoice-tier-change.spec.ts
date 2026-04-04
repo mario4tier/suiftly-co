@@ -20,7 +20,7 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { resetCustomer, addCryptoPayment, subscribeSealService } from '../helpers/db';
+import { resetCustomer, addCryptoPayment, subscribeSealService, enableSealOnlyMode } from '../helpers/db';
 import { setMockClock, resetClock } from '../helpers/clock';
 import { TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
 
@@ -33,6 +33,8 @@ const STARTER_PRICE_USD = TIER_PRICES_USD_CENTS.starter / 100;
 
 test.describe('FAILED Invoice Recalculation on Tier Change', () => {
   test(`BUG: downgrade should recalculate FAILED invoice amount from Enterprise ($${ENTERPRISE_PRICE_USD}) to Starter ($${STARTER_PRICE_USD})`, async ({ page }) => {
+    await enableSealOnlyMode(page.request);
+
     // ── Step 1: Set clock to Jan 1 ──────────────────────────────────────
     // Subscribe on the 1st to avoid partial-month reconciliation credit
     // complexity (mid-month subscription creates credits that contaminate

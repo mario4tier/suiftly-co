@@ -21,6 +21,19 @@ import { suiMockConfig } from '@suiftly/database/sui-mock';
 import { stripeMockConfig, mockStripeService } from '@suiftly/database/stripe-mock';
 import { dbClock } from '@suiftly/shared/db-clock';
 
+/**
+ * Clear stale mock Stripe customer IDs (cus_mock_*) from all customers.
+ * Called when disabling force-mock to prevent "No such customer" errors
+ * when the real Stripe API is used with leftover mock IDs.
+ */
+export async function clearMockStripeCustomerIds(): Promise<number> {
+  const result = await db.update(customers)
+    .set({ stripeCustomerId: null })
+    .where(sql`${customers.stripeCustomerId} LIKE 'cus_mock_%'`)
+    .returning({ customerId: customers.customerId });
+  return result.length;
+}
+
 // =============================================================================
 // Mock Test Customers
 // =============================================================================
@@ -226,6 +239,7 @@ export async function resetCustomerTestData(options: TestDataResetOptions = {}) 
             paidOnce: false,
             gracePeriodStart: null,
             gracePeriodNotifiedAt: null,
+            tosAcceptedAt: null,
             currentBalanceUsdCents: balanceUsdCents,
             spendingLimitUsdCents: spendingLimitUsdCents,
             currentPeriodChargedUsdCents: 0,

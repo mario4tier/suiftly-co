@@ -79,8 +79,10 @@ export async function validateInvoiceBeforeCharging(
     };
   }
 
-  // Check 1: Negative amount (should never happen)
-  if (Number(invoice.amountUsdCents) < 0) {
+  // Check 1: Negative amount on non-DRAFT invoices (should never happen)
+  // DRAFT invoices can be negative when customer credits exceed next month's charges
+  // (e.g., Enterprise credit applied to a Starter-tier DRAFT). This is expected.
+  if (Number(invoice.amountUsdCents) < 0 && invoice.status !== 'draft') {
     issues.push({
       severity: 'error',
       code: 'NEGATIVE_AMOUNT',

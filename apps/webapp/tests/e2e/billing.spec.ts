@@ -4,7 +4,7 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { resetCustomer, addCryptoPayment } from '../helpers/db';
+import { resetCustomer, addCryptoPayment, enableSealOnlyMode } from '../helpers/db';
 import { waitAfterMutation } from '../helpers/wait-utils';
 
 const MOCK_WALLET_ADDRESS = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
@@ -13,6 +13,8 @@ const API_BASE = 'http://localhost:22700';
 // Test suite for "no escrow payment method" scenario
 test.describe('Billing Page - No Payment Methods', () => {
   test('shows add payment buttons when no methods configured', async ({ page }) => {
+    await enableSealOnlyMode(page.request);
+
     await resetCustomer(page.request, {
       balanceUsdCents: 0,
       spendingLimitUsdCents: 0,
@@ -40,6 +42,8 @@ test.describe('Billing Page - No Payment Methods', () => {
   });
 
   test('adding crypto payment reveals escrow card with zero balance', async ({ page }) => {
+    await enableSealOnlyMode(page.request);
+
     await resetCustomer(page.request, {
       balanceUsdCents: 0,
       spendingLimitUsdCents: 0,
@@ -80,6 +84,8 @@ test.describe('Billing Page - No Payment Methods', () => {
 
 test.describe('Billing Page', () => {
   test.beforeEach(async ({ page }) => {
+    await enableSealOnlyMode(page.request);
+
     await resetCustomer(page.request, {
       balanceUsdCents: 0,
       spendingLimitUsdCents: 0,

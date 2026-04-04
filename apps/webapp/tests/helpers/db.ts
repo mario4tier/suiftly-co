@@ -501,6 +501,96 @@ export async function subscribeSealService(
   }
 }
 
+/**
+ * Set config flags via the test API endpoint.
+ * This controls feature flags like freq_platform_sub and freq_seal_sub.
+ *
+ * IMPORTANT: After calling this, the frontend config cache must be refreshed.
+ * Navigate away and back, or call the API's initializeFrontendConfig.
+ *
+ * @param flags - Key-value pairs to set (e.g., { freq_platform_sub: '1', freq_seal_sub: '0' })
+ */
+export async function setConfigFlags(
+  request: APIRequestContext,
+  flags: Record<string, string>
+): Promise<void> {
+  const response = await request.post(`${API_BASE}/test/config/global`, {
+    data: flags,
+  });
+
+  if (!response.ok()) {
+    throw new Error(`Failed to set config flags: ${await response.text()}`);
+  }
+}
+
+/**
+ * Set seal-only mode (legacy) for tests that specifically test seal subscription billing.
+ * Shorthand for setConfigFlags with freq_platform_sub='0', freq_seal_sub='1'.
+ */
+export async function enableSealOnlyMode(
+  request: APIRequestContext
+): Promise<void> {
+  await setConfigFlags(request, { freq_platform_sub: '0', freq_seal_sub: '1' });
+}
+
+/**
+ * Subscribe to the Platform service via the billing page UI.
+ *
+ * Navigates to Billing, accepts platform TOS, selects tier, clicks Subscribe,
+ * and waits for the success toast.
+ *
+ * Assumes the page is already authenticated and freq_platform_sub is enabled.
+ * A payment method should be configured (or the test expects payment-pending).
+ *
+ * @param tier - 'STARTER' | 'PRO' (default: 'STARTER')
+ * @param options.expectSuccess - If false, skips waiting for success toast (for payment-pending tests). Default true.
+ */
+export async function subscribePlatformService(
+  page: Page,
+  tier: 'STARTER' | 'PRO' = 'STARTER',
+  options?: {
+    successTimeout?: number;
+    expectSuccess?: boolean;
+  }
+): Promise<void> {
+  const successTimeout = options?.successTimeout ?? 10000;
+  const expectSuccess = options?.expectSuccess ?? true;
+
+  // Navigate to billing page (platform card is there)
+  await page.click('text=Billing');
+  await page.waitForURL('/billing', { timeout: 5000 });
+
+  // Wait for platform plan card to be visible
+  await expect(page.locator('h3:has-text("Choose a Platform Plan")')).toBeVisible({ timeout: 5000 });
+
+  // Select tier (Starter is default, click Pro if needed)
+  if (tier === 'PRO') {
+    await page.locator('text=Pro').first().click();
+  }
+
+  // Accept TOS — click checkbox, then wait for the server round-trip
+  // (acceptTos mutation → getBalance invalidation → tosAcceptedOnServer flips)
+  // so the subscribe button becomes enabled.
+  await page.locator('#platform-tos').click();
+  const subscribeButton = page.locator('button:has-text("Subscribe to")');
+  await expect(subscribeButton).toBeEnabled({ timeout: 10000 });
+
+  await subscribeButton.click();
+
+  if (expectSuccess) {
+    await expect(
+      page.locator('[data-sonner-toast]').filter({ hasText: /Subscribed to Platform/i })
+    ).toBeVisible({ timeout: successTimeout });
+
+    await waitAfterMutation(page);
+
+    // Verify onboarding form is gone (replaced by subscription card with Change Plan)
+    await expect(
+      page.locator('h3:has-text("Choose a Platform Plan")')
+    ).not.toBeVisible({ timeout: 5000 });
+  }
+}
+
 export async function addCreditCardPayment(page: Page): Promise<void> {
   const addButton = page.locator('[data-testid="add-credit-card"]');
   await expect(addButton).toBeVisible({ timeout: 5000 });

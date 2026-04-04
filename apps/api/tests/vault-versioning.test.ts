@@ -66,7 +66,7 @@ describe('API: Vault Versioning E2E', () => {
     await resetTestData(TEST_WALLET_2);
     await resetTestData(TEST_WALLET_3);
 
-    await setConfigFlags({ freq_platform_sub: '1', freq_seal_sub: '1' });
+    await setConfigFlags({ freq_platform_sub: '1', freq_seal_sub: '0' });
 
     // Login and setup first test customer
     accessToken = await login(TEST_WALLET);

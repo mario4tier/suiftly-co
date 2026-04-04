@@ -20,7 +20,7 @@
 import { test, expect } from '@playwright/test';
 import { waitAfterMutation } from '../helpers/wait-utils';
 import { waitForToastsToDisappear } from '../helpers/locators';
-import { resetCustomer, ensureTestBalance } from '../helpers/db';
+import { resetCustomer, ensureTestBalance, enableSealOnlyMode } from '../helpers/db';
 import { waitForStabilization } from '../helpers/vault-sync';
 
 // LM and API URLs for test endpoints
@@ -29,6 +29,8 @@ const API_URL = 'http://localhost:22700';
 
 test.describe('Sync Status - Updating Indicator', () => {
   test.beforeEach(async ({ page, request }) => {
+    await enableSealOnlyMode(request);
+
     // Step 1: Clear any lingering test delays from BOTH API and LM
     await request.post(`${API_URL}/test/delays/clear`);
     await request.post(`${LM_URL}/test/delays/clear`);

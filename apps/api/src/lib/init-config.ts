@@ -60,8 +60,8 @@ const DEFAULT_FRONTEND_CONFIG: Record<string, string> = {
 
   // Feature flags: require subscription for each service type
   // '1' = required, '0' = not required
-  freq_platform_sub: '0',
-  freq_seal_sub: '1',
+  freq_platform_sub: '1',
+  freq_seal_sub: '0',
   freq_grpc_sub: '1',
   freq_graphql_sub: '1',
 };

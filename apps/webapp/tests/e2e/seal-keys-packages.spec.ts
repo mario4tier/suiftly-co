@@ -7,6 +7,7 @@ import { test, expect, Page } from '@playwright/test';
 import { waitAfterMutation, waitForItemCount } from '../helpers/wait-utils';
 import { waitForToastsToDisappear } from '../helpers/locators';
 import { ServiceStabilityChecker } from '../helpers/service-stability';
+import { enableSealOnlyMode } from '../helpers/db';
 import { db } from '@suiftly/database';
 import { sealKeys } from '@suiftly/database/schema';
 import { eq } from 'drizzle-orm';
@@ -62,6 +63,8 @@ test.describe('Seal Keys & Packages Management', () => {
   let stabilityChecker: ServiceStabilityChecker;
 
   test.beforeEach(async ({ page }, testInfo) => {
+    await enableSealOnlyMode(page.request);
+
     // Initialize stability checker and capture initial PIDs
     stabilityChecker = new ServiceStabilityChecker(page.request);
     stabilityChecker.setTestName(testInfo.title);

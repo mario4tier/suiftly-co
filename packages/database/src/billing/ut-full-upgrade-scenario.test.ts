@@ -227,7 +227,8 @@ describe('Full Upgrade Scenario: Deposit → Pro → Schedule Downgrade → Ente
     expect(paidRecords.length).toBe(1);
     expect(paidRecords[0].amountUsdCents).toBe(2900);
     expect(draftRecords.length).toBe(1);
-    expect(draftRecords[0].amountUsdCents).toBe(TIER_PRICES_USD_CENTS.pro);
+    // DRAFT is net of credits: pro price (2900) minus reconciliation credit (floor(2900*1/31)=93)
+    expect(draftRecords[0].amountUsdCents).toBe(TIER_PRICES_USD_CENTS.pro - Math.floor(2900 * 1 / 31));
 
     // ========== STEP 4: Schedule downgrade to Starter ==========
     console.log('\nSTEP 4: Schedule downgrade Pro → Starter');
@@ -249,8 +250,10 @@ describe('Full Upgrade Scenario: Deposit → Pro → Schedule Downgrade → Ente
       eq(billingRecords.customerId, testCustomerId),
       eq(billingRecords.status, 'draft')
     ));
-    console.log(`  DRAFT after downgrade scheduled: $${(draft.amountUsdCents/100).toFixed(2)} (expected: $${(TIER_PRICES_USD_CENTS.starter/100).toFixed(2)})`);
-    expect(draft.amountUsdCents).toBe(TIER_PRICES_USD_CENTS.starter);
+    // DRAFT is net of credits: starter price (900) minus remaining reconciliation credit (93)
+    const expectedDowngradeDraft = TIER_PRICES_USD_CENTS.starter - Math.floor(2900 * 1 / 31);
+    console.log(`  DRAFT after downgrade scheduled: $${(draft.amountUsdCents/100).toFixed(2)} (expected: $${(expectedDowngradeDraft/100).toFixed(2)})`);
+    expect(draft.amountUsdCents).toBe(expectedDowngradeDraft);
 
     // ========== STEP 5: Upgrade to Enterprise (while downgrade is scheduled) ==========
     console.log('\nSTEP 5: Upgrade to Enterprise (while Starter downgrade is scheduled)');

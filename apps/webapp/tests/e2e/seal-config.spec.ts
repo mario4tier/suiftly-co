@@ -5,9 +5,12 @@
 
 import { test, expect } from '@playwright/test';
 import { waitAfterMutation } from '../helpers/wait-utils';
+import { enableSealOnlyMode } from '../helpers/db';
 
 test.describe('Seal Service Onboarding Form', () => {
   test.beforeEach(async ({ page }) => {
+    await enableSealOnlyMode(page.request);
+
     // Reset customer test data (delete all services, reset balance)
     await page.request.post('http://localhost:22700/test/data/reset', {
       data: {

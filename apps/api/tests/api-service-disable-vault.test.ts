@@ -27,7 +27,7 @@ describe('Service disable triggers vault update', () => {
     // Reset test customer and login
     await resetTestData();
 
-    await setConfigFlags({ freq_platform_sub: '1', freq_seal_sub: '1' });
+    await setConfigFlags({ freq_platform_sub: '1', freq_seal_sub: '0' });
 
     accessToken = await login();
 

@@ -32,7 +32,7 @@ describe('API: Billing Flow', () => {
   let customerId: number;
 
   beforeEach(async () => {
-    ({ accessToken, customerId } = await setupBillingTest());
+    ({ accessToken, customerId } = await setupBillingTest({ mode: 'platform-only' }));
   });
 
   afterEach(async () => {

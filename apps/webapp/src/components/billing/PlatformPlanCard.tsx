@@ -12,7 +12,8 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
-import { Check, Loader2, AlertCircle, Download, Settings } from 'lucide-react';
+import { Check, Loader2, Download, Settings, Info } from 'lucide-react';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { trpc } from '@/lib/trpc';
 import { toast } from 'sonner';
 import { fpsubs_usd_sta, fpsubs_usd_pro } from '@/lib/config';
@@ -27,6 +28,7 @@ interface PlatformPlanCardProps {
   platformService: {
     tier: string;
     state: string;
+    paidOnce: boolean;
     subPendingInvoiceId: unknown;
     scheduledTier: string | null;
     scheduledTierEffectiveDate: string | Date | null;
@@ -34,27 +36,52 @@ interface PlatformPlanCardProps {
   } | undefined;
 }
 
-const PLATFORM_TIERS = [
+interface TierFeature {
+  text: string;
+  info?: string;
+}
+
+const PLATFORM_TIERS: {
+  id: ServiceTier;
+  label: string;
+  price: number;
+  features: TierFeature[];
+}[] = [
   {
-    id: 'starter' as ServiceTier,
+    id: 'starter',
     label: 'Starter',
     price: fpsubs_usd_sta,
-    features: ['1 region', '50 RPS', 'Docs + Community support'],
+    features: [
+      { text: '1 region' },
+      { text: '50 RPS' },
+      { text: 'Docs + Community support' },
+    ],
   },
   {
-    id: 'pro' as ServiceTier,
+    id: 'pro',
     label: 'Pro',
     price: fpsubs_usd_pro,
-    features: ['All regions', '200 RPS/region', 'Burst allowed', '99.9% SLA', 'Email support (48h)'],
+    features: [
+      { text: 'Global geo-steering and failover (3 regions)', info: 'Closest server automatically selected. Regional load-balancing and automatic inter-region failover ensures high availability.' },
+      { text: '200 RPS/region', info: 'Per-region rate limit. Burst allowed above limit when capacity is available.' },
+      { text: '99.9% SLA' },
+      { text: 'Email support (48h)' },
+    ],
   },
 ];
 
 export function PlatformPlanCard({ platformService }: PlatformPlanCardProps) {
   const [selectedTier, setSelectedTier] = useState<ServiceTier>('starter');
-  const [tosChecked, setTosChecked] = useState(false);
   const [tosModalOpen, setTosModalOpen] = useState(false);
   const [changePlanOpen, setChangePlanOpen] = useState(false);
   const utils = trpc.useUtils();
+
+  // TOS state: checkbox shows checked on click (optimistic), but subscribe button
+  // requires server-confirmed acceptance to prevent bypassing on mutation failure.
+  const { data: balanceData } = trpc.billing.getBalance.useQuery();
+  const tosAcceptedOnServer = !!balanceData?.tosAcceptedAt;
+  const [tosUserClicked, setTosUserClicked] = useState(false);
+  const tosChecked = tosAcceptedOnServer || tosUserClicked;
 
   const acceptTosMutation = trpc.billing.acceptTos.useMutation({
     onSuccess: () => {
@@ -93,27 +120,26 @@ export function PlatformPlanCard({ platformService }: PlatformPlanCardProps) {
     document.body.removeChild(link);
   };
 
-  const isPending = platformService?.subPendingInvoiceId != null;
-  const isActive = platformService && !isPending;
+  // Once subscribed (any state including payment pending), show the plan card
+  // with Change Plan button. Only show onboarding when no service exists at all.
+  // Status issues (payment pending, suspended, etc.) are surfaced by the billing
+  // page's own notification section — this card just shows the plan and actions.
+  if (platformService) {
+    const isPendingPayment = platformService.subPendingInvoiceId != null;
+    const showCheck = platformService.paidOnce;
+    const tierLabel = `Platform ${formatTierName(platformService.tier as ServiceTier)} Plan${isPendingPayment ? ' - Pending' : ''}`;
 
-  // Active platform subscription
-  if (isActive) {
     return (
       <>
-        <Card className="p-6 border-green-200 dark:border-green-900 bg-green-50/50 dark:bg-green-900/10">
+        <Card className="px-4 py-3 border-green-200 dark:border-green-900 bg-green-50/50 dark:bg-green-900/10">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="flex-shrink-0 w-8 h-8 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center">
-                <Check className="w-4 h-4 text-green-600 dark:text-green-400" />
-              </div>
-              <div>
-                <h3 className="font-semibold text-green-900 dark:text-green-100">
-                  Platform {formatTierName(platformService.tier as ServiceTier)} Plan
-                </h3>
-                <p className="text-sm text-green-700 dark:text-green-300">
-                  Active &mdash; you have access to all Suiftly services
-                </p>
-              </div>
+            <div className="flex items-center gap-2">
+              {showCheck && (
+                <Check className="w-4 h-4 text-green-600 dark:text-green-400 flex-shrink-0" />
+              )}
+              <span className="font-semibold text-sm text-green-900 dark:text-green-100">
+                {tierLabel}
+              </span>
             </div>
             <button
               onClick={() => setChangePlanOpen(true)}
@@ -123,15 +149,12 @@ export function PlatformPlanCard({ platformService }: PlatformPlanCardProps) {
               Change Plan
             </button>
           </div>
-
-          <div className="mt-3">
-            <SubscriptionStatusBanners
-              scheduledTier={(platformService.scheduledTier as ServiceTier) ?? null}
-              scheduledTierEffectiveDate={platformService.scheduledTierEffectiveDate}
-              cancellationScheduledFor={platformService.cancellationScheduledFor}
-              onManagePlan={() => setChangePlanOpen(true)}
-            />
-          </div>
+          <SubscriptionStatusBanners
+            scheduledTier={(platformService.scheduledTier as ServiceTier) ?? null}
+            scheduledTierEffectiveDate={platformService.scheduledTierEffectiveDate}
+            cancellationScheduledFor={platformService.cancellationScheduledFor}
+            onManagePlan={() => setChangePlanOpen(true)}
+          />
         </Card>
         <ChangeTierModal
           isOpen={changePlanOpen}
@@ -143,26 +166,7 @@ export function PlatformPlanCard({ platformService }: PlatformPlanCardProps) {
     );
   }
 
-  // Pending payment
-  if (isPending) {
-    return (
-      <Card className="p-6 border-orange-200 dark:border-orange-900 bg-orange-50/50 dark:bg-orange-900/10">
-        <div className="flex items-center gap-3">
-          <AlertCircle className="w-5 h-5 text-orange-600 dark:text-orange-400 flex-shrink-0" />
-          <div>
-            <h3 className="font-semibold text-orange-900 dark:text-orange-100">
-              Platform {formatTierName(platformService!.tier as ServiceTier)} Plan &mdash; Payment Pending
-            </h3>
-            <p className="text-sm text-orange-700 dark:text-orange-300">
-              Add a payment method or deposit funds to activate your platform subscription.
-            </p>
-          </div>
-        </div>
-      </Card>
-    );
-  }
-
-  // No subscription — show plan selection with ToS
+  // No subscription (or pending initial payment) — show plan selection with ToS
   return (
     <Card className="p-6">
       <h3 className="text-lg font-semibold mb-1">Choose a Platform Plan</h3>
@@ -198,7 +202,24 @@ export function PlatformPlanCard({ platformService }: PlatformPlanCardProps) {
               </div>
               <ul className="text-xs text-gray-500 dark:text-gray-400 mt-2 space-y-0.5">
                 {tier.features.map((f) => (
-                  <li key={f}>{f}</li>
+                  <li key={f.text} className="flex items-center gap-1">
+                    {f.text}
+                    {f.info && (
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <button
+                            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <Info className="h-3 w-3" />
+                          </button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-64">
+                          <p className="text-sm text-gray-600 dark:text-gray-300">{f.info}</p>
+                        </PopoverContent>
+                      </Popover>
+                    )}
+                  </li>
                 ))}
               </ul>
             </div>
@@ -212,7 +233,7 @@ export function PlatformPlanCard({ platformService }: PlatformPlanCardProps) {
           id="platform-tos"
           checked={tosChecked}
           onCheckedChange={(checked) => {
-            setTosChecked(!!checked);
+            setTosUserClicked(!!checked);
             if (checked) {
               acceptTosMutation.mutate();
             }
@@ -234,7 +255,7 @@ export function PlatformPlanCard({ platformService }: PlatformPlanCardProps) {
 
       <Button
         onClick={handleSubscribe}
-        disabled={!tosChecked || subscribeMutation.isPending}
+        disabled={!tosAcceptedOnServer || subscribeMutation.isPending}
         className="w-full bg-[#f38020] hover:bg-[#d96e1a] text-white"
       >
         {subscribeMutation.isPending ? (

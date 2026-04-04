@@ -27,7 +27,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
-import { formatTierName } from "@/lib/billing-utils";
+import { formatTierName, formatUsd } from "@/lib/billing-utils";
 import type { ServiceType, ServiceTier } from "@suiftly/shared/constants";
 
 interface ChangeTierModalProps {
@@ -71,7 +71,7 @@ export function ChangeTierModal({
       utils.services.getTierOptions.invalidate();
       utils.billing.getNextScheduledPayment.invalidate();
       const chargeText = data.chargeAmountUsdCents > 0
-        ? ` You were charged $${(data.chargeAmountUsdCents / 100).toFixed(2)}.`
+        ? ` You were charged ${formatUsd(data.chargeAmountUsdCents / 100)}.`
         : '';
       toast.success(`Upgraded to ${data.newTier.toUpperCase()}.${chargeText}`);
       onSuccess?.();
@@ -224,9 +224,7 @@ export function ChangeTierModal({
     setConfirmDialog(null);
   };
 
-  const formatPrice = (cents: number) => {
-    return `$${(cents / 100).toFixed(2)}`;
-  };
+  const formatPrice = (cents: number) => formatUsd(cents / 100);
 
   const formatDate = (date: Date | string) => {
     return new Date(date).toLocaleDateString('en-US', {

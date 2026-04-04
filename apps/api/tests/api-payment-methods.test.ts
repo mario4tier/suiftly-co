@@ -34,7 +34,7 @@ describe('API: Payment Method CRUD', () => {
     // Reset test customer data via HTTP
     await resetTestData(TEST_WALLET);
 
-    await setConfigFlags({ freq_platform_sub: '1', freq_seal_sub: '1' });
+    await setConfigFlags({ freq_platform_sub: '1', freq_seal_sub: '0' });
 
     // Login - this creates the customer with production defaults
     accessToken = await login(TEST_WALLET);

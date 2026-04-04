@@ -39,7 +39,7 @@ import {
 } from "@/lib/config";
 import { TermsOfServiceContent } from "@/components/content/TermsOfServiceContent";
 import { SERVICE_TIER, type ServiceTier } from "@suiftly/shared/constants";
-import { formatTierName } from "@/lib/billing-utils";
+import { formatTierName, formatUsd } from "@/lib/billing-utils";
 
 interface SealConfigFormProps {
   onTierChange?: (tierSelected: boolean) => void;
@@ -373,7 +373,7 @@ export function SealConfigForm({ onTierChange }: SealConfigFormProps) {
             Processing your subscription...
           </>
         ) : (
-          <>Subscribe to Service for ${monthlyFee.toFixed(2)}/month</>
+          <>Subscribe to Service for {formatUsd(monthlyFee)}/month</>
         )}
       </Button>
 

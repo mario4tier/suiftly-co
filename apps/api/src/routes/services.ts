@@ -102,6 +102,15 @@ export const servicesRouter = router({
           });
         }
 
+        // Enforce TOS acceptance for platform subscriptions
+        // (Platform TOS is persisted server-side; seal has its own client-side TOS flow)
+        if (input.serviceType === 'platform' && !customer.tosAcceptedAt) {
+          throw new TRPCError({
+            code: 'PRECONDITION_FAILED',
+            message: 'Terms of service must be accepted before subscribing',
+          });
+        }
+
         // 2. Check if service already exists (idempotency check)
         const existing = await tx.query.serviceInstances.findFirst({
           where: and(

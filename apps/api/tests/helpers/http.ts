@@ -389,6 +389,9 @@ export async function subscribePlatform(
   accessToken: string,
   tier: string = 'starter'
 ): Promise<void> {
+  // Accept TOS first (server enforces for platform subscriptions)
+  await trpcMutation<any>('billing.acceptTos', {}, accessToken);
+
   const result = await trpcMutation<any>(
     'services.subscribe',
     { serviceType: 'platform', tier },

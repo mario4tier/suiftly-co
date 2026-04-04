@@ -8,11 +8,13 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { addCryptoPayment } from '../helpers/db';
+import { addCryptoPayment, enableSealOnlyMode } from '../helpers/db';
 import { getBanner } from '../helpers/locators';
 
 test.describe('Subscription Without Funds', () => {
   test.beforeEach(async ({ page, request }) => {
+    await enableSealOnlyMode(request);
+
     // Reset customer test data (delete all services, zero balance, NO escrow account)
     await request.post('http://localhost:22700/test/data/reset', {
       data: {

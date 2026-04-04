@@ -38,7 +38,6 @@ export async function applyCreditsToInvoice(
   invoiceAmountCents: number,
   clock: DBClock
 ): Promise<CreditApplicationResult> {
-  const now = clock.now();
   const result: CreditApplicationResult = {
     creditsApplied: [],
     totalAppliedCents: 0,
@@ -50,23 +49,7 @@ export async function applyCreditsToInvoice(
     return result;
   }
 
-  // Get all available credits, ordered by expiration (oldest first)
-  // Skip expired credits (they're kept for audit trail but not used)
-  const availableCredits = await tx
-    .select()
-    .from(customerCredits)
-    .where(
-      and(
-        eq(customerCredits.customerId, customerId),
-        gt(customerCredits.remainingAmountUsdCents, 0),
-        // Only include non-expired credits
-        sql`(${customerCredits.expiresAt} IS NULL OR ${customerCredits.expiresAt} > ${now})`
-      )
-    )
-    .orderBy(
-      // Order by: expiring credits first (nulls last = never expiring)
-      sql`${customerCredits.expiresAt} NULLS LAST`
-    );
+  const availableCredits = await getAvailableCreditRows(tx, customerId, clock);
 
   // Apply credits until invoice is paid or no credits remain
   for (const credit of availableCredits) {
@@ -222,6 +205,31 @@ export async function issueReconciliationCredit(
       null,
     );
   }
+}
+
+/**
+ * Get all available credit rows for a customer (remaining > 0, not expired).
+ * Ordered by expiration date (soonest-expiring first, never-expiring last).
+ *
+ * Used by: applyCreditsToInvoice (payment), recalculateDraftInvoice (preview).
+ */
+export async function getAvailableCreditRows(
+  tx: DatabaseOrTransaction,
+  customerId: number,
+  clock: DBClock
+) {
+  const now = clock.now();
+  return tx
+    .select()
+    .from(customerCredits)
+    .where(
+      and(
+        eq(customerCredits.customerId, customerId),
+        gt(customerCredits.remainingAmountUsdCents, 0),
+        sql`(${customerCredits.expiresAt} IS NULL OR ${customerCredits.expiresAt} > ${now})`
+      )
+    )
+    .orderBy(sql`${customerCredits.expiresAt} NULLS LAST`);
 }
 
 /**

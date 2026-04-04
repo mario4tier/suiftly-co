@@ -5,11 +5,13 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { addCryptoPayment } from '../helpers/db';
+import { addCryptoPayment, enableSealOnlyMode } from '../helpers/db';
 import { getBanner, waitForToastsToDisappear } from '../helpers/locators';
 
 test.describe('Subscription Pricing Validation', () => {
   test.beforeEach(async ({ page }) => {
+    await enableSealOnlyMode(page.request);
+
     // Authenticate with mock wallet first
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet 0")');

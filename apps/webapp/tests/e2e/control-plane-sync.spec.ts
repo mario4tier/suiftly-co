@@ -11,7 +11,7 @@
 
 import { test, expect, Page } from '@playwright/test';
 import { waitAfterMutation } from '../helpers/wait-utils';
-import { resetCustomer, ensureTestBalance, truncateAllTables } from '../helpers/db';
+import { resetCustomer, ensureTestBalance, truncateAllTables, enableSealOnlyMode } from '../helpers/db';
 import { db } from '@suiftly/database';
 import { serviceInstances, systemControl } from '@suiftly/database/schema';
 import { eq, and } from 'drizzle-orm';
@@ -139,6 +139,8 @@ test.describe('Control Plane Sync Flow', () => {
   });
 
   test.beforeEach(async ({ page }) => {
+    await enableSealOnlyMode(page.request);
+
     // Reset customer to clean state
     await resetCustomer(page.request);
 

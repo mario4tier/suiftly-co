@@ -244,7 +244,10 @@ describe('Platform Billing (partial: platform=1, seal_sub=0)', () => {
       expect(sealItem).toBeDefined();
       expect(Number(platformItem!.amountUsdCents)).toBe(100);  // $1
       expect(Number(sealItem!.amountUsdCents)).toBe(2900);     // $29
-      expect(Number(draft!.amountUsdCents)).toBe(3000);         // $30 total
+      // DRAFT is net of credits. Platform credit (floor(100*14/31)=45) was consumed by
+      // seal subscription payment. Seal credit = floor(2900*14/31)=1309 remains.
+      // Net = 100 + 2900 - 1309 = 1691
+      expect(Number(draft!.amountUsdCents)).toBe(1691);
     });
 
     it('should not include usage line item for platform ($0 pricing)', async () => {
@@ -314,9 +317,11 @@ describe('Platform Billing (partial: platform=1, seal_sub=0)', () => {
       expect(service?.tier).toBe('pro'); // Still pro until effective date
       expect(service?.scheduledTier).toBe('starter');
 
-      // DRAFT should reflect the scheduled downgrade price
+      // DRAFT should reflect the scheduled downgrade price minus credits.
+      // Pro subscription on Jan 15 created credit = floor(2900*14/31)=1309.
+      // Starter price (100) - 1309 credits = -1209 (negative = excess credit)
       const { draft } = await getDraftWithLineItems(CUSTOMER_ID);
-      expect(Number(draft!.amountUsdCents)).toBe(100); // $1 (starter price for next month)
+      expect(Number(draft!.amountUsdCents)).toBe(100 - 1309);
     });
   });
 
@@ -332,9 +337,13 @@ describe('Platform Billing (partial: platform=1, seal_sub=0)', () => {
       expect(cancelResult.success).toBe(true);
 
       const { draft, lineItems } = await getDraftWithLineItems(CUSTOMER_ID);
-      const platformItem = lineItems.find(li => li.serviceType === 'platform');
-      expect(platformItem).toBeUndefined();
-      expect(Number(draft!.amountUsdCents)).toBe(0);
+      const platformSubItem = lineItems.find(
+        li => li.serviceType === 'platform' && li.itemType !== 'credit'
+      );
+      expect(platformSubItem).toBeUndefined();
+      // DRAFT total is negative because platform credit (45 cents) remains
+      // after subscription charge is removed. Credit = floor(100*14/31)=45.
+      expect(Number(draft!.amountUsdCents)).toBe(-45);
     });
 
     it('should restore platform to DRAFT after undo cancellation', async () => {

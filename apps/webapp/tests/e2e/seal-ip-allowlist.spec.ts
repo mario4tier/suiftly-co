@@ -12,6 +12,7 @@
 
 import { test, expect, type Page } from '@playwright/test';
 import { getToast, waitForToastsToDisappear } from '../helpers/locators';
+import { enableSealOnlyMode } from '../helpers/db';
 
 /** Click "Save Changes" and wait for the API mutation response + UI to settle */
 async function saveAndWaitForCompletion(page: Page) {
@@ -25,6 +26,8 @@ async function saveAndWaitForCompletion(page: Page) {
 
 test.describe('Seal IP Allowlist - Validation & Save/Cancel', () => {
   test.beforeEach(async ({ page, request }) => {
+    await enableSealOnlyMode(request);
+
     // Setup test environment
     await request.post('http://localhost:22700/test/delays/clear');
     await request.post('http://localhost:22700/test/data/reset', {
@@ -415,6 +418,8 @@ test.describe('Seal IP Allowlist - Validation & Save/Cancel', () => {
 
 test.describe('Seal IP Allowlist - Persistence & Reload', () => {
   test.beforeEach(async ({ page, request }) => {
+    await enableSealOnlyMode(request);
+
     await request.post('http://localhost:22700/test/delays/clear');
     await request.post('http://localhost:22700/test/data/reset', {
       data: {

@@ -6,7 +6,7 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { resetCustomer, ensureTestBalance, addCryptoPayment, addCreditCardPayment } from '../helpers/db';
+import { resetCustomer, ensureTestBalance, addCryptoPayment, addCreditCardPayment, enableSealOnlyMode } from '../helpers/db';
 import { waitAfterMutation } from '../helpers/wait-utils';
 import { getBanner } from '../helpers/locators';
 
@@ -14,6 +14,8 @@ const API_BASE = 'http://localhost:22700';
 
 test.describe('Payment Fallback Flows', () => {
   test.beforeEach(async ({ page, request }) => {
+    await enableSealOnlyMode(request);
+
     // Force mock Stripe service (real Stripe keys may be configured)
     await request.post(`${API_BASE}/test/stripe/force-mock`, { data: { enabled: true } });
 

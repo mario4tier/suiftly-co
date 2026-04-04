@@ -106,15 +106,15 @@ describe('Invoice Validation', () => {
   });
 
   describe('Negative Amount Detection', () => {
-    it('should detect negative invoice amounts', async () => {
-      // Create invoice with negative amount (bug scenario)
+    it('should detect negative invoice amounts on non-draft invoices', async () => {
+      // Non-draft invoice with negative amount is a bug
       const [invoice] = await db.insert(billingRecords).values({
         customerId: testCustomerId,
         billingPeriodStart: clock.now(),
         billingPeriodEnd: clock.addDays(30),
-        amountUsdCents: -2900, // BUG: Negative amount
+        amountUsdCents: -2900, // BUG: Negative amount on non-draft
         type: 'charge',
-        status: 'draft',
+        status: 'pending',
         createdAt: clock.now(),
       }).returning();
 
@@ -125,6 +125,24 @@ describe('Invoice Validation', () => {
       expect(validation.valid).toBe(false);
       expect(validation.criticalErrors.length).toBeGreaterThanOrEqual(1);
       expect(validation.criticalErrors.some(e => e.code === 'NEGATIVE_AMOUNT')).toBe(true);
+    });
+
+    it('should allow negative amounts on draft invoices (credits exceed charges)', async () => {
+      const [invoice] = await db.insert(billingRecords).values({
+        customerId: testCustomerId,
+        billingPeriodStart: clock.now(),
+        billingPeriodEnd: clock.addDays(30),
+        amountUsdCents: -500, // OK: DRAFT can be negative (credits exceed charges)
+        type: 'charge',
+        status: 'draft',
+        createdAt: clock.now(),
+      }).returning();
+
+      const validation = await db.transaction(async (tx) => {
+        return await validateInvoiceBeforeCharging(tx, invoice.id);
+      });
+
+      expect(validation.criticalErrors.some(e => e.code === 'NEGATIVE_AMOUNT')).toBe(false);
     });
   });
 

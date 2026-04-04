@@ -6,9 +6,12 @@
  */
 
 import { test, expect } from '@playwright/test';
+import { enableSealOnlyMode } from '../helpers/db';
 
 test.describe('Service State Transitions', () => {
   test.beforeEach(async ({ page, request }) => {
+    await enableSealOnlyMode(request);
+
     // Reset customer test data (delete all services, reset balance)
     await request.post('http://localhost:22700/test/data/reset', {
       data: {
@@ -172,6 +175,8 @@ test.describe('Service State Transitions', () => {
 
 test.describe('Service State - Edge Cases', () => {
   test.beforeEach(async ({ page, request }) => {
+    await enableSealOnlyMode(request);
+
     // Reset customer test data (delete all services, reset balance, clear escrow)
     await request.post('http://localhost:22700/test/data/reset', {
       data: {

@@ -11,7 +11,7 @@
 
 import { test, expect, type Page } from '@playwright/test';
 import { waitAfterMutation } from '../helpers/wait-utils';
-import { resetCustomer, ensureTestBalance } from '../helpers/db';
+import { resetCustomer, ensureTestBalance, enableSealOnlyMode } from '../helpers/db';
 import {
   sealHealthCheck,
   sealHealthCheckWithRetry,
@@ -134,6 +134,8 @@ async function checkPrerequisites(): Promise<boolean> {
 
 test.describe('Seal Key Rotation', () => {
   test.beforeEach(async ({ page }) => {
+    await enableSealOnlyMode(page.request);
+
     await resetCustomer(page.request);
     await page.context().clearCookies();
     await page.goto('/');

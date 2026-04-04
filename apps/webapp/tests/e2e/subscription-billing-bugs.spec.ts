@@ -9,7 +9,7 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { resetCustomer, addCryptoPayment } from '../helpers/db';
+import { resetCustomer, addCryptoPayment, enableSealOnlyMode } from '../helpers/db';
 import { setMockClock, resetClock } from '../helpers/clock';
 
 const MOCK_WALLET_ADDRESS = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
@@ -17,6 +17,8 @@ const API_BASE = 'http://localhost:22700';
 
 test.describe('Subscription Billing - Bug Detection', () => {
   test('BUG 1: Next Scheduled Payment shows 1st of next month (not last day of current month)', async ({ page }) => {
+    await enableSealOnlyMode(page.request);
+
     // Freeze time to November 15, 2025 for deterministic credit calculation
     // Mid-month ensures a meaningful partial month credit will be created
     await setMockClock(page.request, '2025-11-15T12:00:00Z');
@@ -95,6 +97,8 @@ test.describe('Subscription Billing - Bug Detection', () => {
   });
 
   test('BUG 2: Reconciliation credit created for unused days in partial month', async ({ page }) => {
+    await enableSealOnlyMode(page.request);
+
     // Freeze time to November 24, 2025 for deterministic credit calculation
     await setMockClock(page.request, '2025-11-24T12:00:00Z');
 
@@ -166,6 +170,8 @@ test.describe('Subscription Billing - Bug Detection', () => {
  */
 test.describe('Month Boundary Edge Cases', () => {
   test('last second of month (Nov 30, 23:59:59) - should credit 29 days', async ({ page }) => {
+    await enableSealOnlyMode(page.request);
+
     // Freeze to last second of November
     await setMockClock(page.request, '2025-11-30T23:59:59Z');
 
@@ -217,6 +223,8 @@ test.describe('Month Boundary Edge Cases', () => {
   });
 
   test('first second of month (Dec 1, 00:00:01) - no credit (full month)', async ({ page }) => {
+    await enableSealOnlyMode(page.request);
+
     // Freeze to first second of December
     await setMockClock(page.request, '2025-12-01T00:00:01Z');
 
@@ -266,6 +274,8 @@ test.describe('Month Boundary Edge Cases', () => {
   });
 
   test('February 28 non-leap year (Feb 28, 2025) - 27 days credit', async ({ page }) => {
+    await enableSealOnlyMode(page.request);
+
     // Freeze to Feb 28, 2025 (non-leap year)
     await setMockClock(page.request, '2025-02-28T12:00:00Z');
 
@@ -317,6 +327,8 @@ test.describe('Month Boundary Edge Cases', () => {
   });
 
   test('February 29 leap year (Feb 29, 2024) - 28 days credit', async ({ page }) => {
+    await enableSealOnlyMode(page.request);
+
     // Freeze to Feb 29, 2024 (leap year)
     await setMockClock(page.request, '2024-02-29T12:00:00Z');
 
@@ -368,6 +380,8 @@ test.describe('Month Boundary Edge Cases', () => {
   });
 
   test('January 1st first moment (Jan 1, 00:00:01) - no credit (full month)', async ({ page }) => {
+    await enableSealOnlyMode(page.request);
+
     // Freeze to first second of January
     await setMockClock(page.request, '2025-01-01T00:00:01Z');
 
@@ -417,6 +431,8 @@ test.describe('Month Boundary Edge Cases', () => {
   });
 
   test('December 31st last moment (Dec 31, 23:59:59) - 30 days credit', async ({ page }) => {
+    await enableSealOnlyMode(page.request);
+
     // Freeze to last second of December
     await setMockClock(page.request, '2025-12-31T23:59:59Z');
 
@@ -475,6 +491,8 @@ test.describe('Month Boundary Edge Cases', () => {
  */
 test.describe('Scheduled Change Date Display', () => {
   test('scheduled downgrade shows correct date (not off by one day)', async ({ page }) => {
+    await enableSealOnlyMode(page.request);
+
     // Set clock to Nov 15, 2025 - mid-month for a clear scheduled downgrade scenario
     await setMockClock(page.request, '2025-11-15T12:00:00Z');
 
@@ -551,6 +569,8 @@ test.describe('Scheduled Change Date Display', () => {
   });
 
   test('scheduled cancellation shows correct date (not off by one day)', async ({ page }) => {
+    await enableSealOnlyMode(page.request);
+
     // Set clock to Nov 15, 2025
     await setMockClock(page.request, '2025-11-15T12:00:00Z');
 

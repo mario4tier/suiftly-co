@@ -199,7 +199,9 @@ describe('Service Billing Integration (Phase 2)', () => {
         ));
 
       expect(drafts).toHaveLength(1);
-      expect(Number(drafts[0].amountUsdCents)).toBe(2900); // Full month rate
+      // DRAFT is net of credits: pro price (2900) minus reconciliation credit
+      // (floor(2900*14/31)=1309) for subscribing on Jan 15.
+      expect(Number(drafts[0].amountUsdCents)).toBe(2900 - Math.floor(2900 * 14 / 31));
     });
   });
 

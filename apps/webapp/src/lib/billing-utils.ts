@@ -9,6 +9,16 @@
  */
 
 import { INVOICE_LINE_ITEM_TYPE, SERVICE_TIER, SERVICE_TYPE } from '@suiftly/shared/constants';
+
+/**
+ * Format USD amount: "$29" for whole dollars, "$13.09" when there are cents.
+ * Handles negative amounts: "-$5" or "-$5.23".
+ */
+export function formatUsd(amount: number): string {
+  const abs = Math.abs(amount);
+  const formatted = abs % 1 === 0 ? `$${abs}` : `$${abs.toFixed(2)}`;
+  return amount < 0 ? `-${formatted}` : formatted;
+}
 import type { InvoiceLineItem, ServiceTier } from '@suiftly/shared/types';
 
 /**

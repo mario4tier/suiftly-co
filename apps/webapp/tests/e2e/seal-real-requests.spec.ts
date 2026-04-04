@@ -25,7 +25,7 @@
 import { test, expect } from '@playwright/test';
 import { waitAfterMutation } from '../helpers/wait-utils';
 import { ServiceStabilityChecker } from '../helpers/service-stability';
-import { resetCustomer, ensureTestBalance, getCustomerData, waitForHaproxyLogs } from '../helpers/db';
+import { resetCustomer, ensureTestBalance, getCustomerData, waitForHaproxyLogs, enableSealOnlyMode } from '../helpers/db';
 // Note: We intentionally don't use setupCpEnabled or createApiKey shortcuts
 // to test the real user experience through the UI
 import {
@@ -420,6 +420,8 @@ test.describe('Real Seal Requests', () => {
   });
 
   test.beforeEach(async ({ page }, testInfo) => {
+    await enableSealOnlyMode(page.request);
+
     // Initialize stability checker and capture initial PIDs
     stabilityChecker = new ServiceStabilityChecker(page.request);
     stabilityChecker.setTestName(testInfo.title);
@@ -933,6 +935,8 @@ test.describe('Real Seal Requests - IP Allowlist', () => {
   let stabilityChecker: ServiceStabilityChecker;
 
   test.beforeEach(async ({ page }, testInfo) => {
+    await enableSealOnlyMode(page.request);
+
     // Initialize stability checker and capture initial PIDs
     stabilityChecker = new ServiceStabilityChecker(page.request);
     stabilityChecker.setTestName(testInfo.title);
@@ -1344,6 +1348,8 @@ test.describe('Real Seal Requests - Log Ingestion', () => {
   let stabilityChecker: ServiceStabilityChecker;
 
   test.beforeEach(async ({ page }, testInfo) => {
+    await enableSealOnlyMode(page.request);
+
     // Initialize stability checker and capture initial PIDs
     stabilityChecker = new ServiceStabilityChecker(page.request);
     stabilityChecker.setTestName(testInfo.title);

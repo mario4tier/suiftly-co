@@ -9,7 +9,7 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { resetCustomer, getCustomerData, subscribeSealService } from '../helpers/db';
+import { resetCustomer, getCustomerData, subscribeSealService, enableSealOnlyMode } from '../helpers/db';
 import { waitAfterMutation } from '../helpers/wait-utils';
 import { getStripePublishableKey, findStripeFrame, fillStripeCard } from '../helpers/stripe';
 
@@ -47,6 +47,8 @@ test.describe('Stripe Sandbox', () => {
   });
 
   test.beforeEach(async ({ page }) => {
+    await enableSealOnlyMode(page.request);
+
     // Ensure force-mock is disabled for real Stripe tests
     await page.request.post(`${API_BASE}/test/stripe/force-mock`, {
       data: { enabled: false },

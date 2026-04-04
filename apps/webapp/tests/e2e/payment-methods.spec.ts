@@ -4,13 +4,15 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { resetCustomer, ensureTestBalance, addCryptoPayment, addCreditCardPayment, getCustomerData } from '../helpers/db';
+import { resetCustomer, ensureTestBalance, addCryptoPayment, addCreditCardPayment, getCustomerData, enableSealOnlyMode } from '../helpers/db';
 import { waitAfterMutation } from '../helpers/wait-utils';
 
 const API_BASE = 'http://localhost:22700';
 
 test.describe('Payment Methods', () => {
   test.beforeEach(async ({ page }) => {
+    await enableSealOnlyMode(page.request);
+
     await resetCustomer(page.request);
     await page.context().clearCookies();
 

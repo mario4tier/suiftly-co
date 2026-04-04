@@ -6,9 +6,12 @@
  */
 
 import { test, expect } from '@playwright/test';
+import { enableSealOnlyMode } from '../helpers/db';
 
 test.describe('API Key Creation on Subscription', () => {
   test.beforeEach(async ({ page }) => {
+    await enableSealOnlyMode(page.request);
+
     // Authenticate with mock wallet
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet 0")');

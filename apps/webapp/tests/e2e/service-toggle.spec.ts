@@ -13,9 +13,12 @@
 import { test, expect } from '@playwright/test';
 import { waitAfterMutation, waitForCondition } from '../helpers/wait-utils';
 import { waitForToastsToDisappear } from '../helpers/locators';
+import { enableSealOnlyMode } from '../helpers/db';
 
 test.describe('Service Toggle - Enable/Disable', () => {
   test.beforeEach(async ({ page, request }) => {
+    await enableSealOnlyMode(request);
+
     // Step 1: Clear any lingering test delays from previous tests
     await request.post('http://localhost:22700/test/delays/clear');
 

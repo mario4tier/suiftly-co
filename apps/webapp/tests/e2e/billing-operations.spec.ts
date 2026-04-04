@@ -4,7 +4,7 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { resetCustomer, ensureTestBalance, addCryptoPayment } from '../helpers/db';
+import { resetCustomer, ensureTestBalance, addCryptoPayment, enableSealOnlyMode } from '../helpers/db';
 import { waitAfterMutation } from '../helpers/wait-utils';
 
 const MOCK_WALLET_ADDRESS = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
@@ -12,6 +12,8 @@ const API_BASE = 'http://localhost:22700';
 
 test.describe('Billing Operations', () => {
   test.beforeEach(async ({ page }) => {
+    await enableSealOnlyMode(page.request);
+
     // Delete customer - will be recreated with production defaults on auth
     // Production defaults: balance=$0, spending limit=$250
     await resetCustomer(page.request);
@@ -341,6 +343,8 @@ test.describe('Billing Operations', () => {
 
 test.describe('Billing Validation Edge Cases', () => {
   test.beforeEach(async ({ page }) => {
+    await enableSealOnlyMode(page.request);
+
     // Reset to production defaults
     await resetCustomer(page.request);
 

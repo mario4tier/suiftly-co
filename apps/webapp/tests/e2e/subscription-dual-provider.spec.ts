@@ -13,7 +13,7 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { setupPaymentProvider, subscribeSealService } from '../helpers/db';
+import { setupPaymentProvider, subscribeSealService, enableSealOnlyMode } from '../helpers/db';
 import { getStripePublishableKey } from '../helpers/stripe';
 import { waitAfterMutation, waitForCondition } from '../helpers/wait-utils';
 import { waitForToastsToDisappear } from '../helpers/locators';
@@ -35,6 +35,8 @@ for (const provider of ['escrow', 'stripe'] as const) {
     }
 
     test.beforeEach(async ({ page, request }) => {
+      await enableSealOnlyMode(request);
+
       if (provider === 'stripe') {
         // Disable force-mock to check for real Stripe keys
         await request.post(`${API_BASE}/test/stripe/force-mock`, {

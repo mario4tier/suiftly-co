@@ -14,12 +14,15 @@
 
 import { test, expect } from '@playwright/test';
 import { waitAfterMutation, waitForCondition } from '../helpers/wait-utils';
+import { enableSealOnlyMode } from '../helpers/db';
 
 const MOCK_WALLET_ADDRESS = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const API_BASE = 'http://localhost:22700';
 
 test.describe('Escrow Mock - Wallet Operations', () => {
   test.beforeEach(async ({ page }) => {
+    await enableSealOnlyMode(page.request);
+
     // Reset customer data
     await page.request.post(`${API_BASE}/test/data/reset`, {
       data: {
@@ -194,6 +197,8 @@ test.describe('Escrow Mock - Wallet Operations', () => {
 
 test.describe('Escrow Mock - Service Subscription Scenarios', () => {
   test.beforeEach(async ({ page }) => {
+    await enableSealOnlyMode(page.request);
+
     // Reset customer data
     await page.request.post(`${API_BASE}/test/data/reset`, {
       data: {
@@ -370,6 +375,8 @@ test.describe('Escrow Mock - Service Subscription Scenarios', () => {
 
 test.describe('Subscription Charge Architecture - Critical Business Logic', () => {
   test.beforeEach(async ({ page }) => {
+    await enableSealOnlyMode(page.request);
+
     // Reset customer data (database only, doesn't create mock wallet)
     await page.request.post(`${API_BASE}/test/data/reset`, {
       data: {
