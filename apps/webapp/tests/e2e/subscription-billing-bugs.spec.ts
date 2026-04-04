@@ -64,15 +64,15 @@ test.describe('Subscription Billing - Bug Detection', () => {
 
     // Expand Next Scheduled Payment/Refund
     // Use text selector for regex pattern
-    await page.locator('text=/Next Scheduled (Payment|Refund)/').click();
+    await page.locator('text=/Next Scheduled Payment/').click();
 
     // BUG DETECTION: Check the entire card (not just date section)
     // The button contains both date and amount in separate divs
     // Use filter instead of has-text with regex for better compatibility
-    const nextPaymentButton = page.locator('button').filter({ hasText: /Next Scheduled (Payment|Refund)/ });
+    const nextPaymentButton = page.locator('button').filter({ hasText: /Next Scheduled Payment/ });
     const fullText = await nextPaymentButton.textContent();
 
-    console.log('Next Scheduled Payment/Refund text:', fullText);
+    console.log('Next Scheduled Payment text:', fullText);
 
     // Should show next month's 1st day (not current month's last day)
     // With DBClock set to Nov 15, 2025, next billing date is December 1, 2025
@@ -88,12 +88,12 @@ test.describe('Subscription Billing - Bug Detection', () => {
     await expect(page.locator('text=Seal Pro tier')).toBeVisible();
     // Credit includes service name and month in format: "Seal partial month credit (November)"
     await expect(page.locator('text=/Seal partial month credit \\(/i')).toBeVisible();
-    await expect(page.locator('text=/Total (Charge|Refund)/')).toBeVisible();
+    await expect(page.locator('text=/Total:/')).toBeVisible();
 
     // Verify line items exist in expanded section (amounts vary by date)
     const expandedSection = page.locator('text=Seal Pro tier').locator('../..');
     await expect(expandedSection).toContainText('$29.00'); // Seal Pro subscription (fixed price)
-    await expect(expandedSection).toContainText(/Total (Charge|Refund)/); // Total label exists
+    await expect(expandedSection).toContainText(/Total:/); // Total label exists
   });
 
   test('BUG 2: Reconciliation credit created for unused days in partial month', async ({ page }) => {

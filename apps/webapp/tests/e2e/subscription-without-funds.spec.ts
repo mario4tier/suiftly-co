@@ -196,7 +196,7 @@ test.describe('Subscription Without Funds', () => {
     await page.waitForURL('/billing', { timeout: 5000 });
 
     // Verify "Next Scheduled Payment" section shows $0.00
-    const nextPaymentButton = page.locator('button').filter({ hasText: /Next Scheduled (Payment|Refund)/ });
+    const nextPaymentButton = page.locator('button').filter({ hasText: /Next Scheduled Payment/ });
     const nextPaymentSection = nextPaymentButton.locator('..');
     await expect(nextPaymentSection).toContainText('$0.00', { timeout: 5000 });
 
@@ -272,7 +272,7 @@ test.describe('Subscription Without Funds', () => {
     await page.waitForURL('/billing', { timeout: 5000 });
 
     // Verify Next Scheduled Payment shows $0.00 (service has pending charge)
-    const nextPaymentSection = page.locator('button').filter({ hasText: /Next Scheduled (Payment|Refund)/ }).locator('..');
+    const nextPaymentSection = page.locator('button').filter({ hasText: /Next Scheduled Payment/ }).locator('..');
     await expect(nextPaymentSection).toContainText('$0.00', { timeout: 5000 });
 
     // Deposit funds ($30 to cover the $29 subscription)

@@ -172,17 +172,17 @@ test.describe('Billing Page', () => {
     await page.waitForURL('/billing', { timeout: 5000 });
 
     // Next Scheduled Payment should be visible (no longer gated by escrow)
-    await expect(page.locator('text=/Next Scheduled (Payment|Refund)/')).toBeVisible();
+    await expect(page.locator('text=Next Scheduled Payment')).toBeVisible();
 
     // Should NOT show details initially
     await expect(page.locator('text=No upcoming charges')).not.toBeVisible();
 
     // Click to expand
-    await page.locator('text=/Next Scheduled (Payment|Refund)/').click();
+    await page.locator('text=Next Scheduled Payment').click();
     await expect(page.locator('text=No upcoming charges')).toBeVisible();
 
     // Click again to collapse
-    await page.locator('text=/Next Scheduled (Payment|Refund)/').click();
+    await page.locator('text=Next Scheduled Payment').click();
     await expect(page.locator('text=No upcoming charges')).not.toBeVisible();
 
     console.log('✅ Next scheduled payment expandable works correctly');
@@ -272,7 +272,7 @@ test.describe('Billing Page', () => {
     await page.waitForLoadState('networkidle');
 
     // Expand Next Scheduled Payment section (no longer gated by escrow)
-    await page.locator('text=/Next Scheduled (Payment|Refund)/').click();
+    await page.locator('text=Next Scheduled Payment').click();
     await expect(page.locator('text=No upcoming charges')).not.toBeVisible();
     await expect(page.locator('text=Seal Pro tier')).toBeVisible();
 
@@ -284,7 +284,7 @@ test.describe('Billing Page', () => {
       console.log('  → No partial month credit (expected if subscribed near month end)');
     }
 
-    await expect(page.locator('text=/Total (Charge|Refund):/')).toBeVisible();
+    await expect(page.locator('text=Total:')).toBeVisible();
 
     console.log('✅ Next scheduled payment shows correct amount after subscription');
   });
