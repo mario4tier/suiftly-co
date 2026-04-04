@@ -68,20 +68,20 @@ test.describe('Seal Service Onboarding Form', () => {
     await expect(page.locator('text=SELECTED')).toBeVisible();
 
     // Subscribe button should show PRO price ($29)
-    await expect(page.locator('button:has-text("$29.00/month")')).toBeVisible();
+    await expect(page.locator('button:has-text("$29/month")')).toBeVisible();
 
     console.log('✅ PRO tier is selected by default with correct price');
   });
 
   test('selecting different tier updates price on subscribe button', async ({ page }) => {
     // Initially PRO ($29)
-    await expect(page.locator('button:has-text("$29.00/month")')).toBeVisible();
+    await expect(page.locator('button:has-text("$29/month")')).toBeVisible();
 
     // Click STARTER tier
     await page.getByRole('heading', { name: 'STARTER' }).click();
 
     // Price should update to $9
-    await expect(page.locator('button:has-text("$9.00/month")')).toBeVisible();
+    await expect(page.locator('button:has-text("$9/month")')).toBeVisible();
 
     // SELECTED badge should move to STARTER
     await expect(page.locator('text=SELECTED')).toBeVisible();
@@ -90,7 +90,7 @@ test.describe('Seal Service Onboarding Form', () => {
     await page.getByRole('heading', { name: 'ENTERPRISE' }).click();
 
     // Price should update to $185
-    await expect(page.locator('button:has-text("$185.00/month")')).toBeVisible();
+    await expect(page.locator('button:has-text("$185/month")')).toBeVisible();
 
     console.log('✅ Tier selection updates subscribe button price correctly');
   });
@@ -181,17 +181,17 @@ test.describe('Seal Service Onboarding Form', () => {
     await page.locator('label:has-text("Agree to")').click();
 
     // Check default PRO tier ($29/month)
-    let subscribeButton = page.locator('button:has-text("Subscribe to Service for $29.00/month")');
+    let subscribeButton = page.locator('button:has-text("Subscribe to Service for $29/month")');
     await expect(subscribeButton).toBeVisible();
 
     // Switch to STARTER ($9/month)
     await page.getByRole('heading', { name: 'STARTER' }).click();
-    subscribeButton = page.locator('button:has-text("Subscribe to Service for $9.00/month")');
+    subscribeButton = page.locator('button:has-text("Subscribe to Service for $9/month")');
     await expect(subscribeButton).toBeVisible();
 
     // Switch to ENTERPRISE ($185/month)
     await page.getByRole('heading', { name: 'ENTERPRISE' }).click();
-    subscribeButton = page.locator('button:has-text("Subscribe to Service for $185.00/month")');
+    subscribeButton = page.locator('button:has-text("Subscribe to Service for $185/month")');
     await expect(subscribeButton).toBeVisible();
 
     console.log('✅ Subscribe button displays correct tier and price');

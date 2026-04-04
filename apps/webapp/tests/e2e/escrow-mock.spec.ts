@@ -331,7 +331,7 @@ test.describe('Escrow Mock - Service Subscription Scenarios', () => {
     await page.locator('text=$185/month').click();
 
     // Wait for button to update to show ENTERPRISE price
-    await expect(page.locator('button:has-text("Subscribe to Service for $185.00/month")')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('button:has-text("Subscribe to Service for $185/month")')).toBeVisible({ timeout: 5000 });
 
     // Try to subscribe - should fail because $185 > $50 limit
     await page.locator('button:has-text("Subscribe to Service")').click();

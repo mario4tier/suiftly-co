@@ -320,18 +320,18 @@ test.describe('Subscription Pricing Validation', () => {
 
     // Check STARTER price - $9
     await page.getByRole('heading', { name: 'STARTER' }).click();
-    await expect(page.locator('button:has-text("$9.00/month")')).toBeVisible();
-    console.log('✅ STARTER tier button shows $9.00/month');
+    await expect(page.locator('button:has-text("$9/month")')).toBeVisible();
+    console.log('✅ STARTER tier button shows $9/month');
 
     // Check PRO price - $29
     await page.getByRole('heading', { name: 'PRO' }).click();
-    await expect(page.locator('button:has-text("$29.00/month")')).toBeVisible();
-    console.log('✅ PRO tier button shows $29.00/month');
+    await expect(page.locator('button:has-text("$29/month")')).toBeVisible();
+    console.log('✅ PRO tier button shows $29/month');
 
     // Check ENTERPRISE price - $185
     await page.getByRole('heading', { name: 'ENTERPRISE' }).click();
-    await expect(page.locator('button:has-text("$185.00/month")')).toBeVisible();
-    console.log('✅ ENTERPRISE tier button shows $185.00/month');
+    await expect(page.locator('button:has-text("$185/month")')).toBeVisible();
+    console.log('✅ ENTERPRISE tier button shows $185/month');
 
     console.log('✅ All tier buttons show correct pricing');
   });
