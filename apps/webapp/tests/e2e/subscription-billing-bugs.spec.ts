@@ -9,7 +9,7 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { resetCustomer, addCryptoPayment, enableSealOnlyMode } from '../helpers/db';
+import { resetCustomer, addCryptoPayment, enableSealOnlyMode, subscribeSealService } from '../helpers/db';
 import { setMockClock, resetClock } from '../helpers/clock';
 
 const MOCK_WALLET_ADDRESS = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
@@ -199,13 +199,7 @@ test.describe('Month Boundary Edge Cases', () => {
     // Add crypto payment method (required for escrow payment to work)
     await page.click('text=Billing');
     await page.waitForURL('/billing', { timeout: 5000 });
-    await addCryptoPayment(page);
-
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
-    await page.locator('label:has-text("Agree to")').click();
-    await page.locator('button:has-text("Subscribe to Service")').click();
-    await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
+    await subscribeSealService(page, 'PRO');
 
     const response = await page.request.get(`${API_BASE}/test/data/customer`);
     const data = await response.json();
@@ -253,13 +247,7 @@ test.describe('Month Boundary Edge Cases', () => {
     // Add crypto payment method (required for escrow payment to work)
     await page.click('text=Billing');
     await page.waitForURL('/billing', { timeout: 5000 });
-    await addCryptoPayment(page);
-
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
-    await page.locator('label:has-text("Agree to")').click();
-    await page.locator('button:has-text("Subscribe to Service")').click();
-    await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
+    await subscribeSealService(page, 'PRO');
 
     const response = await page.request.get(`${API_BASE}/test/data/customer`);
     const data = await response.json();
@@ -305,13 +293,7 @@ test.describe('Month Boundary Edge Cases', () => {
     // Add crypto payment method (required for escrow payment to work)
     await page.click('text=Billing');
     await page.waitForURL('/billing', { timeout: 5000 });
-    await addCryptoPayment(page);
-
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
-    await page.locator('label:has-text("Agree to")').click();
-    await page.locator('button:has-text("Subscribe to Service")').click();
-    await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
+    await subscribeSealService(page, 'PRO');
 
     const response = await page.request.get(`${API_BASE}/test/data/customer`);
     const data = await response.json();
@@ -351,21 +333,14 @@ test.describe('Month Boundary Edge Cases', () => {
       },
     });
 
+    // Auth and subscribe via helper (handles tier selection, TOS, and payment)
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
     await page.waitForLoadState('networkidle');
 
-    // Add crypto payment method (required for escrow payment to work)
-    await page.click('text=Billing');
-    await page.waitForURL('/billing', { timeout: 5000 });
-    await addCryptoPayment(page);
-
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
-    await page.locator('label:has-text("Agree to")').click();
-    await page.locator('button:has-text("Subscribe to Service")').click();
-    await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
+    // Deposit already auto-added escrow payment method — subscribe directly
+    await subscribeSealService(page, 'PRO');
 
     const response = await page.request.get(`${API_BASE}/test/data/customer`);
     const data = await response.json();
@@ -413,13 +388,7 @@ test.describe('Month Boundary Edge Cases', () => {
     // Add crypto payment method (required for escrow payment to work)
     await page.click('text=Billing');
     await page.waitForURL('/billing', { timeout: 5000 });
-    await addCryptoPayment(page);
-
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
-    await page.locator('label:has-text("Agree to")').click();
-    await page.locator('button:has-text("Subscribe to Service")').click();
-    await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
+    await subscribeSealService(page, 'PRO');
 
     const response = await page.request.get(`${API_BASE}/test/data/customer`);
     const data = await response.json();
@@ -465,13 +434,7 @@ test.describe('Month Boundary Edge Cases', () => {
     // Add crypto payment method (required for escrow payment to work)
     await page.click('text=Billing');
     await page.waitForURL('/billing', { timeout: 5000 });
-    await addCryptoPayment(page);
-
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
-    await page.locator('label:has-text("Agree to")').click();
-    await page.locator('button:has-text("Subscribe to Service")').click();
-    await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
+    await subscribeSealService(page, 'PRO');
 
     const response = await page.request.get(`${API_BASE}/test/data/customer`);
     const data = await response.json();
