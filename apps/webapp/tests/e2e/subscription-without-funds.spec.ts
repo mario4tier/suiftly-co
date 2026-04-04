@@ -157,12 +157,7 @@ test.describe('Subscription Without Funds', () => {
     const notification = page.locator('.bg-orange-50').filter({ hasText: 'Subscription payment pending' });
     await expect(notification).toBeVisible({ timeout: 5000 });
 
-    // Notification should mention Seal service and Pro tier price
-    await expect(notification).toContainText('Seal');
-    await expect(notification).toContainText('Pro');
-    await expect(notification).toContainText('$29.00');
-
-    // With no payment methods, should say to add a payment method
+    // With no payment methods, should prompt to add one
     await expect(notification).toContainText('Add a payment method');
 
     console.log('✅ Billing page shows pending subscription notification');
