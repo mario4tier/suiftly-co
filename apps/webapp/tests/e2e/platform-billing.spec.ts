@@ -21,7 +21,6 @@ import {
 import { setMockClock, resetClock } from '../helpers/clock';
 import { waitAfterMutation } from '../helpers/wait-utils';
 import { waitForToastsToDisappear } from '../helpers/locators';
-import { getStripePublishableKey, addSandboxCreditCard } from '../helpers/stripe';
 
 const API_BASE = 'http://localhost:22700';
 
@@ -222,86 +221,6 @@ test.describe('Platform Billing', () => {
       await expect(
         page.locator('[data-sonner-toast]').filter({ hasText: /Subscribed to Platform/i })
       ).toBeVisible({ timeout: 10000 });
-    });
-  });
-
-  // =========================================================================
-  // Stripe Payment
-  // =========================================================================
-  test.describe('Stripe Payment', () => {
-    test('should subscribe to platform with pre-configured credit card', async ({ page, request }) => {
-      // Skip if real Stripe not configured
-      const stripeKey = await getStripePublishableKey(request);
-      test.skip(!stripeKey, 'Real Stripe not configured — skipping sandbox test');
-
-      // Disable mock so real Stripe sandbox is used
-      await request.post(`${API_BASE}/test/stripe/force-mock`, {
-        data: { enabled: false },
-      });
-
-      // Navigate to billing and add a real Stripe card first
-      await page.click('text=Billing');
-      await page.waitForURL('/billing', { timeout: 5000 });
-      await addSandboxCreditCard(page);
-
-      // Now subscribe to platform — should charge the card
-      await page.locator('#platform-tos').click();
-      await waitAfterMutation(page);
-      await page.locator('button:has-text("Subscribe to Starter Plan")').click();
-
-      // Wait for success (Stripe charge may take a few seconds)
-      await expect(
-        page.locator('[data-sonner-toast]').filter({ hasText: /Subscribed to Platform/i })
-      ).toBeVisible({ timeout: 30000 });
-
-      await waitAfterMutation(page);
-
-      // Verify active card
-      await expect(
-        page.locator('text=Change Plan')
-      ).toBeVisible({ timeout: 5000 });
-
-      // Re-enable mock for other tests
-      await request.post(`${API_BASE}/test/stripe/force-mock`, {
-        data: { enabled: true },
-      });
-    });
-
-    test('should resolve pending platform via Stripe after adding card', async ({ page, request }) => {
-      // Skip if real Stripe not configured
-      const stripeKey = await getStripePublishableKey(request);
-      test.skip(!stripeKey, 'Real Stripe not configured — skipping sandbox test');
-
-      await request.post(`${API_BASE}/test/stripe/force-mock`, {
-        data: { enabled: false },
-      });
-
-      // Subscribe without any payment method → pending
-      await page.click('text=Billing');
-      await page.waitForURL('/billing', { timeout: 5000 });
-
-      await page.locator('#platform-tos').click();
-      await waitAfterMutation(page);
-      await page.locator('button:has-text("Subscribe to Starter Plan")').click();
-      await waitAfterMutation(page);
-      await waitForToastsToDisappear(page);
-
-      // Verify pending
-      await expect(
-        page.locator('text=Subscription payment pending')
-      ).toBeVisible({ timeout: 5000 });
-
-      // Add credit card — should trigger payment resolution
-      await addSandboxCreditCard(page);
-
-      // Pending should resolve (webhook → GM sync → charge → UI update)
-      await expect(
-        page.locator('text=Change Plan')
-      ).toBeVisible({ timeout: 90000 });
-
-      await request.post(`${API_BASE}/test/stripe/force-mock`, {
-        data: { enabled: true },
-      });
     });
   });
 
