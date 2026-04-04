@@ -269,8 +269,9 @@ test.describe('Platform Billing', () => {
       await changePlanDialog.locator('h4:has-text("STARTER")').click();
       // Confirmation appears as a separate AlertDialog overlay
       await page.locator('button:has-text("Schedule Downgrade")').click();
-      await page.waitForLoadState('networkidle', { timeout: 10000 });
       await waitAfterMutation(page);
+      // Wait for dialog to close (downgrade scheduled)
+      await expect(changePlanDialog).not.toBeVisible({ timeout: 10000 });
 
       // Step 5: Deposit enough for Starter ($1) but not Pro ($29)
       const retryDeposit = STARTER_PRICE + 5;
