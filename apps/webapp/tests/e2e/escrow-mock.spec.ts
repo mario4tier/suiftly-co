@@ -404,6 +404,14 @@ test.describe('Subscription Charge Architecture - Critical Business Logic', () =
   });
 
   test('idempotency: retry subscription returns existing service without double charge', async ({ page }) => {
+    // Verify escrow balance via API before subscribing (self-healing check)
+    const balanceBefore = await page.request.get(`${API_BASE}/test/wallet/balance`, {
+      params: { walletAddress: MOCK_WALLET_ADDRESS },
+    });
+    const balanceData = await balanceBefore.json();
+    expect(balanceData.found).toBe(true);
+    expect(balanceData.balanceUsd).toBe(100);
+
     // Navigate to Seal service
     await page.click('text=Seal');
     await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
@@ -416,26 +424,23 @@ test.describe('Subscription Charge Architecture - Critical Business Logic', () =
     // Wait for redirect to overview page (subscription successful)
     await page.waitForURL(/\/services\/seal\/overview/, { timeout: 10000 });
 
-    // Navigate to billing page to check balance
-    await page.click('text=Billing');
-    await page.waitForURL('/billing', { timeout: 5000 });
-
-    // Verify balance decreased from $100 to $71
-    // Look for balance in the Suiftly Escrow Account card
-    const balanceAfterFirst = await page.getByText('Balance', { exact: true }).locator('..').locator('text=/\\$\\d+\\.\\d{2}/').textContent();
-    expect(balanceAfterFirst).toBe('$71.00');
+    // Verify balance decreased via API (robust — no DOM scraping race)
+    const balanceAfterFirst = await page.request.get(`${API_BASE}/test/wallet/balance`, {
+      params: { walletAddress: MOCK_WALLET_ADDRESS },
+    });
+    const afterFirstData = await balanceAfterFirst.json();
+    expect(afterFirstData.balanceUsd).toBe(71);
 
     // Try to subscribe again by navigating back to Seal
     await page.click('text=Seal');
     await page.waitForURL(/\/services\/seal\/overview/, { timeout: 5000 }); // Should redirect to overview
 
-    // Navigate back to billing to verify balance
-    await page.click('text=Billing');
-    await page.waitForURL('/billing', { timeout: 5000 });
-
-    // Verify balance stayed $71 (no double charge)
-    const balanceAfterRetry = await page.getByText('Balance', { exact: true }).locator('..').locator('text=/\\$\\d+\\.\\d{2}/').textContent();
-    expect(balanceAfterRetry).toBe('$71.00');
+    // Verify balance stayed $71 (no double charge) — via API
+    const balanceAfterRetry = await page.request.get(`${API_BASE}/test/wallet/balance`, {
+      params: { walletAddress: MOCK_WALLET_ADDRESS },
+    });
+    const afterRetryData = await balanceAfterRetry.json();
+    expect(afterRetryData.balanceUsd).toBe(71);
 
     console.log('✅ Idempotent subscription - no double charge on retry');
   });
