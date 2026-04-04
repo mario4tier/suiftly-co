@@ -14,7 +14,7 @@
 
 import { test, expect } from '@playwright/test';
 import { waitAfterMutation, waitForCondition } from '../helpers/wait-utils';
-import { enableSealOnlyMode } from '../helpers/db';
+import { enableSealOnlyMode, subscribeSealService } from '../helpers/db';
 
 const MOCK_WALLET_ADDRESS = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const API_BASE = 'http://localhost:22700';
@@ -42,6 +42,7 @@ test.describe('Escrow Mock - Wallet Operations', () => {
     await waitAfterMutation(page);
 
     await page.waitForURL('/dashboard', { timeout: 10000 });
+    await page.waitForLoadState('networkidle');
   });
 
   test('can deposit funds via test API and see updated balance', async ({ page }) => {
@@ -218,6 +219,7 @@ test.describe('Escrow Mock - Service Subscription Scenarios', () => {
     await waitAfterMutation(page);
 
     await page.waitForURL('/dashboard', { timeout: 10000 });
+    await page.waitForLoadState('networkidle');
   });
 
   test('can subscribe to service with sufficient balance', async ({ page }) => {
@@ -388,11 +390,13 @@ test.describe('Subscription Charge Architecture - Critical Business Logic', () =
     // Clear cookies for clean auth state (prevents test pollution)
     await page.context().clearCookies();
 
-    // Authenticate
+    // Authenticate — wait for networkidle to ensure frontend config is loaded
+    // (config flags set above need to propagate to the frontend SPA)
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet 0")');
     await waitAfterMutation(page);
     await page.waitForURL('/dashboard', { timeout: 10000 });
+    await page.waitForLoadState('networkidle');
 
     // Deposit $100 to create mock wallet account (needed for charges to work)
     await page.request.post(`${API_BASE}/test/wallet/deposit`, {
@@ -404,22 +408,8 @@ test.describe('Subscription Charge Architecture - Critical Business Logic', () =
   });
 
   test('idempotency: retry subscription returns existing service without double charge', async ({ page }) => {
-    // Verify escrow balance via API before subscribing (self-healing check)
-    const balanceBefore = await page.request.get(`${API_BASE}/test/wallet/balance`, {
-      params: { walletAddress: MOCK_WALLET_ADDRESS },
-    });
-    const balanceData = await balanceBefore.json();
-    expect(balanceData.found).toBe(true);
-    expect(balanceData.balanceUsd).toBe(100);
-
-    // Navigate to Seal service
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
-
-    // Accept terms and subscribe with default PRO tier ($29)
-    await page.locator('label:has-text("Agree to")').click();
-    const subscribeButton = page.locator('button:has-text("Subscribe to Service")');
-    await subscribeButton.click();
+    // Subscribe to PRO ($29) using the helper (handles tier selection + TOS)
+    await subscribeSealService(page, 'PRO');
 
     // Wait for redirect to overview page (subscription successful)
     await page.waitForURL(/\/services\/seal\/overview/, { timeout: 10000 });
