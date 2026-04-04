@@ -46,6 +46,7 @@ test.describe('Tailwind Color System', () => {
 
     // Wait for redirect to /dashboard after auth
     await page.waitForURL('/dashboard', { timeout: 10000 });
+    await page.waitForLoadState('networkidle');
 
     // Stay on dashboard to test header colors (wallet button exists here)
     // Seal service page is used only for specific tests that need onboarding form

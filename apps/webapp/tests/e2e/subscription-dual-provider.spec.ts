@@ -60,6 +60,7 @@ for (const provider of ['escrow', 'stripe'] as const) {
       await page.goto('/');
       await page.click('button:has-text("Mock Wallet 0")');
       await page.waitForURL('/dashboard', { timeout: 10000 });
+    await page.waitForLoadState('networkidle');
       await waitAfterMutation(page);
     });
 

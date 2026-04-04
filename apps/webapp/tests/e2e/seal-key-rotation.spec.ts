@@ -142,6 +142,7 @@ test.describe('Seal Key Rotation', () => {
     await page.click('button:has-text("Mock Wallet 0")');
     await waitAfterMutation(page);
     await page.waitForURL('/dashboard', { timeout: 10000 });
+    await page.waitForLoadState('networkidle');
     await ensureTestBalance(page.request, 1000, { spendingLimitUsd: 250 });
   });
 

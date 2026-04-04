@@ -29,6 +29,7 @@ test.describe('Billing Operations', () => {
     await waitAfterMutation(page);
 
     await page.waitForURL('/dashboard', { timeout: 10000 });
+    await page.waitForLoadState('networkidle');
 
     // Navigate to billing page
     await page.click('text=Billing');
@@ -356,6 +357,7 @@ test.describe('Billing Validation Edge Cases', () => {
     await page.click('button:has-text("Mock Wallet 0")');
     await waitAfterMutation(page);
     await page.waitForURL('/dashboard', { timeout: 10000 });
+    await page.waitForLoadState('networkidle');
 
     // Now set $100 balance (customer exists after auth)
     await ensureTestBalance(page.request, 100);

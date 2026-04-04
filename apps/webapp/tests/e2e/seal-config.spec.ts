@@ -26,6 +26,7 @@ test.describe('Seal Service Onboarding Form', () => {
     // Wait for authentication to complete (smart wait - returns as soon as auth complete)
     await waitAfterMutation(page);
     await page.waitForURL('/dashboard', { timeout: 10000 });
+    await page.waitForLoadState('networkidle');
 
     // Navigate to seal service page (should show onboarding form)
     await page.click('text=Seal');

@@ -30,6 +30,7 @@ test.describe('Subscription Without Funds', () => {
 
     // Wait for redirect to /dashboard after auth
     await page.waitForURL('/dashboard', { timeout: 10000 });
+    await page.waitForLoadState('networkidle');
 
     // Navigate to seal service page
     await page.click('text=Seal');

@@ -58,6 +58,7 @@ test.describe('FAILED Invoice Recalculation on Tier Change', () => {
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
+    await page.waitForLoadState('networkidle');
 
     // Add crypto payment method (required for escrow to work)
     await page.click('text=Billing');

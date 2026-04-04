@@ -50,6 +50,7 @@ test.describe('Seal IP Allowlist - Validation & Save/Cancel', () => {
     await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForTimeout(500);
     await page.waitForURL('/dashboard', { timeout: 10000 });
+    await page.waitForLoadState('networkidle');
 
     // Subscribe to PRO tier
     await page.click('text=Seal');
@@ -441,6 +442,7 @@ test.describe('Seal IP Allowlist - Persistence & Reload', () => {
     await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForTimeout(500);
     await page.waitForURL('/dashboard', { timeout: 10000 });
+    await page.waitForLoadState('networkidle');
 
     await page.click('text=Seal');
     await page.waitForURL(/\/services\/seal/, { timeout: 5000 });

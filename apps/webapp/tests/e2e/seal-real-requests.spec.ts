@@ -438,6 +438,7 @@ test.describe('Real Seal Requests', () => {
     await page.click('button:has-text("Mock Wallet 0")');
     await waitAfterMutation(page);
     await page.waitForURL('/dashboard', { timeout: 10000 });
+    await page.waitForLoadState('networkidle');
 
     // Ensure customer has balance for subscription
     await ensureTestBalance(page.request, 1000, { spendingLimitUsd: 250 });
@@ -953,6 +954,7 @@ test.describe('Real Seal Requests - IP Allowlist', () => {
     await page.click('button:has-text("Mock Wallet 0")');
     await waitAfterMutation(page);
     await page.waitForURL('/dashboard', { timeout: 10000 });
+    await page.waitForLoadState('networkidle');
 
     // Ensure customer has balance for subscription
     await ensureTestBalance(page.request, 1000, { spendingLimitUsd: 250 });
@@ -1366,6 +1368,7 @@ test.describe('Real Seal Requests - Log Ingestion', () => {
     await page.click('button:has-text("Mock Wallet 0")');
     await waitAfterMutation(page);
     await page.waitForURL('/dashboard', { timeout: 10000 });
+    await page.waitForLoadState('networkidle');
 
     // Ensure customer has balance for subscription
     await ensureTestBalance(page.request, 1000, { spendingLimitUsd: 250 });

@@ -46,6 +46,7 @@ test.describe('Sync Status - Updating Indicator', () => {
     await page.click('button:has-text("Mock Wallet 0")');
     await waitAfterMutation(page);
     await page.waitForURL('/dashboard', { timeout: 10000 });
+    await page.waitForLoadState('networkidle');
 
     // Step 5: Ensure customer has funds for subscription
     await ensureTestBalance(request, 100, { spendingLimitUsd: 250 });

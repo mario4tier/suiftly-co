@@ -380,6 +380,9 @@ export async function authenticateWithMockWallet(page: Page): Promise<void> {
   await page.click('button:has-text("Mock Wallet 0")');
   // Wait for redirect away from login page (auth complete)
   await expect(page).not.toHaveURL(/\/login/, { timeout: 10000 });
+  // Wait for frontend config fetch to complete (config flags set before auth
+  // need to propagate from the API to the SPA's in-memory config)
+  await page.waitForLoadState('networkidle');
 }
 
 /**

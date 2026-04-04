@@ -18,6 +18,7 @@ test.describe('API Key Creation on Subscription', () => {
 
     // Wait for redirect to dashboard after auth
     await page.waitForURL('/dashboard', { timeout: 10000 });
+    await page.waitForLoadState('networkidle');
 
     // Wait for authentication toast to disappear
     await page.waitForTimeout(3000);

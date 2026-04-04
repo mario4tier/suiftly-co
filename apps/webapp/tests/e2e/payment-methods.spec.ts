@@ -26,6 +26,7 @@ test.describe('Payment Methods', () => {
     await page.click('button:has-text("Mock Wallet 0")');
     await waitAfterMutation(page);
     await page.waitForURL('/dashboard', { timeout: 10000 });
+    await page.waitForLoadState('networkidle');
 
     // Navigate to billing
     await page.click('text=Billing');

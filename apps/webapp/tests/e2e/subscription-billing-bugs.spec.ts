@@ -43,6 +43,7 @@ test.describe('Subscription Billing - Bug Detection', () => {
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
+    await page.waitForLoadState('networkidle');
 
     // Add crypto payment method (required for escrow payment to work)
     await page.click('text=Billing');
@@ -122,6 +123,7 @@ test.describe('Subscription Billing - Bug Detection', () => {
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
+    await page.waitForLoadState('networkidle');
 
     // Add crypto payment method (required for escrow payment to work)
     await page.click('text=Billing');
@@ -192,6 +194,7 @@ test.describe('Month Boundary Edge Cases', () => {
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
+    await page.waitForLoadState('networkidle');
 
     // Add crypto payment method (required for escrow payment to work)
     await page.click('text=Billing');
@@ -245,6 +248,7 @@ test.describe('Month Boundary Edge Cases', () => {
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
+    await page.waitForLoadState('networkidle');
 
     // Add crypto payment method (required for escrow payment to work)
     await page.click('text=Billing');
@@ -296,6 +300,7 @@ test.describe('Month Boundary Edge Cases', () => {
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
+    await page.waitForLoadState('networkidle');
 
     // Add crypto payment method (required for escrow payment to work)
     await page.click('text=Billing');
@@ -349,6 +354,7 @@ test.describe('Month Boundary Edge Cases', () => {
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
+    await page.waitForLoadState('networkidle');
 
     // Add crypto payment method (required for escrow payment to work)
     await page.click('text=Billing');
@@ -402,6 +408,7 @@ test.describe('Month Boundary Edge Cases', () => {
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
+    await page.waitForLoadState('networkidle');
 
     // Add crypto payment method (required for escrow payment to work)
     await page.click('text=Billing');
@@ -453,6 +460,7 @@ test.describe('Month Boundary Edge Cases', () => {
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
+    await page.waitForLoadState('networkidle');
 
     // Add crypto payment method (required for escrow payment to work)
     await page.click('text=Billing');
@@ -513,6 +521,7 @@ test.describe('Scheduled Change Date Display', () => {
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
+    await page.waitForLoadState('networkidle');
 
     // Add crypto payment method (required for escrow payment to work)
     await page.click('text=Billing');
@@ -591,6 +600,7 @@ test.describe('Scheduled Change Date Display', () => {
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
+    await page.waitForLoadState('networkidle');
 
     // Add crypto payment method (required for escrow payment to work)
     await page.click('text=Billing');

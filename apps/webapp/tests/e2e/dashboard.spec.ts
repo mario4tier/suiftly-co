@@ -18,6 +18,7 @@ test.describe('Dashboard Navigation', () => {
 
     // Wait for authentication and redirect to /dashboard
     await page.waitForURL('/dashboard', { timeout: 10000 });
+    await page.waitForLoadState('networkidle');
   });
 
   test('redirects to dashboard after authentication', async ({ page }) => {

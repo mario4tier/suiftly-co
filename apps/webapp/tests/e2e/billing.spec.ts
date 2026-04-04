@@ -24,6 +24,7 @@ test.describe('Billing Page - No Payment Methods', () => {
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
+    await page.waitForLoadState('networkidle');
 
     await page.click('text=Billing');
     await page.waitForURL('/billing', { timeout: 5000 });
@@ -53,6 +54,7 @@ test.describe('Billing Page - No Payment Methods', () => {
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
+    await page.waitForLoadState('networkidle');
 
     await page.click('text=Billing');
     await page.waitForURL('/billing', { timeout: 5000 });
@@ -94,6 +96,7 @@ test.describe('Billing Page', () => {
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet 0")');
     await page.waitForURL('/dashboard', { timeout: 10000 });
+    await page.waitForLoadState('networkidle');
   });
 
   test('shows escrow account with balance after deposit', async ({ page }) => {

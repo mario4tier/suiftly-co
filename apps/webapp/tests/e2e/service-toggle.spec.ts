@@ -47,6 +47,7 @@ test.describe('Service Toggle - Enable/Disable', () => {
     await page.click('button:has-text("Mock Wallet 0")');
     await waitAfterMutation(page);
     await page.waitForURL('/dashboard', { timeout: 10000 });
+    await page.waitForLoadState('networkidle');
 
     // Step 6: Subscribe to seal service to create test service instance
     await page.click('text=Seal');

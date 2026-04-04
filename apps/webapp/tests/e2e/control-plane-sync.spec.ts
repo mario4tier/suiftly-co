@@ -152,6 +152,7 @@ test.describe('Control Plane Sync Flow', () => {
     await page.click('button:has-text("Mock Wallet 0")');
     await waitAfterMutation(page);
     await page.waitForURL('/dashboard', { timeout: 10000 });
+    await page.waitForLoadState('networkidle');
 
     // Ensure customer has escrow account with $1000 balance for subscription payment
     await ensureTestBalance(page.request, 1000, { spendingLimitUsd: 250 });
