@@ -9,7 +9,7 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { resetCustomer, addCryptoPayment, enableSealOnlyMode, subscribeSealService } from '../helpers/db';
+import { resetCustomer, enableSealOnlyMode, subscribeSealService } from '../helpers/db';
 import { setMockClock, resetClock } from '../helpers/clock';
 
 const MOCK_WALLET_ADDRESS = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
@@ -45,23 +45,14 @@ test.describe('Subscription Billing - Bug Detection', () => {
     await page.waitForURL('/dashboard', { timeout: 10000 });
     await page.waitForLoadState('networkidle');
 
-    // Add crypto payment method (required for escrow payment to work)
-    await page.click('text=Billing');
-    await page.waitForURL('/billing', { timeout: 5000 });
-    await addCryptoPayment(page);
-
-    // Subscribe to Seal Pro
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
-    await page.locator('label:has-text("Agree to")').click();
-    await page.locator('button:has-text("Subscribe to Service")').click();
-    await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
+    // Subscribe to Seal Pro (deposit auto-adds escrow payment method)
+    await subscribeSealService(page, 'PRO');
 
     // Navigate to billing page and reload for fresh draft data
     await page.click('text=Billing');
     await page.waitForURL('/billing', { timeout: 5000 });
     await page.reload();
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     // Expand Next Scheduled Payment/Refund
     // Use text selector for regex pattern
@@ -125,17 +116,8 @@ test.describe('Subscription Billing - Bug Detection', () => {
     await page.waitForURL('/dashboard', { timeout: 10000 });
     await page.waitForLoadState('networkidle');
 
-    // Add crypto payment method (required for escrow payment to work)
-    await page.click('text=Billing');
-    await page.waitForURL('/billing', { timeout: 5000 });
-    await addCryptoPayment(page);
-
-    // Subscribe to Seal Pro
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
-    await page.locator('label:has-text("Agree to")').click();
-    await page.locator('button:has-text("Subscribe to Service")').click();
-    await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
+    // Subscribe to Seal Pro (deposit auto-adds escrow payment method)
+    await subscribeSealService(page, 'PRO');
 
     // Check database for reconciliation credit via API
     const response = await page.request.get(`${API_BASE}/test/data/customer`);
@@ -486,20 +468,8 @@ test.describe('Scheduled Change Date Display', () => {
     await page.waitForURL('/dashboard', { timeout: 10000 });
     await page.waitForLoadState('networkidle');
 
-    // Add crypto payment method (required for escrow payment to work)
-    await page.click('text=Billing');
-    await page.waitForURL('/billing', { timeout: 5000 });
-    await addCryptoPayment(page);
-
-    // Subscribe to Enterprise tier first
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
-
-    // Select Enterprise tier and subscribe
-    await page.getByRole('heading', { name: 'ENTERPRISE' }).click();
-    await page.locator('label:has-text("Agree to")').click();
-    await page.locator('button:has-text("Subscribe to Service")').click();
-    await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
+    // Subscribe to Seal Enterprise (deposit auto-adds escrow payment method)
+    await subscribeSealService(page, 'ENTERPRISE');
 
     // Navigate to overview to schedule downgrade
     await page.click('text=Overview');
@@ -565,17 +535,8 @@ test.describe('Scheduled Change Date Display', () => {
     await page.waitForURL('/dashboard', { timeout: 10000 });
     await page.waitForLoadState('networkidle');
 
-    // Add crypto payment method (required for escrow payment to work)
-    await page.click('text=Billing');
-    await page.waitForURL('/billing', { timeout: 5000 });
-    await addCryptoPayment(page);
-
-    // Subscribe to Pro tier
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
-    await page.locator('label:has-text("Agree to")').click();
-    await page.locator('button:has-text("Subscribe to Service")').click();
-    await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
+    // Subscribe to Seal Pro (deposit auto-adds escrow payment method)
+    await subscribeSealService(page, 'PRO');
 
     // Navigate to overview to schedule cancellation
     await page.click('text=Overview');
