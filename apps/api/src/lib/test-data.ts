@@ -227,6 +227,8 @@ export async function resetCustomerTestData(options: TestDataResetOptions = {}) 
         await tx.delete(mockSuiTransactions).where(eq(mockSuiTransactions.customerId, customerId));
 
         // 7. Clear mock configs (reset delays and failure injections)
+        // NOTE: force-mock is NOT reset here — it's test-level infrastructure
+        // managed by each test's beforeEach/afterEach, not customer data.
         suiMockConfig.clearConfig();
         stripeMockConfig.clearConfig();
         mockStripeService.reset();
