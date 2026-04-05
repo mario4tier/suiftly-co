@@ -54,15 +54,25 @@ test.describe('Platform-Only Mode', () => {
       ).toBeVisible();
     });
 
-    test('should block seal access when platform not subscribed', async ({ page }) => {
-      // Navigate to Seal service
+    test('should NOT show seal onboarding form even without platform subscription', async ({ page }) => {
+      // Navigate to Seal service (no platform, no seal subscription)
       await page.click('text=Seal');
       await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
 
-      // Should show platform-required banner/gate
-      // The seal page renders a blue banner when platform is required but missing
+      // Should show platform-required banner
       await expect(
         page.locator('text=/platform subscription/i')
+      ).toBeVisible({ timeout: 5000 });
+
+      // But should NOT show the seal onboarding/subscription form
+      // (freq_seal_sub=0 means no per-service subscription needed)
+      await expect(
+        page.locator('button:has-text("Subscribe to Service")')
+      ).not.toBeVisible({ timeout: 3000 });
+
+      // Should show the interactive form (service is usage-based, no subscription step)
+      await expect(
+        page.locator('text=Change Plan')
       ).toBeVisible({ timeout: 5000 });
     });
 
@@ -93,6 +103,23 @@ test.describe('Platform-Only Mode', () => {
       await ensureTestBalance(request, 100);
       await subscribePlatformService(page, 'STARTER');
       await waitForToastsToDisappear(page);
+    });
+
+    test('should NOT show seal onboarding form after platform subscription', async ({ page }) => {
+      // Navigate to Seal
+      await page.click('text=Seal');
+      await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
+
+      // The onboarding form (tier selection + "Subscribe to Service") must NOT appear.
+      // In platform-only mode (freq_seal_sub=0), seal is usage-based only.
+      await expect(
+        page.locator('button:has-text("Subscribe to Service")')
+      ).not.toBeVisible({ timeout: 5000 });
+
+      // Should show the interactive form instead
+      await expect(
+        page.locator('text=Change Plan')
+      ).toBeVisible({ timeout: 5000 });
     });
 
     test('should subscribe to seal service without billing charge', async ({ page }) => {

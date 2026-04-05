@@ -16,7 +16,7 @@ import { AlertCircle, PauseCircle, AlertTriangle, Loader2, Clock } from 'lucide-
 import { type ServiceState, type ServiceTier } from '@suiftly/shared/constants';
 import { trpc } from '../../lib/trpc';
 import { toast } from 'sonner';
-import { freq_platform_sub } from '../../lib/config';
+import { freq_platform_sub, freq_seal_sub } from '../../lib/config';
 import { SubscriptionStatusBanners } from '../../components/billing/SubscriptionStatusBanners';
 import { useServicesStatus } from '../../hooks/useServicesStatus';
 import { ServiceStatusIndicator } from '../../components/ui/service-status-indicator';
@@ -98,8 +98,11 @@ function SealOverviewPage() {
     && platformService.state === 'enabled';
   const blockedByPlatform = needsPlatform && !hasPlatform;
 
-  // Determine which form to show based on service state
-  const showOnboardingForm = serviceState === 'not_provisioned';
+  // Determine which form to show based on service state and config.
+  // When per-service subscription is disabled (freq_seal_sub=0), skip onboarding
+  // entirely — seal is usage-based only, no subscription step needed.
+  const requiresSealSub = freq_seal_sub === 1;
+  const showOnboardingForm = requiresSealSub && serviceState === 'not_provisioned';
   const showInteractiveForm = !showOnboardingForm;
 
   const getStatusBanner = () => {
