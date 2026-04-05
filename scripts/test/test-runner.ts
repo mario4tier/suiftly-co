@@ -637,6 +637,38 @@ async function main() {
     }
   }
 
+  // Clean slate: reset DB to prevent contamination from prior test runs.
+  // E2E tests change config_global and leave customer data that can cause
+  // unit test failures if run immediately after.
+  section('Resetting database for clean test run...');
+  try {
+    const resetResponse = await fetch(`http://localhost:${PORT.SUDOB}/api/test/reset-all`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+      signal: AbortSignal.timeout(60000),
+    });
+    if (resetResponse.ok) {
+      success('Database reset complete');
+    } else {
+      warning('Database reset returned non-OK status — continuing anyway');
+    }
+  } catch {
+    warning('Database reset failed or timed out — continuing anyway');
+  }
+
+  // Wait for GM to recover after reset-all (it stops/starts GM)
+  section('Waiting for GM to be ready after reset...');
+  const gmDeadline = Date.now() + 30000;
+  while (Date.now() < gmDeadline) {
+    if (await checkServerRunning('http://localhost:22600/health')) break;
+    await new Promise(r => setTimeout(r, 1000));
+  }
+  if (!await checkServerRunning('http://localhost:22600/health')) {
+    error('GM not ready after reset — starting dev servers');
+    await startDevServers();
+  }
+
   // 1. Database Unit Tests (Vitest) - billing/stats pure unit tests
   let result = await runCommand(
     'Database Unit Tests',
