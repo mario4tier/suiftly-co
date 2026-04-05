@@ -614,15 +614,21 @@ async function main() {
 
   const results: TestResult[] = [];
 
-  // Check if dev servers are running
+  // Check if dev servers are running (GM + API + Webapp)
   section('Checking servers...');
+  const gmRunning = await checkServerRunning('http://localhost:22600/health');
   const apiRunning = await checkServerRunning('http://localhost:22700/health');
   const webappRunning = await checkServerRunning('http://localhost:22710');
 
-  if (apiRunning && webappRunning) {
-    success('Dev servers already running');
+  if (gmRunning && apiRunning && webappRunning) {
+    success('Dev servers already running (GM :22600, API :22700)');
   } else {
-    warning('Dev servers not running - will start them automatically');
+    const missing = [
+      !gmRunning && 'GM :22600',
+      !apiRunning && 'API :22700',
+      !webappRunning && 'Webapp :22710',
+    ].filter(Boolean).join(', ');
+    warning(`Dev servers not running (${missing}) - will start them automatically`);
     try {
       await startDevServers();
     } catch (err: any) {
