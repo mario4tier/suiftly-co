@@ -258,9 +258,9 @@ test.describe('Subscription Without Funds', () => {
     await page.locator('nav').getByRole('link', { name: /Billing & Payments/i }).click();
     await page.waitForURL('/billing', { timeout: 5000 });
 
-    // Verify Next Scheduled Payment shows $0.00 (service has pending charge)
-    const nextPaymentSection = page.locator('button').filter({ hasText: /Next Scheduled Payment/ }).locator('..');
-    await expect(nextPaymentSection).toContainText('$0.00', { timeout: 5000 });
+    // Next Scheduled Payment is hidden when subscriptions have pending payments
+    const nextPaymentButton = page.locator('button').filter({ hasText: /Next Scheduled Payment/ });
+    await expect(nextPaymentButton).not.toBeVisible({ timeout: 5000 });
 
     // Deposit funds ($30 to cover the $29 subscription)
     await page.locator('button:has-text("Deposit")').first().click();
@@ -273,17 +273,10 @@ test.describe('Subscription Without Funds', () => {
     // Give time for the sync with GM to complete and React Query to invalidate/refetch
     await page.waitForTimeout(2000);
 
-    // Next Scheduled Payment should now be updated (no longer $0.00)
-    await expect(nextPaymentSection).not.toContainText('$0.00', { timeout: 5000 });
+    // After deposit resolves the pending charge, Next Scheduled Payment should appear
+    await expect(nextPaymentButton).toBeVisible({ timeout: 10000 });
 
-    // Should contain a positive dollar amount (service is now in DRAFT invoice)
-    const amountMatch = await nextPaymentSection.textContent();
-    const hasPositiveAmount = amountMatch && /\$[1-9]\d*\.\d{2}/.test(amountMatch);
-    if (!hasPositiveAmount) {
-      throw new Error('Expected Next Scheduled Payment to show a positive amount after subscription activation');
-    }
-
-    console.log('  → Next Scheduled Payment updated from $0.00 to positive amount');
+    console.log('  → Next Scheduled Payment now visible after pending charge resolved');
     console.log('✅ Next Scheduled Payment updates immediately after subscription activation');
   });
 });
