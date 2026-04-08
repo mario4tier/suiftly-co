@@ -269,9 +269,8 @@ describe('Invoice Validation', () => {
       await db.insert(serviceInstances).values({
         customerId: testCustomerId,
         serviceType: 'seal',
-        tier: 'pro',
         isUserEnabled: true,
-        config: { tier: 'pro' },
+        config: {},
       });
 
       // Create DRAFT with wrong amount

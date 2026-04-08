@@ -5,34 +5,43 @@
  * and service gate behavior (retry pending invoices on enable/key creation).
  *
  * Tests use /test/stripe/config to inject failures and control mock behavior.
+ * Platform subscription is the billing trigger (starter = $1/month).
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { db } from '@suiftly/database';
-import { serviceInstances, billingRecords } from '@suiftly/database/schema';
-import { eq, and } from 'drizzle-orm';
+import { billingRecords, customers } from '@suiftly/database/schema';
+import { eq } from 'drizzle-orm';
 import {
   setClockTime,
   resetClock,
   trpcMutation,
-  trpcQuery,
   restCall,
   resetTestData,
   ensureTestBalance,
   addStripePaymentMethod,
-  subscribeAndEnable,
   reconcilePendingPayments,
 } from './helpers/http.js';
-import { TEST_WALLET } from './helpers/auth.js';
-import { expectNoNotifications } from './helpers/notifications.js';
-import { setupBillingTest } from './helpers/setup.js';
+import { login, TEST_WALLET } from './helpers/auth.js';
+import { clearNotifications, expectNoNotifications } from './helpers/notifications.js';
 
 describe('API: Provider Chain & Service Gates', () => {
   let accessToken: string;
   let customerId: number;
 
   beforeEach(async () => {
-    ({ accessToken, customerId } = await setupBillingTest({ balance: 2 }));
+    await resetClock();
+    await resetTestData(TEST_WALLET);
+
+    accessToken = await login(TEST_WALLET);
+
+    const customer = await db.query.customers.findFirst({
+      where: eq(customers.walletAddress, TEST_WALLET),
+    });
+    if (!customer) throw new Error('Test customer not found');
+    customerId = customer.customerId;
+
+    await clearNotifications(customerId);
 
     // Force mock Stripe service (even if STRIPE_SECRET_KEY is configured)
     await restCall('POST', '/test/stripe/force-mock', { enabled: true });
@@ -62,10 +71,11 @@ describe('API: Provider Chain & Service Gates', () => {
         accessToken
       );
 
-      // Subscribe — escrow should handle the charge
+      // Accept TOS and subscribe to platform — escrow should handle the charge
+      await trpcMutation<any>('billing.acceptTos', {}, accessToken);
       const subscribeResult = await trpcMutation<any>(
         'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
+        { serviceType: 'platform', tier: 'starter' },
         accessToken
       );
 
@@ -80,23 +90,21 @@ describe('API: Provider Chain & Service Gates', () => {
       await setClockTime('2025-01-05T00:00:00Z');
 
       // No payment methods, no escrow account
+      await trpcMutation<any>('billing.acceptTos', {}, accessToken);
       const subscribeResult = await trpcMutation<any>(
         'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
+        { serviceType: 'platform', tier: 'starter' },
         accessToken
       );
 
       expect(subscribeResult.result?.data).toBeDefined();
       expect(subscribeResult.result?.data.paymentPending).toBe(true);
 
-      // Verify service has pending invoice
-      const service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal')
-        ),
+      // Verify customer has pending invoice
+      const customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, customerId),
       });
-      expect(service?.subPendingInvoiceId).not.toBeNull();
+      expect(customer?.pendingInvoiceId).not.toBeNull();
 
       await expectNoNotifications(customerId);
     });
@@ -104,8 +112,8 @@ describe('API: Provider Chain & Service Gates', () => {
     it('should fallback to stripe when escrow has insufficient funds', async () => {
       await setClockTime('2025-01-05T00:00:00Z');
 
-      // Create escrow with $1 (insufficient for $9 starter)
-      await ensureTestBalance(1, { walletAddress: TEST_WALLET });
+      // Create escrow with $0 (insufficient for $1 starter)
+      await ensureTestBalance(0, { walletAddress: TEST_WALLET });
 
       // Add escrow as priority 1
       await trpcMutation<any>(
@@ -114,13 +122,14 @@ describe('API: Provider Chain & Service Gates', () => {
         accessToken
       );
 
-      // Add stripe as priority 2 (complete-setup creates the row)
+      // Add stripe as priority 2
       await addStripePaymentMethod(accessToken);
 
       // Subscribe — escrow should fail, stripe should succeed
+      await trpcMutation<any>('billing.acceptTos', {}, accessToken);
       const subscribeResult = await trpcMutation<any>(
         'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
+        { serviceType: 'platform', tier: 'starter' },
         accessToken
       );
 
@@ -142,9 +151,10 @@ describe('API: Provider Chain & Service Gates', () => {
       await addStripePaymentMethod(accessToken);
 
       // Subscribe — Stripe charge requires 3DS action, so payment should be pending
+      await trpcMutation<any>('billing.acceptTos', {}, accessToken);
       const subscribeResult = await trpcMutation<any>(
         'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
+        { serviceType: 'platform', tier: 'starter' },
         accessToken
       );
 
@@ -165,16 +175,17 @@ describe('API: Provider Chain & Service Gates', () => {
   });
 
   // =========================================================================
-  // Service Gate (toggleService)
+  // Service Gate (toggleService on platform with pending invoice)
   // =========================================================================
   describe('Service Gate - toggleService', () => {
     it('should retry pending invoice on enable after deposit succeeds', async () => {
       await setClockTime('2025-01-05T00:00:00Z');
 
-      // Subscribe without funds → pending
+      // Subscribe platform without funds → pending
+      await trpcMutation<any>('billing.acceptTos', {}, accessToken);
       const subscribeResult = await trpcMutation<any>(
         'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
+        { serviceType: 'platform', tier: 'starter' },
         accessToken
       );
       expect(subscribeResult.result?.data?.paymentPending).toBe(true);
@@ -189,47 +200,43 @@ describe('API: Provider Chain & Service Gates', () => {
         accessToken
       );
 
-      // Try to enable — should retry payment and succeed
-      const toggleResult = await trpcMutation<any>(
-        'services.toggleService',
-        { serviceType: 'seal', enabled: true },
-        accessToken
-      );
+      // Trigger reconciliation via deposit flow (same as GM would do)
+      await reconcilePendingPayments(customerId);
 
-      expect(toggleResult.result?.data).toBeDefined();
-      expect(toggleResult.result?.data.isUserEnabled).toBe(true);
-
-      // Verify pending invoice was cleared
-      const service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal')
-        ),
+      // Verify pending invoice was cleared on customer
+      const customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, customerId),
       });
-      expect(service?.subPendingInvoiceId).toBeNull();
+      expect(customer?.pendingInvoiceId).toBeNull();
+      expect(customer?.paidOnce).toBe(true);
 
       await expectNoNotifications(customerId);
     });
 
-    it('should fail when no payment methods configured', async () => {
+    it('should fail reconciliation when no payment methods configured', async () => {
       await setClockTime('2025-01-05T00:00:00Z');
 
-      // Subscribe without funds → pending
+      // Subscribe platform without funds and no payment method → pending
+      await trpcMutation<any>('billing.acceptTos', {}, accessToken);
       await trpcMutation<any>(
         'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
+        { serviceType: 'platform', tier: 'starter' },
         accessToken
       );
 
-      // Try to enable without any payment methods
-      const toggleResult = await trpcMutation<any>(
-        'services.toggleService',
-        { serviceType: 'seal', enabled: true },
-        accessToken
-      );
+      // Note: do NOT call ensureTestBalance here — it auto-adds escrow as a
+      // payment method (server-side test convenience), which would break this test.
+      // The test verifies that reconciliation fails when there is NO payment method;
+      // whether the customer has escrow funds is irrelevant if no method row exists.
 
-      expect(toggleResult.error).toBeDefined();
-      expect(toggleResult.error.data?.code).toBe('PRECONDITION_FAILED');
+      // Reconcile — should fail since no payment method configured
+      const result = await reconcilePendingPayments(customerId);
+      // The reconciliation runs but finds no payment methods
+      // Customer should still have pending invoice
+      const customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, customerId),
+      });
+      expect(customer?.pendingInvoiceId).not.toBeNull();
 
       await expectNoNotifications(customerId);
     });

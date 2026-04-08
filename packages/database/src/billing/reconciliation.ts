@@ -155,7 +155,7 @@ export async function reconcileStuckInvoices(
               }
             }
 
-            // Finalize: clear subPendingInvoiceId, set paidOnce, clear grace
+            // Finalize: clear pendingInvoiceId, set paidOnce, clear grace
             // period, issue reconciliation credit, recalculate DRAFT.
             await finalizeSuccessfulPayment(tx, invoice.customerId, invoice.id, clock);
 

@@ -102,11 +102,10 @@ export const SERVICE_STATE = {
   SUSPENDED_NO_PAYMENT: 'suspended_no_payment',
 } as const satisfies Record<string, ServiceState>;
 
-// Service Tiers
+// Service Tiers (platform only: starter and pro)
 export const SERVICE_TIER = {
   STARTER: 'starter',
   PRO: 'pro',
-  ENTERPRISE: 'enterprise',
 } as const satisfies Record<string, ServiceTier>;
 
 // Transaction Types
@@ -134,7 +133,6 @@ export const INVOICE_LINE_ITEM_TYPE = {
   // Tier subscriptions (per service, per tier)
   SUBSCRIPTION_STARTER: 'subscription_starter',
   SUBSCRIPTION_PRO: 'subscription_pro',
-  SUBSCRIPTION_ENTERPRISE: 'subscription_enterprise',
 
   // Tier upgrade (pro-rated charge for remaining days in month)
   TIER_UPGRADE: 'tier_upgrade',
@@ -157,7 +155,6 @@ export const INVOICE_LINE_ITEM_TYPE = {
 export const TIER_TO_SUBSCRIPTION_ITEM = {
   [SERVICE_TIER.STARTER]: INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_STARTER,
   [SERVICE_TIER.PRO]: INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_PRO,
-  [SERVICE_TIER.ENTERPRISE]: INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_ENTERPRISE,
 } as const satisfies Record<ServiceTier, InvoiceLineItemType>;
 
 // Field Length Limits (matches database VARCHAR constraints)
@@ -179,7 +176,7 @@ export const FIELD_LIMITS = {
   // Service identifiers
   SERVICE_TYPE: 20,         // 'seal', 'grpc', 'graphql'
   SERVICE_STATE: 30,        // 'not_provisioned', 'enabled', 'suspended_*', etc.
-  SERVICE_TIER: 20,         // 'starter', 'pro', 'enterprise'
+  SERVICE_TIER: 20,         // 'starter', 'pro'
 
   // Status fields
   CUSTOMER_STATUS: 20,      // 'active', 'suspended', 'closed'

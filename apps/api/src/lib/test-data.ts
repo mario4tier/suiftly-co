@@ -219,7 +219,9 @@ export async function resetCustomerTestData(options: TestDataResetOptions = {}) 
         // Original tables
         await tx.delete(ledgerEntries).where(eq(ledgerEntries.customerId, customerId));
         await tx.delete(refreshTokens).where(eq(refreshTokens.customerId, customerId));
-        await tx.delete(billingRecords).where(eq(billingRecords.customerId, customerId)); // Now safe to delete
+        // Clear customer FK to billing_records before deleting them
+        await tx.update(customers).set({ pendingInvoiceId: null }).where(eq(customers.customerId, customerId));
+        await tx.delete(billingRecords).where(eq(billingRecords.customerId, customerId));
         await tx.delete(escrowTransactions).where(eq(escrowTransactions.customerId, customerId));
         await tx.delete(usageRecords).where(eq(usageRecords.customerId, customerId));
         await tx.delete(haproxyRawLogs).where(eq(haproxyRawLogs.customerId, customerId));
@@ -246,6 +248,13 @@ export async function resetCustomerTestData(options: TestDataResetOptions = {}) 
             spendingLimitUsdCents: spendingLimitUsdCents,
             currentPeriodChargedUsdCents: 0,
             stripeCustomerId: null,
+            // Clear platform subscription fields
+            platformTier: null,
+            pendingInvoiceId: null,
+            scheduledPlatformTier: null,
+            scheduledPlatformTierEffectiveDate: null,
+            platformCancellationScheduledFor: null,
+            platformCancellationEffectiveAt: null,
             ...(clearEscrowAccount ? { escrowContractId: null } : {}),
           })
           .where(eq(customers.customerId, customerId));
@@ -352,14 +361,14 @@ export async function getCustomerTestData(walletAddress: string = MOCK_WALLET_AD
       balanceUsd: (customer.currentBalanceUsdCents ?? 0) / 100,
       spendingLimitUsd: (customer.spendingLimitUsdCents ?? 0) / 100,
       currentPeriodChargedUsd: (customer.currentPeriodChargedUsdCents ?? 0) / 100,
+      platformTier: customer.platformTier,
+      pendingInvoiceId: customer.pendingInvoiceId,
+      subscriptionChargePending: customer.pendingInvoiceId !== null, // Convenience boolean for tests
     },
     services: services.map(s => ({
       serviceType: s.serviceType,
-      tier: s.tier,
       state: s.state,
       isUserEnabled: s.isUserEnabled,
-      subPendingInvoiceId: s.subPendingInvoiceId,
-      subscriptionChargePending: s.subPendingInvoiceId !== null, // Convenience boolean for tests
     })),
     apiKeysCount: keys.length,
     sealKeysCount: sealKeysData.length,
@@ -490,6 +499,13 @@ export async function setupSealWithCpEnabled(options: SetupSealOptions | string 
 
   const customerId = customer.customerId;
 
+  // Step 0: Ensure customer has platform subscription (required for vault generation)
+  if (!customer.platformTier) {
+    await db.update(customers)
+      .set({ platformTier: 'starter', paidOnce: true })
+      .where(eq(customers.customerId, customerId));
+  }
+
   // Step 1: Create or update service instance (subscribe + enable)
   let service = await db.query.serviceInstances.findFirst({
     where: eq(serviceInstances.customerId, customerId),
@@ -501,9 +517,7 @@ export async function setupSealWithCpEnabled(options: SetupSealOptions | string 
       customerId,
       serviceType: 'seal',
       state: 'enabled',
-      tier: 'starter',
       isUserEnabled: true,
-      paidOnce: true, // Skip payment requirement for tests
       enabledAt: dbClock.now(),
     }).returning();
     service = newService;
@@ -700,7 +714,9 @@ export async function getServiceInstanceTestData(
   return {
     found: true,
     ...service,
-    subscriptionChargePending: service.subPendingInvoiceId !== null, // Convenience boolean for tests
+    // pendingInvoiceId is now on customers table (platform-level)
+    pendingInvoiceId: customer.pendingInvoiceId,
+    subscriptionChargePending: customer.pendingInvoiceId !== null, // Convenience boolean for tests
   };
 }
 

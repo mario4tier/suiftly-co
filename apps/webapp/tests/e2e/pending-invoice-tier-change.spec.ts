@@ -20,32 +20,29 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { resetCustomer, addCryptoPayment, subscribeSealService, enableSealOnlyMode } from '../helpers/db';
+import { resetCustomer, addCryptoPayment, subscribePlatformService } from '../helpers/db';
 import { setMockClock, resetClock } from '../helpers/clock';
-import { TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
 
 const MOCK_WALLET_ADDRESS = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const API_BASE = 'http://localhost:22700';
 const GM_BASE = 'http://localhost:22600';
 
-const ENTERPRISE_PRICE_USD = TIER_PRICES_USD_CENTS.enterprise / 100;
-const STARTER_PRICE_USD = TIER_PRICES_USD_CENTS.starter / 100;
+const PRO_PRICE_USD = 29; // Platform Pro = $29/month
+const STARTER_PRICE_USD = 1; // Platform Starter = $1/month
 
 test.describe('FAILED Invoice Recalculation on Tier Change', () => {
-  test(`BUG: downgrade should recalculate FAILED invoice amount from Enterprise ($${ENTERPRISE_PRICE_USD}) to Starter ($${STARTER_PRICE_USD})`, async ({ page }) => {
-    await enableSealOnlyMode(page.request);
-
+  test(`BUG: downgrade should recalculate FAILED invoice amount from Pro ($${PRO_PRICE_USD}) to Starter ($${STARTER_PRICE_USD})`, async ({ page }) => {
     // ── Step 1: Set clock to Jan 1 ──────────────────────────────────────
     // Subscribe on the 1st to avoid partial-month reconciliation credit
     // complexity (mid-month subscription creates credits that contaminate
     // balance assertions).
     await setMockClock(page.request, '2025-01-01T00:00:01Z');
 
-    // ── Step 2: Reset customer, deposit enough to cover Enterprise, set up escrow
+    // ── Step 2: Reset customer, deposit enough to cover Pro, set up escrow
     await resetCustomer(page.request);
 
-    // Deposit enough to cover Enterprise subscription + buffer
-    const initialDepositUsd = ENTERPRISE_PRICE_USD + 15;
+    // Deposit enough to cover Pro subscription + buffer
+    const initialDepositUsd = PRO_PRICE_USD + 15;
     await page.request.post(`${API_BASE}/test/wallet/deposit`, {
       data: {
         walletAddress: MOCK_WALLET_ADDRESS,
@@ -65,11 +62,8 @@ test.describe('FAILED Invoice Recalculation on Tier Change', () => {
     await page.waitForURL('/billing', { timeout: 5000 });
     await addCryptoPayment(page);
 
-    // ── Step 3: Subscribe to Enterprise ────────────────────────────────
-    await subscribeSealService(page, 'ENTERPRISE');
-
-    // Verify subscription succeeded and we're on overview
-    await page.waitForURL(/\/services\/seal\/overview/, { timeout: 5000 });
+    // ── Step 3: Subscribe to Platform Pro ──────────────────────────────
+    await subscribePlatformService(page, 'PRO');
 
     // ── Step 4: Advance clock to Feb 1 ──────────────────────────────────
     await setMockClock(page.request, '2025-02-01T00:00:01Z');
@@ -102,15 +96,14 @@ test.describe('FAILED Invoice Recalculation on Tier Change', () => {
     expect(syncResp1.ok()).toBe(true);
 
     // ── Step 7: Schedule downgrade to Starter via UI ────────────────────
-    // Navigate to Seal overview
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
-    await page.click('text=Overview');
-    await page.waitForURL(/\/services\/seal\/overview/, { timeout: 5000 });
+    // Navigate to billing page for platform tier change
+    await page.click('text=Billing');
+    await page.waitForURL('/billing', { timeout: 5000 });
 
     // Reload to ensure fresh state after billing run
     await page.reload();
-    await page.waitForLoadState('networkidle');
+    // Don't use networkidle — billing page may poll while GM is processing sync-all.
+    // Wait directly for the button we need.
 
     // Open Change Plan modal
     await page.locator('button:has-text("Change Plan")').click();

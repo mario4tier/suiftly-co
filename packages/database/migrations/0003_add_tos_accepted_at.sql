@@ -1,1 +1,0 @@
-ALTER TABLE "customers" ADD COLUMN "tos_accepted_at" timestamp with time zone;

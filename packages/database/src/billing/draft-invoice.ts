@@ -11,7 +11,7 @@
  */
 
 import { eq, and, sql, inArray } from 'drizzle-orm';
-import { serviceInstances, billingRecords, invoiceLineItems } from '../schema';
+import { customers, serviceInstances, billingRecords, invoiceLineItems } from '../schema';
 import type { LockedTransaction } from './locking';
 import { getOrCreateDraftInvoice, updateDraftInvoiceAmount } from './invoices';
 import { getAvailableCreditRows } from './credits';
@@ -81,7 +81,6 @@ export async function recalculateDraftInvoice(
   const managedTypes: InvoiceLineItemType[] = [
     INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_STARTER,
     INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_PRO,
-    INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_ENTERPRISE,
     INVOICE_LINE_ITEM_TYPE.EXTRA_API_KEYS,
     INVOICE_LINE_ITEM_TYPE.EXTRA_SEAL_KEYS,
     INVOICE_LINE_ITEM_TYPE.EXTRA_PACKAGES,
@@ -98,39 +97,47 @@ export async function recalculateDraftInvoice(
       )
     );
 
-  // Get all subscribed services
+  // Read customer for platform billing fields
+  const [customer] = await tx
+    .select()
+    .from(customers)
+    .where(eq(customers.customerId, customerId))
+    .limit(1);
+
+  // Insert platform subscription line item (from customer, not service)
+  // Skip if platform cancellation is scheduled or effective
+  if (
+    customer &&
+    customer.platformTier &&
+    !customer.platformCancellationScheduledFor &&
+    !customer.platformCancellationEffectiveAt
+  ) {
+    // Use scheduled tier if present (for scheduled downgrades), otherwise current tier
+    const effectiveTier = (customer.scheduledPlatformTier || customer.platformTier) as ServiceTier;
+    const tierPriceCents = getTierPriceUsdCents(effectiveTier);
+    const subscriptionItemType = TIER_TO_SUBSCRIPTION_ITEM[effectiveTier];
+
+    // Insert subscription line item (platform-level, serviceType = 'platform')
+    await tx.insert(invoiceLineItems).values({
+      billingRecordId: draftId,
+      itemType: subscriptionItemType,
+      serviceType: 'platform' as ServiceType,
+      quantity: 1,
+      unitPriceUsdCents: tierPriceCents,
+      amountUsdCents: tierPriceCents,
+    });
+  }
+
+  // Get all subscribed services for add-on charges
   // NOTE: Service existence = subscription. is_user_enabled is just on/off toggle.
-  // Customers are billed for subscribed services regardless of toggle state.
   const services = await tx
     .select()
     .from(serviceInstances)
     .where(eq(serviceInstances.customerId, customerId));
 
-  // Insert subscription line items for each service
+  // Insert add-on line items for each service
   for (const service of services) {
-    // Skip services that are being cancelled:
-    // - cancellationScheduledFor set: scheduled but not yet processed (during the month)
-    // - state = 'cancellation_pending': already processed by processScheduledCancellations
-    //   on the 1st (which clears cancellationScheduledFor but sets state)
-    if (service.cancellationScheduledFor || service.state === 'cancellation_pending') {
-      continue;
-    }
-
     const serviceType = service.serviceType as ServiceType;
-    // Use scheduled tier if present (for scheduled downgrades), otherwise current tier
-    const effectiveTier = (service.scheduledTier || service.tier) as ServiceTier;
-    const tierPriceCents = getTierPriceUsdCents(effectiveTier, serviceType);
-    const subscriptionItemType = TIER_TO_SUBSCRIPTION_ITEM[effectiveTier];
-
-    // Insert subscription line item
-    await tx.insert(invoiceLineItems).values({
-      billingRecordId: draftId,
-      itemType: subscriptionItemType,
-      serviceType: serviceType,
-      quantity: 1,
-      unitPriceUsdCents: tierPriceCents,
-      amountUsdCents: tierPriceCents,
-    });
 
     // Add-on charges (Seal keys, packages, API keys)
     if (service.serviceType === 'seal' && service.config && typeof service.config === 'object') {

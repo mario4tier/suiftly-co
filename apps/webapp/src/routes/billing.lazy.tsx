@@ -18,12 +18,11 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { ChevronRight, ChevronDown, User, ArrowUpDown, ArrowDownUp, Shield, Building2, AlertCircle, CreditCard, Trash2, ArrowUp, ArrowDown, Wallet, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { getTierPriceUsdCents } from '@suiftly/shared/pricing';
-import { SERVICE_TYPE, SPENDING_LIMIT } from '@suiftly/shared/constants';
+import { SPENDING_LIMIT } from '@suiftly/shared/constants';
 import type { InvoiceLineItem } from '@suiftly/shared/types';
 import { formatLineItemDescription, formatTierName, formatUsd } from '@/lib/billing-utils';
 import { StripeCardDialog } from '@/components/stripe-card-dialog';
 import { PlatformPlanCard } from '@/components/billing/PlatformPlanCard';
-import { freq_platform_sub } from '@/lib/config';
 
 export const Route = createLazyFileRoute('/billing')({
   component: BillingPage,
@@ -53,18 +52,18 @@ function BillingPage() {
   const [newSpendingLimitInput, setNewSpendingLimitInput] = useState('');
   const [error, setError] = useState('');
 
-  // Query balance
-  const { data: balanceData, isLoading: balanceLoading, refetch: refetchBalance } = trpc.billing.getBalance.useQuery();
-
-  // Query services to check for pending subscriptions.
-  // Poll every 3s while any service has a pending invoice, so the banner
-  // disappears promptly after GM processes the payment (webhook → retry chain).
-  const { data: services } = trpc.services.list.useQuery(undefined, {
+  // Query balance (includes platform subscription fields from customer record).
+  // Poll every 3s while a pending invoice exists, so the banner disappears
+  // promptly after GM processes the payment (webhook → retry chain).
+  const { data: balanceData, isLoading: balanceLoading, refetch: refetchBalance } = trpc.billing.getBalance.useQuery(undefined, {
     refetchInterval: (query) => {
       const data = query.state.data;
-      return data?.some(s => s.subPendingInvoiceId != null) ? 3000 : false;
+      return data?.pendingInvoiceId != null ? 3000 : false;
     },
   });
+
+  // Query services list (for non-platform service data)
+  const { data: services } = trpc.services.list.useQuery();
 
   // Query next scheduled payment (DRAFT invoice)
   const { data: nextPaymentData, isLoading: nextPaymentLoading } = trpc.billing.getNextScheduledPayment.useQuery();
@@ -303,12 +302,11 @@ function BillingPage() {
   const spendingLimit = balanceData?.spendingLimitUsd; // null = unlimited, number = limit
   const found = balanceData?.found ?? false;
 
-  // Calculate pending subscription charges
-  const pendingServices = services?.filter(s => s.subPendingInvoiceId != null) ?? [];
-  const totalPendingUsd = pendingServices.reduce((sum, service) => {
-    const priceUsdCents = getTierPriceUsdCents(service.tier, service.serviceType);
-    return sum + (priceUsdCents / 100);
-  }, 0);
+  // Calculate pending subscription charges (platform pending invoice is on balanceData)
+  const hasPendingInvoice = balanceData?.pendingInvoiceId != null;
+  const totalPendingUsd = hasPendingInvoice && balanceData?.platformTier
+    ? getTierPriceUsdCents(balanceData.platformTier) / 100
+    : 0;
   const shortfallUsd = Math.max(0, totalPendingUsd - balance);
 
   // Determine which payment methods are already active
@@ -318,10 +316,8 @@ function BillingPage() {
   const hasPaypalMethod = activeMethods.some((m: any) => m.providerType === 'paypal');
   const hasNonEscrowMethod = hasStripeMethod || hasPaypalMethod;
 
-  // Platform subscription status
-  const platformService = services?.find(s => s.serviceType === 'platform');
-  const showPlatformCard = freq_platform_sub === 1;
-  const needsPlatformOnboarding = showPlatformCard && !platformService;
+  // Platform subscription status from balanceData (customer-level fields)
+  const needsPlatformOnboarding = !balanceData?.platformTier;
 
   return (
     <DashboardLayout>
@@ -330,13 +326,18 @@ function BillingPage() {
           <h2 className="text-3xl font-bold tracking-tight">Billing</h2>
         </div>
 
-        {/* Platform Plan Card — shown when platform subscription is required */}
-        {showPlatformCard && (
-          <PlatformPlanCard platformService={platformService ?? undefined} />
-        )}
+        {/* Platform Plan Card */}
+        <PlatformPlanCard
+          platformTier={balanceData?.platformTier ?? null}
+          paidOnce={balanceData?.paidOnce ?? false}
+          pendingInvoiceId={balanceData?.pendingInvoiceId ?? null}
+          scheduledPlatformTier={balanceData?.scheduledPlatformTier ?? null}
+          scheduledPlatformTierEffectiveDate={balanceData?.scheduledPlatformTierEffectiveDate ?? null}
+          platformCancellationScheduledFor={balanceData?.platformCancellationScheduledFor ?? null}
+        />
 
         {/* Pending Subscription Notification */}
-        {pendingServices.length > 0 && (
+        {hasPendingInvoice && (
           <div className="bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-900 rounded-lg px-4 py-3 flex gap-3">
             {activeMethods.length > 0 ? (
               <Loader2 className="h-5 w-5 text-orange-600 dark:text-orange-500 flex-shrink-0 mt-0.5 animate-spin" />
@@ -349,14 +350,11 @@ function BillingPage() {
                 <p>
                   {hasNonEscrowMethod ? (
                     <>
-                      Payment ({pendingServices.length === 1
-                        ? `${formatTierName(pendingServices[0].tier)} - ${formatUsd(getTierPriceUsdCents(pendingServices[0].tier, pendingServices[0].serviceType) / 100)}/month`
-                        : `${formatUsd(totalPendingUsd)}/month`
-                      }) will be soon attempted with your configured payment methods.
+                      Payment ({formatTierName((balanceData?.platformTier ?? 'starter') as 'starter' | 'pro')} - {formatUsd(totalPendingUsd)}/month) will be soon attempted with your configured payment methods.
                     </>
                   ) : hasEscrowMethod && shortfallUsd > 0 ? (
                     <>
-                      Deposit at least <span className="font-bold">${shortfallUsd.toFixed(2)}</span> to activate {pendingServices.length === 1 ? 'your service' : 'these services'}.
+                      Deposit at least <span className="font-bold">${shortfallUsd.toFixed(2)}</span> to activate your service.
                     </>
                   ) : hasEscrowMethod ? (
                     <>
@@ -364,7 +362,7 @@ function BillingPage() {
                     </>
                   ) : (
                     <>
-                      Add a payment method below to activate {pendingServices.length === 1 ? 'your service' : 'these services'}.
+                      Add a payment method below to activate your service.
                     </>
                   )}
                 </p>
@@ -647,7 +645,7 @@ function BillingPage() {
       )}
 
       {/* Next Scheduled Payment — hidden during onboarding or when payments are pending */}
-      {!needsPlatformOnboarding && pendingServices.length === 0 && <Card className="p-4 mb-6">
+      {!needsPlatformOnboarding && !hasPendingInvoice && <Card className="p-4 mb-6">
         <button
           onClick={() => setNextPaymentExpanded(!nextPaymentExpanded)}
           className="w-full flex items-center justify-between text-left"

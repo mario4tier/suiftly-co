@@ -12,7 +12,7 @@
 
 import { eq, and, sql } from 'drizzle-orm';
 import type { Database, DatabaseOrTransaction } from '../db';
-import { billingRecords, serviceInstances, customerCredits } from '../schema';
+import { billingRecords, serviceInstances, customerCredits, customers } from '../schema';
 import { ValidationError } from './errors';
 
 /**
@@ -193,17 +193,15 @@ async function detectOrphanedReconciliationCredits(
     return issues; // No reconciliation credits to check
   }
 
-  // Get subscribed services (existence = subscription, not toggle state)
-  // This must match billing logic: subscription = billed, regardless of is_user_enabled
-  const subscribedServices = await tx
-    .select()
-    .from(serviceInstances)
-    .where(eq(serviceInstances.customerId, customerId));
-  // NO check for is_user_enabled - that's just an on/off toggle
+  // Check if customer has an active platform subscription (the only billable subscription)
+  const customer = await tx.query.customers.findFirst({
+    where: eq(customers.customerId, customerId),
+  });
+  const hasPlatformSubscription = customer?.platformTier != null;
 
-  // If we have reconciliation credits but NO subscribed services, that's suspicious
-  // This means service was cancelled but credit wasn't voided
-  if (reconCredits.length > 0 && subscribedServices.length === 0) {
+  // If we have reconciliation credits but no platform subscription, that's suspicious
+  // This means subscription was cancelled but credit wasn't voided
+  if (reconCredits.length > 0 && !hasPlatformSubscription) {
     issues.push({
       severity: 'warning',
       code: 'ORPHANED_RECONCILIATION_CREDITS',

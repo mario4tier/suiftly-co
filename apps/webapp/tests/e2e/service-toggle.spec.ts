@@ -13,12 +13,10 @@
 import { test, expect } from '@playwright/test';
 import { waitAfterMutation, waitForCondition } from '../helpers/wait-utils';
 import { waitForToastsToDisappear } from '../helpers/locators';
-import { enableSealOnlyMode } from '../helpers/db';
+import { subscribePlatformService } from '../helpers/db';
 
 test.describe('Service Toggle - Enable/Disable', () => {
   test.beforeEach(async ({ page, request }) => {
-    await enableSealOnlyMode(request);
-
     // Step 1: Clear any lingering test delays from previous tests
     await request.post('http://localhost:22700/test/delays/clear');
 
@@ -49,16 +47,11 @@ test.describe('Service Toggle - Enable/Disable', () => {
     await page.waitForURL('/dashboard', { timeout: 10000 });
     await page.waitForLoadState('networkidle');
 
-    // Step 6: Subscribe to seal service to create test service instance
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
-    await page.locator('label:has-text("Agree to")').click();
-    await page.getByRole('heading', { name: 'STARTER' }).click();
-    await page.locator('button:has-text("Subscribe to Service")').click();
-
-    // Wait for subscription success and navigate to overview
-    await expect(page.locator('[data-sonner-toast]').filter({ hasText: /Subscription successful/i })).toBeVisible({ timeout: 5000 });
-    await page.waitForURL(/\/services\/seal\/overview/, { timeout: 5000 });
+    // Step 6: Subscribe to platform (auto-provisions seal as disabled)
+    await subscribePlatformService(page);
+    // Navigate to seal overview
+    await page.goto('/services/seal/overview');
+    await page.waitForLoadState('networkidle');
 
     // Wait for toasts to disappear before test starts (prevents pollution)
     await waitForToastsToDisappear(page);

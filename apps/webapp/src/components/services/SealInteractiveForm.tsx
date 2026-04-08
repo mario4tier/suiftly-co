@@ -11,7 +11,6 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { Info, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { ActionButton } from "@/components/ui/action-button";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -37,10 +36,6 @@ import {
   freg_count,
   fbw_sta,
   fbw_pro,
-  fbw_ent,
-  fsubs_usd_sta,
-  fsubs_usd_pro,
-  fsubs_usd_ent,
   fskey_incl,
   fskey_pkg_incl,
 } from "@/lib/config";
@@ -57,7 +52,6 @@ import {
   formatIpAddressListForDisplay,
   areIpListsEqual,
 } from "@suiftly/shared/schemas";
-import { formatTierName } from "@/lib/billing-utils";
 
 interface SealInteractiveFormProps {
   serviceState: ServiceState;
@@ -65,7 +59,8 @@ interface SealInteractiveFormProps {
   isEnabled: boolean;
   isToggling?: boolean;
   onToggleService?: (enabled: boolean) => void;
-  onChangePlan?: () => void;
+  /** When true, show the form in read-only preview mode with actions gated */
+  isGated?: boolean;
 }
 
 export function SealInteractiveForm({
@@ -74,7 +69,7 @@ export function SealInteractiveForm({
   isEnabled,
   isToggling = false,
   onToggleService,
-  onChangePlan,
+  isGated = false,
 }: SealInteractiveFormProps) {
   const [burstEnabled, setBurstEnabled] = useState(tier !== "starter");
   const [ipAllowlistEnabled, setIpAllowlistEnabled] = useState(false);
@@ -146,18 +141,19 @@ export function SealInteractiveForm({
     });
   };
 
-  // Fetch usage statistics from database
-  const { data: usageStats } = trpc.seal.getUsageStats.useQuery();
+  // Fetch usage statistics from database (disabled in gated mode — no seal service exists yet)
+  const { data: usageStats } = trpc.seal.getUsageStats.useQuery(undefined, { enabled: !isGated });
 
   // Fetch DRAFT invoice to show pending usage charges
   const { data: draftInvoice } = trpc.billing.getNextScheduledPayment.useQuery();
 
-  // Fetch API keys
-  const { data: apiKeys, isLoading: apiKeysLoading } = trpc.seal.listApiKeys.useQuery();
+  // Fetch API keys (disabled in gated mode)
+  const { data: apiKeys, isLoading: apiKeysLoading } = trpc.seal.listApiKeys.useQuery(undefined, { enabled: !isGated });
 
   // Fetch seal keys with packages
   // Poll every 3 seconds when any key is registering or updating to show status changes
   const { data: sealKeys, isLoading: sealKeysLoading } = trpc.seal.listKeys.useQuery(undefined, {
+    enabled: !isGated,
     refetchInterval: (query) => {
       const keys = query.state.data;
       if (!keys) return false;
@@ -363,8 +359,8 @@ export function SealInteractiveForm({
     },
   });
 
-  // Fetch More Settings
-  const { data: moreSettings } = trpc.seal.getMoreSettings.useQuery();
+  // Fetch More Settings (disabled in gated mode — no seal service exists yet)
+  const { data: moreSettings } = trpc.seal.getMoreSettings.useQuery(undefined, { enabled: !isGated });
 
   // Burst mutation
   const updateBurstMutation = trpc.seal.updateBurstSetting.useMutation({
@@ -424,37 +420,27 @@ export function SealInteractiveForm({
 
   // Determine if service is cancelled or suspended
   const isCancelled = serviceState === SERVICE_STATE.SUSPENDED_MAINTENANCE || serviceState === SERVICE_STATE.SUSPENDED_NO_PAYMENT;
-  const isReadOnly = isCancelled;
+  // isReadOnly: all mutating actions disabled (cancelled service or gated by missing platform sub)
+  const isReadOnly = isCancelled || isGated;
 
-  // Tier info
+  // Bandwidth per region derives from platform tier (seal has no subscription fee)
   const tierInfo = {
-    [SERVICE_TIER.STARTER]: {
-      reqPerRegion: fbw_sta,
-      price: fsubs_usd_sta,
-    },
-    [SERVICE_TIER.PRO]: {
-      reqPerRegion: fbw_pro,
-      price: fsubs_usd_pro,
-    },
-    [SERVICE_TIER.ENTERPRISE]: {
-      reqPerRegion: fbw_ent,
-      price: fsubs_usd_ent,
-    },
+    [SERVICE_TIER.STARTER]: { reqPerRegion: fbw_sta },
+    [SERVICE_TIER.PRO]: { reqPerRegion: fbw_pro },
   };
+  const currentTier = tierInfo[tier as keyof typeof tierInfo] ?? tierInfo[SERVICE_TIER.STARTER];
 
-  const currentTier = tierInfo[tier];
-
-  // Monthly charges calculation (mock data for now)
+  // Monthly charges for seal: no subscription fee (included in platform plan)
+  // Only usage-based charges apply
   const monthlyCharges = {
-    guaranteedBandwidth: currentTier.price,
-    sealKeys: 0, // 1 of 1 used (included)
-    ipv4Allowlist: 0, // 1 of 1 used (included for Pro/Enterprise)
-    packagesPerKey: 0, // Using 3 of 3 included
-    apiKeys: 0, // 1 of 2 used (included)
+    guaranteedBandwidth: 0, // Included in platform plan
+    sealKeys: 0,
+    ipv4Allowlist: 0,
+    packagesPerKey: 0,
+    apiKeys: 0,
   };
 
   const totalMonthlyFee =
-    monthlyCharges.guaranteedBandwidth +
     monthlyCharges.sealKeys +
     monthlyCharges.ipv4Allowlist +
     monthlyCharges.packagesPerKey +
@@ -764,14 +750,7 @@ export function SealInteractiveForm({
           {/* Monthly Charges Section */}
           <div className="space-y-4">
             <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-              {formatTierName(tier).toUpperCase()} Tier{' '}
-              <ActionButton
-                onClick={onChangePlan}
-                disabled={isReadOnly}
-                className="ml-2"
-              >
-                Change Plan
-              </ActionButton>
+              Service Overview
             </h3>
 
             {/* Monthly Charges Table */}

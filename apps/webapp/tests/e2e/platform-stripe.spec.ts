@@ -13,7 +13,6 @@ import { test, expect } from '../fixtures/base-test';
 import {
   resetCustomer,
   authenticateWithMockWallet,
-  setConfigFlags,
   getCustomerData,
 } from '../helpers/db';
 import {
@@ -31,7 +30,6 @@ test.describe('Platform Stripe Payment', () => {
 
   test.beforeEach(async ({ page, request }) => {
     await resetCustomer(request);
-    await setConfigFlags(request, { freq_platform_sub: '1', freq_seal_sub: '0' });
 
     // Disable force-mock BEFORE checking key (force-mock hides the publishable key)
     await request.post(`${API_BASE}/test/stripe/force-mock`, { data: { enabled: false } });
@@ -48,7 +46,6 @@ test.describe('Platform Stripe Payment', () => {
   });
 
   test.afterAll(async ({ request }) => {
-    await setConfigFlags(request, { freq_platform_sub: '1', freq_seal_sub: '0' });
     await request.post(`${API_BASE}/test/stripe/force-mock`, { data: { enabled: true } });
   });
 
@@ -107,9 +104,7 @@ test.describe('Platform Stripe Payment', () => {
 
     // Verify via API that payment actually went through
     const customerData = await getCustomerData(request);
-    const platform = customerData.services?.find((s: any) => s.serviceType === 'platform');
-    expect(platform).toBeDefined();
-    expect(platform.subscriptionChargePending).toBe(false);
+    expect(customerData.customer.subscriptionChargePending).toBe(false);
   });
 
   // =========================================================================

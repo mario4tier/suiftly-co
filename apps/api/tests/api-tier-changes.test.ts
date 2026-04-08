@@ -4,6 +4,10 @@
  * Tests tier upgrade/downgrade lifecycle through HTTP calls only.
  * NO direct internal function calls (except DB reads for assertions).
  *
+ * Tiers apply only to the platform subscription (starter / pro).
+ * Non-platform services (seal, grpc, graphql) derive their limits from
+ * the platform tier at runtime and have no tier of their own.
+ *
  * This test simulates realistic client behavior by:
  * 1. Making HTTP calls to tRPC endpoints (services.upgradeTier, services.scheduleTierDowngrade, etc.)
  * 2. Controlling time via /test/clock/* endpoints
@@ -12,8 +16,8 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { db } from '@suiftly/database';
-import { serviceInstances } from '@suiftly/database/schema';
-import { eq, and } from 'drizzle-orm';
+import { customers } from '@suiftly/database/schema';
+import { eq } from 'drizzle-orm';
 import {
   setClockTime,
   resetClock,
@@ -21,7 +25,6 @@ import {
   trpcMutation,
   trpcQuery,
   resetTestData,
-  subscribeAndEnable,
 } from './helpers/http.js';
 import { TEST_WALLET } from './helpers/auth.js';
 import { INVOICE_LINE_ITEM_TYPE } from '@suiftly/shared/constants';
@@ -31,7 +34,6 @@ import { setupBillingTest } from './helpers/setup.js';
 const SUBSCRIPTION_ITEM_TYPES = [
   INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_STARTER,
   INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_PRO,
-  INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_ENTERPRISE,
 ] as const;
 
 describe('API: Tier Changes Flow', () => {
@@ -39,6 +41,7 @@ describe('API: Tier Changes Flow', () => {
   let customerId: number;
 
   beforeEach(async () => {
+    // Platform is subscribed at starter tier; seal/grpc/graphql auto-provisioned (disabled)
     ({ accessToken, customerId } = await setupBillingTest());
   });
 
@@ -51,29 +54,23 @@ describe('API: Tier Changes Flow', () => {
 
   describe('Tier Upgrade Flow', () => {
     it('should upgrade tier immediately with pro-rated charge', async () => {
-      // ---- Setup: Subscribe to a starter service first ----
+      // Platform is already at starter tier from beforeEach
       await setClockTime('2025-01-05T00:00:00Z');
 
-      await subscribeAndEnable('seal', 'starter', accessToken);
-
-      // Verify service state via DB read
-      let service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal')
-        ),
+      // Verify platform state via customer record
+      let customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, customerId),
       });
-      expect(service).toBeDefined();
-      expect(service?.tier).toBe('starter');
-      expect(service?.paidOnce).toBe(true);
-      expect(service?.isUserEnabled).toBe(true);
+      expect(customer).toBeDefined();
+      expect(customer?.platformTier).toBe('starter');
+      expect(customer?.paidOnce).toBe(true);
 
       // ---- Upgrade to pro tier mid-month ----
       await setClockTime('2025-01-15T00:00:00Z');
 
       const upgradeResult = await trpcMutation<any>(
         'services.upgradeTier',
-        { serviceType: 'seal', newTier: 'pro' },
+        { serviceType: 'platform', newTier: 'pro' },
         accessToken
       );
 
@@ -83,24 +80,29 @@ describe('API: Tier Changes Flow', () => {
       expect(upgradeResult.result?.data?.chargeAmountUsdCents).toBeGreaterThanOrEqual(0);
 
       // Verify tier changed immediately in DB
-      service = await db.query.serviceInstances.findFirst({
-        where: eq(serviceInstances.instanceId, service!.instanceId),
+      customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, customerId),
       });
-      expect(service?.tier).toBe('pro');
+      expect(customer?.platformTier).toBe('pro');
 
       await expectNoNotifications(customerId);
     });
 
     it('should reject upgrade to same tier', async () => {
-      // ---- Setup: Subscribe to pro tier ----
+      // Platform starts at starter; upgrade to pro first, then try same-tier upgrade
       await setClockTime('2025-01-05T00:00:00Z');
+      await ensureTestBalance(100, { walletAddress: TEST_WALLET });
 
-      await subscribeAndEnable('seal', 'pro', accessToken);
+      await trpcMutation<any>(
+        'services.upgradeTier',
+        { serviceType: 'platform', newTier: 'pro' },
+        accessToken
+      );
 
       // ---- Try to upgrade to same tier ----
       const upgradeResult = await trpcMutation<any>(
         'services.upgradeTier',
-        { serviceType: 'seal', newTier: 'pro' },
+        { serviceType: 'platform', newTier: 'pro' },
         accessToken
       );
 
@@ -111,16 +113,20 @@ describe('API: Tier Changes Flow', () => {
     });
 
     it('should reject upgrade to lower tier (use downgrade instead)', async () => {
-      // ---- Setup: Subscribe to enterprise tier (need $200+ balance) ----
+      // Platform starts at starter; upgrade to pro, then try to "upgrade" back to starter
       await setClockTime('2025-01-05T00:00:00Z');
-      await ensureTestBalance(200, { walletAddress: TEST_WALLET });
+      await ensureTestBalance(100, { walletAddress: TEST_WALLET });
 
-      await subscribeAndEnable('seal', 'enterprise', accessToken);
+      await trpcMutation<any>(
+        'services.upgradeTier',
+        { serviceType: 'platform', newTier: 'pro' },
+        accessToken
+      );
 
       // ---- Try to upgrade to lower tier ----
       const upgradeResult = await trpcMutation<any>(
         'services.upgradeTier',
-        { serviceType: 'seal', newTier: 'starter' },
+        { serviceType: 'platform', newTier: 'starter' },
         accessToken
       );
 
@@ -133,17 +139,22 @@ describe('API: Tier Changes Flow', () => {
 
   describe('Tier Downgrade Flow', () => {
     it('should schedule downgrade for end of billing period', async () => {
-      // ---- Setup: Subscribe to pro tier ----
+      // Upgrade platform to pro first
       await setClockTime('2025-01-05T00:00:00Z');
+      await ensureTestBalance(100, { walletAddress: TEST_WALLET });
 
-      await subscribeAndEnable('seal', 'pro', accessToken);
+      await trpcMutation<any>(
+        'services.upgradeTier',
+        { serviceType: 'platform', newTier: 'pro' },
+        accessToken
+      );
 
       // ---- Schedule downgrade to starter ----
       await setClockTime('2025-01-15T00:00:00Z');
 
       const downgradeResult = await trpcMutation<any>(
         'services.scheduleTierDowngrade',
-        { serviceType: 'seal', newTier: 'starter' },
+        { serviceType: 'platform', newTier: 'starter' },
         accessToken
       );
 
@@ -151,45 +162,46 @@ describe('API: Tier Changes Flow', () => {
       expect(downgradeResult.result?.data?.scheduledTier).toBe('starter');
       expect(downgradeResult.result?.data?.effectiveDate).toBeDefined();
 
-      // Verify service still at pro tier (downgrade is scheduled, not immediate)
-      const service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal')
-        ),
+      // Verify customer still at pro tier (downgrade is scheduled, not immediate)
+      const customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, customerId),
       });
-      expect(service?.tier).toBe('pro');
-      expect(service?.scheduledTier).toBe('starter');
+      expect(customer?.platformTier).toBe('pro');
+      expect(customer?.scheduledPlatformTier).toBe('starter');
 
       await expectNoNotifications(customerId);
     });
 
     it('should update DRAFT invoice line items to show scheduled tier price', async () => {
       /**
-       * BUG REPRODUCTION: When user schedules a downgrade from enterprise to starter,
-       * the "Next Scheduled Payment" section should show the STARTER price ($9),
-       * not the current ENTERPRISE price ($185).
+       * BUG REPRODUCTION: When user schedules a downgrade from pro to starter,
+       * the "Next Scheduled Payment" section should show the STARTER price ($1),
+       * not the current PRO price ($29).
        *
        * Root cause: buildDraftLineItems() in invoice-formatter.ts uses service.tier
        * instead of (service.scheduledTier || service.tier).
        *
        * Scenario:
-       * 1. User is on Enterprise ($185/month)
-       * 2. User schedules downgrade to Starter ($9/month)
-       * 3. DRAFT invoice amount_usd_cents is updated correctly to 900
-       * 4. BUG: getNextScheduledPayment line items still show Enterprise ($185)
+       * 1. User is on Pro ($29/month)
+       * 2. User schedules downgrade to Starter ($1/month)
+       * 3. DRAFT invoice amount_usd_cents is updated correctly to 100
+       * 4. BUG: getNextScheduledPayment line items still show Pro ($29)
        *
-       * Expected: Line items should show "Seal Starter tier - $9.00"
-       * Actual: Line items show "Seal Enterprise tier - $185.00"
+       * Expected: Line items should show "Platform Starter tier - $1.00"
+       * Actual: Line items show "Platform Pro tier - $29.00"
        */
 
-      // ---- Setup: Subscribe to enterprise tier (need $200+ balance) ----
+      // ---- Setup: Upgrade platform to pro tier ----
       await setClockTime('2025-01-05T00:00:00Z');
-      await ensureTestBalance(200, { walletAddress: TEST_WALLET });
+      await ensureTestBalance(100, { walletAddress: TEST_WALLET });
 
-      await subscribeAndEnable('seal', 'enterprise', accessToken);
+      await trpcMutation<any>(
+        'services.upgradeTier',
+        { serviceType: 'platform', newTier: 'pro' },
+        accessToken
+      );
 
-      // ---- Verify initial state: DRAFT shows enterprise price ----
+      // ---- Verify initial state: DRAFT shows pro price ----
       let paymentResult = await trpcQuery<any>(
         'billing.getNextScheduledPayment',
         undefined,
@@ -199,18 +211,20 @@ describe('API: Tier Changes Flow', () => {
       expect(paymentResult.result?.data?.found).toBe(true);
       expect(paymentResult.result?.data?.lineItems).toBeDefined();
 
-      // Initially should show Enterprise tier (filter by seal service to exclude platform subscription)
+      // Initially should show Pro tier
       let lineItems = paymentResult.result?.data?.lineItems;
-      let subscriptionItem = lineItems.find((item: any) => SUBSCRIPTION_ITEM_TYPES.includes(item.itemType) && item.service === 'seal');
-      expect(subscriptionItem?.itemType).toBe(INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_ENTERPRISE);
-      expect(subscriptionItem?.amountUsd).toBe(185); // Enterprise = $185
+      let subscriptionItem = lineItems.find(
+        (item: any) => SUBSCRIPTION_ITEM_TYPES.includes(item.itemType) && item.service === 'platform'
+      );
+      expect(subscriptionItem?.itemType).toBe(INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_PRO);
+      expect(subscriptionItem?.amountUsd).toBe(29); // Pro = $29
 
       // ---- Schedule downgrade to starter ----
       await setClockTime('2025-01-15T00:00:00Z');
 
       const downgradeResult = await trpcMutation<any>(
         'services.scheduleTierDowngrade',
-        { serviceType: 'seal', newTier: 'starter' },
+        { serviceType: 'platform', newTier: 'starter' },
         accessToken
       );
 
@@ -226,71 +240,70 @@ describe('API: Tier Changes Flow', () => {
 
       expect(paymentResult.result?.data?.found).toBe(true);
       lineItems = paymentResult.result?.data?.lineItems;
-      subscriptionItem = lineItems.find((item: any) => SUBSCRIPTION_ITEM_TYPES.includes(item.itemType) && item.service === 'seal');
+      subscriptionItem = lineItems.find(
+        (item: any) => SUBSCRIPTION_ITEM_TYPES.includes(item.itemType) && item.service === 'platform'
+      );
 
-      // Line items should show the SCHEDULED tier (starter = $9), not current tier (enterprise = $185)
+      // Line items should show the SCHEDULED tier (starter = $1), not current tier (pro = $29)
       expect(subscriptionItem?.itemType).toBe(INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_STARTER);
-      expect(subscriptionItem?.amountUsd).toBe(9); // Starter = $9, NOT Enterprise = $185
+      expect(subscriptionItem?.amountUsd).toBe(1); // Starter = $1, NOT Pro = $29
 
       await expectNoNotifications(customerId);
     });
 
     it('should allow canceling scheduled downgrade', async () => {
-      // ---- Setup: Subscribe and schedule downgrade ----
+      // Upgrade then schedule downgrade
       await setClockTime('2025-01-05T00:00:00Z');
+      await ensureTestBalance(100, { walletAddress: TEST_WALLET });
 
-      await subscribeAndEnable('seal', 'pro', accessToken);
+      await trpcMutation<any>(
+        'services.upgradeTier',
+        { serviceType: 'platform', newTier: 'pro' },
+        accessToken
+      );
 
       // Schedule downgrade
       await trpcMutation<any>(
         'services.scheduleTierDowngrade',
-        { serviceType: 'seal', newTier: 'starter' },
+        { serviceType: 'platform', newTier: 'starter' },
         accessToken
       );
 
       // Verify downgrade is scheduled
-      let service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal')
-        ),
+      let customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, customerId),
       });
-      expect(service?.scheduledTier).toBe('starter');
+      expect(customer?.scheduledPlatformTier).toBe('starter');
 
       // ---- Cancel the scheduled downgrade ----
       const cancelResult = await trpcMutation<any>(
         'services.cancelScheduledTierChange',
-        { serviceType: 'seal' },
+        { serviceType: 'platform' },
         accessToken
       );
 
       expect(cancelResult.result?.data?.success).toBe(true);
 
       // Verify scheduled downgrade is cleared
-      service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal')
-        ),
+      customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, customerId),
       });
-      expect(service?.scheduledTier).toBeNull();
-      expect(service?.tier).toBe('pro'); // Still at pro
+      expect(customer?.scheduledPlatformTier).toBeNull();
+      expect(customer?.platformTier).toBe('pro'); // Still at pro
 
       await expectNoNotifications(customerId);
     });
   });
 
   describe('Get Tier Options', () => {
-    it('should return available tier options for service', async () => {
-      // ---- Setup: Subscribe to starter tier ----
+    it('should return available tier options for platform service', async () => {
+      // Platform starts at starter
       await setClockTime('2025-01-05T00:00:00Z');
-
-      await subscribeAndEnable('seal', 'starter', accessToken);
 
       // ---- Get tier options ----
       const optionsResult = await trpcQuery<any>(
         'services.getTierOptions',
-        { serviceType: 'seal' },
+        { serviceType: 'platform' },
         accessToken
       );
 
@@ -300,14 +313,13 @@ describe('API: Tier Changes Flow', () => {
       // Should show current tier
       expect(options.currentTier).toBe('starter');
 
-      // Should have all tier options (starter, pro, enterprise)
+      // Platform has exactly 2 tiers (starter and pro)
       expect(options.availableTiers).toBeDefined();
-      expect(options.availableTiers.length).toBe(3);
+      expect(options.availableTiers.length).toBe(2);
 
-      // Check tier structure - each option should have the right flags
+      // Check tier structure
       const starterOption = options.availableTiers.find((t: any) => t.tier === 'starter');
       const proOption = options.availableTiers.find((t: any) => t.tier === 'pro');
-      const enterpriseOption = options.availableTiers.find((t: any) => t.tier === 'enterprise');
 
       expect(starterOption?.isCurrentTier).toBe(true);
       expect(starterOption?.isUpgrade).toBe(false);
@@ -316,90 +328,56 @@ describe('API: Tier Changes Flow', () => {
       expect(proOption?.isUpgrade).toBe(true);
       expect(proOption?.isDowngrade).toBe(false);
 
-      expect(enterpriseOption?.isUpgrade).toBe(true);
-      expect(enterpriseOption?.isDowngrade).toBe(false);
-
       await expectNoNotifications(customerId);
     });
 
     it('should return scheduled tier when downgrade is scheduled (bug reproduction)', async () => {
       /**
-       * BUG REPRODUCTION: When user schedules multiple downgrades sequentially,
-       * the UI shows the same "Takes effect November 30th" for ALL downgrade options.
-       *
-       * EXPECTED: getTierOptions should return which tier is currently scheduled,
-       * so the UI can distinguish between "pending scheduled downgrade" vs
-       * "potential downgrade option".
+       * BUG REPRODUCTION: When user schedules a downgrade, the UI should show
+       * which tier is currently scheduled so it can distinguish between
+       * "pending scheduled downgrade" vs "potential downgrade option".
        *
        * SEQUENCE:
-       * 1. User on Enterprise schedules downgrade to Pro -> scheduledTier should be 'pro'
-       * 2. User changes mind, schedules downgrade to Starter -> scheduledTier should now be 'starter'
-       * 3. UI should show "Scheduled" only on the currently scheduled tier
+       * 1. User on Pro schedules downgrade to Starter -> scheduledTier should be 'starter'
+       * 2. UI should show "Scheduled" only on the currently scheduled tier
        */
-      // ---- Setup: Subscribe to enterprise tier (need $200+ balance) ----
+      // ---- Setup: Upgrade platform to pro ----
       await setClockTime('2025-01-05T00:00:00Z');
-      await ensureTestBalance(200, { walletAddress: TEST_WALLET });
+      await ensureTestBalance(100, { walletAddress: TEST_WALLET });
 
-      await subscribeAndEnable('seal', 'enterprise', accessToken);
+      await trpcMutation<any>(
+        'services.upgradeTier',
+        { serviceType: 'platform', newTier: 'pro' },
+        accessToken
+      );
 
-      // ---- Step 1: Schedule downgrade to Pro ----
+      // ---- Schedule downgrade to starter ----
       await setClockTime('2025-01-15T00:00:00Z');
 
       await trpcMutation<any>(
         'services.scheduleTierDowngrade',
-        { serviceType: 'seal', newTier: 'pro' },
+        { serviceType: 'platform', newTier: 'starter' },
         accessToken
       );
 
-      // Get tier options - should show Pro as the scheduled tier
-      let optionsResult = await trpcQuery<any>(
+      // Get tier options — should show Starter as the scheduled tier
+      const optionsResult = await trpcQuery<any>(
         'services.getTierOptions',
-        { serviceType: 'seal' },
+        { serviceType: 'platform' },
         accessToken
       );
 
-      let options = optionsResult.result?.data;
+      const options = optionsResult.result?.data;
       expect(options).toBeDefined();
-      expect(options.currentTier).toBe('enterprise');
+      expect(options.currentTier).toBe('pro');
 
       // API returns scheduledTier so UI knows which downgrade is pending
-      expect(options.scheduledTier).toBe('pro');
+      expect(options.scheduledTier).toBe('starter');
       expect(options.scheduledTierEffectiveDate).toBeDefined();
 
-      // Check that only pro shows as "scheduled", not starter
-      const proOption = options.availableTiers.find((t: any) => t.tier === 'pro');
+      // Starter should be marked as scheduled (the pending change)
       const starterOption = options.availableTiers.find((t: any) => t.tier === 'starter');
-
-      // Pro should be marked as scheduled (the pending change)
-      expect(proOption.isScheduled).toBe(true);
-      // Starter should NOT be marked as scheduled (just a potential option)
-      expect(starterOption.isScheduled).toBe(false);
-
-      // ---- Step 2: Change mind, schedule downgrade to Starter instead ----
-      await trpcMutation<any>(
-        'services.scheduleTierDowngrade',
-        { serviceType: 'seal', newTier: 'starter' },
-        accessToken
-      );
-
-      // Get tier options again - should now show Starter as the scheduled tier
-      optionsResult = await trpcQuery<any>(
-        'services.getTierOptions',
-        { serviceType: 'seal' },
-        accessToken
-      );
-
-      options = optionsResult.result?.data;
-
-      // Now Starter should be the scheduled tier, not Pro
-      expect(options.scheduledTier).toBe('starter');
-
-      const proOption2 = options.availableTiers.find((t: any) => t.tier === 'pro');
-      const starterOption2 = options.availableTiers.find((t: any) => t.tier === 'starter');
-
-      // Now Starter should be scheduled, Pro should not
-      expect(starterOption2.isScheduled).toBe(true);
-      expect(proOption2.isScheduled).toBe(false);
+      expect(starterOption.isScheduled).toBe(true);
 
       await expectNoNotifications(customerId);
     });

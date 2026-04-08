@@ -15,24 +15,16 @@ import {
   ensureTestBalance,
   setupPaymentProvider,
   subscribePlatformService,
-  setConfigFlags,
 } from '../helpers/db';
 import { waitAfterMutation } from '../helpers/wait-utils';
-import { getToast, waitForToastsToDisappear } from '../helpers/locators';
+import { waitForToastsToDisappear } from '../helpers/locators';
 
 const API_BASE = 'http://localhost:22700';
 
 test.describe('Platform Subscription', () => {
   test.beforeEach(async ({ page, request }) => {
     await resetCustomer(request);
-    // Set platform-only mode (production config)
-    await setConfigFlags(request, { freq_platform_sub: '1', freq_seal_sub: '0' });
     await authenticateWithMockWallet(page);
-  });
-
-  test.afterAll(async ({ request }) => {
-    // Restore production default: platform-only mode
-    await setConfigFlags(request, { freq_platform_sub: '1', freq_seal_sub: '0' });
   });
 
   // =========================================================================
@@ -82,17 +74,12 @@ test.describe('Platform Subscription', () => {
       // Subscribe (Starter is default)
       await page.locator('button:has-text("Subscribe to Starter Plan")').click();
 
-      // Wait for success toast
+      // Wait for actual state change: active subscription card appears
       await expect(
-        getToast(page, /Subscribed to Platform Starter/i)
+        page.getByText('Platform Starter Plan', { exact: true })
       ).toBeVisible({ timeout: 10000 });
 
       await waitAfterMutation(page);
-
-      // Verify active card appears
-      await expect(
-        page.getByText('Platform Starter Plan', { exact: true })
-      ).toBeVisible({ timeout: 5000 });
     });
 
     test('should subscribe to Platform Pro with escrow', async ({ page, request }) => {
@@ -119,16 +106,12 @@ test.describe('Platform Subscription', () => {
       // Subscribe
       await page.locator('button:has-text("Subscribe to Pro Plan")').click();
 
-      // Wait for success
+      // Wait for actual state change: active subscription card appears
       await expect(
-        getToast(page, /Subscribed to Platform Pro/i)
+        page.getByText('Platform Pro Plan', { exact: true })
       ).toBeVisible({ timeout: 10000 });
 
       await waitAfterMutation(page);
-
-      await expect(
-        page.getByText('Platform Pro Plan', { exact: true })
-      ).toBeVisible({ timeout: 5000 });
     });
 
     test('should show payment pending when no funds', async ({ page }) => {
@@ -141,17 +124,12 @@ test.describe('Platform Subscription', () => {
 
       await page.locator('button:has-text("Subscribe to Starter Plan")').click();
 
-      // Should show warning toast about payment pending
+      // Wait for actual state change: pending card appears
       await expect(
-        getToast(page, /Payment pending/i)
+        page.locator('text=Subscription payment pending')
       ).toBeVisible({ timeout: 10000 });
 
       await waitAfterMutation(page);
-
-      // Should show orange pending card heading
-      await expect(
-        page.locator('text=Subscription payment pending')
-      ).toBeVisible({ timeout: 5000 });
     });
   });
 
@@ -223,15 +201,13 @@ test.describe('Platform Subscription', () => {
       await expect(dialog).toBeVisible({ timeout: 5000 });
       await page.fill('input#depositAmount', '10');
       await dialog.getByRole('button', { name: 'Deposit' }).click();
-      await expect(
-        page.locator('[data-sonner-toast]').filter({ hasText: /Deposited.*successfully/i })
-      ).toBeVisible({ timeout: 10000 });
-      await waitAfterMutation(page);
 
-      // Pending should resolve → active green card appears
+      // Wait for actual state change: pending resolves → active green card appears
       await expect(
         page.locator('text=Change Plan')
       ).toBeVisible({ timeout: 15000 });
+
+      await waitAfterMutation(page);
     });
 
     test('should maintain pending state after page refresh', async ({ page }) => {

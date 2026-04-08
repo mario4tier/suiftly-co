@@ -571,6 +571,18 @@ if (isTestDeployment()) {
   // sudob owns ALL destructive test operations and does truncation directly via pg.
   // This keeps dangerous operations in one place (sudob, which never runs in production).
 
+  // Force Stripe mock mode (mirrors /test/stripe/force-mock on API server)
+  // Required so GM's retryUnpaidInvoices uses the mock Stripe service instead of real Stripe,
+  // which would reject mock customer IDs (cus_mock_*) used in E2E tests.
+  server.post('/api/test/stripe/force-mock', async (request, reply) => {
+    const body = request.body as any;
+    const enabled = body?.enabled === true;
+    const { setStripeForceMock } = await import('@suiftly/database/stripe-mock');
+    setStripeForceMock(enabled);
+    console.log(`[STRIPE] GM force-mock mode ${enabled ? 'enabled' : 'disabled'}`);
+    return reply.send({ success: true, forceMock: enabled });
+  });
+
   // Suspend/resume billing processing (for unit tests that need exclusive DB access)
   server.post('/api/test/processing/suspend', async () => {
     await suspendProcessing();

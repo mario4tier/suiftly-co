@@ -24,16 +24,13 @@ import { SubscriptionStatusBanners } from '@/components/billing/SubscriptionStat
 import type { ServiceTier } from '@suiftly/shared/constants';
 
 interface PlatformPlanCardProps {
-  /** The platform service instance from services.list, or undefined if not subscribed */
-  platformService: {
-    tier: string;
-    state: string;
-    paidOnce: boolean;
-    subPendingInvoiceId: unknown;
-    scheduledTier: string | null;
-    scheduledTierEffectiveDate: string | Date | null;
-    cancellationScheduledFor: string | Date | null;
-  } | undefined;
+  /** Platform subscription data from billing.getBalance (customer-level fields) */
+  platformTier: string | null;
+  paidOnce: boolean;
+  pendingInvoiceId: number | null;
+  scheduledPlatformTier: string | null;
+  scheduledPlatformTierEffectiveDate: string | null;
+  platformCancellationScheduledFor: string | null;
 }
 
 interface TierFeature {
@@ -70,7 +67,7 @@ const PLATFORM_TIERS: {
   },
 ];
 
-export function PlatformPlanCard({ platformService }: PlatformPlanCardProps) {
+export function PlatformPlanCard({ platformTier, paidOnce, pendingInvoiceId, scheduledPlatformTier, scheduledPlatformTierEffectiveDate, platformCancellationScheduledFor }: PlatformPlanCardProps) {
   const [selectedTier, setSelectedTier] = useState<ServiceTier>('starter');
   const [tosModalOpen, setTosModalOpen] = useState(false);
   const [changePlanOpen, setChangePlanOpen] = useState(false);
@@ -92,6 +89,7 @@ export function PlatformPlanCard({ platformService }: PlatformPlanCardProps) {
   const subscribeMutation = trpc.services.subscribe.useMutation({
     onSuccess: (data) => {
       utils.services.list.invalidate();
+      utils.billing.getBalance.invalidate();
       utils.billing.getNextScheduledPayment.invalidate();
       if (data.paymentPending) {
         toast.warning('Platform subscription created. Payment pending.');
@@ -121,13 +119,13 @@ export function PlatformPlanCard({ platformService }: PlatformPlanCardProps) {
   };
 
   // Once subscribed (any state including payment pending), show the plan card
-  // with Change Plan button. Only show onboarding when no service exists at all.
+  // with Change Plan button. Only show onboarding when no tier is set.
   // Status issues (payment pending, suspended, etc.) are surfaced by the billing
   // page's own notification section — this card just shows the plan and actions.
-  if (platformService) {
-    const isPendingPayment = platformService.subPendingInvoiceId != null;
-    const showCheck = platformService.paidOnce;
-    const tierLabel = `Platform ${formatTierName(platformService.tier as ServiceTier)} Plan${isPendingPayment ? ' - Pending' : ''}`;
+  if (platformTier) {
+    const isPendingPayment = pendingInvoiceId != null;
+    const showCheck = paidOnce;
+    const tierLabel = `Platform ${formatTierName(platformTier as ServiceTier)} Plan${isPendingPayment ? ' - Pending' : ''}`;
 
     return (
       <>
@@ -150,9 +148,9 @@ export function PlatformPlanCard({ platformService }: PlatformPlanCardProps) {
             </button>
           </div>
           <SubscriptionStatusBanners
-            scheduledTier={(platformService.scheduledTier as ServiceTier) ?? null}
-            scheduledTierEffectiveDate={platformService.scheduledTierEffectiveDate}
-            cancellationScheduledFor={platformService.cancellationScheduledFor}
+            scheduledTier={(scheduledPlatformTier as ServiceTier) ?? null}
+            scheduledTierEffectiveDate={scheduledPlatformTierEffectiveDate}
+            cancellationScheduledFor={platformCancellationScheduledFor}
             onManagePlan={() => setChangePlanOpen(true)}
           />
         </Card>
@@ -160,7 +158,10 @@ export function PlatformPlanCard({ platformService }: PlatformPlanCardProps) {
           isOpen={changePlanOpen}
           onClose={() => setChangePlanOpen(false)}
           serviceType="platform"
-          onSuccess={() => utils.services.list.invalidate()}
+          onSuccess={() => {
+            utils.services.list.invalidate();
+            utils.billing.getBalance.invalidate();
+          }}
         />
       </>
     );

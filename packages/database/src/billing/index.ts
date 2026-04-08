@@ -164,7 +164,7 @@ export type {
 // Cancellation cleanup job (Phase 1C)
 export {
   processCancellationCleanup,
-  getServicesApproachingDeletion,
+  getCustomersApproachingCancellation,
   cleanupOldCancellationHistory,
 } from './cancellation-cleanup';
 

@@ -11,7 +11,7 @@
 import { eq, and, or, sql, asc } from 'drizzle-orm';
 import type { DatabaseOrTransaction } from '../db';
 import type { LockedTransaction } from './locking';
-import { billingRecords, invoicePayments, serviceInstances, customers } from '../schema';
+import { billingRecords, invoicePayments, customers } from '../schema';
 import { applyCreditsToInvoice, issueReconciliationCredit, issueCredit } from './credits';
 import { clearGracePeriod } from './grace-period';
 import { recalculateDraftInvoice } from './draft-invoice';
@@ -342,40 +342,33 @@ export async function finalizeSuccessfulPayment(
   billingRecordId: number,
   clock: DBClock,
 ): Promise<void> {
-  // 1. Clear subPendingInvoiceId + set paidOnce on services referencing this invoice
-  const pendingServices = await tx
-    .select({ instanceId: serviceInstances.instanceId, serviceType: serviceInstances.serviceType })
-    .from(serviceInstances)
-    .where(
-      and(
-        eq(serviceInstances.customerId, customerId),
-        eq(serviceInstances.subPendingInvoiceId, billingRecordId),
-      )
-    );
+  // 1. Clear pendingInvoiceId + set paidOnce on customer if this invoice matches
+  const [customer] = await tx
+    .select({ pendingInvoiceId: customers.pendingInvoiceId })
+    .from(customers)
+    .where(eq(customers.customerId, customerId))
+    .limit(1);
 
-  if (pendingServices.length > 0) {
-    await tx.update(serviceInstances)
-      .set({ subPendingInvoiceId: null, paidOnce: true })
-      .where(
-        and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.subPendingInvoiceId, billingRecordId),
-        )
-      );
+  const hasPendingInvoice = customer?.pendingInvoiceId === billingRecordId;
+
+  if (hasPendingInvoice) {
+    await tx.update(customers)
+      .set({ pendingInvoiceId: null, paidOnce: true })
+      .where(eq(customers.customerId, customerId));
+  } else {
+    // 2. Set paidOnce on customer (enables grace period on future payment failures)
+    await tx.update(customers)
+      .set({ paidOnce: true })
+      .where(eq(customers.customerId, customerId));
   }
-
-  // 2. Set paidOnce on customer (enables grace period on future payment failures)
-  await tx.update(customers)
-    .set({ paidOnce: true })
-    .where(eq(customers.customerId, customerId));
 
   // 3. Clear grace period (customer may have been suspended due to previous failure)
   await clearGracePeriod(tx, customerId);
 
   // 4. Issue reconciliation credit for partial month (deferred subscription payment).
-  //    Only for invoices linked to a pending service — avoids minting credits for
-  //    non-subscription invoices (usage, add-on) that have no linked service.
-  if (pendingServices.length > 0) {
+  //    Only for invoices linked to a pending customer invoice — avoids minting credits for
+  //    non-subscription invoices (usage, add-on) that have no linked pending invoice.
+  if (hasPendingInvoice) {
     const [invoice] = await tx
       .select()
       .from(billingRecords)
@@ -384,7 +377,7 @@ export async function finalizeSuccessfulPayment(
 
     if (invoice) {
       await issueReconciliationCredit(
-        tx, customerId, invoice, pendingServices[0].serviceType,
+        tx, customerId, invoice, 'platform',
       );
     }
   }

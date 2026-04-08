@@ -48,7 +48,12 @@ export function CustomerDetail() {
           ['Status', customer.status],
           ['Stripe Customer ID', customer.stripeCustomerId || '—'],
           ['Escrow Contract', customer.escrowContractId || '—'],
+          ['Platform Tier', customer.platformTier || '—'],
+          ['Pending Invoice', customer.pendingInvoiceId ? `#${customer.pendingInvoiceId}` : '—'],
           ['Paid Once', String(customer.paidOnce)],
+          ['Scheduled Tier', customer.scheduledPlatformTier || '—'],
+          ['Cancellation Scheduled', customer.platformCancellationScheduledFor || '—'],
+          ['Cancellation Effective', customer.platformCancellationEffectiveAt ? new Date(customer.platformCancellationEffectiveAt).toLocaleString() : '—'],
           ['Spending Limit', formatCents(customer.spendingLimitUsdCents)],
           ['Current Balance', formatCents(customer.currentBalanceUsdCents)],
           ['Period Charged', formatCents(customer.currentPeriodChargedUsdCents)],
@@ -93,24 +98,15 @@ export function CustomerDetail() {
           <table style={tableStyle}>
             <thead>
               <tr style={thRowStyle}>
-                <Th>Service</Th><Th>Tier</Th><Th>State</Th><Th>Enabled</Th><Th>Pending Invoice</Th><Th>Paid Once</Th><Th>Updated</Th>
+                <Th>Service</Th><Th>State</Th><Th>Enabled</Th><Th>Updated</Th>
               </tr>
             </thead>
             <tbody>
               {services.map((s: any) => (
                 <tr key={s.instanceId} style={tdRowStyle}>
                   <Td>{s.serviceType}</Td>
-                  <Td>{s.tier}</Td>
                   <Td>{s.state}</Td>
                   <Td>{String(s.isUserEnabled)}</Td>
-                  <Td>
-                    {s.subPendingInvoiceId ? (
-                      <a href={`/invoice?id=${s.subPendingInvoiceId}`} target="_blank" rel="noopener noreferrer" style={linkStyle}>
-                        #{s.subPendingInvoiceId}
-                      </a>
-                    ) : '—'}
-                  </Td>
-                  <Td>{String(s.paidOnce)}</Td>
                   <Td>{new Date(s.updatedAt).toLocaleString()}</Td>
                 </tr>
               ))}

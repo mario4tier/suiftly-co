@@ -14,7 +14,7 @@
 import { eq, sql } from 'drizzle-orm';
 import type { Database } from '../db';
 import type { LockedTransaction } from './locking';
-import { billingRecords, invoiceLineItems, serviceInstances } from '../schema';
+import { billingRecords, invoiceLineItems, serviceInstances, customers } from '../schema';
 import { getBillableRequestCount } from '../stats/queries';
 import type { DBClock } from '@suiftly/shared/db-clock';
 import {
@@ -585,14 +585,44 @@ export async function syncUsageToDraft(
       AND item_type = ${INVOICE_LINE_ITEM_TYPE.REQUESTS}
   `);
 
-  // 4. Get all subscribed services for this customer
-  // Skip services with pending subscription charge (not yet paid initial charge)
-  const services = await tx
+  // 4. Check if customer has a pending subscription charge (not yet paid initial charge)
+  // If so, skip usage billing entirely for this customer
+  const [customer] = await tx
+    .select({ pendingInvoiceId: customers.pendingInvoiceId })
+    .from(customers)
+    .where(eq(customers.customerId, customerId))
+    .limit(1);
+
+  if (customer?.pendingInvoiceId !== null && customer?.pendingInvoiceId !== undefined) {
+    // Customer has a pending subscription invoice — skip usage billing
+    // Update invoice total (subtract old usage, no new usage)
+    if (existingUsageTotal > 0) {
+      await tx.execute(sql`
+        UPDATE billing_records
+        SET amount_usd_cents = amount_usd_cents - ${existingUsageTotal}
+        WHERE id = ${invoiceId}
+      `);
+    }
+
+    // Always update lastUpdatedAt
+    await tx.execute(sql`
+      UPDATE billing_records
+      SET last_updated_at = ${clock.now()}
+      WHERE id = ${invoiceId}
+    `);
+
+    return {
+      success: true,
+      totalUsageChargesCents: 0,
+      lineItemsCount: 0,
+    };
+  }
+
+  // Get all subscribed services for this customer
+  const activeServices = await tx
     .select()
     .from(serviceInstances)
     .where(eq(serviceInstances.customerId, customerId));
-
-  const activeServices = services.filter(s => s.subPendingInvoiceId === null);
 
   // 5. For DRAFT invoices, show CURRENT month's usage (not next month's billing period)
   // The DRAFT billing period is for next month's subscription charges,
@@ -627,7 +657,10 @@ export async function syncUsageToDraft(
       now
     );
 
-    // 8. Calculate charge (conservative: round down)
+    // 8. Skip services with no usage — don't insert $0 line items
+    if (requestCount === 0) continue;
+
+    // 9. Calculate charge (conservative: round down)
     const chargeCents = Math.floor((requestCount * pricePer1000) / 1000);
 
     // Unit price: cents per 1000 requests (stored for precision)

@@ -25,7 +25,7 @@
 import { test, expect } from '@playwright/test';
 import { waitAfterMutation } from '../helpers/wait-utils';
 import { ServiceStabilityChecker } from '../helpers/service-stability';
-import { resetCustomer, ensureTestBalance, getCustomerData, waitForHaproxyLogs, enableSealOnlyMode } from '../helpers/db';
+import { resetCustomer, ensureTestBalance, getCustomerData, waitForHaproxyLogs, subscribePlatformService } from '../helpers/db';
 // Note: We intentionally don't use setupCpEnabled or createApiKey shortcuts
 // to test the real user experience through the UI
 import {
@@ -420,8 +420,6 @@ test.describe('Real Seal Requests', () => {
   });
 
   test.beforeEach(async ({ page }, testInfo) => {
-    await enableSealOnlyMode(page.request);
-
     // Initialize stability checker and capture initial PIDs
     stabilityChecker = new ServiceStabilityChecker(page.request);
     stabilityChecker.setTestName(testInfo.title);
@@ -442,6 +440,7 @@ test.describe('Real Seal Requests', () => {
 
     // Ensure customer has balance for subscription
     await ensureTestBalance(page.request, 1000, { spendingLimitUsd: 250 });
+    await subscribePlatformService(page);
   });
 
   test.afterEach(async () => {
@@ -460,24 +459,9 @@ test.describe('Real Seal Requests', () => {
       return;
     }
 
-    // === STEP 1: Subscribe to Seal service through UI ===
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
-
-    // Accept terms and select STARTER tier
-    await page.locator('label:has-text("Agree to")').click();
-    await page.getByRole('heading', { name: 'STARTER' }).click();
-
-    // Subscribe to service
-    const subscribeButton = page.locator('button:has-text("Subscribe to Service")');
-    await subscribeButton.click();
-
-    // Wait for subscription success
-    await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
-    console.log('✅ Subscription successful - API key auto-created');
-
-    // Wait for redirect to overview
-    await page.waitForURL(/\/services\/seal\/overview/, { timeout: 10000 });
+    // === STEP 1: Navigate to seal overview (platform subscribed in beforeEach, seal auto-provisioned) ===
+    await page.goto('/services/seal/overview');
+    await page.waitForLoadState('networkidle');
 
     // === STEP 2: Enable the service via UI toggle ===
     const serviceToggle = page.locator('button[role="switch"]');
@@ -581,18 +565,9 @@ test.describe('Real Seal Requests', () => {
       return;
     }
 
-    // === Subscribe and configure through UI (real user experience) ===
-
-    // Navigate to Seal service
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
-
-    // Accept terms and subscribe
-    await page.locator('label:has-text("Agree to")').click();
-    await page.getByRole('heading', { name: 'STARTER' }).click();
-    await page.locator('button:has-text("Subscribe to Service")').click();
-    await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
-    await page.waitForURL(/\/services\/seal\/overview/, { timeout: 10000 });
+    // === Navigate to seal overview (platform subscribed in beforeEach, seal auto-provisioned) ===
+    await page.goto('/services/seal/overview');
+    await page.waitForLoadState('networkidle');
 
     // Enable service
     const serviceToggle = page.locator('button[role="switch"]');
@@ -712,14 +687,9 @@ test.describe('Real Seal Requests', () => {
       'Seal backend (mseal1) not running on port 20401. Start it with: sudo systemctl start mseal1-node'
     ).toBe(true);
 
-    // === STEP 1: Subscribe and configure through UI ===
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
-    await page.locator('label:has-text("Agree to")').click();
-    await page.getByRole('heading', { name: 'STARTER' }).click();
-    await page.locator('button:has-text("Subscribe to Service")').click();
-    await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
-    await page.waitForURL(/\/services\/seal\/overview/, { timeout: 10000 });
+    // === STEP 1: Navigate to seal overview (platform subscribed in beforeEach, seal auto-provisioned) ===
+    await page.goto('/services/seal/overview');
+    await page.waitForLoadState('networkidle');
 
     // Enable service initially
     const serviceToggle = page.locator('button[role="switch"]');
@@ -936,8 +906,6 @@ test.describe('Real Seal Requests - IP Allowlist', () => {
   let stabilityChecker: ServiceStabilityChecker;
 
   test.beforeEach(async ({ page }, testInfo) => {
-    await enableSealOnlyMode(page.request);
-
     // Initialize stability checker and capture initial PIDs
     stabilityChecker = new ServiceStabilityChecker(page.request);
     stabilityChecker.setTestName(testInfo.title);
@@ -958,6 +926,7 @@ test.describe('Real Seal Requests - IP Allowlist', () => {
 
     // Ensure customer has balance for subscription
     await ensureTestBalance(page.request, 1000, { spendingLimitUsd: 250 });
+    await subscribePlatformService(page, 'PRO');
   });
 
   test.afterEach(async () => {
@@ -985,16 +954,10 @@ test.describe('Real Seal Requests - IP Allowlist', () => {
       return;
     }
 
-    // === STEP 1: Subscribe to PRO tier (IP allowlist requires PRO+) ===
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
-
-    await page.locator('label:has-text("Agree to")').click();
-    await page.getByRole('heading', { name: 'PRO' }).click();
-    await page.locator('button:has-text("Subscribe to Service")').click();
-    await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
-    await page.waitForURL(/\/services\/seal\/overview/, { timeout: 10000 });
-    console.log('✅ Subscribed to PRO tier');
+    // === STEP 1: Navigate to seal overview (platform PRO subscribed in beforeEach, seal auto-provisioned) ===
+    await page.goto('/services/seal/overview');
+    await page.waitForLoadState('networkidle');
+    console.log('✅ Navigated to seal overview (PRO platform active)');
 
     // === STEP 2: Enable service and create seal key + package (for cpEnabled) ===
     const serviceToggle = page.locator('button[role="switch"]');
@@ -1110,14 +1073,9 @@ test.describe('Real Seal Requests - IP Allowlist', () => {
       return;
     }
 
-    // Subscribe to PRO tier
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
-    await page.locator('label:has-text("Agree to")').click();
-    await page.getByRole('heading', { name: 'PRO' }).click();
-    await page.locator('button:has-text("Subscribe to Service")').click();
-    await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
-    await page.waitForURL(/\/services\/seal\/overview/, { timeout: 10000 });
+    // Navigate to seal overview (platform PRO subscribed in beforeEach, seal auto-provisioned)
+    await page.goto('/services/seal/overview');
+    await page.waitForLoadState('networkidle');
 
     // Enable service
     const serviceToggle = page.locator('button[role="switch"]');
@@ -1226,14 +1184,9 @@ test.describe('Real Seal Requests - IP Allowlist', () => {
       return;
     }
 
-    // Subscribe to PRO tier
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
-    await page.locator('label:has-text("Agree to")').click();
-    await page.getByRole('heading', { name: 'PRO' }).click();
-    await page.locator('button:has-text("Subscribe to Service")').click();
-    await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
-    await page.waitForURL(/\/services\/seal\/overview/, { timeout: 10000 });
+    // Navigate to seal overview (platform PRO subscribed in beforeEach, seal auto-provisioned)
+    await page.goto('/services/seal/overview');
+    await page.waitForLoadState('networkidle');
 
     // Enable service + create seal key/package
     const serviceToggle = page.locator('button[role="switch"]');
@@ -1350,8 +1303,6 @@ test.describe('Real Seal Requests - Log Ingestion', () => {
   let stabilityChecker: ServiceStabilityChecker;
 
   test.beforeEach(async ({ page }, testInfo) => {
-    await enableSealOnlyMode(page.request);
-
     // Initialize stability checker and capture initial PIDs
     stabilityChecker = new ServiceStabilityChecker(page.request);
     stabilityChecker.setTestName(testInfo.title);
@@ -1372,6 +1323,7 @@ test.describe('Real Seal Requests - Log Ingestion', () => {
 
     // Ensure customer has balance for subscription
     await ensureTestBalance(page.request, 1000, { spendingLimitUsd: 250 });
+    await subscribePlatformService(page);
   });
 
   test.afterEach(async () => {
@@ -1399,15 +1351,9 @@ test.describe('Real Seal Requests - Log Ingestion', () => {
       return;
     }
 
-    // === STEP 1: Subscribe and configure through UI ===
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
-    await page.locator('label:has-text("Agree to")').click();
-    await page.getByRole('heading', { name: 'STARTER' }).click();
-    await page.locator('button:has-text("Subscribe to Service")').click();
-    await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
-    await page.waitForURL(/\/services\/seal\/overview/, { timeout: 10000 });
-    console.log('✅ Subscribed to STARTER tier');
+    // === STEP 1: Navigate to seal overview (platform subscribed in beforeEach, seal auto-provisioned) ===
+    await page.goto('/services/seal/overview');
+    await page.waitForLoadState('networkidle');
 
     // Enable service
     const serviceToggle = page.locator('button[role="switch"]');

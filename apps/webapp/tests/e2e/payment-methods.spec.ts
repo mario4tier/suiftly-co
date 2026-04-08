@@ -4,20 +4,24 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { resetCustomer, ensureTestBalance, addCryptoPayment, addCreditCardPayment, getCustomerData, enableSealOnlyMode } from '../helpers/db';
+import { resetCustomer, ensureTestBalance, addCryptoPayment, addCreditCardPayment, getCustomerData } from '../helpers/db';
 import { waitAfterMutation } from '../helpers/wait-utils';
 
 const API_BASE = 'http://localhost:22700';
+const GM_BASE = 'http://localhost:22600';
 
 test.describe('Payment Methods', () => {
   test.beforeEach(async ({ page }) => {
-    await enableSealOnlyMode(page.request);
-
     await resetCustomer(page.request);
     await page.context().clearCookies();
 
-    // Force mock Stripe mode (ensures mock even when STRIPE_SECRET_KEY is set)
+    // Force mock Stripe mode on both API and GM.
+    // GM runs retryUnpaidInvoices with its own Stripe service instance — without this,
+    // GM would use real Stripe (rejecting cus_mock_* IDs) even when API is in mock mode.
     await page.request.post(`${API_BASE}/test/stripe/force-mock`, {
+      data: { enabled: true },
+    });
+    await page.request.post(`${GM_BASE}/api/test/stripe/force-mock`, {
       data: { enabled: true },
     });
 
@@ -34,8 +38,11 @@ test.describe('Payment Methods', () => {
   });
 
   test.afterEach(async ({ page }) => {
-    // Clean up force-mock so it doesn't leak into manual testing
+    // Clean up force-mock on both API and GM so it doesn't leak into manual testing
     await page.request.post(`${API_BASE}/test/stripe/force-mock`, {
+      data: { enabled: false },
+    });
+    await page.request.post(`${GM_BASE}/api/test/stripe/force-mock`, {
       data: { enabled: false },
     });
   });
@@ -190,32 +197,49 @@ test.describe('Payment Methods', () => {
     await expect(page.getByText('$250.00', { exact: true }).first()).toBeVisible({ timeout: 5000 });
   });
 
-  test('should clear payment pending after escrow deposit and GM reconciliation', async ({ page }) => {
-    // Step 1: Subscribe to Seal service without payment methods (payment will be pending)
-    await page.goto('/services/seal/overview');
-    await page.waitForLoadState('networkidle');
-
-    // Select Starter tier (cheapest)
-    await page.click('text=STARTER');
-
-    // Accept terms of service
-    await page.locator('#terms').click();
-
-    // Subscribe — payment will fail (no payment methods configured)
-    await page.click('button:has-text("Subscribe to Service")');
-    await waitAfterMutation(page);
-
-    // Step 2: Navigate to billing and verify pending banner
+  test('should add stripe credit card after platform subscription is pending', async ({ page }) => {
+    // Step 1: Subscribe to platform without any payment method → pending
     await page.click('text=Billing');
     await page.waitForURL('/billing', { timeout: 5000 });
+    await page.locator('#platform-tos').click();
+    const subscribeButton = page.locator('button:has-text("Subscribe to")');
+    await expect(subscribeButton).toBeEnabled({ timeout: 5000 });
+    await subscribeButton.click();
+    await waitAfterMutation(page);
+
+    // Step 2: Verify pending banner appears
     await expect(page.locator('text=Subscription payment pending')).toBeVisible({ timeout: 5000 });
 
-    // Step 3: Add escrow payment method and deposit sufficient funds
-    await addCryptoPayment(page);
-    await ensureTestBalance(page.request, 50);
+    // Step 3: Add Stripe credit card via mock dialog
+    // "Add Credit Card" button must still be visible after subscribing (even with pending payment)
+    await addCreditCardPayment(page);
 
-    // Step 4: Trigger GM reconciliation (synchronous — waits for completion).
-    // GM's reconcilePayments charges via escrow (DB-backed mock) and clears subPendingInvoiceId.
+    // Step 4: Verify card appears in payment methods
+    const creditCardRow = page.locator('[data-testid="payment-method-row"]').filter({ hasText: 'Credit Card' });
+    await expect(creditCardRow).toBeVisible({ timeout: 5000 });
+    await expect(creditCardRow).toContainText('Visa');
+    await expect(creditCardRow).toContainText('4242');
+  });
+
+  test('should clear payment pending after stripe card added and reconciliation', async ({ page }) => {
+    // Step 1: Subscribe to platform without any payment method → pending
+    await page.click('text=Billing');
+    await page.waitForURL('/billing', { timeout: 5000 });
+    await page.locator('#platform-tos').click();
+    const subscribeButton = page.locator('button:has-text("Subscribe to")');
+    await expect(subscribeButton).toBeEnabled({ timeout: 5000 });
+    await subscribeButton.click();
+    await waitAfterMutation(page);
+
+    // Step 2: Verify pending banner appears
+    await expect(page.locator('text=Subscription payment pending')).toBeVisible({ timeout: 5000 });
+
+    // Step 3: Add Stripe credit card (no funds needed — Stripe mock charges directly)
+    await addCreditCardPayment(page);
+    const creditCardRow = page.locator('[data-testid="payment-method-row"]').filter({ hasText: 'Credit Card' });
+    await expect(creditCardRow).toBeVisible({ timeout: 5000 });
+
+    // Step 4: Trigger reconciliation via API server (uses API's Stripe mock, not GM's separate instance)
     const customerData = await getCustomerData(page.request);
     const reconcileResp = await page.request.post(`${API_BASE}/test/billing/reconcile`, {
       data: { customerId: customerData.customer.customerId },
@@ -227,10 +251,43 @@ test.describe('Payment Methods', () => {
     await page.waitForLoadState('networkidle');
     await expect(page.locator('text=Subscription payment pending')).not.toBeVisible({ timeout: 5000 });
 
-    // Verify the service payment is no longer pending via test endpoint
+    // Verify the platform subscription payment is no longer pending
     const updatedData = await getCustomerData(page.request);
-    const sealService = updatedData.services.find((s: any) => s.serviceType === 'seal');
-    expect(sealService).toBeDefined();
-    expect(sealService.subscriptionChargePending).toBe(false);
+    expect(updatedData.customer.subscriptionChargePending).toBe(false);
+  });
+
+  test('should clear payment pending after escrow deposit and GM reconciliation', async ({ page }) => {
+    // Step 1: Subscribe to platform without payment methods (payment will be pending)
+    await page.click('text=Billing');
+    await page.waitForURL('/billing', { timeout: 5000 });
+    await page.locator('#platform-tos').click();
+    const subscribeButton = page.locator('button:has-text("Subscribe to")');
+    await expect(subscribeButton).toBeEnabled({ timeout: 5000 });
+    await subscribeButton.click();
+    await waitAfterMutation(page);
+
+    // Step 2: Verify pending banner on billing page
+    await expect(page.locator('text=Subscription payment pending')).toBeVisible({ timeout: 5000 });
+
+    // Step 3: Add escrow payment method and deposit sufficient funds
+    await addCryptoPayment(page);
+    await ensureTestBalance(page.request, 50);
+
+    // Step 4: Trigger reconciliation (synchronous — waits for completion).
+    // reconcilePendingPayments charges via escrow and clears pendingInvoiceId.
+    const customerData = await getCustomerData(page.request);
+    const reconcileResp = await page.request.post(`${API_BASE}/test/billing/reconcile`, {
+      data: { customerId: customerData.customer.customerId },
+    });
+    expect(reconcileResp.ok()).toBeTruthy();
+
+    // Step 5: Reload and verify pending banner is gone
+    await page.reload();
+    await page.waitForLoadState('networkidle');
+    await expect(page.locator('text=Subscription payment pending')).not.toBeVisible({ timeout: 5000 });
+
+    // Verify the platform subscription payment is no longer pending
+    const updatedData = await getCustomerData(page.request);
+    expect(updatedData.customer.subscriptionChargePending).toBe(false);
   });
 });

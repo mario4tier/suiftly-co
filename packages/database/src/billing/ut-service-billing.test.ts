@@ -131,7 +131,7 @@ describe('Service Billing Integration (Phase 2)', () => {
       );
 
       expect(result.paymentSuccessful).toBe(true);
-      expect(result.subPendingInvoiceId).toBeNull();
+      expect(result.pendingInvoiceId).toBeNull();
       expect(result.amountUsdCents).toBe(2900);
 
       // Verify invoice created and paid
@@ -170,14 +170,16 @@ describe('Service Billing Integration (Phase 2)', () => {
     });
 
     it('should create DRAFT invoice for next billing cycle', async () => {
+      // Set platform tier on customer (platform subscription drives DRAFT subscription line item)
+      await db.update(customers).set({ platformTier: 'pro' })
+        .where(eq(customers.customerId, testCustomerId));
+
       // Create and enable service (simulates successful subscription)
       await db.insert(serviceInstances).values({
         customerId: testCustomerId,
         serviceType: 'seal',
-        tier: 'pro',
         isUserEnabled: true, // Service is enabled
-        subPendingInvoiceId: null,
-        config: { tier: 'pro' },
+        config: {},
       });
 
       // Handle billing (creates/updates DRAFT)
@@ -244,11 +246,14 @@ describe('Service Billing Integration (Phase 2)', () => {
 
   describe('DRAFT Invoice Management', () => {
     it('should recalculate DRAFT when service configuration changes', async () => {
-      // Create service
+      // Set platform tier on customer (platform subscription drives DRAFT subscription line item)
+      await db.update(customers).set({ platformTier: 'pro' })
+        .where(eq(customers.customerId, testCustomerId));
+
+      // Create service with add-ons
       await db.insert(serviceInstances).values({
         customerId: testCustomerId,
         serviceType: 'seal',
-        tier: 'pro',
         isUserEnabled: true,
         config: {
           tier: 'pro',
@@ -276,13 +281,16 @@ describe('Service Billing Integration (Phase 2)', () => {
     });
 
     it('should NOT change DRAFT when service is toggled off (subscription still active)', async () => {
+      // Set platform tier on customer (platform subscription drives DRAFT subscription line item)
+      await db.update(customers).set({ platformTier: 'pro' })
+        .where(eq(customers.customerId, testCustomerId));
+
       // Create subscribed service (enabled)
       await db.insert(serviceInstances).values({
         customerId: testCustomerId,
         serviceType: 'seal',
-        tier: 'pro',
         isUserEnabled: true, // Service is ON
-        config: { tier: 'pro' },
+        config: {},
       });
 
       // Calculate initial DRAFT

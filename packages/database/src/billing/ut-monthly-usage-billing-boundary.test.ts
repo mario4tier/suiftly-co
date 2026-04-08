@@ -69,6 +69,7 @@ async function createTestCustomer(clock: MockDBClock): Promise<number> {
     currentPeriodChargedUsdCents: 0,
     currentPeriodStart: '2025-01-01',
     paidOnce: true,
+    platformTier: 'pro',
     createdAt: clock.now(),
     updatedAt: clock.now(),
   });
@@ -77,9 +78,8 @@ async function createTestCustomer(clock: MockDBClock): Promise<number> {
     customerId,
     serviceType: 'seal',
     state: 'enabled',
-    tier: 'pro',
     isUserEnabled: true,
-    config: { tier: 'pro' },
+    config: {},
   });
 
   await ensureEscrowPaymentMethod(db, customerId);

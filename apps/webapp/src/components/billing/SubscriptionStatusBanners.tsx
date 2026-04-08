@@ -2,7 +2,7 @@
  * Subscription Status Banners
  *
  * Reusable notification banners for scheduled downgrades and cancellations.
- * Used by both platform (billing page) and per-service (seal overview page) subscriptions.
+ * Used by the platform subscription (billing page).
  */
 
 import { Clock, AlertTriangle } from 'lucide-react';

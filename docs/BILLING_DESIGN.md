@@ -106,7 +106,7 @@ DRAFT → PENDING → PAID/FAILED/VOIDED
 ### Service Gate (Payment Blocking)
 - Service enabling and key operations blocked until:
   1. `paidOnce = true` (service has been paid for at least once)
-  2. `subPendingInvoiceId` is resolved (no pending subscription invoice)
+  2. `pendingInvoiceId` is resolved (no pending subscription invoice)
   3. At least one active payment method exists (see [PAYMENT_DESIGN.md](./PAYMENT_DESIGN.md))
 - Function: `canPerformKeyOperation()` (key ops), service gate logic in `services.ts` / `seal.ts`
 
@@ -219,7 +219,7 @@ See [PAYMENT_DESIGN.md](./PAYMENT_DESIGN.md) for payment-related schema details.
 
 ### Key Fields on `service_instances`
 - `paid_once` - Service-level payment verification (controls key ops, tier change behavior — see above)
-- `sub_pending_invoice_id` - Pending subscription invoice (blocks service enabling until paid)
+- `pending_invoice_id` - Pending subscription invoice (blocks service enabling until paid)
 - `scheduled_tier`, `scheduled_tier_effective_date` - Downgrade
 - `cancellation_scheduled_for`, `cancellation_effective_at` - Cancellation
 

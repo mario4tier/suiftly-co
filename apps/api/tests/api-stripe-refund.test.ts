@@ -1,8 +1,8 @@
 /**
  * API Test: Stripe Refund Flow
  *
- * Tests excess credit refunds when a customer downgrades tier.
- * Scenario: Enterprise ($185/month) → Starter ($9/month), excess reconciliation
+ * Tests excess credit refunds when a customer downgrades platform tier.
+ * Scenario: Pro ($29/month) → Starter ($1/month) mid-month, excess reconciliation
  * credit should be refunded to Stripe.
  *
  * All tests use MockStripeService (no real Stripe API calls).
@@ -14,7 +14,6 @@ import {
   customers,
   serviceInstances,
   billingRecords,
-  invoicePayments,
   customerCredits,
 } from '@suiftly/database/schema';
 import { eq, and } from 'drizzle-orm';
@@ -27,8 +26,6 @@ import {
   ensureTestBalance,
   addStripePaymentMethod,
   runPeriodicBillingJob,
-  setConfigFlags,
-  subscribePlatform,
 } from './helpers/http.js';
 import { login, TEST_WALLET } from './helpers/auth.js';
 
@@ -39,8 +36,6 @@ describe('API: Stripe Refund Flow', () => {
   beforeEach(async () => {
     await resetClock();
     await resetTestData(TEST_WALLET);
-
-    await setConfigFlags({ freq_platform_sub: '1', freq_seal_sub: '1' });
 
     accessToken = await login(TEST_WALLET);
 
@@ -54,9 +49,8 @@ describe('API: Stripe Refund Flow', () => {
     if (!customer) throw new Error('Test customer not found');
     customerId = customer.customerId;
 
+    // Small balance — insufficient for platform Pro ($29) so Stripe handles it
     await ensureTestBalance(2, { walletAddress: TEST_WALLET });
-    await setClockTime('2025-01-01T00:00:00Z');
-    await subscribePlatform(accessToken);
   });
 
   afterEach(async () => {
@@ -67,16 +61,20 @@ describe('API: Stripe Refund Flow', () => {
   });
 
   /**
-   * Helper: Subscribe to a tier with Stripe as payment method
+   * Helper: Subscribe to platform tier with Stripe as payment method.
+   * Escrow has $2 (insufficient for Pro = $29, sufficient for Starter = $1).
    */
-  async function subscribeWithStripe(tier: string): Promise<void> {
-    // Add stripe as payment method (complete-setup creates the row)
+  async function subscribePlatformWithStripe(tier: string): Promise<void> {
+    // Accept TOS (required for platform subscribe)
+    await trpcMutation<any>('billing.acceptTos', {}, accessToken);
+
+    // Add Stripe as payment method
     await addStripePaymentMethod(accessToken);
 
-    // Subscribe
+    // Subscribe to platform (Stripe will handle Pro charge since escrow < $29)
     const result = await trpcMutation<any>(
       'services.subscribe',
-      { serviceType: 'seal', tier },
+      { serviceType: 'platform', tier },
       accessToken
     );
     expect(result.result?.data).toBeDefined();
@@ -88,11 +86,11 @@ describe('API: Stripe Refund Flow', () => {
   // =========================================================================
   describe('Excess credit refund', () => {
     it('should issue refund when credits exceed monthly cost after downgrade', async () => {
-      // Subscribe to Enterprise mid-month ($185/month = 18500 cents)
+      // Subscribe to Platform Pro mid-month ($29/month = 2900 cents) via Stripe
       await setClockTime('2025-01-15T00:00:00Z');
-      await subscribeWithStripe('enterprise');
+      await subscribePlatformWithStripe('pro');
 
-      // Verify reconciliation credit was issued
+      // Verify reconciliation credit was issued (paid for unused days at start of month)
       const creditsAfterSub = await db.select()
         .from(customerCredits)
         .where(
@@ -105,13 +103,13 @@ describe('API: Stripe Refund Flow', () => {
       const totalCredit = creditsAfterSub.reduce(
         (sum, c) => sum + Number(c.originalAmountUsdCents), 0
       );
-      // On Jan 15: credit = 18500 * 14/31 = ~8354 cents (~$83.54)
-      expect(totalCredit).toBeGreaterThan(5000); // > $50
+      // On Jan 15: credit = 2900 * 14/31 ≈ 1309 cents (~$13.09)
+      expect(totalCredit).toBeGreaterThan(1000); // > $10
 
       // Schedule downgrade to Starter (takes effect 1st of next month)
       const downgradeResult = await trpcMutation<any>(
         'services.scheduleTierDowngrade',
-        { serviceType: 'seal', newTier: 'starter' },
+        { serviceType: 'platform', newTier: 'starter' },
         accessToken
       );
       expect(downgradeResult.result?.data?.success).toBe(true);
@@ -121,21 +119,7 @@ describe('API: Stripe Refund Flow', () => {
       const billingResult = await runPeriodicBillingJob(customerId);
       expect(billingResult.success).toBe(true);
 
-      // Check if a refund operation was recorded
-      const refundOps = billingResult.result?.operations?.filter(
-        (op: any) => op.description?.includes('Refunded') || op.description?.includes('refund')
-      );
-
-      // Verify billing records include a credit type (refund)
-      const allRecords = await db.select()
-        .from(billingRecords)
-        .where(eq(billingRecords.customerId, customerId));
-
-      const creditRecords = allRecords.filter(r => r.type === 'credit');
-      // Should have at least one credit record if refund was issued
-      // (refund creates a billing record of type='credit')
-
-      // Verify that remaining credits were reduced
+      // Verify that remaining credits were reduced (refund consumed excess credits)
       const creditsAfterRefund = await db.select()
         .from(customerCredits)
         .where(
@@ -148,18 +132,17 @@ describe('API: Stripe Refund Flow', () => {
         (sum, c) => sum + Number(c.remainingAmountUsdCents), 0
       );
 
-      // After refund, remaining credits should be <= total monthly cost
-      // (seal starter $9 + platform starter $1 = $10 = 1000 cents)
+      // After refund, remaining credits should be <= total monthly cost (platform starter $1 = 100 cents)
       // The refund leaves at most 1 month buffer.
-      expect(remainingCredit).toBeLessThanOrEqual(1000);
+      expect(remainingCredit).toBeLessThanOrEqual(100);
     });
 
     it('should NOT refund when credits are less than monthly cost', async () => {
-      // Subscribe to Starter ($9/month) mid-month
+      // Subscribe to Platform Starter mid-month ($1/month = 100 cents) via Stripe
       await setClockTime('2025-01-15T00:00:00Z');
-      await subscribeWithStripe('starter');
+      await subscribePlatformWithStripe('starter');
 
-      // Credits will be small (< $9)
+      // Credits will be small (< $1)
       const creditsAfterSub = await db.select()
         .from(customerCredits)
         .where(
@@ -171,10 +154,10 @@ describe('API: Stripe Refund Flow', () => {
       const totalCredit = creditsAfterSub.reduce(
         (sum, c) => sum + Number(c.originalAmountUsdCents), 0
       );
-      // On Jan 15: credit = 900 * 14/31 = ~406 cents < 900 monthly cost
-      expect(totalCredit).toBeLessThan(900);
+      // On Jan 15: credit = 100 * 14/31 ≈ 45 cents < 100 monthly cost
+      expect(totalCredit).toBeLessThan(100);
 
-      // Advance to 1st of next month and run billing
+      // Advance to 1st of next month and run billing (no downgrade — still at starter)
       await setClockTime('2025-02-01T00:00:00Z');
       const billingResult = await runPeriodicBillingJob(customerId);
 
@@ -188,14 +171,19 @@ describe('API: Stripe Refund Flow', () => {
     it('should NOT refund when original payment was escrow (not Stripe)', async () => {
       await setClockTime('2025-01-15T00:00:00Z');
 
-      // Use escrow instead of Stripe
-      const { ensureTestBalance } = await import('./helpers/http.js');
-      await ensureTestBalance(500); // $500 — enough for Enterprise ($185/month)
+      // Accept TOS and fund with enough for Platform Pro via escrow
+      await trpcMutation<any>('billing.acceptTos', {}, accessToken);
+      await ensureTestBalance(500, { walletAddress: TEST_WALLET }); // $500 — enough for Pro ($29)
+      await trpcMutation<any>(
+        'billing.addPaymentMethod',
+        { providerType: 'escrow' },
+        accessToken
+      );
 
-      // Subscribe to Enterprise with escrow
+      // Subscribe to Platform Pro with escrow
       const result = await trpcMutation<any>(
         'services.subscribe',
-        { serviceType: 'seal', tier: 'enterprise' },
+        { serviceType: 'platform', tier: 'pro' },
         accessToken
       );
       expect(result.result?.data?.paymentPending).toBe(false);
@@ -203,7 +191,7 @@ describe('API: Stripe Refund Flow', () => {
       // Schedule downgrade to Starter
       await trpcMutation<any>(
         'services.scheduleTierDowngrade',
-        { serviceType: 'seal', newTier: 'starter' },
+        { serviceType: 'platform', newTier: 'starter' },
         accessToken
       );
 

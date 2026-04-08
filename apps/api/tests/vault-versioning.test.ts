@@ -27,7 +27,6 @@ import {
   trpcMutation,
   resetTestData,
   subscribeAndEnable,
-  setConfigFlags,
   subscribePlatform,
 } from './helpers/http.js';
 import { login, TEST_WALLET } from './helpers/auth.js';
@@ -66,7 +65,6 @@ describe('API: Vault Versioning E2E', () => {
     await resetTestData(TEST_WALLET_2);
     await resetTestData(TEST_WALLET_3);
 
-    await setConfigFlags({ freq_platform_sub: '1', freq_seal_sub: '0' });
 
     // Login and setup first test customer
     accessToken = await login(TEST_WALLET);
@@ -115,11 +113,18 @@ describe('API: Vault Versioning E2E', () => {
         .select({
           customerId: serviceInstances.customerId,
           state: serviceInstances.state,
-          tier: serviceInstances.tier,
           isUserEnabled: serviceInstances.isUserEnabled,
         })
         .from(serviceInstances)
         .where(eq(serviceInstances.serviceType, 'seal'));
+
+      // Look up platform tier for each customer (tier derives from platform, not service)
+      const custRecords = await db
+        .select({ customerId: customers.customerId, platformTier: customers.platformTier })
+        .from(customers);
+      const tierMap = new Map(
+        custRecords.map(c => [c.customerId, c.platformTier ?? 'starter'])
+      );
 
       const vaultData: Record<string, string> = {};
       for (const service of services) {
@@ -141,7 +146,7 @@ describe('API: Vault Versioning E2E', () => {
         const config = {
           customerId: service.customerId,
           apiKeyFps: keys.map((k) => k.apiKeyFp),
-          tier: service.tier,
+          tier: tierMap.get(service.customerId) ?? 'starter',
           status: service.state === 'enabled' ? 'active' : 'disabled',
           isUserEnabled: service.isUserEnabled,
         };
@@ -177,7 +182,6 @@ describe('API: Vault Versioning E2E', () => {
         .select({
           customerId: serviceInstances.customerId,
           state: serviceInstances.state,
-          tier: serviceInstances.tier,
           isUserEnabled: serviceInstances.isUserEnabled,
         })
         .from(serviceInstances)
@@ -189,7 +193,7 @@ describe('API: Vault Versioning E2E', () => {
         vaultData[`customer:${service.customerId}`] = JSON.stringify({
           customerId: service.customerId,
           apiKeyFps: [],
-          tier: service.tier,
+          tier: 'starter', // tier derives from platform, not seal service
           status: 'active',
           isUserEnabled: service.isUserEnabled,
         });
@@ -601,16 +605,23 @@ describe('API: Vault Versioning E2E', () => {
       // 2. GM: Generate vault from DB data
       const writer = createVaultWriter({ storageDir, keyProvider });
 
-      // Get real customer data
+      // Get real customer data — tier derives from platform service, not seal
       const services = await db
         .select({
           customerId: serviceInstances.customerId,
           state: serviceInstances.state,
-          tier: serviceInstances.tier,
           isUserEnabled: serviceInstances.isUserEnabled,
         })
         .from(serviceInstances)
         .where(eq(serviceInstances.serviceType, 'seal'));
+
+      // Look up platform tier for each customer (rate limits derive from platform)
+      const allCustomers = await db
+        .select({ customerId: customers.customerId, platformTier: customers.platformTier })
+        .from(customers);
+      const platformTierMap = new Map(
+        allCustomers.map(c => [c.customerId, c.platformTier ?? 'starter'])
+      );
 
       const vaultData: Record<string, string> = {};
       for (const service of services) {
@@ -632,7 +643,7 @@ describe('API: Vault Versioning E2E', () => {
         vaultData[`customer:${service.customerId}`] = JSON.stringify({
           customerId: service.customerId,
           apiKeyFps: keys.map((k) => k.apiKeyFp),
-          tier: service.tier,
+          tier: platformTierMap.get(service.customerId) ?? 'starter',
           status: service.state === 'enabled' ? 'active' : 'disabled',
           isUserEnabled: service.isUserEnabled,
         });

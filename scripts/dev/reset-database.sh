@@ -160,6 +160,27 @@ else
   echo "   ℹ️  Global Manager not running (OK)"
 fi
 
+# Stop LM if running (LM writes to HAProxy .map files; must stop before clearing them)
+if systemctl is-active --quiet suiftly-lm; then
+  echo "   🛑 Stopping Local Manager..."
+  systemctl stop suiftly-lm
+  echo "   ✅ Local Manager stopped"
+else
+  echo "   ℹ️  Local Manager not running (OK)"
+fi
+
+# Clear HAProxy map files (they persist __version__ across restarts)
+# Without this, HAProxy restarts with the old version counter (e.g. 333) even after
+# a DB reset sets vault_seq back to 1 → LM sees VERSION MISMATCH on next apply.
+HAPROXY_MAP_DIR="/etc/haproxy/conf.d"
+if [ -d "$HAPROXY_MAP_DIR" ]; then
+  echo "   🗑️  Clearing HAProxy map files (reset __version__ counter)..."
+  for mapfile in "$HAPROXY_MAP_DIR"/*.map; do
+    [ -f "$mapfile" ] && truncate -s 0 "$mapfile"
+  done
+  echo "   ✅ HAProxy map files cleared"
+fi
+
 # Clean vault directories (GM first, then LM)
 # Prevents stale vault files from causing seq mismatches after DB reset
 GM_VAULT_DIRS=("/opt/syncf/data_tx" "/opt/syncf/data_rx" "/opt/syncf/data")

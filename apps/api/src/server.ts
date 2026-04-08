@@ -1075,7 +1075,10 @@ if (isTestFeaturesEnabled()) {
   });
 
   // Reconcile pending payments for a customer (for testing)
-  // Calls GM queue endpoint to ensure single-threaded execution
+  // Runs retryUnpaidInvoices directly in the API server so the API server's
+  // Stripe mock (which was set up by addStripePaymentMethod/force-mock) is used.
+  // Previously routed through GM, but GM has a separate in-memory Stripe mock
+  // that does not know about payment methods created by the API server's mock.
   server.post('/test/billing/reconcile', {
     config: { rateLimit: false },
   }, async (request, reply) => {
@@ -1086,19 +1089,21 @@ if (isTestFeaturesEnabled()) {
     }
 
     try {
-      // Call GM's sync-customer endpoint (synchronous by default)
-      // This ensures reconciliation runs in GM's single-threaded task queue
-      const gmResponse = await fetch(
-        `http://localhost:22600/api/queue/sync-customer/${body.customerId}?source=test`,
-        { method: 'POST' }
-      );
+      const { db, withCustomerLock } = await import('@suiftly/database');
+      const { retryUnpaidInvoices, getCustomerProviders } = await import('@suiftly/database/billing');
+      const { getSuiService } = await import('@suiftly/database/sui-mock');
+      const { getStripeService } = await import('@suiftly/database/stripe-mock');
+      const { dbClockProvider } = await import('@suiftly/shared/db-clock');
 
-      if (!gmResponse.ok) {
-        const errorText = await gmResponse.text();
-        throw new Error(`GM sync-customer failed: ${gmResponse.status} ${errorText}`);
-      }
+      await dbClockProvider.syncFromTestKv();
+      const clock = dbClockProvider.getClock();
+      const paymentServices = { suiService: getSuiService(), stripeService: getStripeService() };
 
-      const result = await gmResponse.json();
+      const result = await withCustomerLock(db, body.customerId, async (tx) => {
+        const providers = await getCustomerProviders(body.customerId, paymentServices, tx, clock);
+        return await retryUnpaidInvoices(tx, body.customerId, providers, clock);
+      });
+
       reply.send({ success: true, result });
     } catch (error: any) {
       console.error('[TEST RECONCILE ERROR]', error);

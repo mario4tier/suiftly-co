@@ -11,8 +11,9 @@ import { customers, serviceInstances, systemControl, lmStatus, apiKeys, sealKeys
 import { eq, and, sql, min, ne, isNull, count } from 'drizzle-orm';
 import { SERVICE_TYPE, SERVICE_TIER, SERVICE_STATE } from '@suiftly/shared/constants';
 import type { ServiceType } from '@suiftly/shared/constants';
+import { DEFAULT_SERVICE_CONFIG } from '@suiftly/shared/schemas';
 import { testDelayManager } from '../lib/test-delays';
-import { getTierPriceUsdCents, requiresServiceSub } from '../lib/config-cache';
+import { getTierPriceUsdCents } from '../lib/config-cache';
 import { getSuiService } from '@suiftly/database/sui-mock';
 import { getStripeService } from '@suiftly/database/stripe-mock';
 import { storeApiKey } from '../lib/api-keys';
@@ -28,17 +29,16 @@ import {
   getTierChangeOptions,
 } from '@suiftly/database/billing';
 import { dbClock } from '@suiftly/shared/db-clock';
-import { getAvailableTiers } from '@suiftly/shared/pricing';
 import { triggerVaultSync, markConfigChanged } from '../lib/gm-sync';
 import { retryPendingInvoice, assertPlatformSubscription } from '../lib/payment-gates';
 
 // Zod schemas for input validation
 const serviceTypeSchema = z.enum([SERVICE_TYPE.SEAL, SERVICE_TYPE.GRPC, SERVICE_TYPE.GRAPHQL, SERVICE_TYPE.PLATFORM]);
-const serviceTierSchema = z.enum([SERVICE_TIER.STARTER, SERVICE_TIER.PRO, SERVICE_TIER.ENTERPRISE]);
+const serviceTierSchema = z.enum([SERVICE_TIER.STARTER, SERVICE_TIER.PRO]);
 
 const subscribeInputSchema = z.object({
   serviceType: serviceTypeSchema,
-  tier: serviceTierSchema,
+  tier: serviceTierSchema.optional(), // Required for platform; not used for non-platform services
   config: z.any().optional(),
 });
 
@@ -68,17 +68,18 @@ export const servicesRouter = router({
       // Apply test delay if configured
       await testDelayManager.applyDelay('subscribe');
 
-      // Validate tier is available for this service type
-      const availableTiers = getAvailableTiers(input.serviceType);
-      if (!availableTiers.includes(input.tier)) {
+      const isPlatform = input.serviceType === SERVICE_TYPE.PLATFORM;
+
+      // Platform requires tier selection; non-platform services have no tier
+      if (isPlatform && !input.tier) {
         throw new TRPCError({
           code: 'BAD_REQUEST',
-          message: `${input.tier} tier is not available for ${input.serviceType}. Available: ${availableTiers.join(', ')}`,
+          message: 'Platform subscription requires a tier (starter or pro)',
         });
       }
 
-      // Get tier price upfront (from in-memory cache - O(1) lookup, no database query)
-      const priceUsdCents = getTierPriceUsdCents(input.tier, input.serviceType);
+      // Get platform tier price upfront (from in-memory cache - O(1) lookup, no database query)
+      const priceUsdCents = isPlatform ? getTierPriceUsdCents(input.tier!) : 0;
       const paymentServices = { suiService: getSuiService(), stripeService: getStripeService() };
 
       // Wrap entire operation in customer advisory lock
@@ -103,77 +104,72 @@ export const servicesRouter = router({
         }
 
         // Enforce TOS acceptance for platform subscriptions
-        // (Platform TOS is persisted server-side; seal has its own client-side TOS flow)
-        if (input.serviceType === 'platform' && !customer.tosAcceptedAt) {
+        if (isPlatform && !customer.tosAcceptedAt) {
           throw new TRPCError({
             code: 'PRECONDITION_FAILED',
             message: 'Terms of service must be accepted before subscribing',
           });
         }
 
-        // 2. Check if service already exists (idempotency check)
-        const existing = await tx.query.serviceInstances.findFirst({
-          where: and(
-            eq(serviceInstances.customerId, ctx.user!.customerId),
-            eq(serviceInstances.serviceType, input.serviceType)
-          ),
-        });
+        if (isPlatform) {
+          // 2. Platform idempotency check — platformTier on customers table
+          if (customer.platformTier !== null) {
+            // Already subscribed - return idempotent response
+            return {
+              instanceId: 0, // No service instance for platform
+              customerId: ctx.user!.customerId,
+              serviceType: input.serviceType,
+              tier: customer.platformTier,
+              state: SERVICE_STATE.ENABLED,
+              isUserEnabled: true,
+              config: {},
+              pendingInvoiceId: customer.pendingInvoiceId,
+              apiKey: null as string | null,
+              paymentPending: customer.pendingInvoiceId !== null,
+            };
+          }
+        } else {
+          // 2. Non-platform idempotency check
+          const existing = await tx.query.serviceInstances.findFirst({
+            where: and(
+              eq(serviceInstances.customerId, ctx.user!.customerId),
+              eq(serviceInstances.serviceType, input.serviceType)
+            ),
+          });
 
-        if (existing) {
-          // Already subscribed - return existing instance (idempotent)
-          // Note: API key was already created, won't be returned again
-          return {
-            ...existing,
-            subPendingInvoiceId: existing.subPendingInvoiceId,
-            apiKey: null as string | null,
-            paymentPending: existing.subPendingInvoiceId !== null,
-          };
-        }
+          if (existing) {
+            // Already subscribed - return existing instance (idempotent)
+            return {
+              ...existing,
+              pendingInvoiceId: customer.pendingInvoiceId,
+              apiKey: null as string | null,
+              paymentPending: customer.pendingInvoiceId !== null,
+            };
+          }
 
-        // 2.5. Platform gating: require active platform subscription before per-service subscribe
-        if (input.serviceType !== SERVICE_TYPE.PLATFORM) {
+          // 2.5. Platform gating: require active platform subscription before non-platform subscribe
           await assertPlatformSubscription(tx, ctx.user!.customerId);
         }
 
-        const isPlatform = input.serviceType === SERVICE_TYPE.PLATFORM;
-
-        // 3. Initialize config with defaults based on service type and tier
-        const defaultConfig = isPlatform
-          ? { tier: input.tier }
-          : {
-              tier: input.tier,
-              burstEnabled: input.tier !== SERVICE_TIER.STARTER, // Enabled by default for Pro/Enterprise
-              totalSealKeys: 1,
-              packagesPerSealKey: 3,
-              totalApiKeys: 2,
-              purchasedSealKeys: 0,
-              purchasedPackages: 0,
-              purchasedApiKeys: 0,
-              ipAllowlist: [],
-            };
-
-        // 4. Create service instance
-        // Platform is auto-enabled (always "on"). Per-service starts DISABLED.
-        const [newService] = await tx
-          .insert(serviceInstances)
-          .values({
-            customerId: ctx.user!.customerId,
-            serviceType: input.serviceType,
-            tier: input.tier,
-            state: isPlatform ? SERVICE_STATE.ENABLED : SERVICE_STATE.DISABLED,
-            config: input.config || defaultConfig,
-            isUserEnabled: isPlatform, // Platform auto-on, per-service off
-          })
-          .returning();
-
-        // 5. Generate initial API key (skip for platform — no API keys needed)
-        let plainKey: string | null = null;
         if (!isPlatform) {
+          // Non-platform services (seal, grpc, graphql): free features, no billing
+          const defaultConfig = DEFAULT_SERVICE_CONFIG;
+
+          const [newService] = await tx
+            .insert(serviceInstances)
+            .values({
+              customerId: ctx.user!.customerId,
+              serviceType: input.serviceType,
+              state: SERVICE_STATE.DISABLED,
+              config: input.config || defaultConfig,
+              isUserEnabled: false,
+            })
+            .returning();
+
+          // Generate initial API key
           const result = await storeApiKey({
             customerId: ctx.user!.customerId,
             serviceType: input.serviceType,
-            // sealType is Seal-specific metadata (network + access mode)
-            // Future gRPC/GraphQL services will have their own metadata encoding
             ...(input.serviceType === SERVICE_TYPE.SEAL && {
               sealType: { network: 'mainnet', access: 'open' },
             }),
@@ -181,40 +177,32 @@ export const servicesRouter = router({
               generatedAt: 'subscription',
               instanceId: newService.instanceId,
             },
-            tx, // Pass locked transaction
+            tx,
           });
-          plainKey = result.plainKey;
-        }
-
-        // 6. Process billing — skip when per-service subscription is not required
-        const skipBilling = !isPlatform && !requiresServiceSub(input.serviceType);
-
-        if (skipBilling) {
-          // No subscription charge — set paidOnce immediately so service can be enabled
-          await tx
-            .update(serviceInstances)
-            .set({ paidOnce: true })
-            .where(eq(serviceInstances.instanceId, newService.instanceId));
-          await tx
-            .update(customers)
-            .set({ paidOnce: true })
-            .where(eq(customers.customerId, ctx.user!.customerId));
 
           return {
             ...newService,
-            subPendingInvoiceId: null,
-            apiKey: plainKey,
+            pendingInvoiceId: null,
+            apiKey: result.plainKey,
             paymentPending: false,
           };
         }
 
+        // Platform service: billing applies
+        // 3. Set platform tier on customer record (no service instance for platform)
+        await tx
+          .update(customers)
+          .set({ platformTier: input.tier! })
+          .where(eq(customers.customerId, ctx.user!.customerId));
+
+        // 4. Process platform billing
         let billingResult;
         try {
           billingResult = await handleSubscriptionBillingLocked(
             tx,
             ctx.user!.customerId,
             input.serviceType,
-            input.tier,
+            input.tier!,
             priceUsdCents,
             paymentServices,
             dbClock
@@ -222,17 +210,25 @@ export const servicesRouter = router({
         } catch (billingError) {
           console.error('[SUBSCRIBE] Unexpected billing error:', billingError);
           return {
-            ...newService,
-            subPendingInvoiceId: null,
-            apiKey: plainKey,
+            instanceId: 0,
+            customerId: ctx.user!.customerId,
+            serviceType: input.serviceType,
+            tier: input.tier!,
+            state: SERVICE_STATE.ENABLED,
+            isUserEnabled: true,
+            config: {},
+            pendingInvoiceId: null,
+            apiKey: null as string | null,
             paymentPending: true,
             paymentError: 'UNEXPECTED_ERROR',
             paymentErrorMessage: billingError instanceof Error ? billingError.message : 'Unexpected error',
           };
         }
 
+        // 5. Handle billing result — return early if payment failed
+        // Auto-provisioning of seal/grpc/graphql only happens after successful platform payment
         if (!billingResult.paymentSuccessful) {
-          console.log('[SUBSCRIBE] Billing failed, returning service with pending payment:', billingResult.error);
+          console.log('[SUBSCRIBE] Platform billing failed, returning with pending payment:', billingResult.error);
 
           let paymentErrorMessage: string;
           if (billingResult.error?.includes('Account does not exist') ||
@@ -244,14 +240,20 @@ export const servicesRouter = router({
           }
 
           await tx
-            .update(serviceInstances)
-            .set({ subPendingInvoiceId: billingResult.subPendingInvoiceId })
-            .where(eq(serviceInstances.instanceId, newService.instanceId));
+            .update(customers)
+            .set({ pendingInvoiceId: billingResult.pendingInvoiceId })
+            .where(eq(customers.customerId, ctx.user!.customerId));
 
           return {
-            ...newService,
-            subPendingInvoiceId: billingResult.subPendingInvoiceId,
-            apiKey: plainKey,
+            instanceId: 0,
+            customerId: ctx.user!.customerId,
+            serviceType: input.serviceType,
+            tier: input.tier!,
+            state: SERVICE_STATE.ENABLED,
+            isUserEnabled: true,
+            config: {},
+            pendingInvoiceId: billingResult.pendingInvoiceId,
+            apiKey: null as string | null,
             paymentPending: true,
             paymentError: billingResult.error?.includes('No escrow account')
               ? 'NO_ESCROW_ACCOUNT'
@@ -260,23 +262,70 @@ export const servicesRouter = router({
           };
         }
 
-        // 7. Payment succeeded
-        // Platform stays enabled (always "on"), per-service stays disabled until user enables
+        // 6. Payment succeeded — clear pending state on customer
         await tx
-          .update(serviceInstances)
-          .set({
-            state: isPlatform ? SERVICE_STATE.ENABLED : SERVICE_STATE.DISABLED,
-            subPendingInvoiceId: null,
-            isUserEnabled: isPlatform,
-          })
-          .where(eq(serviceInstances.instanceId, newService.instanceId));
+          .update(customers)
+          .set({ pendingInvoiceId: null })
+          .where(eq(customers.customerId, ctx.user!.customerId));
 
-        // 8. Return service with API key
+        // 7. Auto-provision non-platform services now that platform payment succeeded.
+        // Idempotent (onConflictDoNothing + key existence check) so safe to re-run.
+        const nonPlatformServices = [SERVICE_TYPE.SEAL, SERVICE_TYPE.GRPC, SERVICE_TYPE.GRAPHQL] as const;
+        for (const serviceType of nonPlatformServices) {
+          await tx
+            .insert(serviceInstances)
+            .values({
+              customerId: ctx.user!.customerId,
+              serviceType,
+              state: SERVICE_STATE.DISABLED,
+              config: DEFAULT_SERVICE_CONFIG,
+              isUserEnabled: false,
+            })
+            .onConflictDoNothing();
+
+          // Generate an API key for each auto-provisioned service (idempotent)
+          const existingServiceInstance = await tx.query.serviceInstances.findFirst({
+            where: and(
+              eq(serviceInstances.customerId, ctx.user!.customerId),
+              eq(serviceInstances.serviceType, serviceType)
+            ),
+          });
+
+          if (existingServiceInstance) {
+            const existingKey = await tx.query.apiKeys.findFirst({
+              where: and(
+                eq(apiKeys.customerId, ctx.user!.customerId),
+                eq(apiKeys.serviceType, serviceType),
+              ),
+            });
+
+            if (!existingKey) {
+              await storeApiKey({
+                customerId: ctx.user!.customerId,
+                serviceType,
+                ...(serviceType === SERVICE_TYPE.SEAL && {
+                  sealType: { network: 'mainnet', access: 'open' },
+                }),
+                metadata: {
+                  generatedAt: 'platform_subscription',
+                  instanceId: existingServiceInstance.instanceId,
+                },
+                tx,
+              });
+            }
+          }
+        }
+
         return {
-          ...newService,
-          subPendingInvoiceId: null,
-          isUserEnabled: isPlatform,
-          apiKey: plainKey,
+          instanceId: 0,
+          customerId: ctx.user!.customerId,
+          serviceType: input.serviceType,
+          tier: input.tier!,
+          state: SERVICE_STATE.ENABLED,
+          isUserEnabled: true,
+          config: {},
+          pendingInvoiceId: null,
+          apiKey: null as string | null,
           paymentPending: false,
         };
       },
@@ -384,11 +433,15 @@ export const servicesRouter = router({
 
           // Check if subscription charge is pending when trying to enable
           // Only validate funds when payment is still pending (not yet paid)
-          if (service.subPendingInvoiceId !== null && input.enabled) {
-            await retryPendingInvoice(tx, ctx.user!.customerId, {
-              instanceId: service.instanceId,
-              subPendingInvoiceId: service.subPendingInvoiceId,
-            });
+          // pendingInvoiceId lives on customers table (platform-level gate)
+          const [customerForGate] = await tx
+            .select({ pendingInvoiceId: customers.pendingInvoiceId })
+            .from(customers)
+            .where(eq(customers.customerId, ctx.user!.customerId))
+            .limit(1);
+
+          if (customerForGate?.pendingInvoiceId != null && input.enabled) {
+            await retryPendingInvoice(tx, ctx.user!.customerId, customerForGate.pendingInvoiceId);
           }
 
           // Only allow toggling if service is in disabled or enabled state
@@ -497,16 +550,7 @@ export const servicesRouter = router({
           }
 
           // Get current config or create new one
-          const currentConfig = service.config as any || {
-            tier: service.tier,
-            burstEnabled: false,
-            totalSealKeys: 1,
-            packagesPerSealKey: 3,
-            totalApiKeys: 2,
-            purchasedSealKeys: 0,
-            purchasedPackages: 0,
-            purchasedApiKeys: 0,
-          };
+          const currentConfig = service.config as any || DEFAULT_SERVICE_CONFIG;
 
           // Update only the fields that were provided
           const updatedConfig = {
@@ -515,19 +559,27 @@ export const servicesRouter = router({
             ...(input.ipAllowlist !== undefined && { ipAllowlist: input.ipAllowlist }),
           };
 
-          // Validate burst is only for Pro/Enterprise
-          if (updatedConfig.burstEnabled && service.tier === SERVICE_TIER.STARTER) {
+          // Look up effective tier from customer's platform subscription for feature gating
+          const [customerForTier] = await tx
+            .select({ platformTier: customers.platformTier })
+            .from(customers)
+            .where(eq(customers.customerId, ctx.user!.customerId))
+            .limit(1);
+          const effectiveTier = customerForTier?.platformTier ?? SERVICE_TIER.STARTER;
+
+          // Validate burst is only for Pro tier
+          if (updatedConfig.burstEnabled && effectiveTier === SERVICE_TIER.STARTER) {
             throw new TRPCError({
               code: 'BAD_REQUEST',
-              message: 'Burst is only available for Pro and Enterprise tiers',
+              message: 'Burst is only available for Pro tier',
             });
           }
 
-          // Validate IP allowlist is only for Pro/Enterprise
-          if (updatedConfig.ipAllowlist?.length > 0 && service.tier === SERVICE_TIER.STARTER) {
+          // Validate IP allowlist is only for Pro tier
+          if (updatedConfig.ipAllowlist?.length > 0 && effectiveTier === SERVICE_TIER.STARTER) {
             throw new TRPCError({
               code: 'BAD_REQUEST',
-              message: 'IP allowlist is only available for Pro and Enterprise tiers',
+              message: 'IP allowlist is only available for Pro tier',
             });
           }
 
@@ -574,6 +626,13 @@ export const servicesRouter = router({
         });
       }
 
+      if (input.serviceType !== 'platform') {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Tier changes are only available for the platform subscription',
+        });
+      }
+
       const options = await getTierChangeOptions(
         db,
         ctx.user.customerId,
@@ -608,6 +667,13 @@ export const servicesRouter = router({
         });
       }
 
+      if (input.serviceType !== 'platform') {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Tier changes are only available for the platform subscription',
+        });
+      }
+
       // Apply test delay if configured
       await testDelayManager.applyDelay('tierChange');
 
@@ -622,7 +688,7 @@ export const servicesRouter = router({
             tx,
             ctx.user!.customerId,
             input.serviceType as ServiceType,
-            input.newTier as 'starter' | 'pro' | 'enterprise',
+            input.newTier as 'starter' | 'pro',
             paymentServices,
             dbClock
           );
@@ -662,6 +728,13 @@ export const servicesRouter = router({
         });
       }
 
+      if (input.serviceType !== 'platform') {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Tier changes are only available for the platform subscription',
+        });
+      }
+
       // Apply test delay if configured
       await testDelayManager.applyDelay('tierChange');
 
@@ -673,7 +746,7 @@ export const servicesRouter = router({
             tx,
             ctx.user!.customerId,
             input.serviceType as ServiceType,
-            input.newTier as 'starter' | 'pro' | 'enterprise',
+            input.newTier as 'starter' | 'pro',
             dbClock
           );
         },
@@ -706,6 +779,13 @@ export const servicesRouter = router({
         throw new TRPCError({
           code: 'UNAUTHORIZED',
           message: 'Not authenticated',
+        });
+      }
+
+      if (input.serviceType !== 'platform') {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Tier changes are only available for the platform subscription',
         });
       }
 

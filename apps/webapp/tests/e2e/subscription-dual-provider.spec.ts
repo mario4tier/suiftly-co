@@ -13,7 +13,7 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { setupPaymentProvider, subscribeSealService, enableSealOnlyMode } from '../helpers/db';
+import { setupPaymentProvider, subscribePlatformService } from '../helpers/db';
 import { getStripePublishableKey } from '../helpers/stripe';
 import { waitAfterMutation, waitForCondition } from '../helpers/wait-utils';
 import { waitForToastsToDisappear } from '../helpers/locators';
@@ -22,9 +22,8 @@ const API_BASE = 'http://localhost:22700';
 
 /** Tier pricing (USD) */
 const TIERS = [
-  { name: 'STARTER', price: 9 },
+  { name: 'STARTER', price: 1 },
   { name: 'PRO', price: 29 },
-  { name: 'ENTERPRISE', price: 185 },
 ] as const;
 
 for (const provider of ['escrow', 'stripe'] as const) {
@@ -35,8 +34,6 @@ for (const provider of ['escrow', 'stripe'] as const) {
     }
 
     test.beforeEach(async ({ page, request }) => {
-      await enableSealOnlyMode(request);
-
       if (provider === 'stripe') {
         // Disable force-mock to check for real Stripe keys
         await request.post(`${API_BASE}/test/stripe/force-mock`, {
@@ -79,17 +76,16 @@ for (const provider of ['escrow', 'stripe'] as const) {
         await setupPaymentProvider(page, request, provider, tier.price);
 
         const successTimeout = provider === 'stripe' ? 30000 : 10000;
-        await subscribeSealService(page, tier.name, { successTimeout });
+        await subscribePlatformService(page, tier.name as 'STARTER' | 'PRO', { successTimeout, expectSuccess: true });
+
+        // Navigate to seal to verify auto-provisioned seal service
+        await page.goto('/services/seal/overview');
+        await page.waitForLoadState('networkidle');
 
         // Should show service disabled banner
         await expect(
           page.locator('text=/Service is currently OFF/i')
         ).toBeVisible({ timeout: 5000 });
-
-        // Should be on the overview page (onboarding form gone)
-        await expect(
-          page.getByRole('heading', { name: 'Guaranteed Bandwidth' })
-        ).not.toBeVisible();
 
         console.log(`  ${tier.name} via ${provider}: subscription succeeded`);
       });
@@ -97,11 +93,15 @@ for (const provider of ['escrow', 'stripe'] as const) {
 
     test('toggle enable/disable works after subscription', async ({ page, request }) => {
       // Use STARTER (cheapest tier)
-      await setupPaymentProvider(page, request, provider, 9);
+      await setupPaymentProvider(page, request, provider, 1);
 
       const successTimeout = provider === 'stripe' ? 30000 : 10000;
-      await subscribeSealService(page, 'STARTER', { successTimeout });
+      await subscribePlatformService(page, 'STARTER', { successTimeout });
       await waitForToastsToDisappear(page);
+
+      // Navigate to seal overview after platform subscription
+      await page.goto('/services/seal/overview');
+      await page.waitForLoadState('networkidle');
 
       // Verify initial state: disabled
       const initialService = await request.get(

@@ -37,7 +37,6 @@ function assertNever(value: never, context: string): string {
 const TIER_DISPLAY_NAMES: Record<ServiceTier, string> = {
   [SERVICE_TIER.STARTER]: 'Starter',
   [SERVICE_TIER.PRO]: 'Pro',
-  [SERVICE_TIER.ENTERPRISE]: 'Enterprise',
 };
 
 /**
@@ -77,8 +76,6 @@ export function formatLineItemDescription(item: InvoiceLineItem): string {
       return item.service === SERVICE_TYPE.PLATFORM ? 'Platform Starter plan' : `${serviceName} Starter tier`;
     case INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_PRO:
       return item.service === SERVICE_TYPE.PLATFORM ? 'Platform Pro plan' : `${serviceName} Pro tier`;
-    case INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_ENTERPRISE:
-      return `${serviceName} Enterprise tier`;
     case INVOICE_LINE_ITEM_TYPE.TIER_UPGRADE:
       return `${serviceName} tier upgrade (pro-rated)`;
     case INVOICE_LINE_ITEM_TYPE.REQUESTS:

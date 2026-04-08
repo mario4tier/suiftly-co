@@ -11,8 +11,8 @@
  */
 
 import { test, expect, type Page } from '@playwright/test';
-import { getToast, waitForToastsToDisappear } from '../helpers/locators';
-import { enableSealOnlyMode } from '../helpers/db';
+import { waitForToastsToDisappear } from '../helpers/locators';
+import { subscribePlatformService } from '../helpers/db';
 
 /** Click "Save Changes" and wait for the API mutation response + UI to settle */
 async function saveAndWaitForCompletion(page: Page) {
@@ -26,8 +26,6 @@ async function saveAndWaitForCompletion(page: Page) {
 
 test.describe('Seal IP Allowlist - Validation & Save/Cancel', () => {
   test.beforeEach(async ({ page, request }) => {
-    await enableSealOnlyMode(request);
-
     // Setup test environment
     await request.post('http://localhost:22700/test/delays/clear');
     await request.post('http://localhost:22700/test/data/reset', {
@@ -52,30 +50,24 @@ test.describe('Seal IP Allowlist - Validation & Save/Cancel', () => {
     await page.waitForURL('/dashboard', { timeout: 10000 });
     await page.waitForLoadState('networkidle');
 
-    // Subscribe to PRO tier
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
-    await page.locator('label:has-text("Agree to")').click();
-    await page.getByRole('heading', { name: 'PRO' }).click();
-    await page.locator('button:has-text("Subscribe to Service")').click();
-
-    await expect(getToast(page, /Subscription successful/i)).toBeVisible({ timeout: 5000 });
-    await page.waitForURL(/\/services\/seal\/overview/, { timeout: 5000 });
-
-    // Wait for toasts to disappear before navigating (prevents pollution)
+    // Subscribe to platform PRO (auto-provisions seal; platform tier used for IP allowlist limits)
+    await subscribePlatformService(page, 'PRO');
+    // Navigate to seal overview
+    await page.goto('/services/seal/overview');
+    await page.waitForLoadState('networkidle');
     await waitForToastsToDisappear(page);
 
     // Navigate to More Settings
     await page.click('button[role="tab"]:has-text("More Settings")');
     await expect(page.locator('#ip-allowlist-toggle')).toBeVisible({ timeout: 5000 });
 
-    // Enable IP allowlist - wait for mutation + all triggered refetches to complete
-    const toggleResponse = page.waitForResponse(
-      (resp) => resp.url().includes('/i/api') && resp.request().method() === 'POST' && resp.ok()
-    );
+    // Enable IP allowlist — wait for toggle + mutation onSuccess to complete.
+    // onSuccess resets editingIpText state; must finish before tests type into textarea.
     await page.locator('#ip-allowlist-toggle').click();
-    await toggleResponse;
-    await page.waitForLoadState('networkidle');
+    await expect(page.locator('#ip-allowlist-toggle')).toHaveAttribute('data-state', 'checked', { timeout: 5000 });
+    await expect(page.locator('#ip-allowlist')).toBeVisible({ timeout: 5000 });
+    // Brief pause for React to settle after mutation callback
+    await page.waitForTimeout(500);
   });
 
   test('accepts valid IPv4 addresses and shows Save button', async ({ page }) => {
@@ -419,8 +411,6 @@ test.describe('Seal IP Allowlist - Validation & Save/Cancel', () => {
 
 test.describe('Seal IP Allowlist - Persistence & Reload', () => {
   test.beforeEach(async ({ page, request }) => {
-    await enableSealOnlyMode(request);
-
     await request.post('http://localhost:22700/test/delays/clear');
     await request.post('http://localhost:22700/test/data/reset', {
       data: {
@@ -444,14 +434,11 @@ test.describe('Seal IP Allowlist - Persistence & Reload', () => {
     await page.waitForURL('/dashboard', { timeout: 10000 });
     await page.waitForLoadState('networkidle');
 
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
-    await page.locator('label:has-text("Agree to")').click();
-    await page.getByRole('heading', { name: 'PRO' }).click();
-    await page.locator('button:has-text("Subscribe to Service")').click();
-
-    await expect(getToast(page, /Subscription successful/i)).toBeVisible({ timeout: 5000 });
-    await page.waitForURL(/\/services\/seal\/overview/, { timeout: 5000 });
+    // Subscribe to platform PRO (auto-provisions seal; platform tier for IP limits)
+    await subscribePlatformService(page, 'PRO');
+    // Navigate to seal overview
+    await page.goto('/services/seal/overview');
+    await page.waitForLoadState('networkidle');
   });
 
   test('saved IPs persist after page reload', async ({ page, request }) => {
@@ -462,13 +449,11 @@ test.describe('Seal IP Allowlist - Persistence & Reload', () => {
     await page.click('button[role="tab"]:has-text("More Settings")');
     await expect(page.locator('#ip-allowlist-toggle')).toBeVisible({ timeout: 5000 });
 
-    // Enable IP allowlist - wait for mutation + all triggered refetches to complete
-    const toggleResponse = page.waitForResponse(
-      (resp) => resp.url().includes('/i/api') && resp.request().method() === 'POST' && resp.ok()
-    );
+    // Enable IP allowlist — wait for toggle + mutation onSuccess to complete
     await page.locator('#ip-allowlist-toggle').click();
-    await toggleResponse;
-    await page.waitForLoadState('networkidle');
+    await expect(page.locator('#ip-allowlist-toggle')).toHaveAttribute('data-state', 'checked', { timeout: 5000 });
+    await expect(page.locator('#ip-allowlist')).toBeVisible({ timeout: 5000 });
+    await page.waitForTimeout(500);
 
     // Add and save IP
     const textarea = page.locator('#ip-allowlist');
@@ -483,6 +468,7 @@ test.describe('Seal IP Allowlist - Persistence & Reload', () => {
 
     // Reload page and navigate back to More Settings
     await page.reload();
+    await page.waitForLoadState('networkidle');
     await page.click('button[role="tab"]:has-text("More Settings")');
     // Wait for data to load — toggle will be checked once the fetched config has ipAllowlistEnabled=true
     await expect(page.locator('#ip-allowlist-toggle')).toBeChecked({ timeout: 10000 });

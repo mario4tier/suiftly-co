@@ -314,7 +314,7 @@ export async function registerStripeWebhook(server: FastifyInstance) {
  * Full reconciliation:
  * 1. Create invoice_payments row (sourceType='stripe')
  * 2. Update billing_records: status='paid', amountPaidUsdCents, paymentActionUrl=null
- * 3. Finalize: clear subPendingInvoiceId, set paidOnce, clear grace period,
+ * 3. Finalize: clear pendingInvoiceId, set paidOnce, clear grace period,
  *    issue reconciliation credit, recalculate DRAFT (via finalizeSuccessfulPayment)
  *
  * Uses metadata.billing_record_id (set by StripePaymentProvider) to find the
@@ -491,7 +491,7 @@ async function handleInvoicePaid(invoice: Record<string, unknown>) {
       })
       .where(eq(billingRecords.id, billingRecordId));
 
-    // 3. Finalize: clear subPendingInvoiceId, set paidOnce, clear grace period,
+    // 3. Finalize: clear pendingInvoiceId, set paidOnce, clear grace period,
     //    issue reconciliation credit, and recalculate DRAFT — all via shared function.
     await finalizeSuccessfulPayment(tx, customerId, billingRecordId, clock);
 

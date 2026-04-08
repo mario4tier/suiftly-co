@@ -11,7 +11,7 @@
 
 import { test, expect, type Page } from '@playwright/test';
 import { waitAfterMutation } from '../helpers/wait-utils';
-import { resetCustomer, ensureTestBalance, enableSealOnlyMode } from '../helpers/db';
+import { resetCustomer, ensureTestBalance, subscribePlatformService } from '../helpers/db';
 import {
   sealHealthCheck,
   sealHealthCheckWithRetry,
@@ -56,12 +56,15 @@ async function getApiKeys(
   const response = await request.get(`${API_URL}/test/data/api-keys`);
   if (!response.ok()) throw new Error(`Failed to get API keys: ${await response.text()}`);
   const data = await response.json();
-  return (data.apiKeys || []).map((k: any) => ({
-    apiKeyFp: k.apiKeyFp,
-    keyPreview: `${k.apiKeyId.slice(0, 8)}...${k.apiKeyId.slice(-4)}`,
-    fullKey: k.apiKeyId,
-    isUserEnabled: k.isUserEnabled,
-  }));
+  // Filter to seal-only keys (grpc/graphql keys are auto-provisioned but not tested here)
+  return (data.apiKeys || [])
+    .filter((k: any) => k.serviceType === 'seal')
+    .map((k: any) => ({
+      apiKeyFp: k.apiKeyFp,
+      keyPreview: `${k.apiKeyId.slice(0, 8)}...${k.apiKeyId.slice(-4)}`,
+      fullKey: k.apiKeyId,
+      isUserEnabled: k.isUserEnabled,
+    }));
 }
 
 async function verifyKeyWorks(apiKey: string, label: string): Promise<void> {
@@ -93,13 +96,12 @@ async function verifyServiceDisabled(apiKey: string, label: string): Promise<voi
 
 /** Subscribe to Seal, enable service, create seal key + package (for cpEnabled) */
 async function setupSealService(page: Page, packageSuffix: string): Promise<void> {
+  // Subscribe to platform (auto-provisions seal as disabled)
+  await subscribePlatformService(page);
+
+  // Navigate to seal overview
   await page.click('text=Seal');
-  await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
-  await page.locator('label:has-text("Agree to")').click();
-  await page.getByRole('heading', { name: 'STARTER' }).click();
-  await page.locator('button:has-text("Subscribe to Service")').click();
-  await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
-  await page.waitForURL(/\/services\/seal\/overview/, { timeout: 10000 });
+  await page.waitForURL(/\/services\/seal\/overview/, { timeout: 5000 });
 
   // Enable service if needed
   const toggle = page.locator('button[role="switch"]');
@@ -134,8 +136,6 @@ async function checkPrerequisites(): Promise<boolean> {
 
 test.describe('Seal Key Rotation', () => {
   test.beforeEach(async ({ page }) => {
-    await enableSealOnlyMode(page.request);
-
     await resetCustomer(page.request);
     await page.context().clearCookies();
     await page.goto('/');

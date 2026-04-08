@@ -11,7 +11,7 @@
 
 import { test, expect, Page } from '@playwright/test';
 import { waitAfterMutation } from '../helpers/wait-utils';
-import { resetCustomer, ensureTestBalance, truncateAllTables, enableSealOnlyMode } from '../helpers/db';
+import { resetCustomer, ensureTestBalance, truncateAllTables, subscribePlatformService } from '../helpers/db';
 import { db } from '@suiftly/database';
 import { serviceInstances, systemControl } from '@suiftly/database/schema';
 import { eq, and } from 'drizzle-orm';
@@ -139,8 +139,6 @@ test.describe('Control Plane Sync Flow', () => {
   });
 
   test.beforeEach(async ({ page }) => {
-    await enableSealOnlyMode(page.request);
-
     // Reset customer to clean state
     await resetCustomer(page.request);
 
@@ -156,6 +154,7 @@ test.describe('Control Plane Sync Flow', () => {
 
     // Ensure customer has escrow account with $1000 balance for subscription payment
     await ensureTestBalance(page.request, 1000, { spendingLimitUsd: 250 });
+    await subscribePlatformService(page);
   });
 
   test('cpEnabled transitions to true when service enabled with seal key and package', async ({ page }) => {
@@ -168,23 +167,9 @@ test.describe('Control Plane Sync Flow', () => {
     let cpEnabled = await getServiceCpEnabled(customerId);
     expect(cpEnabled).toBeFalsy();
 
-    // Navigate to Seal service and subscribe
-    await page.goto('/services/seal');
-    await waitAfterMutation(page);
-
-    // Subscribe to PRO tier
-    const subscribeButton = page.locator('button:has-text("Subscribe to Service")');
-    if (await subscribeButton.isVisible()) {
-      // Click checkbox using role selector - most robust for Radix UI components
-      await page.getByRole('checkbox').click();
-      await waitAfterMutation(page);
-      // Verify checkbox is checked before clicking subscribe
-      await expect(page.getByRole('checkbox')).toBeChecked({ timeout: 2000 });
-      await subscribeButton.click();
-      await waitAfterMutation(page);
-      // Wait for navigation to overview (subscription worked even if toast was missed)
-      await page.waitForURL(/\/services\/seal\/overview/, { timeout: 10000 });
-    }
+    // Navigate to seal overview (auto-provisioned after platform subscribe in beforeEach)
+    await page.goto('/services/seal/overview');
+    await page.waitForLoadState('networkidle');
 
     // Wait for the interactive form to render (shows when service is subscribed)
     const serviceToggle = page.locator('button[role="switch"]');

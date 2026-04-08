@@ -6,7 +6,7 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import { router, protectedProcedure } from '../lib/trpc';
-import { db, withCustomerLockForAPI } from '@suiftly/database';
+import { db, withCustomerLockForAPI, type DatabaseOrTransaction } from '@suiftly/database';
 import { sealKeys, sealPackages, sealRegistrationOps, serviceInstances, apiKeys, configGlobal, customers, systemControl, adminNotifications } from '@suiftly/database/schema';
 import { eq, and, sql, isNull } from 'drizzle-orm';
 import { SERVICE_TYPE, SEAL_LIMITS } from '@suiftly/shared/constants';
@@ -18,6 +18,22 @@ import { dbClock } from '@suiftly/shared/db-clock';
 import { triggerVaultSync, markConfigChanged } from '../lib/gm-sync';
 import { retryPendingInvoice } from '../lib/payment-gates';
 import { getSealProcessGroup, isProduction } from '@mhaxbe/system-config';
+
+/**
+ * Get the customer's effective tier from their platform subscription.
+ * All feature gating (burst, IP allowlist, rate limits) is derived from platform tier.
+ */
+async function getCustomerPlatformTier(
+  dbInstance: DatabaseOrTransaction,
+  customerId: number
+): Promise<'starter' | 'pro'> {
+  const result = await dbInstance
+    .select({ platformTier: customers.platformTier })
+    .from(customers)
+    .where(eq(customers.customerId, customerId))
+    .limit(1);
+  return (result[0]?.platformTier as 'starter' | 'pro') ?? 'starter';
+}
 
 export const sealRouter = router({
   /**
@@ -880,11 +896,15 @@ export const sealRouter = router({
           }
 
           // Check if subscription charge is pending (payment gate logic)
-          if (service.subPendingInvoiceId !== null) {
-            await retryPendingInvoice(tx, ctx.user!.customerId, {
-              instanceId: service.instanceId,
-              subPendingInvoiceId: service.subPendingInvoiceId,
-            });
+          // pendingInvoiceId lives on customers table (platform-level gate)
+          const [customerForGate] = await tx
+            .select({ pendingInvoiceId: customers.pendingInvoiceId })
+            .from(customers)
+            .where(eq(customers.customerId, ctx.user!.customerId))
+            .limit(1);
+
+          if (customerForGate?.pendingInvoiceId != null) {
+            await retryPendingInvoice(tx, ctx.user!.customerId, customerForGate.pendingInvoiceId);
           }
 
           // Get configuration limits
@@ -896,7 +916,7 @@ export const sealRouter = router({
           // ====================================================================
           // Count ALL keys ever created for this customer (including soft-deleted)
           // This is an absolute safety limit to prevent abuse even after deletion
-          // is enabled for pro/enterprise tiers.
+          // is enabled for pro tiers.
           const allKeysEver = await tx.query.sealKeys.findMany({
             where: eq(sealKeys.customerId, ctx.user!.customerId),
             columns: { sealKeyId: true },
@@ -940,7 +960,7 @@ export const sealRouter = router({
           // ====================================================================
           // This is the normal business limit based on subscription tier.
           // Soft-deleted keys don't count because deletion is blocked in production.
-          // When deletion is enabled for pro/enterprise, the hard limit above catches abuse.
+          // When deletion is enabled for pro tier, the hard limit above catches abuse.
           const nonDeletedKeys = await tx.query.sealKeys.findMany({
             where: and(
               eq(sealKeys.instanceId, service.instanceId),
@@ -1169,6 +1189,9 @@ export const sealRouter = router({
     // Count allowlist entries (from config)
     const allowlistEntries = (config.ipAllowlist || []).length;
 
+    // Derive feature limits from platform tier
+    const platformTier = await getCustomerPlatformTier(db, ctx.user.customerId);
+
     // Get limits and pricing from configGlobal
     const sealKeysIncluded = getConfigInt('fskey_incl', 1);
     const packagesIncluded = getConfigInt('fskey_pkg_incl', 3);
@@ -1197,8 +1220,8 @@ export const sealRouter = router({
       },
       allowlist: {
         used: allowlistEntries,
-        total: service.tier === 'starter' ? 0 : (config.totalIpv4Allowlist || ipv4Included),
-        included: service.tier === 'starter' ? 0 : ipv4Included,
+        total: platformTier === 'starter' ? 0 : (config.totalIpv4Allowlist || ipv4Included),
+        included: platformTier === 'starter' ? 0 : ipv4Included,
         pricePerAdditional: ipv4Price,
       },
       packagesPerKey: {
@@ -1581,11 +1604,12 @@ export const sealRouter = router({
             });
           }
 
-          // Starter tier doesn't support burst
-          if (service.tier === 'starter') {
+          // Burst requires Pro platform tier
+          const platformTierForBurst = await getCustomerPlatformTier(tx, ctx.user!.customerId);
+          if (platformTierForBurst === 'starter') {
             throw new TRPCError({
               code: 'BAD_REQUEST',
-              message: 'Burst is only available for Pro and Enterprise tiers',
+              message: 'Burst is only available for Pro tier',
             });
           }
 
@@ -1652,11 +1676,12 @@ export const sealRouter = router({
             });
           }
 
-          // Starter tier doesn't support IP allowlist
-          if (service.tier === 'starter') {
+          // IP allowlist requires Pro platform tier
+          const platformTierForAllowlist = await getCustomerPlatformTier(tx, ctx.user!.customerId);
+          if (platformTierForAllowlist === 'starter') {
             throw new TRPCError({
               code: 'BAD_REQUEST',
-              message: 'IP Allowlist is only available for Pro and Enterprise tiers',
+              message: 'IP Allowlist is only available for Pro tier',
             });
           }
 
@@ -1753,9 +1778,10 @@ export const sealRouter = router({
     }
 
     const config = service.config as any || {};
+    const platformTier = await getCustomerPlatformTier(db, ctx.user.customerId);
 
     return {
-      burstEnabled: config.burstEnabled ?? (service.tier !== 'starter'),
+      burstEnabled: config.burstEnabled ?? (platformTier !== 'starter'),
       ipAllowlistEnabled: config.ipAllowlistEnabled ?? false,
       ipAllowlist: config.ipAllowlist || [],
     };

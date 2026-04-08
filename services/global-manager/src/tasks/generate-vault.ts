@@ -44,12 +44,12 @@
  * - No reset of configChangeVaultSeq needed - the comparison handles it
  */
 
-import { db, systemControl, serviceInstances, apiKeys, sealKeys, sealPackages, adminNotifications } from '@suiftly/database';
+import { db, systemControl, serviceInstances, customers, apiKeys, sealKeys, sealPackages, adminNotifications } from '@suiftly/database';
 import { SERVICE_TYPE, SERVICE_STATE, SEAL_TEST_KEY, type ServiceType } from '@suiftly/shared/constants';
 import { createVaultWriter, createVaultReader, computeContentHash, type VaultInstance } from '@mhaxbe/vault-codec';
 import { getSealProcessGroup } from '@mhaxbe/system-config';
 import { isProduction } from '@mhaxbe/system-config';
-import { eq, and, isNull } from 'drizzle-orm';
+import { eq, and, isNull, isNotNull, inArray } from 'drizzle-orm';
 
 // ============================================================================
 // HAProxy Map Encoding - Tier Configuration
@@ -65,9 +65,8 @@ import { eq, and, isNull } from 'drizzle-orm';
  * - bqos: Burst QoS priority (0-15, 0 = burst disabled)
  */
 const TIER_CONFIG: Record<string, { ilim: number; glim: number; blim: number; bqos: number }> = {
-  starter: { ilim: 0x02, glim: 0x02, blim: 0x00, bqos: 0x0 },    // 8 req/sec, no burst
-  pro: { ilim: 0x10, glim: 0x06, blim: 0x06, bqos: 0x2 },        // 24 req/sec + burst
-  enterprise: { ilim: 0x40, glim: 0x18, blim: 0x18, bqos: 0x3 }, // 96 req/sec + burst
+  starter: { ilim: 0x02, glim: 0x02, blim: 0x00, bqos: 0x0 }, // 8 req/sec, no burst
+  pro: { ilim: 0x10, glim: 0x06, blim: 0x06, bqos: 0x2 },     // 24 req/sec + burst
 };
 
 // Type for vault type codes
@@ -479,7 +478,6 @@ async function buildHAProxyVaultData(
         customerId: serviceInstances.customerId,
         instanceId: serviceInstances.instanceId,
         state: serviceInstances.state,
-        tier: serviceInstances.tier,
         isUserEnabled: serviceInstances.isUserEnabled,
         cpEnabled: serviceInstances.cpEnabled,
         config: serviceInstances.config,
@@ -494,6 +492,26 @@ async function buildHAProxyVaultData(
   } catch (error) {
     console.error(`[VAULT] ERROR: buildHAProxyVaultData services query failed:`, error);
     throw error;
+  }
+
+  // Pre-fetch platform tiers for all customers in one batch query
+  // Rate limits (ilim/glim/blim) are derived from the customer's platform tier
+  const customerIds = [...new Set(services.map(s => s.customerId))];
+  const platformTierMap = new Map<number, string>();
+  if (customerIds.length > 0) {
+    const platformCustomers = await db
+      .select({
+        customerId: customers.customerId,
+        platformTier: customers.platformTier,
+      })
+      .from(customers)
+      .where(and(
+        inArray(customers.customerId, customerIds),
+        isNotNull(customers.platformTier)
+      ));
+    for (const pi of platformCustomers) {
+      if (pi.platformTier) platformTierMap.set(pi.customerId, pi.platformTier);
+    }
   }
 
   // Build config for each cpEnabled customer
@@ -518,6 +536,32 @@ async function buildHAProxyVaultData(
       const apiKeyFps = keys.map((k) => k.apiKeyFp);
       const status = getVaultStatus(service.state);
 
+      // Derive effective tier from customer's platform subscription
+      const effectiveTier = platformTierMap.get(service.customerId);
+      if (!effectiveTier) {
+        // cpEnabled service with no platform subscription — invalid state, skip (fail closed)
+        console.error(`[VAULT] WARNING: customer ${service.customerId} has cpEnabled ${serviceType} service but no platformTier — skipping`);
+        try {
+          // Deduplicate: only insert if no recent notification exists for this customer+code
+          const existing = await db.query.adminNotifications.findFirst({
+            where: and(
+              eq(adminNotifications.customerId, service.customerId),
+              eq(adminNotifications.code, 'ORPHANED_CP_ENABLED_SERVICE')
+            ),
+          });
+          if (!existing) {
+            await db.insert(adminNotifications).values({
+              customerId: service.customerId,
+              severity: 'warning',
+              category: 'billing',
+              code: 'ORPHANED_CP_ENABLED_SERVICE',
+              message: `Customer ${service.customerId} has cpEnabled ${serviceType} service but no platform subscription`,
+            });
+          }
+        } catch { /* don't let notification failure break vault generation */ }
+        continue;
+      }
+
       // Extract IP allowlist from service config if enabled
       // Config is jsonb with: { ipAllowlistEnabled?: boolean, ipAllowlist?: string[], ... }
       const dbConfig = service.config as { ipAllowlistEnabled?: boolean; ipAllowlist?: string[] } | null;
@@ -526,9 +570,9 @@ async function buildHAProxyVaultData(
           ? dbConfig.ipAllowlist
           : undefined;
 
-      // Encode HAProxy map config
+      // Encode HAProxy map config using platform-derived tier
       const { mapConfigHex, extraApiKeyFps } = encodeCustomerMapConfig(
-        service.tier,
+        effectiveTier,
         status,
         service.isUserEnabled,
         apiKeyFps,
@@ -540,7 +584,7 @@ async function buildHAProxyVaultData(
         serviceType: serviceTypeStr,
         network,
         apiKeyFps,
-        tier: service.tier,
+        tier: effectiveTier,
         status,
         isUserEnabled: service.isUserEnabled,
         mapConfigHex,
@@ -729,8 +773,28 @@ async function buildKeyserverVaultData(
         )
       );
 
+    // Pre-fetch platform tiers to skip orphaned services (same as HAProxy path)
+    const custIds = [...new Set(services.map(s => s.customerId))];
+    const ksPlatformTierMap = new Map<number, string>();
+    if (custIds.length > 0) {
+      const ptRows = await db
+        .select({ customerId: customers.customerId, platformTier: customers.platformTier })
+        .from(customers)
+        .where(and(
+          inArray(customers.customerId, custIds),
+          isNotNull(customers.platformTier)
+        ));
+      for (const r of ptRows) {
+        if (r.platformTier) ksPlatformTierMap.set(r.customerId, r.platformTier);
+      }
+    }
+
     for (const service of services) {
-      // Customer ID as string for cust_id field
+      // Skip orphaned cpEnabled services with no platform subscription
+      if (!ksPlatformTierMap.has(service.customerId)) {
+        continue; // Already reported by HAProxy vault path
+      }
+
       const custId = `c${service.customerId}`;
 
       // Get seal keys for this service

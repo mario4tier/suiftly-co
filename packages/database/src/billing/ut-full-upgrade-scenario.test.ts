@@ -1,12 +1,13 @@
 /**
- * Full Upgrade Scenario Test: Deposit → Pro → Schedule Downgrade → Upgrade to Enterprise
+ * Full Upgrade Scenario Test: Deposit → Starter → Upgrade Pro → Schedule Downgrade → Re-confirm Pro
  *
  * Reproduces user-reported bug:
  * - User deposits $200
- * - User subscribes to Pro tier ($29 charged)
+ * - User subscribes to Starter platform tier ($1 charged)
+ * - User upgrades to Pro (pro-rated charge)
  * - User schedules downgrade to Starter
- * - User upgrades to Enterprise instead
- * - Expected: All billing records visible, DRAFT shows Enterprise price
+ * - User upgrades back to Pro (while downgrade is scheduled)
+ * - Expected: All billing records visible, DRAFT shows Pro price
  * - Bug reported: "$29 charge not showing in billing but was subtracted from escrow"
  */
 
@@ -14,7 +15,6 @@ import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
 import { db } from '../db';
 import {
   customers,
-  serviceInstances,
   billingRecords,
   customerCredits,
   invoicePayments,
@@ -33,9 +33,10 @@ import type { ISuiService, TransactionResult, ChargeParams, EscrowAccount, Depos
 import {
   handleTierUpgrade,
   scheduleTierDowngrade,
+  cancelScheduledTierChange,
 } from './tier-changes';
 import { handleSubscriptionBilling } from './service-billing';
-import { TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
+import { PLATFORM_TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
 import { toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData, resetTestState, suspendGMProcessing } from './test-helpers';
 
 // ============================================================================
@@ -113,7 +114,7 @@ class FullScenarioMockSuiService implements ISuiService {
 // Test Suite
 // ============================================================================
 
-describe('Full Upgrade Scenario: Deposit → Pro → Schedule Downgrade → Enterprise', () => {
+describe('Full Upgrade Scenario: Deposit → Starter → Upgrade Pro → Schedule Downgrade → Re-confirm Pro', () => {
   const clock = new MockDBClock();
   let suiService: FullScenarioMockSuiService;
   let paymentServices: ReturnType<typeof toPaymentServices>;
@@ -146,23 +147,13 @@ describe('Full Upgrade Scenario: Deposit → Pro → Schedule Downgrade → Ente
       currentPeriodChargedUsdCents: 0,
       currentPeriodStart: '2025-12-01',
       paidOnce: false,
+      platformTier: 'starter', // Initial platform tier
+      pendingInvoiceId: null,
       createdAt: clock.now(),
       updatedAt: clock.now(),
     }).returning();
 
     testCustomerId = customer.customerId;
-
-    // Create service instance (not yet subscribed - no tier set yet, will be set on subscribe)
-    await db.insert(serviceInstances).values({
-      customerId: testCustomerId,
-      serviceType: 'seal',
-      tier: 'starter', // Initial tier before subscribing
-      state: 'disabled',
-      isUserEnabled: false,
-      subPendingInvoiceId: null,
-      paidOnce: false,
-      config: {},
-    });
 
     // Ensure escrow payment method exists for provider chain
     await ensureEscrowPaymentMethod(db, testCustomerId);
@@ -182,20 +173,20 @@ describe('Full Upgrade Scenario: Deposit → Pro → Schedule Downgrade → Ente
     console.log(`  Mock escrow balance: ${suiService.getBalance()} cents ($${(suiService.getBalance()/100).toFixed(2)})`);
     expect(suiService.getBalance()).toBe(20000);
 
-    // ========== STEP 2: Subscribe to Pro tier ==========
-    console.log('\nSTEP 2: Subscribe to Pro tier ($29)');
+    // ========== STEP 2: Subscribe to Starter tier ==========
+    console.log('\nSTEP 2: Subscribe to Starter platform tier ($1)');
 
-    // First update service to Pro tier, then call subscription billing
-    await db.update(serviceInstances)
-      .set({ tier: 'pro', state: 'enabled', isUserEnabled: true })
-      .where(eq(serviceInstances.customerId, testCustomerId));
+    // First update customer to Starter tier, then call subscription billing
+    await db.update(customers)
+      .set({ platformTier: 'starter' })
+      .where(eq(customers.customerId, testCustomerId));
 
     const subscriptionResult = await handleSubscriptionBilling(
       db,
       testCustomerId,
-      'seal',
-      'pro',
-      TIER_PRICES_USD_CENTS.pro, // $29 = 2900 cents
+      'platform',
+      'starter',
+      PLATFORM_TIER_PRICES_USD_CENTS.starter, // $1 = 100 cents
       paymentServices,
       clock
     );
@@ -205,11 +196,29 @@ describe('Full Upgrade Scenario: Deposit → Pro → Schedule Downgrade → Ente
     console.log(`  Mock escrow balance after: ${suiService.getBalance()} cents ($${(suiService.getBalance()/100).toFixed(2)})`);
 
     expect(subscriptionResult.paymentSuccessful).toBe(true);
-    expect(subscriptionResult.amountUsdCents).toBe(2900);
-    expect(suiService.getBalance()).toBe(20000 - 2900); // $171
+    expect(subscriptionResult.amountUsdCents).toBe(100);
+    expect(suiService.getBalance()).toBe(20000 - 100); // $199
 
-    // ========== STEP 3: Verify billing record for Pro subscription ==========
-    console.log('\nSTEP 3: Verify billing record for Pro subscription');
+    // ========== STEP 2b: Upgrade to Pro tier ==========
+    console.log('\nSTEP 2b: Upgrade to Pro tier ($29, pro-rated)');
+
+    const upgradeToProResult = await handleTierUpgrade(db, testCustomerId, 'platform', 'pro', paymentServices, clock);
+    console.log(`  Upgrade result: success=${upgradeToProResult.success}, newTier=${upgradeToProResult.newTier}`);
+    console.log(`  Pro-rated charge: ${upgradeToProResult.chargeAmountUsdCents} cents ($${((upgradeToProResult.chargeAmountUsdCents || 0)/100).toFixed(2)})`);
+    console.log(`  Mock escrow balance after: ${suiService.getBalance()} cents ($${(suiService.getBalance()/100).toFixed(2)})`);
+
+    expect(upgradeToProResult.success).toBe(true);
+    expect(upgradeToProResult.newTier).toBe('pro');
+
+    // Calculate expected pro-rated charge for Starter → Pro upgrade
+    // Dec 2 → Dec 31 = 30 days remaining out of 31
+    // (Pro - Starter) * 30/31 = ($29 - $1) * 30/31 = $28 * 30/31
+    const expectedUpgradeToProCents = Math.floor((PLATFORM_TIER_PRICES_USD_CENTS.pro - PLATFORM_TIER_PRICES_USD_CENTS.starter) * 30 / 31);
+    console.log(`  Expected pro-rated upgrade charge: ${expectedUpgradeToProCents} cents ($${(expectedUpgradeToProCents/100).toFixed(2)})`);
+    expect(upgradeToProResult.chargeAmountUsdCents).toBe(expectedUpgradeToProCents);
+
+    // ========== STEP 3: Verify billing records after Starter subscribe + Pro upgrade ==========
+    console.log('\nSTEP 3: Verify billing records after Starter subscribe and Pro upgrade');
 
     let allRecords = await db.select().from(billingRecords)
       .where(eq(billingRecords.customerId, testCustomerId))
@@ -220,76 +229,64 @@ describe('Full Upgrade Scenario: Deposit → Pro → Schedule Downgrade → Ente
       console.log(`    - ${record.status}: $${(record.amountUsdCents/100).toFixed(2)} (${record.type}) id: ${record.id}`);
     }
 
-    // Should have: 1 PAID for Pro subscription, 1 DRAFT for next month
+    // Should have: 1 PAID for Starter subscription, 1 PAID for pro-rated Pro upgrade, 1 DRAFT for next month
     const paidRecords = allRecords.filter(r => r.status === 'paid');
     const draftRecords = allRecords.filter(r => r.status === 'draft');
 
-    expect(paidRecords.length).toBe(1);
-    expect(paidRecords[0].amountUsdCents).toBe(2900);
+    expect(paidRecords.length).toBe(2);
     expect(draftRecords.length).toBe(1);
-    // DRAFT is net of credits: pro price (2900) minus reconciliation credit (floor(2900*1/31)=93)
-    expect(draftRecords[0].amountUsdCents).toBe(TIER_PRICES_USD_CENTS.pro - Math.floor(2900 * 1 / 31));
+    // DRAFT shows Pro price for next month (no reconciliation credit — upgrade charge was already pro-rated)
+    expect(draftRecords[0].amountUsdCents).toBe(PLATFORM_TIER_PRICES_USD_CENTS.pro);
 
     // ========== STEP 4: Schedule downgrade to Starter ==========
     console.log('\nSTEP 4: Schedule downgrade Pro → Starter');
 
-    const downgradeResult = await scheduleTierDowngrade(db, testCustomerId, 'seal', 'starter', clock);
+    const downgradeResult = await scheduleTierDowngrade(db, testCustomerId, 'platform', 'starter', clock);
     console.log(`  Downgrade scheduled: success=${downgradeResult.success}`);
     console.log(`  Effective date: ${downgradeResult.effectiveDate?.toISOString()}`);
 
     expect(downgradeResult.success).toBe(true);
 
-    // Verify service state
-    let [service] = await db.select().from(serviceInstances).where(eq(serviceInstances.customerId, testCustomerId));
-    console.log(`  Service tier: ${service.tier}, scheduledTier: ${service.scheduledTier}`);
-    expect(service.tier).toBe('pro');
-    expect(service.scheduledTier).toBe('starter');
+    // Verify customer platform state
+    let cust = await db.query.customers.findFirst({ where: eq(customers.customerId, testCustomerId) });
+    console.log(`  Platform tier: ${cust!.platformTier}, scheduledTier: ${cust!.scheduledPlatformTier}`);
+    expect(cust!.platformTier).toBe('pro');
+    expect(cust!.scheduledPlatformTier).toBe('starter');
 
     // Check DRAFT after downgrade scheduled
     let [draft] = await db.select().from(billingRecords).where(and(
       eq(billingRecords.customerId, testCustomerId),
       eq(billingRecords.status, 'draft')
     ));
-    // DRAFT is net of credits: starter price (900) minus remaining reconciliation credit (93)
-    const expectedDowngradeDraft = TIER_PRICES_USD_CENTS.starter - Math.floor(2900 * 1 / 31);
-    console.log(`  DRAFT after downgrade scheduled: $${(draft.amountUsdCents/100).toFixed(2)} (expected: $${(expectedDowngradeDraft/100).toFixed(2)})`);
-    expect(draft.amountUsdCents).toBe(expectedDowngradeDraft);
+    // DRAFT shows Starter price (no reconciliation credit — scheduling a downgrade doesn't issue credits)
+    console.log(`  DRAFT after downgrade scheduled: $${(draft.amountUsdCents/100).toFixed(2)} (expected: $${(PLATFORM_TIER_PRICES_USD_CENTS.starter/100).toFixed(2)})`);
+    expect(draft.amountUsdCents).toBe(PLATFORM_TIER_PRICES_USD_CENTS.starter);
 
-    // ========== STEP 5: Upgrade to Enterprise (while downgrade is scheduled) ==========
-    console.log('\nSTEP 5: Upgrade to Enterprise (while Starter downgrade is scheduled)');
+    // ========== STEP 5: Cancel the scheduled downgrade (Pro is the highest tier, no upgrade possible) ==========
+    console.log('\nSTEP 5: Cancel scheduled Starter downgrade (keeping Pro)');
 
-    const upgradeResult = await handleTierUpgrade(db, testCustomerId, 'seal', 'enterprise', paymentServices, clock);
-    console.log(`  Upgrade result: success=${upgradeResult.success}, newTier=${upgradeResult.newTier}`);
-    console.log(`  Pro-rated charge: ${upgradeResult.chargeAmountUsdCents} cents ($${((upgradeResult.chargeAmountUsdCents || 0)/100).toFixed(2)})`);
-    console.log(`  Mock escrow balance after: ${suiService.getBalance()} cents ($${(suiService.getBalance()/100).toFixed(2)})`);
+    const cancelResult = await cancelScheduledTierChange(db, testCustomerId, 'platform', clock);
+    console.log(`  Cancel result: success=${cancelResult.success}`);
 
-    expect(upgradeResult.success).toBe(true);
-    expect(upgradeResult.newTier).toBe('enterprise');
-
-    // Calculate expected pro-rated charge
-    // Dec 2 → Dec 31 = 30 days remaining out of 31
-    // (Enterprise - Pro) * 30/31 = ($185 - $29) * 30/31 = $156 * 30/31 = $150.97
-    const expectedProRatedCents = Math.floor((TIER_PRICES_USD_CENTS.enterprise - TIER_PRICES_USD_CENTS.pro) * 30 / 31);
-    console.log(`  Expected pro-rated: ${expectedProRatedCents} cents ($${(expectedProRatedCents/100).toFixed(2)})`);
-    expect(upgradeResult.chargeAmountUsdCents).toBe(expectedProRatedCents);
+    expect(cancelResult.success).toBe(true);
 
     // ========== STEP 6: Verify final state ==========
     console.log('\nSTEP 6: Verify final state');
 
-    // Service state
-    [service] = await db.select().from(serviceInstances).where(eq(serviceInstances.customerId, testCustomerId));
-    console.log(`  Service tier: ${service.tier}`);
-    console.log(`  Scheduled tier: ${service.scheduledTier}`);
-    expect(service.tier).toBe('enterprise');
-    expect(service.scheduledTier).toBeNull();
+    // Customer platform state: downgrade cancelled, back to Pro
+    cust = await db.query.customers.findFirst({ where: eq(customers.customerId, testCustomerId) });
+    console.log(`  Platform tier: ${cust!.platformTier}`);
+    console.log(`  Scheduled tier: ${cust!.scheduledPlatformTier}`);
+    expect(cust!.platformTier).toBe('pro');
+    expect(cust!.scheduledPlatformTier).toBeNull();
 
-    // DRAFT should now show Enterprise price
+    // DRAFT should now show Pro price
     [draft] = await db.select().from(billingRecords).where(and(
       eq(billingRecords.customerId, testCustomerId),
       eq(billingRecords.status, 'draft')
     ));
-    console.log(`  DRAFT amount: $${(draft.amountUsdCents/100).toFixed(2)} (expected: $${(TIER_PRICES_USD_CENTS.enterprise/100).toFixed(2)})`);
-    expect(draft.amountUsdCents).toBe(TIER_PRICES_USD_CENTS.enterprise);
+    console.log(`  DRAFT amount: $${(draft.amountUsdCents/100).toFixed(2)} (expected: $${(PLATFORM_TIER_PRICES_USD_CENTS.pro/100).toFixed(2)})`);
+    expect(draft.amountUsdCents).toBe(PLATFORM_TIER_PRICES_USD_CENTS.pro);
 
     // ========== STEP 7: List ALL billing records ==========
     console.log('\n========================================');
@@ -309,9 +306,9 @@ describe('Full Upgrade Scenario: Deposit → Pro → Schedule Downgrade → Ente
     }
 
     // Expected records:
-    // 1. PAID - $29 (Pro first month)
-    // 2. PAID - ~$150.97 (Pro-rated upgrade)
-    // 3. DRAFT - $185 (Enterprise next month)
+    // 1. PAID - $1 (Starter first month)
+    // 2. PAID - pro-rated Starter → Pro upgrade charge
+    // 3. DRAFT - $29 (Pro next month)
     const paidRecordsFinal = allRecords.filter(r => r.status === 'paid');
     const draftRecordsFinal = allRecords.filter(r => r.status === 'draft');
 
@@ -320,18 +317,18 @@ describe('Full Upgrade Scenario: Deposit → Pro → Schedule Downgrade → Ente
     expect(paidRecordsFinal.length).toBe(2);
     expect(draftRecordsFinal.length).toBe(1);
 
-    // Verify the $29 Pro charge exists
-    const proCharge = paidRecordsFinal.find(r => r.amountUsdCents === 2900);
-    expect(proCharge).toBeDefined();
-    console.log(`  ✓ Pro subscription charge found: $${(proCharge!.amountUsdCents/100).toFixed(2)}`);
+    // Verify the $1 Starter charge exists
+    const starterCharge = paidRecordsFinal.find(r => r.amountUsdCents === 100);
+    expect(starterCharge).toBeDefined();
+    console.log(`  ✓ Starter subscription charge found: $${(starterCharge!.amountUsdCents/100).toFixed(2)}`);
 
     // Verify the pro-rated upgrade charge exists
-    const upgradeCharge = paidRecordsFinal.find(r => r.amountUsdCents === expectedProRatedCents);
+    const upgradeCharge = paidRecordsFinal.find(r => r.amountUsdCents === expectedUpgradeToProCents);
     expect(upgradeCharge).toBeDefined();
     console.log(`  ✓ Pro-rated upgrade charge found: $${(upgradeCharge!.amountUsdCents/100).toFixed(2)}`);
 
-    // Verify DRAFT
-    expect(draftRecordsFinal[0].amountUsdCents).toBe(TIER_PRICES_USD_CENTS.enterprise);
+    // Verify DRAFT shows Pro price
+    expect(draftRecordsFinal[0].amountUsdCents).toBe(PLATFORM_TIER_PRICES_USD_CENTS.pro);
     console.log(`  ✓ DRAFT invoice correct: $${(draftRecordsFinal[0].amountUsdCents/100).toFixed(2)}`);
 
     // ========== STEP 8: Check invoice_payments table ==========

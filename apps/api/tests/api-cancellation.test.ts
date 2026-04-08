@@ -4,6 +4,10 @@
  * Tests the cancellation lifecycle through HTTP calls only.
  * NO direct internal function calls (except DB reads for assertions).
  *
+ * Cancellation applies to the platform subscription. Non-platform services
+ * (seal, grpc, graphql) are auto-provisioned and can be toggled off, but
+ * they follow the platform's cancellation lifecycle when it's cancelled.
+ *
  * This test simulates realistic client behavior by:
  * 1. Making HTTP calls to tRPC endpoints (services.scheduleCancellation, etc.)
  * 2. Controlling time via /test/clock/* endpoints
@@ -12,8 +16,8 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { db } from '@suiftly/database';
-import { serviceInstances } from '@suiftly/database/schema';
-import { eq, and } from 'drizzle-orm';
+import { customers } from '@suiftly/database/schema';
+import { eq } from 'drizzle-orm';
 import {
   setClockTime,
   resetClock,
@@ -21,17 +25,16 @@ import {
   trpcMutation,
   trpcQuery,
   resetTestData,
-  subscribeAndEnable,
   runPeriodicBillingJob,
 } from './helpers/http.js';
-import { TEST_WALLET } from './helpers/auth.js';
+import { login, TEST_WALLET } from './helpers/auth.js';
 import { INVOICE_LINE_ITEM_TYPE } from '@suiftly/shared/constants';
+import { clearNotifications } from './helpers/notifications.js';
 import { setupBillingTest } from './helpers/setup.js';
 
 const SUBSCRIPTION_ITEM_TYPES = [
   INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_STARTER,
   INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_PRO,
-  INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_ENTERPRISE,
 ] as const;
 
 describe('API: Cancellation Flow', () => {
@@ -39,6 +42,7 @@ describe('API: Cancellation Flow', () => {
   let customerId: number;
 
   beforeEach(async () => {
+    // Platform is subscribed at starter tier; seal/grpc/graphql auto-provisioned
     ({ accessToken, customerId } = await setupBillingTest());
   });
 
@@ -51,98 +55,108 @@ describe('API: Cancellation Flow', () => {
 
   describe('Cancellation Scheduling via HTTP', () => {
     it('should schedule and undo cancellation via HTTP endpoints', async () => {
-      // ---- Setup: Subscribe to a service ----
+      // Platform is already subscribed at starter from beforeEach
       await setClockTime('2025-01-05T00:00:00Z');
 
-      await subscribeAndEnable('seal', 'pro', accessToken);
-
-      // Get service for assertions
-      let service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal')
-        ),
+      // Verify platform via customer record
+      let customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, customerId),
       });
-      expect(service).toBeDefined();
-      expect(service?.tier).toBe('pro');
-      expect(service?.state).toBe('enabled');
+      expect(customer).toBeDefined();
+      expect(customer?.platformTier).toBe('starter');
 
       // ---- Schedule cancellation via HTTP ----
       await setClockTime('2025-01-15T00:00:00Z');
 
       const cancelResult = await trpcMutation<any>(
         'services.scheduleCancellation',
-        { serviceType: 'seal' },
+        { serviceType: 'platform' },
         accessToken
       );
       expect(cancelResult.result?.data?.success).toBe(true);
       expect(cancelResult.result?.data?.effectiveDate).toBeDefined();
 
       // Verify cancellation is scheduled in DB
-      service = await db.query.serviceInstances.findFirst({
-        where: eq(serviceInstances.instanceId, service!.instanceId),
+      customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, customerId),
       });
-      expect(service?.state).toBe('enabled');
-      expect(service?.cancellationScheduledFor).toBeTruthy();
+      expect(customer?.platformTier).not.toBeNull(); // still active
+      expect(customer?.platformCancellationScheduledFor).toBeTruthy();
 
       // ---- Undo cancellation via HTTP ----
       const undoResult = await trpcMutation<any>(
         'services.undoCancellation',
-        { serviceType: 'seal' },
+        { serviceType: 'platform' },
         accessToken
       );
       expect(undoResult.result?.data?.success).toBe(true);
 
       // Verify cancellation was undone in DB
-      service = await db.query.serviceInstances.findFirst({
-        where: eq(serviceInstances.instanceId, service!.instanceId),
+      customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, customerId),
       });
-      expect(service?.cancellationScheduledFor).toBeNull();
+      expect(customer?.platformCancellationScheduledFor).toBeNull();
     });
   });
 
   describe('Unpaid Subscription Cancellation', () => {
     it('should cancel immediately when paidOnce = false', async () => {
-      // Subscribe with insufficient balance so payment fails (paidOnce remains false)
-      await setClockTime('2025-01-15T00:00:00Z');
+      /**
+       * When a subscription payment is pending (paidOnce=false) and the user
+       * cancels, the service is deleted immediately (no grace period needed
+       * since no service was ever actively used).
+       *
+       * This test uses manual setup to avoid the platform subscription from
+       * setupBillingTest, so we can test the unpaid cancellation path directly.
+       */
 
-      // Set balance to $0 so subscription payment will fail
+      // ---- Manual setup: customer with $0 balance, no platform subscription ----
+      await resetTestData(TEST_WALLET);
+      const freshToken = await login(TEST_WALLET);
+      const customer = await db.query.customers.findFirst({
+        where: eq(customers.walletAddress, TEST_WALLET),
+      });
+      if (!customer) throw new Error('Customer not found');
+      const freshId = customer.customerId;
       await ensureTestBalance(0, { walletAddress: TEST_WALLET });
+      await clearNotifications(freshId);
+
+      // Accept TOS (required for platform subscribe)
+      await trpcMutation<any>('billing.acceptTos', {}, freshToken);
+
+      // Subscribe to platform with $0 balance → payment fails (paidOnce remains false)
+      await setClockTime('2025-01-15T00:00:00Z');
 
       const subscribeResult = await trpcMutation<any>(
         'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
-        accessToken
+        { serviceType: 'platform', tier: 'starter' },
+        freshToken
       );
       expect(subscribeResult.result?.data).toBeDefined();
       // Payment should be pending due to insufficient balance
       expect(subscribeResult.result?.data?.paymentPending).toBe(true);
 
-      // Get service instance
-      let service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal')
-        ),
+      // Check customer billing state
+      let freshCustomer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, freshId),
       });
-      expect(service).toBeDefined();
-      expect(service?.paidOnce).toBe(false); // Verify paidOnce is false
-
-      const instanceId = service!.instanceId;
+      expect(freshCustomer).toBeDefined();
+      expect(freshCustomer?.paidOnce).toBe(false); // Verify paidOnce is false
+      expect(freshCustomer?.platformTier).toBe('starter');
 
       // Cancel immediately (should delete service since unpaid)
       const cancelResult = await trpcMutation<any>(
         'services.scheduleCancellation',
-        { serviceType: 'seal' },
-        accessToken
+        { serviceType: 'platform' },
+        freshToken
       );
       expect(cancelResult.result?.data?.success).toBe(true);
 
-      // Service should be DELETED immediately (not scheduled)
-      service = await db.query.serviceInstances.findFirst({
-        where: eq(serviceInstances.instanceId, instanceId),
+      // Platform subscription should be cleared immediately (not scheduled)
+      freshCustomer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, freshId),
       });
-      expect(service).toBeUndefined();
+      expect(freshCustomer?.platformTier).toBeNull();
     });
   });
 
@@ -154,27 +168,23 @@ describe('API: Cancellation Flow', () => {
        * - BUT the line items still show the subscription charge
        *
        * Expected: Line items should only show the credit (if any), no subscription charge
-       * Actual (BUG): Line items show "Seal Enterprise tier - $185.00" even though cancelled
+       * Actual (BUG): Line items show "Platform Pro tier - $29.00" even though cancelled
        *
        * Root cause: buildDraftLineItems() in invoice-formatter.ts does not check
        * for cancellationScheduledFor when building subscription line items.
        */
 
-      // ---- Setup: Subscribe to enterprise tier (need $200+ balance) ----
+      // ---- Setup: Upgrade platform to pro tier ----
       await setClockTime('2025-01-05T00:00:00Z');
-      await ensureTestBalance(200, { walletAddress: TEST_WALLET });
+      await ensureTestBalance(100, { walletAddress: TEST_WALLET });
 
-      await subscribeAndEnable('seal', 'enterprise', accessToken);
+      await trpcMutation<any>(
+        'services.upgradeTier',
+        { serviceType: 'platform', newTier: 'pro' },
+        accessToken
+      );
 
-      // Get service for assertions
-      let service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal')
-        ),
-      });
-
-      // ---- Verify initial state: DRAFT shows enterprise price ----
+      // ---- Verify initial state: DRAFT shows pro price ----
       let paymentResult = await trpcQuery<any>(
         'billing.getNextScheduledPayment',
         undefined,
@@ -183,26 +193,28 @@ describe('API: Cancellation Flow', () => {
 
       expect(paymentResult.result?.data?.found).toBe(true);
       let lineItems = paymentResult.result?.data?.lineItems;
-      let subscriptionItem = lineItems?.find((item: any) => SUBSCRIPTION_ITEM_TYPES.includes(item.itemType) && item.service === 'seal');
-      expect(subscriptionItem?.itemType).toBe(INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_ENTERPRISE);
-      expect(subscriptionItem?.amountUsd).toBe(185); // Enterprise = $185
+      let subscriptionItem = lineItems?.find(
+        (item: any) => SUBSCRIPTION_ITEM_TYPES.includes(item.itemType) && item.service === 'platform'
+      );
+      expect(subscriptionItem?.itemType).toBe(INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_PRO);
+      expect(subscriptionItem?.amountUsd).toBe(29); // Pro = $29
 
       // ---- Schedule cancellation ----
       await setClockTime('2025-01-15T00:00:00Z');
 
       const cancelResult = await trpcMutation<any>(
         'services.scheduleCancellation',
-        { serviceType: 'seal' },
+        { serviceType: 'platform' },
         accessToken
       );
 
       expect(cancelResult.result?.data?.success).toBe(true);
 
       // Verify cancellation is scheduled in DB
-      service = await db.query.serviceInstances.findFirst({
-        where: eq(serviceInstances.instanceId, service!.instanceId),
+      const customerRec = await db.query.customers.findFirst({
+        where: eq(customers.customerId, customerId),
       });
-      expect(service?.cancellationScheduledFor).toBeTruthy();
+      expect(customerRec?.platformCancellationScheduledFor).toBeTruthy();
 
       // ---- BUG: Verify DRAFT line items do NOT show subscription charge ----
       paymentResult = await trpcQuery<any>(
@@ -214,9 +226,10 @@ describe('API: Cancellation Flow', () => {
       expect(paymentResult.result?.data?.found).toBe(true);
       lineItems = paymentResult.result?.data?.lineItems;
 
-      // When cancellation is scheduled, there should be NO seal subscription line item
-      // (platform subscription line item still exists)
-      subscriptionItem = lineItems?.find((item: any) => SUBSCRIPTION_ITEM_TYPES.includes(item.itemType) && item.service === 'seal');
+      // When cancellation is scheduled, there should be NO platform subscription line item
+      subscriptionItem = lineItems?.find(
+        (item: any) => SUBSCRIPTION_ITEM_TYPES.includes(item.itemType) && item.service === 'platform'
+      );
       expect(subscriptionItem).toBeUndefined();
 
       // The total should be $0 or negative (just credits if any)
@@ -228,65 +241,56 @@ describe('API: Cancellation Flow', () => {
   describe('Re-subscription After Full Cancellation', () => {
     it('should allow re-subscription after cancellation takes effect', async () => {
       /**
-       * Tests the full cancellation lifecycle:
-       * 1. Subscribe to a service (paid)
+       * Tests the full cancellation lifecycle for the platform subscription:
+       * 1. Platform is subscribed (paid)
        * 2. Schedule cancellation
        * 3. Advance time to end of billing period (cancellation takes effect)
-       * 4. Re-subscribe to the same service
+       * 4. Re-subscribe to platform
        *
        * This ensures:
-       * - Service is properly deleted after cancellation
-       * - Customer can subscribe again to the same service type
-       * - New subscription works correctly
+       * - Platform service is properly reset after cancellation
+       * - Customer can re-subscribe to platform
        */
 
-      // ---- Step 1: Subscribe to Pro tier ----
+      // ---- Step 1: Platform is already at starter from beforeEach ----
       await setClockTime('2025-01-05T00:00:00Z');
 
-      await subscribeAndEnable('seal', 'pro', accessToken);
-
-      // Verify service exists
-      let service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal')
-        ),
+      // Verify platform subscription exists via customer record
+      let custRec = await db.query.customers.findFirst({
+        where: eq(customers.customerId, customerId),
       });
-      expect(service).toBeDefined();
-      expect(service?.tier).toBe('pro');
-      expect(service?.state).toBe('enabled');
-      expect(service?.paidOnce).toBe(true);
-      const originalInstanceId = service!.instanceId;
+      expect(custRec).toBeDefined();
+      expect(custRec?.platformTier).toBe('starter');
+      expect(custRec?.paidOnce).toBe(true);
 
       // ---- Step 2: Schedule cancellation ----
       await setClockTime('2025-01-15T00:00:00Z');
 
       const cancelResult = await trpcMutation<any>(
         'services.scheduleCancellation',
-        { serviceType: 'seal' },
+        { serviceType: 'platform' },
         accessToken
       );
       expect(cancelResult.result?.data?.success).toBe(true);
 
       // Verify cancellation is scheduled (end of billing period = Feb 1)
-      service = await db.query.serviceInstances.findFirst({
-        where: eq(serviceInstances.instanceId, originalInstanceId),
+      custRec = await db.query.customers.findFirst({
+        where: eq(customers.customerId, customerId),
       });
-      expect(service?.cancellationScheduledFor).toBeTruthy();
+      expect(custRec?.platformCancellationScheduledFor).toBeTruthy();
 
       // ---- Step 3: Advance to billing period end (Feb 1st) ----
-      // The billing job transitions to cancellation_pending state
       await setClockTime('2025-02-01T00:01:00Z');
 
       // Run the periodic billing job to process the cancellation
       await runPeriodicBillingJob(customerId);
 
-      // Service should be in cancellation_pending state (7-day grace period)
-      service = await db.query.serviceInstances.findFirst({
-        where: eq(serviceInstances.instanceId, originalInstanceId),
+      // Platform should be in cancellation_pending state (7-day grace period)
+      custRec = await db.query.customers.findFirst({
+        where: eq(customers.customerId, customerId),
       });
-      expect(service?.state).toBe('cancellation_pending');
-      expect(service?.cancellationEffectiveAt).toBeDefined();
+      expect(custRec?.platformCancellationEffectiveAt).toBeDefined();
+      expect(custRec?.platformCancellationScheduledFor).toBeNull();
 
       // ---- Step 3b: Advance past the 7-day grace period (Feb 8th+) ----
       await setClockTime('2025-02-09T00:01:00Z');
@@ -294,50 +298,32 @@ describe('API: Cancellation Flow', () => {
       // Run the periodic billing job again to trigger cleanup
       await runPeriodicBillingJob(customerId);
 
-      // Service should now be reset to not_provisioned state (not deleted, but reset)
-      service = await db.query.serviceInstances.findFirst({
-        where: eq(serviceInstances.instanceId, originalInstanceId),
+      // Platform subscription should now be cleared (not_provisioned = platformTier null)
+      custRec = await db.query.customers.findFirst({
+        where: eq(customers.customerId, customerId),
       });
-      expect(service?.state).toBe('not_provisioned');
+      expect(custRec?.platformTier).toBeNull();
 
-      // ---- Step 4: Re-subscribe to the same service after cooldown ----
-      // Note: There's a 7-day cooldown period after deletion before re-subscribing
+      // ---- Step 4: Re-subscribe to platform ----
+      // Note: There's a 7-day cooldown period after cancellation before re-subscribing
       await setClockTime('2025-02-17T00:00:00Z');
 
-      // Subscribe again (to starter tier this time, to test different tier)
-      // Note: The subscribe endpoint currently returns existing not_provisioned
-      // instances as-is (idempotency behavior). This means re-subscribing from
-      // not_provisioned state requires the billing job to reconcile the state.
       const subscribeResult = await trpcMutation<any>(
         'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
+        { serviceType: 'platform', tier: 'starter' },
         accessToken
       );
       expect(subscribeResult.result?.data).toBeDefined();
 
-      // The current behavior: subscribe returns existing not_provisioned instance
-      // The tier is 'starter' (was reset by cancellation cleanup)
       expect(subscribeResult.result?.data.tier).toBe('starter');
 
-      // Verify service state is not_provisioned (current behavior)
-      // The instance is reused from the cancelled state
-      let newService = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal')
-        ),
+      custRec = await db.query.customers.findFirst({
+        where: eq(customers.customerId, customerId),
       });
 
-      expect(newService).toBeDefined();
-      expect(newService?.instanceId).toBe(originalInstanceId);
-      expect(newService?.state).toBe('not_provisioned');
-      expect(newService?.cancellationScheduledFor).toBeNull();
-      expect(newService?.cancellationEffectiveAt).toBeNull();
-
-      // Key assertion: After re-subscribing, the service can be re-provisioned
-      // by calling canProvisionService (which checks cooldown period)
-      // For now, we verify the service row exists and is in the expected state
-      // that allows re-provisioning when the billing system processes it
+      expect(custRec?.platformTier).toBe('starter');
+      expect(custRec?.platformCancellationScheduledFor).toBeNull();
+      expect(custRec?.platformCancellationEffectiveAt).toBeNull();
     });
   });
 });

@@ -5,6 +5,7 @@
  * - Usage logs appear as usage line items in DRAFT invoices
  * - Line items have correct itemType, quantity, and pricing
  * - formatLineItemDescription() produces correct UI text
+ * - Platform subscription line items show correct tier amounts
  *
  * See STATS_DESIGN.md and invoice-formatter.ts for implementation details.
  */
@@ -18,9 +19,9 @@ import {
   resetClock,
   ensureTestBalance,
   trpcQuery,
+  trpcMutation,
   resetTestData,
   subscribeAndEnable,
-  setConfigFlags,
   subscribePlatform,
 } from './helpers/http.js';
 import { login, TEST_WALLET } from './helpers/auth.js';
@@ -85,8 +86,6 @@ describe('API: Invoice Line Items', () => {
     // Reset test data
     await resetTestData(TEST_WALLET);
 
-    await setConfigFlags({ freq_platform_sub: '1', freq_seal_sub: '1' });
-
     // Clear existing logs
     await clearLogs();
 
@@ -107,6 +106,7 @@ describe('API: Invoice Line Items', () => {
 
     await setClockTime('2024-01-01T00:00:00Z');
     await subscribePlatform(accessToken);
+    // Seal/grpc/graphql are auto-provisioned (disabled) after platform subscribe
 
     // Restore clock to mid-month (usage tests insert logs at 2024-01-15T11:00:00Z
     // and expect the clock to be at 12:00 so the bucket is in the past)
@@ -121,7 +121,7 @@ describe('API: Invoice Line Items', () => {
 
   describe('Usage Line Items in DRAFT Invoice', () => {
     it('should include usage charges in getNextScheduledPayment after syncing logs', async () => {
-      // ---- Setup: Subscribe to Seal Starter ----
+      // Enable the auto-provisioned seal service for usage tracking
       await subscribeAndEnable('seal', 'starter', accessToken);
 
       // ---- Insert mock usage logs: 15,500 billable requests ----
@@ -162,13 +162,12 @@ describe('API: Invoice Line Items', () => {
       expect(usageItem.quantity).toBe(15500);
 
       // Verify pricing: 15500 requests @ $0.0001/req = $1.55
-      // unitPriceUsd = cents per 1000 / 100 / 1000 = 10 / 100 / 1000 = 0.0001
       expect(usageItem.unitPriceUsd).toBeCloseTo(0.0001, 6);
       expect(usageItem.amountUsd).toBeCloseTo(1.55, 2);
     }, 15000); // 15 second timeout
 
     it('should show zero usage when no logs exist', async () => {
-      // ---- Setup: Subscribe to Seal Starter ----
+      // Enable seal for usage queries
       await subscribeAndEnable('seal', 'starter', accessToken);
 
       // ---- Sync empty usage to DRAFT invoice ----
@@ -196,23 +195,20 @@ describe('API: Invoice Line Items', () => {
         expect(usageItem.amountUsd).toBe(0);
       }
 
-      // Should have seal subscription line item (filter by service to exclude platform subscription)
-      const subscriptionItem = lineItems.find(
-        (item: any) => item.itemType === INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_STARTER && item.service === SERVICE_TYPE.SEAL
+      // Platform subscription line item should exist
+      const platformSubItem = lineItems.find(
+        (item: any) => item.itemType === INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_STARTER && item.service === SERVICE_TYPE.PLATFORM
       );
-      expect(subscriptionItem).toBeDefined();
-      expect(subscriptionItem.service).toBe(SERVICE_TYPE.SEAL);
-      expect(subscriptionItem.amountUsd).toBe(9); // $9 for Starter
+      expect(platformSubItem).toBeDefined();
+      expect(platformSubItem.service).toBe(SERVICE_TYPE.PLATFORM);
+      expect(platformSubItem.amountUsd).toBe(1); // $1 for Platform Starter
     }, 15000);
 
     it('should calculate usage correctly for high volume (50,000 requests = $5.00)', async () => {
-      // ---- Setup: Subscribe and enable ----
+      // Enable seal for usage tracking
       await subscribeAndEnable('seal', 'starter', accessToken);
 
       // ---- Insert 50,000 billable requests using pre-aggregation ----
-      // Uses repeat field (production HAProxy feature) instead of 50k individual rows.
-      // The continuous aggregate uses SUM(repeat) so behavior is identical.
-      // Note: Insert at 11:00 and clock is at 12:00, so bucket (11:00) < now (12:00)
       const insertResult = await insertMockLogs({
         customerId,
         serviceType: 1,
@@ -246,9 +242,14 @@ describe('API: Invoice Line Items', () => {
   });
 
   describe('Subscription Line Items', () => {
-    it('should include correct tier subscription in DRAFT line items', async () => {
-      // ---- Subscribe to Pro tier ----
-      await subscribeAndEnable('seal', 'pro', accessToken);
+    it('should include platform Pro subscription in DRAFT line items', async () => {
+      // Upgrade platform to Pro tier to test Pro subscription line item
+      const upgradeResult = await trpcMutation<any>(
+        'services.upgradeTier',
+        { serviceType: 'platform', newTier: 'pro' },
+        accessToken
+      );
+      expect(upgradeResult.result?.data?.success).toBe(true);
 
       // ---- Get next scheduled payment ----
       const paymentResult = await trpcQuery<any>(
@@ -259,15 +260,15 @@ describe('API: Invoice Line Items', () => {
 
       const lineItems = paymentResult.result?.data?.lineItems;
 
-      // Find seal subscription line item (filter by service to exclude platform subscription)
+      // Find platform Pro subscription line item
       const subscriptionItem = lineItems?.find(
-        (item: any) => item.itemType === INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_PRO && item.service === SERVICE_TYPE.SEAL
+        (item: any) => item.itemType === INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_PRO && item.service === SERVICE_TYPE.PLATFORM
       );
 
       expect(subscriptionItem).toBeDefined();
-      expect(subscriptionItem.service).toBe(SERVICE_TYPE.SEAL);
+      expect(subscriptionItem.service).toBe(SERVICE_TYPE.PLATFORM);
       expect(subscriptionItem.quantity).toBe(1);
-      expect(subscriptionItem.unitPriceUsd).toBe(29); // $29 for Pro
+      expect(subscriptionItem.unitPriceUsd).toBe(29); // $29 for Platform Pro
       expect(subscriptionItem.amountUsd).toBe(29);
     }, 15000);
   });

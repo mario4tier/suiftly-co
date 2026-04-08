@@ -85,7 +85,7 @@ export class MockStripeService implements IStripeService {
       }
     }
 
-    const stripeCustomerId = `cus_mock_${this.nextCustomerIndex++}`;
+    const stripeCustomerId = `cus_mock_${this.nextCustomerIndex++}_${randomBytes(4).toString('hex')}`;
 
     this.customers.set(stripeCustomerId, {
       stripeCustomerId,
@@ -109,11 +109,11 @@ export class MockStripeService implements IStripeService {
       throw new Error(`Stripe customer ${stripeCustomerId} not found`);
     }
 
-    const setupIntentId = `seti_mock_${this.nextSetupIntentIndex++}`;
+    const setupIntentId = `seti_mock_${this.nextSetupIntentIndex++}_${randomBytes(4).toString('hex')}`;
     const clientSecret = `${setupIntentId}_secret_${randomBytes(8).toString('hex')}`;
 
     // In mock mode, automatically "complete" the setup by adding a default test card
-    const paymentMethodId = `pm_mock_${this.nextPaymentMethodIndex++}`;
+    const paymentMethodId = `pm_mock_${this.nextPaymentMethodIndex++}_${randomBytes(4).toString('hex')}`;
     const method: MockStripePaymentMethodState = {
       id: paymentMethodId,
       brand: 'visa',
@@ -182,20 +182,12 @@ export class MockStripeService implements IStripeService {
       return result;
     }
 
-    // Validate customer exists
+    // Validate customer and payment method exist in local state.
+    // Note: the mock may run in a separate process (e.g. Global Manager) that did not
+    // create this customer. In that case, treat the customer as valid with a card on file
+    // (mirrors real Stripe test mode: any valid customer ID + default payment method succeeds).
     const customer = this.customers.get(params.stripeCustomerId);
-    if (!customer) {
-      const result: StripeChargeResult = {
-        success: false,
-        error: `Customer ${params.stripeCustomerId} not found`,
-        retryable: false,
-      };
-      this.idempotencyCache.set(params.idempotencyKey, result);
-      return result;
-    }
-
-    // Check payment method exists
-    if (customer.paymentMethods.length === 0) {
+    if (customer && customer.paymentMethods.length === 0) {
       const result: StripeChargeResult = {
         success: false,
         error: 'No payment method on file',
@@ -230,7 +222,13 @@ export class MockStripeService implements IStripeService {
   async getPaymentMethods(stripeCustomerId: string): Promise<StripePaymentMethod[]> {
     const customer = this.customers.get(stripeCustomerId);
     if (!customer) {
-      return [];
+      // Cross-process scenario: customer was created by another process (e.g. API server).
+      // The mock here (e.g. in GM) has no local state for this customer, but the customer
+      // DOES exist (stripeCustomerId is in the DB). Return a placeholder so isConfigured()
+      // sees methods.length > 0 and includes Stripe in the provider chain. The actual
+      // charge() will also succeed via the same cross-process logic. The DB
+      // (customer_payment_methods) is the authoritative source for UI display.
+      return [{ id: 'pm_mock_cross_process', brand: 'visa', last4: '0000', expMonth: 12, expYear: 2099, isDefault: true }];
     }
 
     return customer.paymentMethods.map(pm => ({

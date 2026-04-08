@@ -75,7 +75,7 @@ import { TermsOfServiceContent } from '@/components/content/TermsOfServiceConten
 
 ## PDF Download
 
-The PDF download button in `SealConfigForm.tsx` downloads from `/terms-of-service.pdf` (the public folder).
+The PDF download button downloads from `/terms-of-service.pdf` (the public folder).
 
 Users can:
 1. View ToS in the modal dialog (rendered from markdown)

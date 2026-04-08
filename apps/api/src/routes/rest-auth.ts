@@ -7,12 +7,13 @@
  */
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { walletConnectSchema, verifySignatureSchema } from '@suiftly/shared/schemas';
+import { walletConnectSchema, verifySignatureSchema, DEFAULT_SERVICE_CONFIG } from '@suiftly/shared/schemas';
 import { generateAccessToken, generateRefreshToken } from '../lib/jwt';
 import { getJWTConfig, parseExpiryToMs } from '../lib/jwt-config';
 import { db, logActivity } from '@suiftly/database';
-import { customers, authNonces, refreshTokens } from '@suiftly/database/schema';
+import { customers, authNonces, refreshTokens, serviceInstances, apiKeys } from '@suiftly/database/schema';
 import { eq, and, gt } from 'drizzle-orm';
+import { storeApiKey } from '../lib/api-keys';
 import { randomBytes, randomInt, createHash } from 'crypto';
 import { config } from '../lib/config.js';
 import { dbClock } from '@suiftly/shared/db-clock';
@@ -176,7 +177,9 @@ export async function registerAuthRoutes(server: FastifyInstance) {
 
     let customerId = 0; // Initialize to satisfy TypeScript (will be set below)
 
-    if (customer.length === 0) {
+    const isNewCustomer = customer.length === 0;
+
+    if (isNewCustomer) {
       // New customer - generate random ID with collision retry
       const MAX_RETRIES = 10;
       let inserted = false;
@@ -214,6 +217,30 @@ export async function registerAuthRoutes(server: FastifyInstance) {
             throw error;
           }
         }
+      }
+
+      // Eagerly provision seal/grpc/graphql service instances + one API key each.
+      // Done at account creation so the customer can see their API key and config
+      // immediately — even before subscribing to platform. Services are disabled
+      // and can only be enabled after platform payment clears.
+      const nonPlatformServices = ['seal', 'grpc', 'graphql'] as const;
+      for (const serviceType of nonPlatformServices) {
+        await db.insert(serviceInstances).values({
+          customerId,
+          serviceType,
+          state: 'disabled',
+          config: DEFAULT_SERVICE_CONFIG,
+          isUserEnabled: false,
+        }).onConflictDoNothing();
+
+        await storeApiKey({
+          customerId,
+          serviceType,
+          ...(serviceType === 'seal' && {
+            sealType: { network: 'mainnet', access: 'open' },
+          }),
+          metadata: { generatedAt: 'account_creation' },
+        });
       }
     } else {
       customerId = customer[0].customerId;

@@ -1,17 +1,17 @@
 CREATE TYPE "public"."billing_record_type" AS ENUM('charge', 'credit');--> statement-breakpoint
 CREATE TYPE "public"."billing_status" AS ENUM('draft', 'pending', 'paid', 'failed', 'voided');--> statement-breakpoint
 CREATE TYPE "public"."billing_type" AS ENUM('immediate', 'scheduled');--> statement-breakpoint
-CREATE TYPE "public"."credit_reason" AS ENUM('outage', 'promo', 'goodwill', 'reconciliation');--> statement-breakpoint
+CREATE TYPE "public"."credit_reason" AS ENUM('outage', 'promo', 'goodwill', 'reconciliation', 'refund');--> statement-breakpoint
 CREATE TYPE "public"."customer_status" AS ENUM('active', 'suspended', 'closed');--> statement-breakpoint
-CREATE TYPE "public"."invoice_line_item_type" AS ENUM('subscription_starter', 'subscription_pro', 'subscription_enterprise', 'tier_upgrade', 'requests', 'extra_api_keys', 'extra_seal_keys', 'extra_allowlist_ips', 'extra_packages', 'credit', 'tax');--> statement-breakpoint
+CREATE TYPE "public"."invoice_line_item_type" AS ENUM('subscription_starter', 'subscription_pro', 'tier_upgrade', 'requests', 'extra_api_keys', 'extra_seal_keys', 'extra_allowlist_ips', 'extra_packages', 'credit', 'tax');--> statement-breakpoint
 CREATE TYPE "public"."payment_method_status" AS ENUM('active', 'suspended', 'removed');--> statement-breakpoint
 CREATE TYPE "public"."payment_provider_type" AS ENUM('escrow', 'stripe', 'paypal');--> statement-breakpoint
 CREATE TYPE "public"."payment_source_type" AS ENUM('credit', 'escrow', 'stripe', 'paypal');--> statement-breakpoint
 CREATE TYPE "public"."seal_op_status" AS ENUM('queued', 'processing', 'completed');--> statement-breakpoint
 CREATE TYPE "public"."seal_op_type" AS ENUM('register', 'update');--> statement-breakpoint
 CREATE TYPE "public"."service_state" AS ENUM('not_provisioned', 'provisioning', 'disabled', 'enabled', 'suspended_maintenance', 'suspended_no_payment', 'cancellation_pending');--> statement-breakpoint
-CREATE TYPE "public"."service_tier" AS ENUM('starter', 'pro', 'enterprise');--> statement-breakpoint
-CREATE TYPE "public"."service_type" AS ENUM('seal', 'grpc', 'graphql');--> statement-breakpoint
+CREATE TYPE "public"."service_tier" AS ENUM('starter', 'pro');--> statement-breakpoint
+CREATE TYPE "public"."service_type" AS ENUM('seal', 'grpc', 'graphql', 'platform');--> statement-breakpoint
 CREATE TYPE "public"."transaction_type" AS ENUM('deposit', 'withdraw', 'charge', 'credit');--> statement-breakpoint
 CREATE TYPE "public"."seal_registration_status" AS ENUM('registering', 'registered', 'updating');--> statement-breakpoint
 CREATE TABLE "admin_notifications" (
@@ -143,11 +143,12 @@ CREATE TABLE "service_cancellation_history" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"customer_id" integer NOT NULL,
 	"service_type" "service_type" NOT NULL,
-	"previous_tier" "service_tier" NOT NULL,
+	"previous_tier" "service_tier",
 	"billing_period_ended_at" timestamp with time zone NOT NULL,
 	"deleted_at" timestamp with time zone NOT NULL,
 	"cooldown_expires_at" timestamp with time zone NOT NULL,
-	"created_at" timestamp with time zone DEFAULT now() NOT NULL
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "check_tier_only_for_platform" CHECK (("service_cancellation_history"."service_type" = 'platform' AND "service_cancellation_history"."previous_tier" IS NOT NULL) OR ("service_cancellation_history"."service_type" != 'platform' AND "service_cancellation_history"."previous_tier" IS NULL))
 );
 --> statement-breakpoint
 CREATE TABLE "customers" (
@@ -160,12 +161,20 @@ CREATE TABLE "customers" (
 	"current_period_charged_usd_cents" bigint DEFAULT 0,
 	"current_period_start" date,
 	"stripe_customer_id" varchar(100),
+	"tos_accepted_at" timestamp with time zone,
 	"paid_once" boolean DEFAULT false NOT NULL,
 	"grace_period_start" date,
 	"grace_period_notified_at" timestamp with time zone[],
+	"platform_tier" "service_tier",
+	"pending_invoice_id" bigint,
+	"scheduled_platform_tier" "service_tier",
+	"scheduled_platform_tier_effective_date" date,
+	"platform_cancellation_scheduled_for" date,
+	"platform_cancellation_effective_at" timestamp with time zone,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "customers_wallet_address_unique" UNIQUE("wallet_address"),
+	CONSTRAINT "customers_stripe_customer_id_unique" UNIQUE("stripe_customer_id"),
 	CONSTRAINT "check_customer_id" CHECK ("customers"."customer_id" != 0)
 );
 --> statement-breakpoint
@@ -185,6 +194,7 @@ CREATE TABLE "billing_records" (
 	"last_retry_at" timestamp with time zone,
 	"failure_reason" text,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"payment_action_url" varchar(500),
 	"last_updated_at" timestamp with time zone,
 	CONSTRAINT "check_tx_digest_length" CHECK ("billing_records"."tx_digest" IS NULL OR LENGTH("billing_records"."tx_digest") = 32)
 );
@@ -220,17 +230,10 @@ CREATE TABLE "service_instances" (
 	"customer_id" integer NOT NULL,
 	"service_type" "service_type" NOT NULL,
 	"state" "service_state" DEFAULT 'not_provisioned' NOT NULL,
-	"tier" "service_tier" NOT NULL,
 	"is_user_enabled" boolean DEFAULT true NOT NULL,
-	"sub_pending_invoice_id" bigint,
-	"paid_once" boolean DEFAULT false NOT NULL,
 	"config" jsonb,
 	"enabled_at" timestamp with time zone,
 	"disabled_at" timestamp with time zone,
-	"scheduled_tier" "service_tier",
-	"scheduled_tier_effective_date" date,
-	"cancellation_scheduled_for" date,
-	"cancellation_effective_at" timestamp with time zone,
 	"last_billed_timestamp" timestamp with time zone,
 	"sma_config_change_vault_seq" integer DEFAULT 0,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
@@ -470,7 +473,6 @@ ALTER TABLE "billing_records" ADD CONSTRAINT "billing_records_customer_id_custom
 ALTER TABLE "escrow_transactions" ADD CONSTRAINT "escrow_transactions_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "ledger_entries" ADD CONSTRAINT "ledger_entries_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "service_instances" ADD CONSTRAINT "service_instances_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "service_instances" ADD CONSTRAINT "service_instances_sub_pending_invoice_id_billing_records_id_fk" FOREIGN KEY ("sub_pending_invoice_id") REFERENCES "public"."billing_records"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "seal_keys" ADD CONSTRAINT "seal_keys_customer_id_customers_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("customer_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "seal_keys" ADD CONSTRAINT "seal_keys_instance_id_service_instances_instance_id_fk" FOREIGN KEY ("instance_id") REFERENCES "public"."service_instances"("instance_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "seal_packages" ADD CONSTRAINT "seal_packages_seal_key_id_seal_keys_seal_key_id_fk" FOREIGN KEY ("seal_key_id") REFERENCES "public"."seal_keys"("seal_key_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
@@ -502,6 +504,8 @@ CREATE INDEX "idx_cancellation_customer_service" ON "service_cancellation_histor
 CREATE INDEX "idx_cancellation_cooldown" ON "service_cancellation_history" USING btree ("cooldown_expires_at");--> statement-breakpoint
 CREATE INDEX "idx_wallet" ON "customers" USING btree ("wallet_address");--> statement-breakpoint
 CREATE INDEX "idx_customer_status" ON "customers" USING btree ("status") WHERE "customers"."status" != 'active';--> statement-breakpoint
+CREATE INDEX "idx_customer_cancellation_scheduled" ON "customers" USING btree ("platform_cancellation_scheduled_for") WHERE "customers"."platform_cancellation_scheduled_for" IS NOT NULL;--> statement-breakpoint
+CREATE INDEX "idx_customer_scheduled_tier" ON "customers" USING btree ("scheduled_platform_tier_effective_date") WHERE "customers"."scheduled_platform_tier" IS NOT NULL;--> statement-breakpoint
 CREATE INDEX "idx_customer_period" ON "billing_records" USING btree ("customer_id","billing_period_start");--> statement-breakpoint
 CREATE INDEX "idx_billing_status" ON "billing_records" USING btree ("status") WHERE "billing_records"."status" != 'paid';--> statement-breakpoint
 CREATE INDEX "idx_billing_type_status" ON "billing_records" USING btree ("billing_type","status") WHERE "billing_records"."status" = 'pending';--> statement-breakpoint
@@ -510,9 +514,6 @@ CREATE INDEX "idx_escrow_tx_digest" ON "escrow_transactions" USING btree ("tx_di
 CREATE INDEX "idx_customer_created" ON "ledger_entries" USING btree ("customer_id","created_at");--> statement-breakpoint
 CREATE INDEX "idx_ledger_tx_digest" ON "ledger_entries" USING btree ("tx_digest") WHERE "ledger_entries"."tx_digest" IS NOT NULL;--> statement-breakpoint
 CREATE INDEX "idx_service_type_state" ON "service_instances" USING btree ("service_type","state");--> statement-breakpoint
-CREATE INDEX "idx_service_cancellation_scheduled" ON "service_instances" USING btree ("cancellation_scheduled_for") WHERE "service_instances"."cancellation_scheduled_for" IS NOT NULL;--> statement-breakpoint
-CREATE INDEX "idx_service_cancellation_pending" ON "service_instances" USING btree ("state","cancellation_effective_at") WHERE "service_instances"."state" = 'cancellation_pending';--> statement-breakpoint
-CREATE INDEX "idx_service_scheduled_tier" ON "service_instances" USING btree ("scheduled_tier_effective_date") WHERE "service_instances"."scheduled_tier" IS NOT NULL;--> statement-breakpoint
 CREATE INDEX "idx_seal_customer" ON "seal_keys" USING btree ("customer_id");--> statement-breakpoint
 CREATE INDEX "idx_seal_instance" ON "seal_keys" USING btree ("instance_id");--> statement-breakpoint
 CREATE INDEX "idx_seal_public_key" ON "seal_keys" USING btree ("public_key");--> statement-breakpoint
@@ -532,5 +533,4 @@ CREATE INDEX "idx_logs_status_code" ON "haproxy_raw_logs" USING btree ("status_c
 CREATE INDEX "idx_logs_api_key_fp" ON "haproxy_raw_logs" USING btree ("api_key_fp","timestamp" DESC NULLS LAST) WHERE "haproxy_raw_logs"."api_key_fp" != 0;--> statement-breakpoint
 CREATE INDEX "idx_system_server_time" ON "haproxy_system_logs" USING btree ("server_id","timestamp" DESC NULLS LAST);--> statement-breakpoint
 CREATE INDEX "idx_activity_customer_time" ON "user_activity_logs" USING btree ("customer_id","timestamp" DESC NULLS LAST);--> statement-breakpoint
-CREATE UNIQUE INDEX "uniq_customer_provider_ref_active" ON "customer_payment_methods" ("customer_id", "provider_ref") WHERE status = 'active' AND provider_ref IS NOT NULL;--> statement-breakpoint
-CREATE UNIQUE INDEX "uniq_customer_priority_active" ON "customer_payment_methods" ("customer_id", "priority") WHERE status = 'active';
+ALTER TABLE "customers" ADD CONSTRAINT "customers_pending_invoice_id_billing_records_id_fk" FOREIGN KEY ("pending_invoice_id") REFERENCES "public"."billing_records"("id") ON DELETE no action ON UPDATE no action;

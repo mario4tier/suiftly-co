@@ -77,10 +77,9 @@ test('Invalid customer status rejected', () => {
   }
 });
 
-// Test 5: Valid seal config
+// Test 5: Valid seal config (tier is derived from platform, not stored in config)
 test('Valid seal config', () => {
   sealConfigSchema.parse({
-    tier: SERVICE_TIER.STARTER,
     burstEnabled: false,
     totalSealKeys: 1,
     packagesPerSealKey: 3,

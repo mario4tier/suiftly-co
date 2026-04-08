@@ -1,21 +1,28 @@
 /**
  * Cancellation Cleanup Job (Phase 1C)
  *
- * Processes services in cancellation_pending state after 7-day grace period.
+ * Processes platform cancellations after 7-day grace period.
  * Per BILLING_DESIGN.md R13.7.
  *
  * What it does:
- * 1. Finds services where cancellation_effective_at <= NOW
+ * 1. Finds customers where platformCancellationEffectiveAt <= NOW
  * 2. Records in cancellation_history (for anti-abuse tracking)
  * 3. Deletes related records (API keys, Seal keys, packages)
- * 4. Resets service to not_provisioned state
+ * 4. Resets services to not_provisioned state
  *
  * Run frequency: Hourly (or more frequently for timely cleanup)
+ *
+ * TODO(production-safety): Before production launch, seal keys (especially imported ones)
+ * should NOT be deleted on cancellation. Imported seal keys represent on-chain objects
+ * with real value. Instead: disable services/keys, keep data intact, allow re-subscription
+ * to restore access. Only delete after extended inactivity (90+ days) or explicit user
+ * request. See: https://github.com/mario4tier/suiftly-co/issues/XX
  */
 
-import { eq, and, lte, sql, inArray } from 'drizzle-orm';
+import { eq, and, lte, sql, isNotNull, inArray } from 'drizzle-orm';
 import type { Database, DatabaseOrTransaction } from '../db';
 import {
+  customers,
   serviceInstances,
   serviceCancellationHistory,
   apiKeys,
@@ -80,40 +87,39 @@ export async function processCancellationCleanup(
     errors: [],
   };
 
-  // Find all services in cancellation_pending state past their effective date
-  const expiredServices = await db
+  // Find all customers with platform cancellation past their effective date
+  const expiredCustomers = await db
     .select()
-    .from(serviceInstances)
+    .from(customers)
     .where(
       and(
-        eq(serviceInstances.state, 'cancellation_pending'),
-        lte(serviceInstances.cancellationEffectiveAt, now)
+        isNotNull(customers.platformCancellationEffectiveAt),
+        lte(customers.platformCancellationEffectiveAt, now)
       )
     );
 
-  // Process each service with customer-level locking
-  for (const service of expiredServices) {
+  // Process each customer's platform cancellation with customer-level locking
+  for (const customer of expiredCustomers) {
     result.servicesProcessed++;
+    const previousTier = (customer.platformTier ?? 'starter') as ServiceTier;
 
     try {
-      await processServiceDeletion(
+      await processPlatformCancellation(
         db,
-        service.customerId,
-        service.serviceType as ServiceType,
-        service.tier as ServiceTier,
-        service.instanceId,
+        customer.customerId,
+        previousTier,
         clock
       );
 
       result.servicesDeleted.push({
-        customerId: service.customerId,
-        serviceType: service.serviceType as ServiceType,
-        previousTier: service.tier as ServiceTier,
+        customerId: customer.customerId,
+        serviceType: 'platform' as ServiceType,
+        previousTier,
       });
     } catch (error) {
       result.errors.push({
-        customerId: service.customerId,
-        serviceType: service.serviceType as ServiceType,
+        customerId: customer.customerId,
+        serviceType: 'platform' as ServiceType,
         error: error instanceof Error ? error.message : 'Unknown error',
       });
     }
@@ -123,95 +129,104 @@ export async function processCancellationCleanup(
 }
 
 /**
- * Process deletion of a single service
+ * Process platform cancellation for a customer
  *
- * Called within customer lock to ensure atomicity.
+ * Records cancellation history, cleans up all service instances,
+ * and resets platform fields. Called within customer lock for atomicity.
  *
  * @param db Database instance
  * @param customerId Customer ID
- * @param serviceType Service type
  * @param previousTier Tier before cancellation
- * @param instanceId Service instance ID
  * @param clock DBClock for timestamps
  */
-async function processServiceDeletion(
+async function processPlatformCancellation(
   db: Database,
   customerId: number,
-  serviceType: ServiceType,
   previousTier: ServiceTier,
-  instanceId: number,
   clock: DBClock
 ): Promise<void> {
   await withCustomerLock(db, customerId, async (tx) => {
     const now = clock.now();
     const cooldownExpiresAt = clock.addDays(COOLDOWN_PERIOD_DAYS);
 
-    // 1. Record in cancellation history (for anti-abuse tracking)
+    // 1. Record platform cancellation in history (for anti-abuse tracking)
     await tx.insert(serviceCancellationHistory).values({
       customerId,
-      serviceType,
+      serviceType: 'platform',
       previousTier,
       billingPeriodEndedAt: now, // Approximate - actual was 7 days ago
       deletedAt: now,
       cooldownExpiresAt,
     });
 
-    // 2. Delete related records
+    // 2. Clean up all service instances for this customer
+    const customerServices = await tx
+      .select()
+      .from(serviceInstances)
+      .where(eq(serviceInstances.customerId, customerId));
 
-    // Delete API keys for this service
-    await tx
-      .delete(apiKeys)
-      .where(
-        and(
-          eq(apiKeys.customerId, customerId),
-          eq(apiKeys.serviceType, serviceType)
-        )
-      );
+    for (const service of customerServices) {
+      const serviceType = service.serviceType as ServiceType;
 
-    // Delete Seal keys and packages (if Seal service)
-    if (serviceType === 'seal') {
-      // First get all seal key IDs for this customer
-      const customerSealKeys = await tx
-        .select({ sealKeyId: sealKeys.sealKeyId })
-        .from(sealKeys)
-        .where(eq(sealKeys.customerId, customerId));
+      // Delete API keys for this service
+      await tx
+        .delete(apiKeys)
+        .where(
+          and(
+            eq(apiKeys.customerId, customerId),
+            eq(apiKeys.serviceType, serviceType)
+          )
+        );
 
-      // Delete packages for all seal keys in one query
-      if (customerSealKeys.length > 0) {
-        const sealKeyIds = customerSealKeys.map(k => k.sealKeyId);
-        await tx
-          .delete(sealPackages)
-          .where(inArray(sealPackages.sealKeyId, sealKeyIds));
+      // Delete Seal keys and packages (if Seal service)
+      if (serviceType === 'seal') {
+        const customerSealKeys = await tx
+          .select({ sealKeyId: sealKeys.sealKeyId })
+          .from(sealKeys)
+          .where(eq(sealKeys.customerId, customerId));
+
+        if (customerSealKeys.length > 0) {
+          const sealKeyIds = customerSealKeys.map(k => k.sealKeyId);
+          await tx
+            .delete(sealPackages)
+            .where(inArray(sealPackages.sealKeyId, sealKeyIds));
+        }
+
+        await tx.delete(sealKeys).where(eq(sealKeys.customerId, customerId));
       }
 
-      // Delete seal keys
-      await tx.delete(sealKeys).where(eq(sealKeys.customerId, customerId));
+      // Reset service instance to not_provisioned state
+      await tx
+        .update(serviceInstances)
+        .set({
+          state: 'not_provisioned',
+          isUserEnabled: true, // Reset to default
+          cpEnabled: false, // Remove from vault generation
+          config: null,
+          enabledAt: null,
+          disabledAt: null,
+        })
+        .where(eq(serviceInstances.instanceId, service.instanceId));
     }
 
-    // 3. Reset service instance to not_provisioned state
-    // Note: subPendingInvoiceId is NULL - re-subscribing will create new invoice
+    // 3. Clear platform cancellation/billing fields on customer
     await tx
-      .update(serviceInstances)
+      .update(customers)
       .set({
-        state: 'not_provisioned',
-        tier: 'starter', // Reset to default tier
-        isUserEnabled: true, // Reset to default
-        subPendingInvoiceId: null, // Reset - new invoice will be created on re-subscribe
-        config: null,
-        enabledAt: null,
-        disabledAt: null,
-        cancellationScheduledFor: null,
-        cancellationEffectiveAt: null,
-        scheduledTier: null,
-        scheduledTierEffectiveDate: null,
+        platformTier: null, // Fully cancelled — no subscription
+        pendingInvoiceId: null, // Reset - new invoice will be created on re-subscribe
+        platformCancellationScheduledFor: null,
+        platformCancellationEffectiveAt: null,
+        scheduledPlatformTier: null,
+        scheduledPlatformTierEffectiveDate: null,
       })
-      .where(eq(serviceInstances.instanceId, instanceId));
+      .where(eq(customers.customerId, customerId));
 
     // 4. Log the cleanup
     await tx.insert(userActivityLogs).values({
       customerId,
       clientIp: '0.0.0.0', // System action
-      message: `Service ${serviceType} deleted after cancellation grace period. Cooldown expires: ${cooldownExpiresAt.toISOString().split('T')[0]}`,
+      message: `Platform subscription cancelled. Cooldown expires: ${cooldownExpiresAt.toISOString().split('T')[0]}`,
     });
   });
 }
@@ -231,38 +246,35 @@ async function processServiceDeletion(
  * @param daysUntilDeletion Days until deletion (e.g., 1 = tomorrow)
  * @returns Services approaching deadline
  */
-export async function getServicesApproachingDeletion(
+export async function getCustomersApproachingCancellation(
   db: Database,
   clock: DBClock,
   daysUntilDeletion: number = 1
 ): Promise<
   Array<{
     customerId: number;
-    serviceType: ServiceType;
     cancellationEffectiveAt: Date;
   }>
 > {
-  const now = clock.now();
   const deadline = clock.addDays(daysUntilDeletion);
 
-  const services = await db
+  // Find customers with platform cancellation approaching deadline
+  const results = await db
     .select({
-      customerId: serviceInstances.customerId,
-      serviceType: serviceInstances.serviceType,
-      cancellationEffectiveAt: serviceInstances.cancellationEffectiveAt,
+      customerId: customers.customerId,
+      cancellationEffectiveAt: customers.platformCancellationEffectiveAt,
     })
-    .from(serviceInstances)
+    .from(customers)
     .where(
       and(
-        eq(serviceInstances.state, 'cancellation_pending'),
-        lte(serviceInstances.cancellationEffectiveAt, deadline)
+        isNotNull(customers.platformCancellationEffectiveAt),
+        lte(customers.platformCancellationEffectiveAt, deadline)
       )
     );
 
-  return services.map((s) => ({
-    customerId: s.customerId,
-    serviceType: s.serviceType as ServiceType,
-    cancellationEffectiveAt: s.cancellationEffectiveAt!,
+  return results.map(r => ({
+    customerId: r.customerId,
+    cancellationEffectiveAt: r.cancellationEffectiveAt!,
   }));
 }
 

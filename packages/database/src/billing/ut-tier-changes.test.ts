@@ -13,10 +13,10 @@ import {
   customerCredits,
   invoicePayments,
   invoiceLineItems,
-  serviceInstances,
   escrowTransactions,
   billingIdempotency,
   serviceCancellationHistory,
+  serviceInstances,
   apiKeys,
   sealKeys,
   sealPackages,
@@ -45,7 +45,7 @@ import { processInvoicePayment } from './payments';
 import { issueCredit } from './credits';
 import { getCustomerProviders } from './providers';
 import type { BillingProcessorConfig } from './types';
-import { TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
+import { PLATFORM_TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
 import { eq, and, sql } from 'drizzle-orm';
 
 // ============================================================================
@@ -119,7 +119,6 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
 
   const testWalletAddress = '0xTIER3000567890abcdefABCDEF1234567890abcdefABCDEF1234567890abc';
   let testCustomerId: number;
-  let testInstanceId: number;
 
   beforeAll(async () => {
     await resetTestState(db);
@@ -150,25 +149,13 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       currentPeriodChargedUsdCents: 0,
       currentPeriodStart: '2025-01-01',
       paidOnce: true,
+      platformTier: 'starter',
+      pendingInvoiceId: null,
       createdAt: clock.now(),
       updatedAt: clock.now(),
     }).returning();
 
     testCustomerId = customer.customerId;
-
-    // Create service in Pro tier (with paidOnce = true for existing tests)
-    const [service] = await db.insert(serviceInstances).values({
-      customerId: testCustomerId,
-      serviceType: 'seal',
-      tier: 'pro',
-      state: 'enabled',
-      isUserEnabled: true,
-      subPendingInvoiceId: null,
-      paidOnce: true, // Service has been paid for (normal paid subscription)
-      config: { tier: 'pro' },
-    }).returning();
-
-    testInstanceId = service.instanceId;
 
     // Ensure escrow payment method exists for provider chain
     await ensureEscrowPaymentMethod(db, testCustomerId);
@@ -184,29 +171,29 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
 
   describe('Tier Upgrade (Immediate Effect)', () => {
     it('should upgrade tier with pro-rated charge', async () => {
-      // Upgrade from Pro ($29) to Enterprise ($185) on Jan 15
+      // Upgrade from Starter ($1) to Pro ($29) on Jan 15
       // 17 days remaining in 31-day month
       const result = await handleTierUpgrade(
         db,
         testCustomerId,
-        'seal',
-        'enterprise',
+        'platform',
+        'pro',
         paymentServices,
         clock
       );
 
       expect(result.success).toBe(true);
-      expect(result.newTier).toBe('enterprise');
+      expect(result.newTier).toBe('pro');
 
-      // Expected charge: ($185 - $29) × (17/31) = $156 × 0.548 = $85.48
-      const expectedCharge = Math.floor((15600 * 17) / 31);
+      // Expected charge: ($29 - $1) × (17/31) = $28 × 0.548 = $15.35
+      const expectedCharge = Math.floor((2800 * 17) / 31);
       expect(result.chargeAmountUsdCents).toBe(expectedCharge);
 
       // Verify tier was updated immediately
-      const service = await db.query.serviceInstances.findFirst({
-        where: eq(serviceInstances.instanceId, testInstanceId),
+      const customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, testCustomerId),
       });
-      expect(service?.tier).toBe('enterprise');
+      expect(customer?.platformTier).toBe('pro');
     });
 
     it('should charge $0 and upgrade immediately when ≤2 days remaining (grace period)', async () => {
@@ -216,21 +203,21 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       const result = await handleTierUpgrade(
         db,
         testCustomerId,
-        'seal',
-        'enterprise',
+        'platform',
+        'pro',
         paymentServices,
         clock
       );
 
       expect(result.success).toBe(true);
       expect(result.chargeAmountUsdCents).toBe(0);
-      expect(result.newTier).toBe('enterprise');
+      expect(result.newTier).toBe('pro');
 
       // Verify tier was updated
-      const service = await db.query.serviceInstances.findFirst({
-        where: eq(serviceInstances.instanceId, testInstanceId),
+      const customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, testCustomerId),
       });
-      expect(service?.tier).toBe('enterprise');
+      expect(customer?.platformTier).toBe('pro');
     });
 
     it('should fail upgrade if payment fails', async () => {
@@ -239,8 +226,8 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       const result = await handleTierUpgrade(
         db,
         testCustomerId,
-        'seal',
-        'enterprise',
+        'platform',
+        'pro',
         paymentServices,
         clock
       );
@@ -249,10 +236,10 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       expect(result.error).toContain('Insufficient balance');
 
       // Verify tier was NOT updated
-      const service = await db.query.serviceInstances.findFirst({
-        where: eq(serviceInstances.instanceId, testInstanceId),
+      const customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, testCustomerId),
       });
-      expect(service?.tier).toBe('pro'); // Still Pro
+      expect(customer?.platformTier).toBe('starter'); // Still Starter
     });
 
     it('should void upgrade invoice on payment failure to prevent orphan retry', async () => {
@@ -267,8 +254,8 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       const result = await handleTierUpgrade(
         db,
         testCustomerId,
-        'seal',
-        'enterprise',
+        'platform',
+        'pro',
         paymentServices,
         clock
       );
@@ -282,11 +269,11 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       });
       expect(invoice?.status).toBe('voided');
 
-      // Tier should still be Pro (not upgraded)
-      const service = await db.query.serviceInstances.findFirst({
-        where: eq(serviceInstances.instanceId, testInstanceId),
+      // Tier should still be Starter (not upgraded)
+      const customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, testCustomerId),
       });
-      expect(service?.tier).toBe('pro');
+      expect(customer?.platformTier).toBe('starter');
 
       // Verify: no FAILED invoices remain that could be retried
       const failedInvoices = await db
@@ -305,7 +292,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       // The customer loses credit value attached to a voided invoice.
       // FIX: Issue a reconciliation credit for consumed credits before voiding.
 
-      const CREDIT_AMOUNT_CENTS = 3000; // $30 credit
+      const CREDIT_AMOUNT_CENTS = 500; // $5 credit — less than the 1535¢ upgrade charge, so escrow is still needed
 
       // 1. Issue a credit
       const creditId = await issueCredit(
@@ -323,12 +310,12 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       // 3. Force escrow to fail — credits will be applied but payment won't complete
       suiService.setFailure(true, 'Insufficient balance');
 
-      // 4. Attempt upgrade Pro → Enterprise (will partially pay with credits, then fail)
+      // 4. Attempt upgrade Starter → Pro (will partially pay with credits, then fail)
       const result = await handleTierUpgrade(
         db,
         testCustomerId,
-        'seal',
-        'enterprise',
+        'platform',
+        'pro',
         paymentServices,
         clock
       );
@@ -368,7 +355,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       // which hits FK violation from invoicePayments (credits applied) or silently
       // burns credits. Should void + restore credits instead.
 
-      const CREDIT_AMOUNT_CENTS = 2500; // $25 credit
+      const CREDIT_AMOUNT_CENTS = 500; // $5 credit — less than the 1535¢ upgrade charge, so escrow is still needed
 
       // Need to import the two-phase functions
       const { prepareTierUpgradePhase1Locked, createUpgradeInvoiceCommitted, executeTierUpgradePhase2Locked } = await import('./tier-changes');
@@ -390,8 +377,8 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       const phase1 = await prepareTierUpgradePhase1Locked(
         tx,
         testCustomerId,
-        'seal',
-        'enterprise',
+        'platform',
+        'pro',
         clock
       );
       expect(phase1.canProceed).toBe(true);
@@ -410,9 +397,9 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       const result = await executeTierUpgradePhase2Locked(
         tx,
         testCustomerId,
-        'seal',
-        'enterprise',
+        'platform',
         'pro',
+        'starter',
         invoiceId,
         paymentServices,
         clock
@@ -448,10 +435,15 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
     });
 
     it('should reject downgrade attempt as upgrade', async () => {
+      // First upgrade to pro so we can attempt to downgrade via upgrade path
+      await db.update(customers)
+        .set({ platformTier: 'pro' })
+        .where(eq(customers.customerId, testCustomerId));
+
       const result = await handleTierUpgrade(
         db,
         testCustomerId,
-        'seal',
+        'platform',
         'starter', // Lower tier
         paymentServices,
         clock
@@ -462,48 +454,48 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
     });
 
     it('should clear scheduled downgrade when upgrading', async () => {
-      // First schedule a downgrade
-      await db.update(serviceInstances)
+      // First schedule a downgrade (service is at starter, schedule starter — just set fields)
+      await db.update(customers)
         .set({
-          scheduledTier: 'starter',
-          scheduledTierEffectiveDate: '2025-02-01',
+          scheduledPlatformTier: 'starter',
+          scheduledPlatformTierEffectiveDate: '2025-02-01',
         })
-        .where(eq(serviceInstances.instanceId, testInstanceId));
+        .where(eq(customers.customerId, testCustomerId));
 
       // Now upgrade (should clear the scheduled downgrade)
       const result = await handleTierUpgrade(
         db,
         testCustomerId,
-        'seal',
-        'enterprise',
+        'platform',
+        'pro',
         paymentServices,
         clock
       );
 
       expect(result.success).toBe(true);
 
-      const service = await db.query.serviceInstances.findFirst({
-        where: eq(serviceInstances.instanceId, testInstanceId),
+      const customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, testCustomerId),
       });
-      expect(service?.tier).toBe('enterprise');
-      expect(service?.scheduledTier).toBeNull();
-      expect(service?.scheduledTierEffectiveDate).toBeNull();
+      expect(customer?.platformTier).toBe('pro');
+      expect(customer?.scheduledPlatformTier).toBeNull();
+      expect(customer?.scheduledPlatformTierEffectiveDate).toBeNull();
     });
 
     it('should reject upgrade when cancellation is scheduled', async () => {
       // First schedule cancellation
-      await db.update(serviceInstances)
+      await db.update(customers)
         .set({
-          cancellationScheduledFor: '2025-01-31',
+          platformCancellationScheduledFor: '2025-01-31',
         })
-        .where(eq(serviceInstances.instanceId, testInstanceId));
+        .where(eq(customers.customerId, testCustomerId));
 
       // Attempt upgrade (should be blocked - user must undo cancellation first)
       const result = await handleTierUpgrade(
         db,
         testCustomerId,
-        'seal',
-        'enterprise',
+        'platform',
+        'pro',
         paymentServices,
         clock
       );
@@ -512,11 +504,11 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       expect(result.error).toContain('Cannot change tier while cancellation is scheduled');
 
       // Cancellation should still be scheduled
-      const service = await db.query.serviceInstances.findFirst({
-        where: eq(serviceInstances.instanceId, testInstanceId),
+      const customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, testCustomerId),
       });
-      expect(service?.cancellationScheduledFor).toBe('2025-01-31');
-      expect(service?.tier).toBe('pro'); // Tier unchanged
+      expect(customer?.platformCancellationScheduledFor).toBe('2025-01-31');
+      expect(customer?.platformTier).toBe('starter'); // Tier unchanged
     });
   });
 
@@ -525,11 +517,18 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
   // ==========================================================================
 
   describe('Tier Downgrade (Scheduled Effect)', () => {
+    beforeEach(async () => {
+      // Start downgrade tests from pro tier (so there's somewhere to downgrade to)
+      await db.update(customers)
+        .set({ platformTier: 'pro' })
+        .where(eq(customers.customerId, testCustomerId));
+    });
+
     it('should schedule downgrade for end of billing period', async () => {
       const result = await scheduleTierDowngrade(
         db,
         testCustomerId,
-        'seal',
+        'platform',
         'starter',
         clock
       );
@@ -544,19 +543,30 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       expect(result.effectiveDate!.getUTCDate()).toBe(1);
 
       // Verify scheduled in database
-      const service = await db.query.serviceInstances.findFirst({
-        where: eq(serviceInstances.instanceId, testInstanceId),
+      const customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, testCustomerId),
       });
-      expect(service?.tier).toBe('pro'); // Still Pro until effective date
-      expect(service?.scheduledTier).toBe('starter');
+      expect(customer?.platformTier).toBe('pro'); // Still Pro until effective date
+      expect(customer?.scheduledPlatformTier).toBe('starter');
     });
 
     it('should reject upgrade attempt as downgrade', async () => {
+      // pro is the highest tier, so any upgrade via downgrade path is invalid
+      // (there is no higher tier to reject; this tests the guard for going "up" via downgrade)
+      // Since 'pro' is already the top tier, we test with a fabricated higher name to trigger the guard.
+      // Actually, the guard checks if the requested tier price > current tier price.
+      // With platform, 'pro' > 'starter', so calling scheduleTierDowngrade to 'pro' from 'pro' is same-tier.
+      // The test intent: calling scheduleTierDowngrade with a HIGHER tier is rejected.
+      // Since service is at 'pro' (highest), we downgrade to 'starter' first, then test going back up via downgrade.
+      await db.update(customers)
+        .set({ platformTier: 'starter' })
+        .where(eq(customers.customerId, testCustomerId));
+
       const result = await scheduleTierDowngrade(
         db,
         testCustomerId,
-        'seal',
-        'enterprise', // Higher tier
+        'platform',
+        'pro', // Higher tier — rejected as downgrade
         clock
       );
 
@@ -566,17 +576,17 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
 
     it('should reject downgrade when cancellation is scheduled', async () => {
       // First schedule cancellation
-      await db.update(serviceInstances)
+      await db.update(customers)
         .set({
-          cancellationScheduledFor: '2025-01-31',
+          platformCancellationScheduledFor: '2025-01-31',
         })
-        .where(eq(serviceInstances.instanceId, testInstanceId));
+        .where(eq(customers.customerId, testCustomerId));
 
       // Attempt downgrade (should be blocked - user must undo cancellation first)
       const result = await scheduleTierDowngrade(
         db,
         testCustomerId,
-        'seal',
+        'platform',
         'starter',
         clock
       );
@@ -585,12 +595,12 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       expect(result.error).toContain('Cannot change tier while cancellation is scheduled');
 
       // Cancellation should still be scheduled
-      const service = await db.query.serviceInstances.findFirst({
-        where: eq(serviceInstances.instanceId, testInstanceId),
+      const customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, testCustomerId),
       });
-      expect(service?.cancellationScheduledFor).toBe('2025-01-31');
-      expect(service?.tier).toBe('pro'); // Tier unchanged
-      expect(service?.scheduledTier).toBeNull(); // No tier change scheduled
+      expect(customer?.platformCancellationScheduledFor).toBe('2025-01-31');
+      expect(customer?.platformTier).toBe('pro'); // Tier unchanged
+      expect(customer?.scheduledPlatformTier).toBeNull(); // No tier change scheduled
     });
 
     it('should allow canceling scheduled tier change', async () => {
@@ -598,7 +608,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       await scheduleTierDowngrade(
         db,
         testCustomerId,
-        'seal',
+        'platform',
         'starter',
         clock
       );
@@ -607,26 +617,26 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       const result = await cancelScheduledTierChange(
         db,
         testCustomerId,
-        'seal',
+        'platform',
         clock
       );
 
       expect(result.success).toBe(true);
 
-      const service = await db.query.serviceInstances.findFirst({
-        where: eq(serviceInstances.instanceId, testInstanceId),
+      const customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, testCustomerId),
       });
-      expect(service?.scheduledTier).toBeNull();
+      expect(customer?.scheduledPlatformTier).toBeNull();
     });
 
     it('should apply scheduled tier change on 1st of month', async () => {
       // Schedule downgrade to starter
-      await db.update(serviceInstances)
+      await db.update(customers)
         .set({
-          scheduledTier: 'starter',
-          scheduledTierEffectiveDate: '2025-02-01',
+          scheduledPlatformTier: 'starter',
+          scheduledPlatformTierEffectiveDate: '2025-02-01',
         })
-        .where(eq(serviceInstances.instanceId, testInstanceId));
+        .where(eq(customers.customerId, testCustomerId));
 
       // Advance to Feb 1
       clock.setTime(new Date('2025-02-01T00:00:00Z'));
@@ -638,12 +648,12 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       });
 
       // Verify tier was changed
-      const service = await db.query.serviceInstances.findFirst({
-        where: eq(serviceInstances.instanceId, testInstanceId),
+      const customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, testCustomerId),
       });
-      expect(service?.tier).toBe('starter');
-      expect(service?.scheduledTier).toBeNull();
-      expect(service?.scheduledTierEffectiveDate).toBeNull();
+      expect(customer?.platformTier).toBe('starter');
+      expect(customer?.scheduledPlatformTier).toBeNull();
+      expect(customer?.scheduledPlatformTierEffectiveDate).toBeNull();
     });
   });
 
@@ -656,7 +666,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       const result = await scheduleCancellation(
         db,
         testCustomerId,
-        'seal',
+        'platform',
         clock
       );
 
@@ -666,12 +676,12 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       expect(result.effectiveDate).toBeDefined();
       expect(result.effectiveDate!.getUTCDate()).toBe(31);
 
-      // Verify scheduled in database (service still active)
-      const service = await db.query.serviceInstances.findFirst({
-        where: eq(serviceInstances.instanceId, testInstanceId),
+      // Verify scheduled in database (customer still active)
+      const customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, testCustomerId),
       });
-      expect(service?.state).toBe('enabled'); // Still enabled
-      expect(service?.cancellationScheduledFor).toBeTruthy();
+      expect(customer?.status).toBe('active'); // Still active
+      expect(customer?.platformCancellationScheduledFor).toBeTruthy();
     });
 
     it('should allow undoing scheduled cancellation', async () => {
@@ -679,7 +689,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       await scheduleCancellation(
         db,
         testCustomerId,
-        'seal',
+        'platform',
         clock
       );
 
@@ -687,25 +697,25 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       const result = await undoCancellation(
         db,
         testCustomerId,
-        'seal',
+        'platform',
         clock
       );
 
       expect(result.success).toBe(true);
 
-      const service = await db.query.serviceInstances.findFirst({
-        where: eq(serviceInstances.instanceId, testInstanceId),
+      const customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, testCustomerId),
       });
-      expect(service?.cancellationScheduledFor).toBeNull();
+      expect(customer?.platformCancellationScheduledFor).toBeNull();
     });
 
     it('should transition to cancellation_pending on 1st of month', async () => {
       // Schedule cancellation for end of January
-      await db.update(serviceInstances)
+      await db.update(customers)
         .set({
-          cancellationScheduledFor: '2025-01-31',
+          platformCancellationScheduledFor: '2025-01-31',
         })
-        .where(eq(serviceInstances.instanceId, testInstanceId));
+        .where(eq(customers.customerId, testCustomerId));
 
       // Advance to Feb 1
       clock.setTime(new Date('2025-02-01T00:00:00Z'));
@@ -717,33 +727,30 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       });
 
       // Verify state changed to cancellation_pending
-      const service = await db.query.serviceInstances.findFirst({
-        where: eq(serviceInstances.instanceId, testInstanceId),
+      const customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, testCustomerId),
       });
-      expect(service?.state).toBe('cancellation_pending');
-      expect(service?.isUserEnabled).toBe(false);
-      expect(service?.cancellationScheduledFor).toBeNull();
-      expect(service?.cancellationEffectiveAt).toBeTruthy();
+      expect(customer?.platformCancellationScheduledFor).toBeNull();
+      expect(customer?.platformCancellationEffectiveAt).toBeTruthy();
 
       // Cancellation effective should be 7 days from now
-      const effectiveAt = new Date(service!.cancellationEffectiveAt!);
+      const effectiveAt = new Date(customer!.platformCancellationEffectiveAt!);
       const expectedEffective = clock.addDays(7);
       expect(effectiveAt.getTime()).toBe(expectedEffective.getTime());
     });
 
     it('should not allow undo after billing period ends', async () => {
-      // Set service to cancellation_pending state
-      await db.update(serviceInstances)
+      // Set customer to cancellation_pending state
+      await db.update(customers)
         .set({
-          state: 'cancellation_pending',
-          cancellationEffectiveAt: clock.addDays(7),
+          platformCancellationEffectiveAt: clock.addDays(7),
         })
-        .where(eq(serviceInstances.instanceId, testInstanceId));
+        .where(eq(customers.customerId, testCustomerId));
 
       const result = await undoCancellation(
         db,
         testCustomerId,
-        'seal',
+        'platform',
         clock
       );
 
@@ -757,30 +764,29 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
   // ==========================================================================
 
   describe('Cancellation Cleanup Job', () => {
+    beforeEach(async () => {
+      // Start cleanup tests from pro tier (more realistic — cancelling a paid pro sub)
+      await db.update(customers)
+        .set({ platformTier: 'pro' })
+        .where(eq(customers.customerId, testCustomerId));
+    });
+
     it('should delete service after 7-day grace period', async () => {
-      // Create API key and seal key for the service
-      await db.insert(apiKeys).values({
-        apiKeyFp: 999999,
-        apiKeyId: 'test-api-key-' + Date.now(),
+      // Create a service instance (cleanup iterates over service_instances)
+      await db.insert(serviceInstances).values({
         customerId: testCustomerId,
         serviceType: 'seal',
+        isUserEnabled: true,
+        config: {},
       });
 
-      await db.insert(sealKeys).values({
-        customerId: testCustomerId,
-        instanceId: testInstanceId,
-        publicKey: Buffer.from('0'.repeat(96), 'hex'),
-        derivationIndex: 0,
-      });
-
-      // Set service to cancellation_pending with past effective date
+      // Set customer to cancellation_pending with past effective date
       const effectiveAt = new Date('2025-01-15T00:00:00Z');
-      await db.update(serviceInstances)
+      await db.update(customers)
         .set({
-          state: 'cancellation_pending',
-          cancellationEffectiveAt: effectiveAt,
+          platformCancellationEffectiveAt: effectiveAt,
         })
-        .where(eq(serviceInstances.instanceId, testInstanceId));
+        .where(eq(customers.customerId, testCustomerId));
 
       // Advance time past the effective date
       clock.setTime(new Date('2025-01-16T00:00:00Z'));
@@ -792,31 +798,17 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       expect(result.servicesDeleted).toHaveLength(1);
       expect(result.errors).toHaveLength(0);
 
-      // Verify service reset to not_provisioned
-      const service = await db.query.serviceInstances.findFirst({
-        where: eq(serviceInstances.instanceId, testInstanceId),
+      // Verify platform tier reset
+      const customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, testCustomerId),
       });
-      expect(service?.state).toBe('not_provisioned');
-      expect(service?.tier).toBe('starter');
-      expect(service?.config).toBeNull();
-
-      // Verify API keys deleted
-      const remainingApiKeys = await db.select()
-        .from(apiKeys)
-        .where(eq(apiKeys.customerId, testCustomerId));
-      expect(remainingApiKeys).toHaveLength(0);
-
-      // Verify seal keys deleted
-      const remainingSealKeys = await db.select()
-        .from(sealKeys)
-        .where(eq(sealKeys.customerId, testCustomerId));
-      expect(remainingSealKeys).toHaveLength(0);
+      expect(customer?.platformTier).toBeNull(); // Reset on cleanup
 
       // Verify cancellation history created
       const history = await db.query.serviceCancellationHistory.findFirst({
         where: and(
           eq(serviceCancellationHistory.customerId, testCustomerId),
-          eq(serviceCancellationHistory.serviceType, 'seal')
+          eq(serviceCancellationHistory.serviceType, 'platform')
         ),
       });
       expect(history).toBeTruthy();
@@ -830,18 +822,17 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
 
   describe('Anti-Abuse: Re-Provisioning Block', () => {
     it('should block provisioning during cancellation_pending state', async () => {
-      // Set service to cancellation_pending
-      await db.update(serviceInstances)
+      // Set customer to cancellation_pending
+      await db.update(customers)
         .set({
-          state: 'cancellation_pending',
-          cancellationEffectiveAt: clock.addDays(7),
+          platformCancellationEffectiveAt: clock.addDays(7),
         })
-        .where(eq(serviceInstances.instanceId, testInstanceId));
+        .where(eq(customers.customerId, testCustomerId));
 
       const result = await canProvisionService(
         db,
         testCustomerId,
-        'seal',
+        'platform',
         clock
       );
 
@@ -853,22 +844,22 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       // Create cancellation history with active cooldown
       await db.insert(serviceCancellationHistory).values({
         customerId: testCustomerId,
-        serviceType: 'seal',
+        serviceType: 'platform',
         previousTier: 'pro',
         billingPeriodEndedAt: new Date('2025-01-08T00:00:00Z'),
         deletedAt: new Date('2025-01-15T00:00:00Z'),
         cooldownExpiresAt: new Date('2025-01-22T00:00:00Z'), // Expires in 7 days
       });
 
-      // Reset service to not_provisioned
-      await db.update(serviceInstances)
-        .set({ state: 'not_provisioned' })
-        .where(eq(serviceInstances.instanceId, testInstanceId));
+      // Reset customer platform tier (no active subscription)
+      await db.update(customers)
+        .set({ platformTier: null })
+        .where(eq(customers.customerId, testCustomerId));
 
       const result = await canProvisionService(
         db,
         testCustomerId,
-        'seal',
+        'platform',
         clock
       );
 
@@ -881,22 +872,22 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       // Create cancellation history with expired cooldown
       await db.insert(serviceCancellationHistory).values({
         customerId: testCustomerId,
-        serviceType: 'seal',
+        serviceType: 'platform',
         previousTier: 'pro',
         billingPeriodEndedAt: new Date('2025-01-01T00:00:00Z'),
         deletedAt: new Date('2025-01-08T00:00:00Z'),
         cooldownExpiresAt: new Date('2025-01-14T00:00:00Z'), // Already expired
       });
 
-      // Reset service to not_provisioned
-      await db.update(serviceInstances)
-        .set({ state: 'not_provisioned' })
-        .where(eq(serviceInstances.instanceId, testInstanceId));
+      // Reset customer platform tier (no active subscription)
+      await db.update(customers)
+        .set({ platformTier: null })
+        .where(eq(customers.customerId, testCustomerId));
 
       const result = await canProvisionService(
         db,
         testCustomerId,
-        'seal',
+        'platform',
         clock
       );
 
@@ -904,17 +895,22 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
     });
 
     it('should allow provisioning different service type during cooldown', async () => {
-      // Create cancellation history for seal service
+      // Create cancellation history for platform (only platform has tiers/billing)
       await db.insert(serviceCancellationHistory).values({
         customerId: testCustomerId,
-        serviceType: 'seal',
+        serviceType: 'platform',
         previousTier: 'pro',
         billingPeriodEndedAt: clock.now(),
         deletedAt: clock.now(),
         cooldownExpiresAt: clock.addDays(7),
       });
 
-      // Try to provision grpc (different service type)
+      // Clear platform tier (cancelled) so the platform check doesn't block
+      await db.update(customers)
+        .set({ platformTier: null })
+        .where(eq(customers.customerId, testCustomerId));
+
+      // Try to provision grpc (different service type) — should not be blocked
       const result = await canProvisionService(
         db,
         testCustomerId,
@@ -935,35 +931,34 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       const options = await getTierChangeOptions(
         db,
         testCustomerId,
-        'seal',
+        'platform',
         clock
       );
 
       expect(options).not.toBeNull();
-      expect(options?.currentTier).toBe('pro');
-      expect(options?.availableTiers).toHaveLength(3);
+      expect(options?.currentTier).toBe('starter');
+      expect(options?.availableTiers).toHaveLength(2);
 
-      // Find starter tier (downgrade)
+      // Find pro tier (upgrade)
+      const pro = options?.availableTiers.find(t => t.tier === 'pro');
+      expect(pro?.isUpgrade).toBe(true);
+      expect(pro?.upgradeChargeCents).toBeGreaterThan(0);
+
+      // Find starter tier (current)
       const starter = options?.availableTiers.find(t => t.tier === 'starter');
-      expect(starter?.isDowngrade).toBe(true);
-      expect(starter?.effectiveDate).toBeTruthy();
-
-      // Find enterprise tier (upgrade)
-      const enterprise = options?.availableTiers.find(t => t.tier === 'enterprise');
-      expect(enterprise?.isUpgrade).toBe(true);
-      expect(enterprise?.upgradeChargeCents).toBeGreaterThan(0);
+      expect(starter?.isCurrentTier).toBe(true);
     });
 
     it('should show cancellation status', async () => {
       // Schedule cancellation
-      await db.update(serviceInstances)
-        .set({ cancellationScheduledFor: '2025-01-31' })
-        .where(eq(serviceInstances.instanceId, testInstanceId));
+      await db.update(customers)
+        .set({ platformCancellationScheduledFor: '2025-01-31' })
+        .where(eq(customers.customerId, testCustomerId));
 
       const options = await getTierChangeOptions(
         db,
         testCustomerId,
-        'seal',
+        'platform',
         clock
       );
 
@@ -977,6 +972,21 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
   // ==========================================================================
 
   describe('Full Cancellation Journey', () => {
+    beforeEach(async () => {
+      // Start full journey tests from pro tier
+      await db.update(customers)
+        .set({ platformTier: 'pro' })
+        .where(eq(customers.customerId, testCustomerId));
+
+      // Create a service instance (cancellation cleanup iterates over service_instances)
+      await db.insert(serviceInstances).values({
+        customerId: testCustomerId,
+        serviceType: 'seal',
+        isUserEnabled: true,
+        config: {},
+      });
+    });
+
     it('should complete full cancellation lifecycle with time simulation', async () => {
       // ---- Day 1: Mid-month, user schedules cancellation ----
       clock.setTime(new Date('2025-01-15T00:00:00Z'));
@@ -984,26 +994,26 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       const cancelResult = await scheduleCancellation(
         db,
         testCustomerId,
-        'seal',
+        'platform',
         clock
       );
       expect(cancelResult.success).toBe(true);
 
-      // Service still active, cancellation scheduled
-      let service = await db.query.serviceInstances.findFirst({
-        where: eq(serviceInstances.instanceId, testInstanceId),
+      // Customer still active, cancellation scheduled
+      let customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, testCustomerId),
       });
-      expect(service?.state).toBe('enabled');
-      expect(service?.cancellationScheduledFor).toBeTruthy();
+      expect(customer?.status).toBe('active');
+      expect(customer?.platformCancellationScheduledFor).toBeTruthy();
 
       // ---- Day 2: User tries to undo, then decides to keep cancellation ----
       clock.setTime(new Date('2025-01-20T00:00:00Z'));
 
-      const undoResult = await undoCancellation(db, testCustomerId, 'seal', clock);
+      const undoResult = await undoCancellation(db, testCustomerId, 'platform', clock);
       expect(undoResult.success).toBe(true);
 
       // Re-schedule cancellation
-      await scheduleCancellation(db, testCustomerId, 'seal', clock);
+      await scheduleCancellation(db, testCustomerId, 'platform', clock);
 
       // ---- Day 3: Billing period ends (Feb 1) - periodic billing processor runs ----
       // This simulates the realistic 5-minute periodic job that runs in production.
@@ -1032,17 +1042,16 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       );
       expect(cancellationOp).toBeDefined();
 
-      // Service now in cancellation_pending
-      service = await db.query.serviceInstances.findFirst({
-        where: eq(serviceInstances.instanceId, testInstanceId),
+      // Customer now in cancellation_pending
+      customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, testCustomerId),
       });
-      expect(service?.state).toBe('cancellation_pending');
-      expect(service?.isUserEnabled).toBe(false);
+      expect(customer?.platformCancellationEffectiveAt).toBeTruthy();
 
       // ---- Day 4: User tries to re-provision (blocked) ----
       clock.setTime(new Date('2025-02-03T00:00:00Z'));
 
-      const provisionCheck = await canProvisionService(db, testCustomerId, 'seal', clock);
+      const provisionCheck = await canProvisionService(db, testCustomerId, 'platform', clock);
       expect(provisionCheck.allowed).toBe(false);
       expect(provisionCheck.reason).toBe('cancellation_pending');
 
@@ -1052,23 +1061,23 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       const cleanupResult = await processCancellationCleanup(db, clock);
       expect(cleanupResult.servicesDeleted).toHaveLength(1);
 
-      // Service reset to not_provisioned
-      service = await db.query.serviceInstances.findFirst({
-        where: eq(serviceInstances.instanceId, testInstanceId),
+      // Platform tier reset
+      customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, testCustomerId),
       });
-      expect(service?.state).toBe('not_provisioned');
+      expect(customer?.platformTier).toBeNull();
 
       // ---- Day 6: User tries to re-provision (still blocked - cooldown) ----
       clock.setTime(new Date('2025-02-10T00:00:00Z'));
 
-      const cooldownCheck = await canProvisionService(db, testCustomerId, 'seal', clock);
+      const cooldownCheck = await canProvisionService(db, testCustomerId, 'platform', clock);
       expect(cooldownCheck.allowed).toBe(false);
       expect(cooldownCheck.reason).toBe('cooldown_period');
 
       // ---- Day 7: Cooldown expires, user can re-provision ----
       clock.setTime(new Date('2025-02-16T00:00:00Z'));
 
-      const finalCheck = await canProvisionService(db, testCustomerId, 'seal', clock);
+      const finalCheck = await canProvisionService(db, testCustomerId, 'platform', clock);
       expect(finalCheck.allowed).toBe(true);
     });
   });
@@ -1079,10 +1088,10 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
 
   describe('Unpaid Subscription Handling (paidOnce = false)', () => {
     beforeEach(async () => {
-      // Reset service to unpaid state
-      await db.update(serviceInstances)
+      // Reset customer to unpaid state
+      await db.update(customers)
         .set({ paidOnce: false })
-        .where(eq(serviceInstances.instanceId, testInstanceId));
+        .where(eq(customers.customerId, testCustomerId));
     });
 
     describe('Immediate Tier Changes for Unpaid Subscriptions', () => {
@@ -1090,29 +1099,34 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         const result = await handleTierUpgrade(
           db,
           testCustomerId,
-          'seal',
-          'enterprise',
+          'platform',
+          'pro',
           paymentServices,
           clock
         );
 
         expect(result.success).toBe(true);
-        expect(result.newTier).toBe('enterprise');
+        expect(result.newTier).toBe('pro');
         expect(result.chargeAmountUsdCents).toBe(0);
 
         // Verify tier was updated immediately
-        const service = await db.query.serviceInstances.findFirst({
-          where: eq(serviceInstances.instanceId, testInstanceId),
+        const customer = await db.query.customers.findFirst({
+          where: eq(customers.customerId, testCustomerId),
         });
-        expect(service?.tier).toBe('enterprise');
-        expect(service?.paidOnce).toBe(false); // Still unpaid
+        expect(customer?.platformTier).toBe('pro');
+        expect(customer?.paidOnce).toBe(false); // Still unpaid
       });
 
       it('should downgrade tier immediately without scheduling when paidOnce = false', async () => {
+        // Upgrade to pro first so we have somewhere to downgrade from
+        await db.update(customers)
+          .set({ platformTier: 'pro' })
+          .where(eq(customers.customerId, testCustomerId));
+
         const result = await scheduleTierDowngrade(
           db,
           testCustomerId,
-          'seal',
+          'platform',
           'starter',
           clock
         );
@@ -1126,12 +1140,12 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         expect(result.effectiveDate!.getTime()).toBe(now.getTime());
 
         // Verify tier was changed immediately (not scheduled)
-        const service = await db.query.serviceInstances.findFirst({
-          where: eq(serviceInstances.instanceId, testInstanceId),
+        const customer = await db.query.customers.findFirst({
+          where: eq(customers.customerId, testCustomerId),
         });
-        expect(service?.tier).toBe('starter');
-        expect(service?.scheduledTier).toBeNull();
-        expect(service?.scheduledTierEffectiveDate).toBeNull();
+        expect(customer?.platformTier).toBe('starter');
+        expect(customer?.scheduledPlatformTier).toBeNull();
+        expect(customer?.scheduledPlatformTierEffectiveDate).toBeNull();
       });
     });
 
@@ -1140,7 +1154,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         const result = await scheduleCancellation(
           db,
           testCustomerId,
-          'seal',
+          'platform',
           clock
         );
 
@@ -1151,18 +1165,18 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         const now = clock.now();
         expect(result.effectiveDate!.getTime()).toBe(now.getTime());
 
-        // Verify service was DELETED (not scheduled for cancellation)
-        const service = await db.query.serviceInstances.findFirst({
-          where: eq(serviceInstances.instanceId, testInstanceId),
+        // Verify platform tier was cleared (not scheduled for cancellation)
+        const customer = await db.query.customers.findFirst({
+          where: eq(customers.customerId, testCustomerId),
         });
-        expect(service).toBeUndefined();
+        expect(customer?.platformTier).toBeNull();
       });
 
       it('should not create cancellation history for unpaid cancellation (no cooldown)', async () => {
         await scheduleCancellation(
           db,
           testCustomerId,
-          'seal',
+          'platform',
           clock
         );
 
@@ -1170,7 +1184,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         const history = await db.query.serviceCancellationHistory.findFirst({
           where: and(
             eq(serviceCancellationHistory.customerId, testCustomerId),
-            eq(serviceCancellationHistory.serviceType, 'seal')
+            eq(serviceCancellationHistory.serviceType, 'platform')
           ),
         });
         expect(history).toBeUndefined();
@@ -1181,7 +1195,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         await scheduleCancellation(
           db,
           testCustomerId,
-          'seal',
+          'platform',
           clock
         );
 
@@ -1189,7 +1203,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         const result = await canProvisionService(
           db,
           testCustomerId,
-          'seal',
+          'platform',
           clock
         );
 
@@ -1202,7 +1216,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         const result = await canPerformKeyOperation(
           db,
           testCustomerId,
-          'seal'
+          'platform'
         );
 
         expect(result.allowed).toBe(false);
@@ -1212,24 +1226,29 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
 
       it('should allow key operations when paidOnce = true', async () => {
         // Set paidOnce to true
-        await db.update(serviceInstances)
+        await db.update(customers)
           .set({ paidOnce: true })
-          .where(eq(serviceInstances.instanceId, testInstanceId));
+          .where(eq(customers.customerId, testCustomerId));
 
         const result = await canPerformKeyOperation(
           db,
           testCustomerId,
-          'seal'
+          'platform'
         );
 
         expect(result.allowed).toBe(true);
       });
 
       it('should block key operations when service not found', async () => {
+        // Clear platform tier — no subscription means "service not found"
+        await db.update(customers)
+          .set({ platformTier: null })
+          .where(eq(customers.customerId, testCustomerId));
+
         const result = await canPerformKeyOperation(
           db,
           testCustomerId,
-          'grpc' // Service doesn't exist
+          'platform' // No platform tier → service_not_found
         );
 
         expect(result.allowed).toBe(false);
@@ -1237,15 +1256,20 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       });
 
       it('should block key operations when service not in active state', async () => {
-        // Set service to not_provisioned state
-        await db.update(serviceInstances)
-          .set({ state: 'not_provisioned', paidOnce: true })
-          .where(eq(serviceInstances.instanceId, testInstanceId));
+        // Set customer to paid with platform tier, but in cancellation_pending
+        // (platformCancellationEffectiveAt set → not in active state)
+        await db.update(customers)
+          .set({
+            platformTier: 'starter',
+            paidOnce: true,
+            platformCancellationEffectiveAt: new Date('2025-02-01T00:00:00Z'),
+          })
+          .where(eq(customers.customerId, testCustomerId));
 
         const result = await canPerformKeyOperation(
           db,
           testCustomerId,
-          'seal'
+          'platform'
         );
 
         expect(result.allowed).toBe(false);
@@ -1258,24 +1282,29 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         const options = await getTierChangeOptions(
           db,
           testCustomerId,
-          'seal',
+          'platform',
           clock
         );
 
         expect(options).not.toBeNull();
         expect(options?.paidOnce).toBe(false);
 
-        // All tiers should have $0 upgrade charge
-        const enterprise = options?.availableTiers.find(t => t.tier === 'enterprise');
-        expect(enterprise?.isUpgrade).toBe(true);
-        expect(enterprise?.upgradeChargeCents).toBe(0);
+        // Pro tier should have $0 upgrade charge (unpaid)
+        const pro = options?.availableTiers.find(t => t.tier === 'pro');
+        expect(pro?.isUpgrade).toBe(true);
+        expect(pro?.upgradeChargeCents).toBe(0);
       });
 
       it('should not show effectiveDate for downgrade when paidOnce = false', async () => {
+        // Upgrade to pro first so starter is a downgrade
+        await db.update(customers)
+          .set({ platformTier: 'pro' })
+          .where(eq(customers.customerId, testCustomerId));
+
         const options = await getTierChangeOptions(
           db,
           testCustomerId,
-          'seal',
+          'platform',
           clock
         );
 
@@ -1289,49 +1318,49 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
 
       it('should show correct pricing when paidOnce = true', async () => {
         // Set paidOnce to true
-        await db.update(serviceInstances)
+        await db.update(customers)
           .set({ paidOnce: true })
-          .where(eq(serviceInstances.instanceId, testInstanceId));
+          .where(eq(customers.customerId, testCustomerId));
 
         const options = await getTierChangeOptions(
           db,
           testCustomerId,
-          'seal',
+          'platform',
           clock
         );
 
         expect(options).not.toBeNull();
         expect(options?.paidOnce).toBe(true);
 
-        // Upgrade should have pro-rated charge
-        const enterprise = options?.availableTiers.find(t => t.tier === 'enterprise');
-        expect(enterprise?.upgradeChargeCents).toBeGreaterThan(0);
+        // Upgrade to pro should have pro-rated charge
+        const pro = options?.availableTiers.find(t => t.tier === 'pro');
+        expect(pro?.upgradeChargeCents).toBeGreaterThan(0);
 
-        // Downgrade should have effective date
+        // Starter is current tier — no downgrade effective date needed
         const starter = options?.availableTiers.find(t => t.tier === 'starter');
-        expect(starter?.effectiveDate).toBeTruthy();
+        expect(starter?.isCurrentTier).toBe(true);
       });
     });
 
     describe('Multiple Tier Changes Before Payment', () => {
       it('should allow changing tier multiple times without charge', async () => {
-        // Upgrade to enterprise
+        // Upgrade to pro
         let result = await handleTierUpgrade(
           db,
           testCustomerId,
-          'seal',
-          'enterprise',
+          'platform',
+          'pro',
           paymentServices,
           clock
         );
         expect(result.success).toBe(true);
         expect(result.chargeAmountUsdCents).toBe(0);
 
-        // Downgrade to starter
+        // Downgrade back to starter
         result = await scheduleTierDowngrade(
           db,
           testCustomerId,
-          'seal',
+          'platform',
           'starter',
           clock
         ) as any;
@@ -1341,7 +1370,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         result = await handleTierUpgrade(
           db,
           testCustomerId,
-          'seal',
+          'platform',
           'pro',
           paymentServices,
           clock
@@ -1350,11 +1379,11 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         expect(result.chargeAmountUsdCents).toBe(0);
 
         // Final state
-        const service = await db.query.serviceInstances.findFirst({
-          where: eq(serviceInstances.instanceId, testInstanceId),
+        const customer = await db.query.customers.findFirst({
+          where: eq(customers.customerId, testCustomerId),
         });
-        expect(service?.tier).toBe('pro');
-        expect(service?.paidOnce).toBe(false);
+        expect(customer?.platformTier).toBe('pro');
+        expect(customer?.paidOnce).toBe(false);
       });
 
       it('should preserve paidOnce = false through tier changes', async () => {
@@ -1362,33 +1391,33 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         await handleTierUpgrade(
           db,
           testCustomerId,
-          'seal',
-          'enterprise',
+          'platform',
+          'pro',
           paymentServices,
           clock
         );
 
         // Verify paidOnce is still false
-        const service = await db.query.serviceInstances.findFirst({
-          where: eq(serviceInstances.instanceId, testInstanceId),
+        const customer = await db.query.customers.findFirst({
+          where: eq(customers.customerId, testCustomerId),
         });
-        expect(service?.paidOnce).toBe(false);
+        expect(customer?.paidOnce).toBe(false);
       });
 
       it('should recalculate FAILED monthly invoices on paidOnce=false immediate downgrade', async () => {
-        // Scenario: Customer subscribed Enterprise, paidOnce=false, has a FAILED monthly
-        // billing invoice at Enterprise price. Immediate downgrade to Starter should
-        // recalculate both the subPendingInvoiceId invoice AND the FAILED monthly invoice.
+        // Scenario: Customer subscribed Pro, paidOnce=false, has a FAILED monthly
+        // billing invoice at Pro price. Immediate downgrade to Starter should
+        // recalculate both the pendingInvoiceId invoice AND the FAILED monthly invoice.
 
-        const ENTERPRISE_PRICE_CENTS = 18500; // $185
-        const STARTER_PRICE_CENTS = 900;      // $9
+        const PRO_PRICE_CENTS = 2900;   // $29
+        const STARTER_PRICE_CENTS = 100; // $1
 
-        // 1. Create a pending billing record (subPendingInvoiceId)
+        // 1. Create a pending billing record (pendingInvoiceId)
         const [pendingInvoice] = await db.insert(billingRecords).values({
           customerId: testCustomerId,
           billingPeriodStart: clock.now(),
           billingPeriodEnd: clock.addDays(30),
-          amountUsdCents: ENTERPRISE_PRICE_CENTS,
+          amountUsdCents: PRO_PRICE_CENTS,
           type: 'charge',
           status: 'pending',
           dueDate: clock.now(),
@@ -1396,19 +1425,19 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
 
         await db.insert(invoiceLineItems).values({
           billingRecordId: pendingInvoice.id,
-          itemType: 'subscription_enterprise',
-          serviceType: 'seal',
-          amountUsdCents: ENTERPRISE_PRICE_CENTS,
-          unitPriceUsdCents: ENTERPRISE_PRICE_CENTS,
+          itemType: 'subscription_pro',
+          serviceType: 'platform',
+          amountUsdCents: PRO_PRICE_CENTS,
+          unitPriceUsdCents: PRO_PRICE_CENTS,
           quantity: 1,
         });
 
-        // 2. Create a separate FAILED monthly billing invoice at Enterprise price
+        // 2. Create a separate FAILED monthly billing invoice at Pro price
         const [failedInvoice] = await db.insert(billingRecords).values({
           customerId: testCustomerId,
           billingPeriodStart: new Date('2025-01-01'),
           billingPeriodEnd: new Date('2025-02-01'),
-          amountUsdCents: ENTERPRISE_PRICE_CENTS,
+          amountUsdCents: PRO_PRICE_CENTS,
           type: 'charge',
           status: 'failed',
           billingType: 'scheduled',
@@ -1417,27 +1446,27 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
 
         await db.insert(invoiceLineItems).values({
           billingRecordId: failedInvoice.id,
-          itemType: 'subscription_enterprise',
-          serviceType: 'seal',
-          amountUsdCents: ENTERPRISE_PRICE_CENTS,
-          unitPriceUsdCents: ENTERPRISE_PRICE_CENTS,
+          itemType: 'subscription_pro',
+          serviceType: 'platform',
+          amountUsdCents: PRO_PRICE_CENTS,
+          unitPriceUsdCents: PRO_PRICE_CENTS,
           quantity: 1,
         });
 
-        // 3. Set service state to paidOnce=false with Enterprise tier
-        await db.update(serviceInstances)
+        // 3. Set customer state to paidOnce=false with Pro tier
+        await db.update(customers)
           .set({
-            tier: 'enterprise',
+            platformTier: 'pro',
             paidOnce: false,
-            subPendingInvoiceId: pendingInvoice.id,
+            pendingInvoiceId: pendingInvoice.id,
           })
-          .where(eq(serviceInstances.instanceId, testInstanceId));
+          .where(eq(customers.customerId, testCustomerId));
 
         // 4. Downgrade to Starter (immediate because paidOnce=false)
         const result = await scheduleTierDowngrade(
           db,
           testCustomerId,
-          'seal',
+          'platform',
           'starter',
           clock
         );
@@ -1445,7 +1474,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         expect(result.success).toBe(true);
         expect(result.scheduledTier).toBe('starter');
 
-        // 5. Verify subPendingInvoiceId invoice was updated (existing behavior)
+        // 5. Verify pendingInvoiceId invoice was updated (existing behavior)
         const updatedPending = await db.query.billingRecords.findFirst({
           where: eq(billingRecords.id, pendingInvoice.id),
         });
@@ -1473,20 +1502,20 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         // record amount should be updated to match the new tier price.
         //
         // Scenario:
-        // 1. User subscribes to Pro ($29). Payment fails. Pending invoice for $29.
-        // 2. User upgrades to Enterprise ($185).
-        // 3. Pending billing record should be updated to $185 (not remain $29).
-        // 4. reconcilePayments should find the correct $185 record.
+        // 1. User subscribes to Starter ($1). Payment fails. Pending invoice for $1.
+        // 2. User upgrades to Pro ($29).
+        // 3. Pending billing record should be updated to $29 (not remain $1).
+        // 4. reconcilePayments should find the correct $29 record.
 
-        const PRO_PRICE_CENTS = 2900;      // $29
-        const ENTERPRISE_PRICE_CENTS = 18500; // $185
+        const STARTER_PRICE_CENTS = 100; // $1
+        const PRO_PRICE_CENTS = 2900;    // $29
 
-        // 1. Create a pending billing record for the initial Pro tier
+        // 1. Create a pending billing record for the initial Starter tier
         const [pendingInvoice] = await db.insert(billingRecords).values({
           customerId: testCustomerId,
           billingPeriodStart: clock.now(),
           billingPeriodEnd: clock.addDays(30),
-          amountUsdCents: PRO_PRICE_CENTS,
+          amountUsdCents: STARTER_PRICE_CENTS,
           type: 'charge',
           status: 'pending',
           dueDate: clock.now(),
@@ -1495,59 +1524,59 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         // Create line item for the pending invoice
         await db.insert(invoiceLineItems).values({
           billingRecordId: pendingInvoice.id,
-          itemType: 'subscription_pro',
-          serviceType: 'seal',
-          amountUsdCents: PRO_PRICE_CENTS,
-          unitPriceUsdCents: PRO_PRICE_CENTS,
+          itemType: 'subscription_starter',
+          serviceType: 'platform',
+          amountUsdCents: STARTER_PRICE_CENTS,
+          unitPriceUsdCents: STARTER_PRICE_CENTS,
           quantity: 1,
         });
 
-        // Set service state to match pending payment scenario
-        await db.update(serviceInstances)
+        // Set customer state to match pending payment scenario
+        await db.update(customers)
           .set({
             paidOnce: false,
-            subPendingInvoiceId: pendingInvoice.id, // Reference to the pending invoice
+            pendingInvoiceId: pendingInvoice.id, // Reference to the pending invoice
           })
-          .where(eq(serviceInstances.instanceId, testInstanceId));
+          .where(eq(customers.customerId, testCustomerId));
 
         // Verify initial state
         const initialInvoice = await db.query.billingRecords.findFirst({
           where: eq(billingRecords.id, pendingInvoice.id),
         });
-        expect(initialInvoice?.amountUsdCents).toBe(PRO_PRICE_CENTS);
+        expect(initialInvoice?.amountUsdCents).toBe(STARTER_PRICE_CENTS);
         expect(initialInvoice?.status).toBe('pending');
 
-        // 2. Upgrade to Enterprise
+        // 2. Upgrade to Pro
         const result = await handleTierUpgrade(
           db,
           testCustomerId,
-          'seal',
-          'enterprise',
+          'platform',
+          'pro',
           paymentServices,
           clock
         );
 
         expect(result.success).toBe(true);
-        expect(result.newTier).toBe('enterprise');
+        expect(result.newTier).toBe('pro');
         expect(result.chargeAmountUsdCents).toBe(0); // No immediate charge when paidOnce = false
 
         // 3. Verify the pending billing record amount was updated
         const updatedInvoice = await db.query.billingRecords.findFirst({
           where: eq(billingRecords.id, pendingInvoice.id),
         });
-        expect(updatedInvoice?.amountUsdCents).toBe(ENTERPRISE_PRICE_CENTS);
+        expect(updatedInvoice?.amountUsdCents).toBe(PRO_PRICE_CENTS);
         expect(updatedInvoice?.status).toBe('pending'); // Still pending
 
         // 4. Verify reconcilePayments would now match correctly
         // (The billing record amount matches the new tier price)
-        const service = await db.query.serviceInstances.findFirst({
-          where: eq(serviceInstances.instanceId, testInstanceId),
+        const customer = await db.query.customers.findFirst({
+          where: eq(customers.customerId, testCustomerId),
         });
-        expect(service?.tier).toBe('enterprise');
-        expect(service?.paidOnce).toBe(false);
+        expect(customer?.platformTier).toBe('pro');
+        expect(customer?.paidOnce).toBe(false);
 
         // The pending billing record's amount now matches what reconcilePayments
-        // will look for when it calculates: getTierPriceUsdCents('enterprise') = $185
+        // will look for when it calculates: getTierPriceUsdCents('pro') = $29
       });
     });
   });
@@ -1559,22 +1588,22 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
   describe('Credit Overpayment Recovery', () => {
     it('should mark invoice paid and issue refund credit when credits exceed recalculated amount', async () => {
       // Scenario:
-      // 1. Customer on Enterprise (paidOnce=true), has $50 in credits
-      // 2. Monthly billing applies $50 credit, escrow charge for remaining $135 fails
-      // 3. Invoice: amountUsdCents=18500, amountPaidUsdCents=5000, status='failed'
-      // 4. Customer downgrades to Starter ($9)
-      // 5. recalculateFailedInvoiceSubscription lowers amountUsdCents to 900
-      // 6. Now amountPaidUsdCents(5000) > amountUsdCents(900)
-      // 7. On retry: should mark invoice paid AND issue $41 refund credit
+      // 1. Customer on Pro (paidOnce=true), has $50 in credits
+      // 2. Monthly billing applies $50 credit, escrow charge for remaining fails
+      // 3. Invoice: amountUsdCents=2900, amountPaidUsdCents=5000, status='failed'
+      // 4. Customer downgrades to Starter ($1)
+      // 5. recalculateFailedInvoiceSubscription lowers amountUsdCents to 100
+      // 6. Now amountPaidUsdCents(5000) > amountUsdCents(100)
+      // 7. On retry: should mark invoice paid AND issue $49 refund credit
 
-      const ENTERPRISE_PRICE_CENTS = 18500;
-      const STARTER_PRICE_CENTS = 900;
+      const PRO_PRICE_CENTS = 2900;
+      const STARTER_PRICE_CENTS = 100;
       const CREDIT_AMOUNT_CENTS = 5000; // $50
 
-      // Set up: Enterprise tier, paidOnce=true
-      await db.update(serviceInstances)
-        .set({ tier: 'enterprise', paidOnce: true })
-        .where(eq(serviceInstances.instanceId, testInstanceId));
+      // Set up: Pro tier, paidOnce=true
+      await db.update(customers)
+        .set({ platformTier: 'pro', paidOnce: true })
+        .where(eq(customers.customerId, testCustomerId));
 
       // 1. Issue credits to the customer
       const tx = unsafeAsLockedTransaction(db);
@@ -1584,12 +1613,12 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         .set({ remainingAmountUsdCents: 0 })
         .where(eq(customerCredits.creditId, creditId));
 
-      // 2. Create FAILED invoice at Enterprise price with credits already applied
+      // 2. Create FAILED invoice at Pro price with credits already applied
       const [failedInvoice] = await db.insert(billingRecords).values({
         customerId: testCustomerId,
         billingPeriodStart: new Date('2025-01-01'),
         billingPeriodEnd: new Date('2025-02-01'),
-        amountUsdCents: ENTERPRISE_PRICE_CENTS,
+        amountUsdCents: PRO_PRICE_CENTS,
         amountPaidUsdCents: CREDIT_AMOUNT_CENTS, // $50 already paid via credits
         type: 'charge',
         status: 'failed',
@@ -1601,10 +1630,10 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
 
       await db.insert(invoiceLineItems).values({
         billingRecordId: failedInvoice.id,
-        itemType: 'subscription_enterprise',
-        serviceType: 'seal',
-        amountUsdCents: ENTERPRISE_PRICE_CENTS,
-        unitPriceUsdCents: ENTERPRISE_PRICE_CENTS,
+        itemType: 'subscription_pro',
+        serviceType: 'platform',
+        amountUsdCents: PRO_PRICE_CENTS,
+        unitPriceUsdCents: PRO_PRICE_CENTS,
         quantity: 1,
       });
 
@@ -1620,7 +1649,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       const result = await scheduleTierDowngrade(
         db,
         testCustomerId,
-        'seal',
+        'platform',
         'starter',
         clock
       );
@@ -1631,7 +1660,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         where: eq(billingRecords.id, failedInvoice.id),
       });
       expect(recalcedInvoice?.amountUsdCents).toBe(STARTER_PRICE_CENTS);
-      // amountPaidUsdCents is still $50 — exceeds the new $9 total
+      // amountPaidUsdCents is still $50 — exceeds the new $1 total
       expect(recalcedInvoice?.amountPaidUsdCents).toBe(CREDIT_AMOUNT_CENTS);
 
       // 4. Retry the invoice — should detect overpayment
@@ -1647,8 +1676,8 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       });
       expect(finalInvoice?.status).toBe('paid');
 
-      // 6. Verify refund credit was issued for the overpayment ($50 - $9 = $41)
-      const overpaymentCents = CREDIT_AMOUNT_CENTS - STARTER_PRICE_CENTS; // 4100
+      // 6. Verify refund credit was issued for the overpayment ($50 - $1 = $49)
+      const overpaymentCents = CREDIT_AMOUNT_CENTS - STARTER_PRICE_CENTS; // 4900
       const refundCredits = await db.query.customerCredits.findMany({
         where: and(
           eq(customerCredits.customerId, testCustomerId),
@@ -1672,18 +1701,18 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       // credit every time it's called on an invoice where alreadyPaid >= totalAmount.
       // A second call on an already-paid invoice mints a duplicate credit.
 
-      const ENTERPRISE_PRICE_CENTS = 18500; // $185
-      const STARTER_PRICE_CENTS = 900;    // $9
+      const PRO_PRICE_CENTS = 2900;    // $29
+      const STARTER_PRICE_CENTS = 100; // $1
       const CREDIT_AMOUNT_CENTS = 5000; // $50
 
       const tx = unsafeAsLockedTransaction(db);
 
-      // 1. Create a FAILED invoice at Enterprise price with $50 credit already applied
+      // 1. Create a FAILED invoice at Pro price with $50 credit already applied
       const creditId = await issueCredit(db, testCustomerId, CREDIT_AMOUNT_CENTS, 'promo', 'Test credit for idempotency');
 
       const [failedInvoice] = await db.insert(billingRecords).values({
         customerId: testCustomerId,
-        amountUsdCents: ENTERPRISE_PRICE_CENTS,
+        amountUsdCents: PRO_PRICE_CENTS,
         amountPaidUsdCents: CREDIT_AMOUNT_CENTS, // $50 already paid via credits
         status: 'failed',
         type: 'charge',
@@ -1694,10 +1723,10 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
 
       await db.insert(invoiceLineItems).values({
         billingRecordId: failedInvoice.id,
-        itemType: 'subscription_enterprise',
-        serviceType: 'seal',
-        amountUsdCents: ENTERPRISE_PRICE_CENTS,
-        unitPriceUsdCents: ENTERPRISE_PRICE_CENTS,
+        itemType: 'subscription_pro',
+        serviceType: 'platform',
+        amountUsdCents: PRO_PRICE_CENTS,
+        unitPriceUsdCents: PRO_PRICE_CENTS,
         quantity: 1,
       });
 
@@ -1708,8 +1737,8 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         amountUsdCents: CREDIT_AMOUNT_CENTS,
       });
 
-      // 2. Downgrade to Starter → recalculates to $9
-      await scheduleTierDowngrade(db, testCustomerId, 'seal', 'starter', clock);
+      // 2. Downgrade to Starter → recalculates to $1
+      await scheduleTierDowngrade(db, testCustomerId, 'platform', 'starter', clock);
 
       // 3. First call to processInvoicePayment → should mark paid + issue overpayment credit
       const providers = await getCustomerProviders(testCustomerId, paymentServices, tx, clock);
@@ -1753,13 +1782,18 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       // exhausted max retries, the periodic job skips it permanently even
       // though it's now affordable after the tier downgrade.
 
-      const ENTERPRISE_PRICE_CENTS = 18500; // $185
-      const STARTER_PRICE_CENTS = 900;    // $9
+      const PRO_PRICE_CENTS = 2900;    // $29
+      const STARTER_PRICE_CENTS = 100; // $1
+
+      // Set customer at pro tier for the downgrade to make sense
+      await db.update(customers)
+        .set({ platformTier: 'pro' })
+        .where(eq(customers.customerId, testCustomerId));
 
       // 1. Create a FAILED invoice that has exhausted retries
       const [failedInvoice] = await db.insert(billingRecords).values({
         customerId: testCustomerId,
-        amountUsdCents: ENTERPRISE_PRICE_CENTS,
+        amountUsdCents: PRO_PRICE_CENTS,
         amountPaidUsdCents: 0,
         status: 'failed',
         type: 'charge',
@@ -1773,16 +1807,16 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
 
       await db.insert(invoiceLineItems).values({
         billingRecordId: failedInvoice.id,
-        itemType: 'subscription_enterprise',
-        serviceType: 'seal',
-        amountUsdCents: ENTERPRISE_PRICE_CENTS,
-        unitPriceUsdCents: ENTERPRISE_PRICE_CENTS,
+        itemType: 'subscription_pro',
+        serviceType: 'platform',
+        amountUsdCents: PRO_PRICE_CENTS,
+        unitPriceUsdCents: PRO_PRICE_CENTS,
         quantity: 1,
       });
 
-      // 2. Downgrade to Starter → recalculates invoice to $9
+      // 2. Downgrade to Starter → recalculates invoice to $1
       const result = await scheduleTierDowngrade(
-        db, testCustomerId, 'seal', 'starter', clock
+        db, testCustomerId, 'platform', 'starter', clock
       );
       expect(result.success).toBe(true);
 
@@ -1810,10 +1844,15 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       // applyScheduledTierChanges returns 0 and processExcessCreditRefunds is
       // never called, leaving the reconciliation credit stranded.
 
-      const PRO_PRICE_CENTS = TIER_PRICES_USD_CENTS.pro;
+      const PRO_PRICE_CENTS = PLATFORM_TIER_PRICES_USD_CENTS.pro;
 
       // ---- Jan 5: Subscribe at Pro tier ----
       clock.setTime(new Date('2025-01-05T00:00:00Z'));
+
+      // Set customer to pro tier for this test
+      await db.update(customers)
+        .set({ platformTier: 'pro' })
+        .where(eq(customers.customerId, testCustomerId));
 
       // Compute reconciliation credit the same way production does:
       // daysUsed = 31 - 5 + 1 = 27, daysNotUsed = 31 - 27 = 4
@@ -1855,7 +1894,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         testCustomerId,
         expectedCreditCents,
         'reconciliation',
-        `Partial month credit for seal (${daysNotUsed}/${daysInJan} days unused)`,
+        `Partial month credit for platform (${daysNotUsed}/${daysInJan} days unused)`,
         null,
       );
 
@@ -1874,7 +1913,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       const downgradeResult = await scheduleTierDowngrade(
         db,
         testCustomerId,
-        'seal',
+        'platform',
         'starter',
         clock
       );
@@ -1882,11 +1921,11 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       expect(downgradeResult.scheduledTier).toBe('starter');
 
       // Verify scheduled tier is set
-      let service = await db.query.serviceInstances.findFirst({
-        where: eq(serviceInstances.instanceId, testInstanceId),
+      let cust = await db.query.customers.findFirst({
+        where: eq(customers.customerId, testCustomerId),
       });
-      expect(service?.scheduledTier).toBe('starter');
-      expect(service?.scheduledTierEffectiveDate).toBeTruthy();
+      expect(cust?.scheduledPlatformTier).toBe('starter');
+      expect(cust?.scheduledPlatformTierEffectiveDate).toBeTruthy();
 
       // ---- Jan 20: Cancel subscription ----
       clock.setTime(new Date('2025-01-20T00:00:00Z'));
@@ -1894,17 +1933,17 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       const cancelResult = await scheduleCancellation(
         db,
         testCustomerId,
-        'seal',
+        'platform',
         clock
       );
       expect(cancelResult.success).toBe(true);
 
       // Verify: cancellation cleared the scheduled tier (this is the bug trigger)
-      service = await db.query.serviceInstances.findFirst({
-        where: eq(serviceInstances.instanceId, testInstanceId),
+      cust = await db.query.customers.findFirst({
+        where: eq(customers.customerId, testCustomerId),
       });
-      expect(service?.cancellationScheduledFor).toBeTruthy();
-      expect(service?.scheduledTier).toBeNull(); // Bug: this was cleared
+      expect(cust?.platformCancellationScheduledFor).toBeTruthy();
+      expect(cust?.scheduledPlatformTier).toBeNull(); // Bug: this was cleared
 
       // Reconciliation credit should still exist
       const creditsBeforeBilling = await db.select().from(customerCredits)

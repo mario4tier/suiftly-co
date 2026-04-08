@@ -296,11 +296,19 @@ export async function subscribeAndEnable(
   tier: string,
   accessToken: string
 ): Promise<{ paymentPending: boolean; tier: string; [key: string]: any }> {
+  // Platform is required for all services. Subscribe to platform first (idempotent).
+  // For non-platform services, the tier arg controls the platform tier (not the service tier).
+  // Non-platform services (seal/grpc/graphql) are auto-provisioned with tier=null.
+  if (serviceType !== 'platform') {
+    await subscribePlatform(accessToken, tier);
+  }
+
   // Subscribe to service
-  // Subscription is allowed without payment — creates service + API key
+  // For platform: tier is passed as-is
+  // For non-platform: tier is ignored (service is auto-provisioned via platform subscribe)
   const subscribeResult = await trpcMutation<any>(
     'services.subscribe',
-    { serviceType, tier },
+    serviceType === 'platform' ? { serviceType, tier } : { serviceType },
     accessToken
   );
 
@@ -313,8 +321,8 @@ export async function subscribeAndEnable(
     throw new Error('Subscribe returned no data');
   }
 
-  // Validate: Subscription should be for the requested tier
-  if (data.tier !== tier) {
+  // Validate: Subscription should be for the requested tier (skip for non-platform, which have tier=null)
+  if (data.tier !== undefined && data.tier !== null && data.tier !== tier) {
     throw new Error(`Subscribe returned wrong tier: expected ${tier}, got ${data.tier}`);
   }
 
@@ -363,13 +371,10 @@ export async function subscribeAndEnable(
 }
 
 /**
- * Set config_global feature flags and reload the API server's config cache.
- * Use this in test setup to switch between billing combos.
+ * Set config_global values and reload the API server's config cache.
+ * Use this in test setup to override pricing or other global config values.
  *
- * Common combos:
- * - Combo #1 (legacy): { freq_platform_sub: '0', freq_seal_sub: '1' }
- * - Combo #3 (MVP):    { freq_platform_sub: '1', freq_seal_sub: '0' }
- * - Combo both:        { freq_platform_sub: '1', freq_seal_sub: '1' }
+ * Example: { fpsubs_usd_sta: '100', fpsubs_usd_pro: '2900' }
  */
 export async function setConfigFlags(flags: Record<string, string>): Promise<void> {
   const result = await restCall('POST', '/test/config/global', flags);
@@ -380,7 +385,7 @@ export async function setConfigFlags(flags: Record<string, string>): Promise<voi
 
 /**
  * Subscribe to the platform service (combo #3 prerequisite).
- * Creates a platform subscription so per-service subscribes don't get blocked.
+ * Creates a platform subscription (required to access seal/grpc/graphql services).
  * No-op if platform subscription already exists.
  *
  * @param tier - Platform tier (default 'starter' = $1/month)
@@ -401,6 +406,10 @@ export async function subscribePlatform(
   if (result.error && !JSON.stringify(result.error).includes('Already subscribed')) {
     throw new Error(`Platform subscribe failed: ${JSON.stringify(result.error)}`);
   }
+  // Warn if payment is still pending (auto-provisioning won't happen until payment succeeds)
+  if (result.result?.data?.paymentPending) {
+    console.warn('[subscribePlatform] Payment pending — auto-provisioning of seal/grpc/graphql deferred until payment succeeds');
+  }
 }
 
 /**
@@ -416,6 +425,10 @@ export async function ensureTestBalance(
   const balanceResult = await restCall<any>('GET', `/test/wallet/balance?walletAddress=${walletAddress}`);
 
   if (!balanceResult.data?.found) {
+    if (targetBalanceUsd <= 0) {
+      // Account doesn't exist and target is $0 — no action needed (balance is already $0)
+      return;
+    }
     // Create account with deposit
     const depositResult = await restCall('POST', '/test/wallet/deposit', {
       walletAddress,

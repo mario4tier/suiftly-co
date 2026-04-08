@@ -1,23 +1,18 @@
 /**
  * Seal Service Configuration Page
- * Premium design with professional layout
  */
 
 import { createLazyFileRoute } from '@tanstack/react-router';
 import { useState, useEffect } from 'react';
 import { DashboardLayout } from '../../components/layout/DashboardLayout';
-import { SealConfigForm } from '../../components/services/SealConfigForm';
 import { SealInteractiveForm } from '../../components/services/SealInteractiveForm';
-import { ChangeTierModal } from '../../components/services/ChangeTierModal';
 import { Switch } from '../../components/ui/switch';
 import { TextRoute } from '../../components/ui/text-route';
 
-import { AlertCircle, PauseCircle, AlertTriangle, Loader2, Clock } from 'lucide-react';
+import { AlertCircle, PauseCircle, AlertTriangle, Loader2, Clock, Lock } from 'lucide-react';
 import { type ServiceState, type ServiceTier } from '@suiftly/shared/constants';
 import { trpc } from '../../lib/trpc';
 import { toast } from 'sonner';
-import { freq_platform_sub, freq_seal_sub } from '../../lib/config';
-import { SubscriptionStatusBanners } from '../../components/billing/SubscriptionStatusBanners';
 import { useServicesStatus } from '../../hooks/useServicesStatus';
 import { ServiceStatusIndicator } from '../../components/ui/service-status-indicator';
 
@@ -26,10 +21,8 @@ export const Route = createLazyFileRoute('/services/seal/overview')({
 });
 
 function SealOverviewPage() {
-  const [tierSelected, setTierSelected] = useState(false);
   const [isToggling, setIsToggling] = useState(false);
   const [localIsEnabled, setLocalIsEnabled] = useState(false);
-  const [changeTierModalOpen, setChangeTierModalOpen] = useState(false);
 
   // Fetch services using React Query hook
   const { data: services, isLoading, refetch } = trpc.services.list.useQuery();
@@ -47,9 +40,7 @@ function SealOverviewPage() {
   // Toggle service mutation
   const toggleServiceMutation = trpc.services.toggleService.useMutation({
     onSuccess: () => {
-      // Refetch services to get updated state
       refetch();
-      // Refetch status - mutation sets configChangeVaultSeq, so status will be 'pending'
       refetchStatus();
       setIsToggling(false);
     },
@@ -57,15 +48,16 @@ function SealOverviewPage() {
       console.error('Toggle service error:', error);
       toast.error(error.message || 'Failed to toggle service');
       setIsToggling(false);
-      // Revert optimistic UI update immediately
       setLocalIsEnabled(isUserEnabled);
-      // Also refetch to ensure consistency
       refetch();
     },
   });
 
   // Find seal service
   const sealService = services?.find(s => s.serviceType === 'seal');
+
+  // Platform subscription data from billing.getBalance (customer-level)
+  const { data: balanceData } = trpc.billing.getBalance.useQuery();
 
   // Sync local toggle state with server state
   const isUserEnabled = sealService?.isUserEnabled ?? false;
@@ -85,43 +77,15 @@ function SealOverviewPage() {
   }
 
   const serviceState: ServiceState = (sealService?.state as ServiceState) ?? 'not_provisioned';
-  const tier: ServiceTier = (sealService?.tier as ServiceTier) ?? 'pro';
-  const subscriptionChargePending = sealService != null && sealService.subPendingInvoiceId != null; // Derive boolean from invoice reference
-  const scheduledTier = sealService?.scheduledTier as ServiceTier | null;
-  const scheduledTierEffectiveDate = sealService?.scheduledTierEffectiveDate;
-  const cancellationScheduledFor = sealService?.cancellationScheduledFor;
 
-  // Platform gating: check if platform subscription is required and active
-  const platformService = services?.find(s => s.serviceType === 'platform');
-  const needsPlatform = freq_platform_sub === 1;
-  const hasPlatform = platformService != null && platformService.subPendingInvoiceId == null
-    && platformService.state === 'enabled';
-  const blockedByPlatform = needsPlatform && !hasPlatform;
+  // Derive effective tier from platform subscription (seal has no own tier)
+  const platformTier: ServiceTier = (balanceData?.platformTier as ServiceTier) ?? 'starter';
 
-  // Determine which form to show based on service state and config.
-  // When per-service subscription is disabled (freq_seal_sub=0), skip onboarding
-  // entirely — seal is usage-based only, no subscription step needed.
-  const requiresSealSub = freq_seal_sub === 1;
-  const showOnboardingForm = requiresSealSub && serviceState === 'not_provisioned';
-  const showInteractiveForm = !showOnboardingForm;
+  // Platform gating: check if platform subscription is active
+  const hasPlatform = balanceData?.platformTier != null && balanceData?.pendingInvoiceId == null;
+  const blockedByPlatform = !hasPlatform;
 
   const getStatusBanner = () => {
-    // Priority: Show payment pending banner first if applicable
-    if (subscriptionChargePending) {
-      return {
-        icon: AlertCircle,
-        bgColor: 'bg-orange-50 dark:bg-orange-900/20',
-        borderColor: 'border-orange-200 dark:border-orange-900',
-        iconColor: 'text-orange-600 dark:text-orange-500',
-        textColor: 'text-orange-900 dark:text-orange-200',
-        message: (
-          <>
-            Subscription payment pending. Add funds via <TextRoute to="/billing">Billing</TextRoute>.
-          </>
-        ),
-      };
-    }
-
     switch (serviceState) {
       case 'disabled':
         return {
@@ -133,7 +97,6 @@ function SealOverviewPage() {
           message: 'Service is currently OFF. Switch to ON to start serving traffic.',
         };
       case 'enabled':
-        // No banner when service is active - reserve banners for errors or actionable states
         return null;
       case 'suspended_maintenance':
         return {
@@ -142,7 +105,7 @@ function SealOverviewPage() {
           borderColor: 'border-blue-200 dark:border-blue-900',
           iconColor: 'text-blue-600 dark:text-blue-500',
           textColor: 'text-blue-900 dark:text-blue-200',
-          message: 'Service suspended for maintenance. Configuration and keys preserved at $2/month. Resume anytime.',
+          message: 'Service suspended for maintenance. Configuration and keys preserved. Resume anytime.',
         };
       case 'suspended_no_payment':
         return {
@@ -170,7 +133,6 @@ function SealOverviewPage() {
   const banner = getStatusBanner();
 
   const handleToggleService = async (enabled: boolean) => {
-    // Update local state immediately for smooth visual feedback
     setLocalIsEnabled(enabled);
     setIsToggling(true);
 
@@ -183,119 +145,106 @@ function SealOverviewPage() {
   return (
     <DashboardLayout>
       <div className="space-y-2">
-        {/* Conditional Header based on state */}
-        {showOnboardingForm ? (
-          /* Onboarding: Show page title */
-          <div className="pb-4 border-b border-gray-200 dark:border-gray-800">
+        {/* Header with service toggle */}
+        <div className="pb-4 border-b border-gray-200 dark:border-gray-800">
+          <div className="flex items-center justify-between">
             <h1 className="text-2xl font-semibold text-gray-900 dark:text-gray-50">
-              Configure Seal Service
+              Seal Service
             </h1>
-          </div>
-        ) : (
-          /* Interactive: Show service toggle at top */
-          <div className="pb-4 border-b border-gray-200 dark:border-gray-800">
-            <div className="flex items-center justify-between">
-              <h1 className="text-2xl font-semibold text-gray-900 dark:text-gray-50">
-                Seal Service
-              </h1>
-              <div className="flex items-center gap-3">
-                <div className="w-4 h-4 flex items-center justify-center">
-                  {isToggling && <Loader2 className="h-3 w-3 animate-spin text-gray-500 dark:text-gray-400" />}
-                </div>
-                <Switch
-                  id="service-toggle"
-                  checked={localIsEnabled}
-                  onCheckedChange={handleToggleService}
-                  disabled={isToggling}
-                />
-                <span className="text-sm font-medium text-gray-600 dark:text-gray-400">
-                  {localIsEnabled ? "ON" : "OFF"}
-                </span>
+            <div className="flex items-center gap-3">
+              <div className="w-4 h-4 flex items-center justify-center">
+                {isToggling && <Loader2 className="h-3 w-3 animate-spin text-gray-500 dark:text-gray-400" />}
               </div>
-            </div>
-            {/* Status indicator - uses shared component for consistency */}
-            <div data-testid="service-status" className="mt-1">
-              <ServiceStatusIndicator
-                operationalStatus={sealStatus?.operationalStatus}
-                isSyncing={isSyncing}
-                fallbackIsEnabled={localIsEnabled}
-                showLabel
+              <Switch
+                id="service-toggle"
+                checked={localIsEnabled}
+                onCheckedChange={handleToggleService}
+                disabled={isToggling || serviceState === 'not_provisioned' || blockedByPlatform}
               />
+              <span className="text-sm font-medium text-gray-600 dark:text-gray-400">
+                {localIsEnabled ? "ON" : "OFF"}
+              </span>
             </div>
           </div>
-        )}
+          {/* Status indicator */}
+          <div data-testid="service-status" className="mt-1">
+            <ServiceStatusIndicator
+              operationalStatus={sealStatus?.operationalStatus}
+              isSyncing={isSyncing}
+              fallbackIsEnabled={localIsEnabled}
+              showLabel
+            />
+          </div>
+        </div>
 
-        {/* Status Banner - Show for State 3+ */}
-        {banner && (
-          <div data-testid="banner-section" className={`${banner.bgColor} border ${banner.borderColor} rounded-lg px-3 py-2 flex gap-3`}>
-            <banner.icon className={`h-5 w-5 ${banner.iconColor} flex-shrink-0 mt-0.5`} />
+        {/* Platform subscription required — takes precedence over all other banners */}
+        {blockedByPlatform ? (
+          <div data-testid="platform-required-banner" className="bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-900 rounded-lg px-3 py-2 flex gap-3">
+            <Lock className="h-5 w-5 text-orange-600 dark:text-orange-500 flex-shrink-0 mt-0.5" />
             <div className="flex-1">
-              <div className={`text-sm ${banner.textColor}`}>
-                {banner.message}
+              <div className="text-sm text-orange-900 dark:text-orange-200">
+                <span className="font-semibold">Platform subscription required</span>
+                {' — '}
+                <TextRoute to="/billing">Subscribe on the Billing page</TextRoute>
+                {' to unlock these features.'}
               </div>
             </div>
           </div>
-        )}
-
-        {/* Config Needed Banner - warn when service can't operate due to missing config */}
-        {sealStatus?.operationalStatus === 'config_needed' && sealStatus.configNeededReason && (
-          <div data-testid="config-needed-banner" className="rounded-lg border border-yellow-200 dark:border-yellow-900 bg-yellow-50 dark:bg-yellow-900/20 p-4">
-            <div className="flex items-start gap-3">
-              <AlertTriangle className="h-5 w-5 text-yellow-600 dark:text-yellow-500 flex-shrink-0 mt-0.5" />
-              <div>
-                <p className="text-sm font-semibold text-yellow-800 dark:text-yellow-200">
-                  Configuration Required
-                </p>
-                <p className="text-sm text-yellow-700 dark:text-yellow-300 mt-1">
-                  {sealStatus.configNeededReason}. <TextRoute to="/services/seal/overview" search={{ tab: 'seal-keys' }}>Go to Seal Keys tab</TextRoute>
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
-
-        <SubscriptionStatusBanners
-          scheduledTier={scheduledTier}
-          scheduledTierEffectiveDate={scheduledTierEffectiveDate}
-          cancellationScheduledFor={cancellationScheduledFor}
-          onManagePlan={() => setChangeTierModalOpen(true)}
-        />
-
-        {/* Platform gating banner */}
-        {blockedByPlatform && (
-          <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-900 rounded-lg px-4 py-3 flex gap-3">
-            <AlertCircle className="h-5 w-5 text-blue-600 dark:text-blue-500 flex-shrink-0 mt-0.5" />
-            <div className="text-sm text-blue-900 dark:text-blue-200">
-              <p className="font-semibold mb-1">Platform subscription required</p>
-              <p>
-                A platform plan is required to use Suiftly services.{' '}
-                <TextRoute to="/billing">Subscribe on the Billing page</TextRoute>.
-              </p>
-            </div>
-          </div>
-        )}
-
-        {/* Conditional Form Rendering */}
-        {showOnboardingForm ? (
-          <SealConfigForm onTierChange={setTierSelected} />
         ) : (
+          /* Status Banner — only shown when platform is active */
+          banner && (
+            <div data-testid="banner-section" className={`${banner.bgColor} border ${banner.borderColor} rounded-lg px-3 py-2 flex gap-3`}>
+              <banner.icon className={`h-5 w-5 ${banner.iconColor} flex-shrink-0 mt-0.5`} />
+              <div className="flex-1">
+                <div className={`text-sm ${banner.textColor}`}>
+                  {banner.message}
+                </div>
+              </div>
+            </div>
+          )
+        )}
+
+        {/* Config Needed Banner — API key error takes priority over seal key error (backend enforces order) */}
+        {!blockedByPlatform && sealStatus?.operationalStatus === 'config_needed' && sealStatus.configNeededReason && (() => {
+          const isApiKeyError = sealStatus.configNeededReason === 'No active API key';
+          const tab = isApiKeyError ? 'x-api-key' : 'seal-keys';
+          const tabLabel = isApiKeyError ? 'API Key tab' : 'Seal Keys tab';
+          return (
+            <div data-testid="config-needed-banner" className="rounded-lg border border-yellow-200 dark:border-yellow-900 bg-yellow-50 dark:bg-yellow-900/20 p-4">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="h-5 w-5 text-yellow-600 dark:text-yellow-500 flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm font-semibold text-yellow-800 dark:text-yellow-200">
+                    Configuration Required
+                  </p>
+                  <p className="text-sm text-yellow-700 dark:text-yellow-300 mt-1">
+                    {sealStatus.configNeededReason}. <TextRoute to="/services/seal/overview" search={{ tab }}>Go to {tabLabel}</TextRoute>
+                  </p>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Two states: paid (platform active) → full interactive; everything else → gated preview.
+            "Everything else" covers: no subscription, subscription pending payment, seal not yet
+            provisioned (transient). The customer can always see their API key and config. */}
+        {sealService && !blockedByPlatform ? (
           <SealInteractiveForm
             serviceState={serviceState}
-            tier={tier}
+            tier={platformTier}
             isEnabled={isUserEnabled}
             isToggling={isToggling}
             onToggleService={handleToggleService}
-            onChangePlan={() => setChangeTierModalOpen(true)}
+          />
+        ) : (
+          <SealInteractiveForm
+            serviceState="not_provisioned"
+            tier={platformTier}
+            isEnabled={false}
+            isGated={true}
           />
         )}
-
-        {/* Change Tier Modal */}
-        <ChangeTierModal
-          isOpen={changeTierModalOpen}
-          onClose={() => setChangeTierModalOpen(false)}
-          serviceType="seal"
-          onSuccess={() => refetch()}
-        />
       </div>
     </DashboardLayout>
   );

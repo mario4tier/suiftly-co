@@ -17,7 +17,6 @@ import {
   paymentWebhookEvents,
   billingRecords,
   invoicePayments,
-  serviceInstances,
   customerCredits,
   adminNotifications,
 } from '@suiftly/database/schema';
@@ -30,9 +29,8 @@ import {
   resetClock,
   addStripePaymentMethod,
 } from './helpers/http.js';
-import { TEST_WALLET } from './helpers/auth.js';
+import { login, TEST_WALLET } from './helpers/auth.js';
 import { clearNotifications, expectNotifications, expectNoNotifications } from './helpers/notifications.js';
-import { setupBillingTest } from './helpers/setup.js';
 
 const API_BASE = 'http://localhost:22700';
 const WEBHOOK_SECRET = 'whsec_test_secret_for_development_only';
@@ -78,7 +76,16 @@ describe('API: Stripe Webhook', () => {
   let customerId: number;
 
   beforeEach(async () => {
-    ({ accessToken, customerId } = await setupBillingTest({ balance: 2 }));
+    await resetClock();
+    await resetTestData(TEST_WALLET);
+
+    accessToken = await login(TEST_WALLET);
+    const customer = await db.query.customers.findFirst({
+      where: eq(customers.walletAddress, TEST_WALLET),
+    });
+    if (!customer) throw new Error('Test customer not found');
+    customerId = customer.customerId;
+    await clearNotifications(customerId);
 
     // Set webhook secret override so tests use our known test secret
     await restCall('POST', '/test/stripe/webhook-secret', { secret: WEBHOOK_SECRET });
@@ -345,10 +352,11 @@ describe('API: Stripe Webhook', () => {
       // Add Stripe as only payment method (setup + webhook)
       await addStripePaymentMethod(accessToken);
 
-      // Subscribe — Stripe requires 3DS → payment pending
+      // Accept TOS and subscribe to platform — Stripe requires 3DS → payment pending
+      await trpcMutation<any>('billing.acceptTos', {}, accessToken);
       const result = await trpcMutation<any>(
         'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
+        { serviceType: 'platform', tier: 'starter' },
         accessToken
       );
       expect(result.result?.data?.paymentPending).toBe(true);
@@ -388,7 +396,7 @@ describe('API: Stripe Webhook', () => {
         data: {
           object: {
             id: stripeInvoiceId,
-            amount_paid: 900, // $9 starter
+            amount_paid: 100, // $1 platform starter
             metadata: {
               billing_record_id: String(billingRecordId),
             },
@@ -404,7 +412,7 @@ describe('API: Stripe Webhook', () => {
         .from(billingRecords)
         .where(eq(billingRecords.id, billingRecordId));
       expect(record.status).toBe('paid');
-      expect(Number(record.amountPaidUsdCents)).toBe(900);
+      expect(Number(record.amountPaidUsdCents)).toBe(100);
       expect(record.paymentActionUrl).toBeNull();
 
       // Verify invoice_payments row was created
@@ -414,7 +422,7 @@ describe('API: Stripe Webhook', () => {
       const stripePayment = payments.find(p => p.sourceType === 'stripe');
       expect(stripePayment).toBeDefined();
       expect(stripePayment!.providerReferenceId).toBe(stripeInvoiceId);
-      expect(Number(stripePayment!.amountUsdCents)).toBe(900);
+      expect(Number(stripePayment!.amountUsdCents)).toBe(100);
       await expectNoNotifications(customerId, { tolerateGM: true });
     });
 
@@ -427,7 +435,7 @@ describe('API: Stripe Webhook', () => {
         data: {
           object: {
             id: stripeInvoiceId,
-            amount_paid: 900,
+            amount_paid: 100,
             metadata: { billing_record_id: String(billingRecordId) },
           },
         },
@@ -441,28 +449,18 @@ describe('API: Stripe Webhook', () => {
       });
       expect(customer?.paidOnce).toBe(true);
 
-      // Verify paidOnce on service instance
-      const service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal')
-        ),
-      });
-      expect(service?.paidOnce).toBe(true);
+      // paidOnce is now on customer (verified above)
       await expectNoNotifications(customerId, { tolerateGM: true });
     });
 
-    it('should clear subPendingInvoiceId', async () => {
+    it('should clear pendingInvoiceId', async () => {
       const { billingRecordId, stripeInvoiceId } = await subscribeWith3DSPending();
 
-      // Verify subPendingInvoiceId is set before webhook
-      const serviceBefore = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal')
-        ),
+      // Verify pendingInvoiceId is set before webhook
+      const customerBefore = await db.query.customers.findFirst({
+        where: eq(customers.customerId, customerId),
       });
-      expect(serviceBefore?.subPendingInvoiceId).not.toBeNull();
+      expect(customerBefore?.pendingInvoiceId).not.toBeNull();
 
       const event = {
         id: `evt_inv_clear_pending_${Date.now()}`,
@@ -470,7 +468,7 @@ describe('API: Stripe Webhook', () => {
         data: {
           object: {
             id: stripeInvoiceId,
-            amount_paid: 900,
+            amount_paid: 100,
             metadata: { billing_record_id: String(billingRecordId) },
           },
         },
@@ -478,14 +476,11 @@ describe('API: Stripe Webhook', () => {
 
       await sendWebhookEvent(event);
 
-      // Verify subPendingInvoiceId is cleared
-      const serviceAfter = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal')
-        ),
+      // Verify pendingInvoiceId is cleared
+      const customerAfter = await db.query.customers.findFirst({
+        where: eq(customers.customerId, customerId),
       });
-      expect(serviceAfter?.subPendingInvoiceId).toBeNull();
+      expect(customerAfter?.pendingInvoiceId).toBeNull();
       await expectNoNotifications(customerId, { tolerateGM: true });
     });
 
@@ -498,7 +493,7 @@ describe('API: Stripe Webhook', () => {
         data: {
           object: {
             id: stripeInvoiceId,
-            amount_paid: 900,
+            amount_paid: 100,
             metadata: { billing_record_id: String(billingRecordId) },
           },
         },
@@ -518,7 +513,7 @@ describe('API: Stripe Webhook', () => {
 
       // Should have at least one reconciliation credit (partial month)
       // On Jan 15, days used = 31 - 15 + 1 = 17, days not used = 14
-      // Credit = 900 * 14 / 31 = 406 cents
+      // Credit = 100 * 14 / 31 = 45 cents
       expect(credits.length).toBeGreaterThanOrEqual(1);
       const totalCredit = credits.reduce((sum, c) => sum + Number(c.originalAmountUsdCents), 0);
       expect(totalCredit).toBeGreaterThan(0);
@@ -534,7 +529,7 @@ describe('API: Stripe Webhook', () => {
         data: {
           object: {
             id: stripeInvoiceId,
-            amount_paid: 900,
+            amount_paid: 100,
             metadata: { billing_record_id: String(billingRecordId) },
           },
         },
@@ -577,7 +572,7 @@ describe('API: Stripe Webhook', () => {
         data: {
           object: {
             id: stripeInvoiceId,
-            amount_paid: 900,
+            amount_paid: 100,
             metadata: { billing_record_id: String(billingRecordId) },
           },
         },
@@ -640,10 +635,10 @@ describe('API: Stripe Webhook', () => {
         providerReferenceId: stripeInvoiceId,
         creditId: null,
         escrowTransactionId: null,
-        amountUsdCents: 900,
+        amountUsdCents: 100,
       });
       await db.update(billingRecords)
-        .set({ status: 'paid', amountPaidUsdCents: 900 })
+        .set({ status: 'paid', amountPaidUsdCents: 100 })
         .where(eq(billingRecords.id, billingRecordId));
 
       // Send invoice.paid webhook for the SAME Stripe invoice
@@ -653,7 +648,7 @@ describe('API: Stripe Webhook', () => {
         data: {
           object: {
             id: stripeInvoiceId,
-            amount_paid: 900,
+            amount_paid: 100,
             metadata: { billing_record_id: String(billingRecordId) },
           },
         },
@@ -670,7 +665,7 @@ describe('API: Stripe Webhook', () => {
         .from(billingRecords)
         .where(eq(billingRecords.id, billingRecordId));
       expect(record.status).toBe('paid');
-      expect(Number(record.amountPaidUsdCents)).toBe(900);
+      expect(Number(record.amountPaidUsdCents)).toBe(100);
     });
 
     it('should auto-refund when non-Stripe provider has same reference ID (cross-provider collision)', async () => {
@@ -685,10 +680,10 @@ describe('API: Stripe Webhook', () => {
         providerReferenceId: stripeInvoiceId, // Same reference as the Stripe invoice
         creditId: null,
         escrowTransactionId: null,
-        amountUsdCents: 900,
+        amountUsdCents: 100,
       });
       await db.update(billingRecords)
-        .set({ status: 'paid', amountPaidUsdCents: 900 })
+        .set({ status: 'paid', amountPaidUsdCents: 100 })
         .where(eq(billingRecords.id, billingRecordId));
 
       // Send invoice.paid webhook — should refund because the existing payment
@@ -699,7 +694,7 @@ describe('API: Stripe Webhook', () => {
         data: {
           object: {
             id: stripeInvoiceId,
-            amount_paid: 900,
+            amount_paid: 100,
             metadata: { billing_record_id: String(billingRecordId) },
           },
         },
@@ -720,7 +715,7 @@ describe('API: Stripe Webhook', () => {
       // Simulate: another provider (e.g., escrow) already paid this invoice
       // before the customer completed 3DS on the Stripe-hosted page.
       await db.update(billingRecords)
-        .set({ status: 'paid', amountPaidUsdCents: 900 })
+        .set({ status: 'paid', amountPaidUsdCents: 100 })
         .where(eq(billingRecords.id, billingRecordId));
 
       // Send invoice.paid webhook (customer completed 3DS on stale page)
@@ -730,7 +725,7 @@ describe('API: Stripe Webhook', () => {
         data: {
           object: {
             id: stripeInvoiceId,
-            amount_paid: 900,
+            amount_paid: 100,
             metadata: { billing_record_id: String(billingRecordId) },
           },
         },
@@ -749,7 +744,7 @@ describe('API: Stripe Webhook', () => {
         .from(billingRecords)
         .where(eq(billingRecords.id, billingRecordId));
       expect(record.status).toBe('paid');
-      expect(Number(record.amountPaidUsdCents)).toBe(900);
+      expect(Number(record.amountPaidUsdCents)).toBe(100);
     });
   });
 

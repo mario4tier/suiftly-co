@@ -4,17 +4,22 @@
  * Tests the flow where a user subscribes without sufficient funds,
  * then deposits money to complete the subscription.
  *
- * This test reproduces a bug where the billing record stays as 'failed'
- * instead of being updated to 'paid' after the deposit triggers reconciliation.
+ * Uses platform subscription as the billing trigger ($1 Starter / $29 Pro).
+ * All tests use manual setup (no pre-subscribed platform) to test the
+ * payment-pending billing path.
  *
- * BUG: In reconcilePayments(), the code looks for billing records with status='pending',
- * but when the initial payment fails, the status is 'failed'. So the billing record
- * is never updated to 'paid' even though the charge succeeds on retry.
+ * This test reproduces bugs where the billing record stays as 'failed'
+ * instead of being updated to 'paid' after the deposit triggers reconciliation.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { db } from '@suiftly/database';
-import { serviceInstances, billingRecords, invoicePayments, invoiceLineItems } from '@suiftly/database/schema';
+import {
+  billingRecords,
+  invoicePayments,
+  invoiceLineItems,
+  customers,
+} from '@suiftly/database/schema';
 import { eq, and } from 'drizzle-orm';
 import {
   setClockTime,
@@ -25,16 +30,27 @@ import {
   ensureTestBalance,
   reconcilePendingPayments,
 } from './helpers/http.js';
-import { TEST_WALLET } from './helpers/auth.js';
-import { expectNoNotifications } from './helpers/notifications.js';
-import { setupBillingTest } from './helpers/setup.js';
+import { login, TEST_WALLET } from './helpers/auth.js';
+import { clearNotifications, expectNoNotifications } from './helpers/notifications.js';
 
 describe('API: Subscription Without Funds', () => {
   let accessToken: string;
   let customerId: number;
 
   beforeEach(async () => {
-    ({ accessToken, customerId } = await setupBillingTest({ balance: 2 }));
+    // Manual setup: no platform subscription — we test the billing-pending path
+    await resetClock();
+    await restCall('POST', '/test/data/reset', { walletAddress: TEST_WALLET });
+
+    accessToken = await login(TEST_WALLET);
+
+    const customer = await db.query.customers.findFirst({
+      where: eq(customers.walletAddress, TEST_WALLET),
+    });
+    if (!customer) throw new Error('Test customer not found');
+    customerId = customer.customerId;
+
+    await clearNotifications(customerId);
   });
 
   afterEach(async () => {
@@ -48,13 +64,17 @@ describe('API: Subscription Without Funds', () => {
     await setClockTime('2025-01-15T00:00:00Z');
 
     // ============================================================================
-    // Setup: Create escrow account with $1 (not enough for $9 subscription)
+    // Setup: Create escrow account with $0 (not enough for $1 platform subscription)
     // This ensures the payment will be ATTEMPTED but will FAIL (status = 'failed')
     // ============================================================================
-    console.log('[TEST] Creating escrow account with $1 (insufficient for $9 subscription)...');
-    await ensureTestBalance(1, { walletAddress: TEST_WALLET });
+    console.log('[TEST] Creating escrow account with $0 (insufficient for $1 subscription)...');
+    await ensureTestBalance(0, { walletAddress: TEST_WALLET });
+    await trpcMutation<any>('billing.addPaymentMethod', { providerType: 'escrow' }, accessToken);
 
-    console.log(`[TEST] Customer ${customerId} has $1 balance`);
+    console.log(`[TEST] Customer ${customerId} has $0 balance`);
+
+    // Accept TOS (required for platform subscribe)
+    await trpcMutation<any>('billing.acceptTos', {}, accessToken);
 
     // ============================================================================
     // Step 1: Subscribe without funds (should create service with pending charge)
@@ -63,27 +83,24 @@ describe('API: Subscription Without Funds', () => {
 
     const subscribeResult = await trpcMutation<any>(
       'services.subscribe',
-      { serviceType: 'seal', tier: 'starter' },
+      { serviceType: 'platform', tier: 'starter' },
       accessToken
     );
 
     // Subscription should succeed (creates service with subscriptionChargePending=true)
     expect(subscribeResult.result?.data).toBeDefined();
-    expect(subscribeResult.result?.data.serviceType).toBe('seal');
+    expect(subscribeResult.result?.data.serviceType).toBe('platform');
     expect(subscribeResult.result?.data.tier).toBe('starter');
 
-    // Verify service was created with pending charge
-    const serviceBeforeDeposit = await db.query.serviceInstances.findFirst({
-      where: and(
-        eq(serviceInstances.customerId, customerId),
-        eq(serviceInstances.serviceType, 'seal')
-      ),
+    // Verify customer has pending charge
+    const customerBeforeDeposit = await db.query.customers.findFirst({
+      where: eq(customers.customerId, customerId),
     });
-    expect(serviceBeforeDeposit).toBeDefined();
-    expect(serviceBeforeDeposit?.subPendingInvoiceId).not.toBeNull(); // Should have pending invoice reference
-    expect(serviceBeforeDeposit?.paidOnce).toBe(false);
+    expect(customerBeforeDeposit).toBeDefined();
+    expect(customerBeforeDeposit?.pendingInvoiceId).not.toBeNull(); // Should have pending invoice reference
+    expect(customerBeforeDeposit?.paidOnce).toBe(false);
 
-    console.log('[TEST] Service created with subPendingInvoiceId set');
+    console.log('[TEST] Customer created with pendingInvoiceId set');
 
     // Check billing record was created (should be 'pending' or 'failed')
     const billingRecordsBefore = await db.query.billingRecords.findMany({
@@ -94,7 +111,7 @@ describe('API: Subscription Without Funds', () => {
     });
     expect(billingRecordsBefore.length).toBeGreaterThanOrEqual(1);
 
-    const firstMonthInvoice = billingRecordsBefore.find(br => br.amountUsdCents === 900);
+    const firstMonthInvoice = billingRecordsBefore.find(br => br.amountUsdCents === 100); // $1 = 100 cents
     expect(firstMonthInvoice).toBeDefined();
     console.log(`[TEST] Billing record status before deposit: ${firstMonthInvoice?.status}`);
 
@@ -120,16 +137,13 @@ describe('API: Subscription Without Funds', () => {
     // ============================================================================
     // Step 3: Verify service is now paid
     // ============================================================================
-    const serviceAfterDeposit = await db.query.serviceInstances.findFirst({
-      where: and(
-        eq(serviceInstances.customerId, customerId),
-        eq(serviceInstances.serviceType, 'seal')
-      ),
+    const customerAfterDeposit = await db.query.customers.findFirst({
+      where: eq(customers.customerId, customerId),
     });
-    expect(serviceAfterDeposit?.subPendingInvoiceId).toBeNull(); // Pending invoice cleared
-    expect(serviceAfterDeposit?.paidOnce).toBe(true);
+    expect(customerAfterDeposit?.pendingInvoiceId).toBeNull(); // Pending invoice cleared
+    expect(customerAfterDeposit?.paidOnce).toBe(true);
 
-    console.log('[TEST] Service now has paidOnce=true and subPendingInvoiceId=null');
+    console.log('[TEST] Customer now has paidOnce=true and pendingInvoiceId=null');
 
     // ============================================================================
     // Step 4: Verify billing record was updated to 'paid' (THIS IS THE BUG!)
@@ -141,7 +155,7 @@ describe('API: Subscription Without Funds', () => {
       ),
     });
 
-    const firstMonthInvoiceAfter = billingRecordsAfter.find(br => br.amountUsdCents === 900);
+    const firstMonthInvoiceAfter = billingRecordsAfter.find(br => br.amountUsdCents === 100); // $1
     expect(firstMonthInvoiceAfter).toBeDefined();
 
     console.log(`[TEST] Billing record status after deposit: ${firstMonthInvoiceAfter?.status}`);
@@ -181,7 +195,7 @@ describe('API: Subscription Without Funds', () => {
     const firstMonthEntry = transactions?.find((entry: any) =>
       entry.type === 'charge' &&
       entry.status === 'paid' &&
-      entry.amountUsd === 9 // $9 starter tier
+      entry.amountUsd === 1 // $1 platform starter tier
     );
 
     // BUG: The billing history should show this entry
@@ -199,37 +213,37 @@ describe('API: Subscription Without Funds', () => {
     // ============================================================================
     console.log('[TEST] Step 1: Subscribe to Starter without funds...');
 
+    // Accept TOS (required for platform subscribe)
+    await trpcMutation<any>('billing.acceptTos', {}, accessToken);
+
     const subscribeStarterResult = await trpcMutation<any>(
       'services.subscribe',
-      { serviceType: 'seal', tier: 'starter' },
+      { serviceType: 'platform', tier: 'starter' },
       accessToken
     );
 
     // Subscription should succeed (creates service with pending payment)
     expect(subscribeStarterResult.result?.data).toBeDefined();
-    expect(subscribeStarterResult.result?.data.serviceType).toBe('seal');
+    expect(subscribeStarterResult.result?.data.serviceType).toBe('platform');
     expect(subscribeStarterResult.result?.data.tier).toBe('starter');
     expect(subscribeStarterResult.result?.data.paymentPending).toBe(true);
 
-    // Verify service was created with pending invoice
-    const serviceAfterStarter = await db.query.serviceInstances.findFirst({
-      where: and(
-        eq(serviceInstances.customerId, customerId),
-        eq(serviceInstances.serviceType, 'seal')
-      ),
+    // Verify customer has pending invoice
+    const customerAfterStarter = await db.query.customers.findFirst({
+      where: eq(customers.customerId, customerId),
     });
-    expect(serviceAfterStarter).toBeDefined();
-    expect(serviceAfterStarter?.subPendingInvoiceId).not.toBeNull();
-    const starterInvoiceId = serviceAfterStarter!.subPendingInvoiceId;
+    expect(customerAfterStarter).toBeDefined();
+    expect(customerAfterStarter?.pendingInvoiceId).not.toBeNull();
+    const starterInvoiceId = customerAfterStarter!.pendingInvoiceId;
     console.log(`[TEST] Starter subscription created with pending invoice ID: ${starterInvoiceId}`);
 
-    // Verify the Starter invoice exists (may be 'pending' or 'failed' depending on payment status)
+    // Verify the Starter invoice exists
     const starterInvoice = await db.query.billingRecords.findFirst({
       where: eq(billingRecords.id, starterInvoiceId!),
     });
     expect(starterInvoice).toBeDefined();
-    expect(['pending', 'failed']).toContain(starterInvoice?.status); // Either pending or failed
-    expect(starterInvoice?.amountUsdCents).toBe(900); // $9 Starter
+    expect(['pending', 'failed']).toContain(starterInvoice?.status);
+    expect(starterInvoice?.amountUsdCents).toBe(100); // $1 Starter
     console.log(`[TEST] Starter invoice exists with status: ${starterInvoice?.status}`);
 
     // ============================================================================
@@ -239,7 +253,7 @@ describe('API: Subscription Without Funds', () => {
 
     const cancelResult = await trpcMutation<any>(
       'services.scheduleCancellation',
-      { serviceType: 'seal' },
+      { serviceType: 'platform' },
       accessToken
     );
 
@@ -247,15 +261,12 @@ describe('API: Subscription Without Funds', () => {
     expect(cancelResult.result?.data.success).toBe(true);
     console.log('[TEST] Cancel result:', cancelResult.result?.data);
 
-    // Verify service was deleted
-    const serviceAfterCancel = await db.query.serviceInstances.findFirst({
-      where: and(
-        eq(serviceInstances.customerId, customerId),
-        eq(serviceInstances.serviceType, 'seal')
-      ),
+    // Verify platform subscription was cleared
+    const customerAfterCancel = await db.query.customers.findFirst({
+      where: eq(customers.customerId, customerId),
     });
-    expect(serviceAfterCancel).toBeUndefined(); // Service should be deleted
-    console.log('[TEST] Service deleted: OK');
+    expect(customerAfterCancel?.platformTier).toBeNull(); // Platform sub should be cleared
+    console.log('[TEST] Platform subscription cleared: OK');
 
     // Verify the Starter invoice was DELETED (not just voided)
     const starterInvoiceAfterCancel = await db.query.billingRecords.findFirst({
@@ -272,33 +283,30 @@ describe('API: Subscription Without Funds', () => {
 
     const subscribeProResult = await trpcMutation<any>(
       'services.subscribe',
-      { serviceType: 'seal', tier: 'pro' },
+      { serviceType: 'platform', tier: 'pro' },
       accessToken
     );
 
     expect(subscribeProResult.result?.data).toBeDefined();
-    expect(subscribeProResult.result?.data.serviceType).toBe('seal');
+    expect(subscribeProResult.result?.data.serviceType).toBe('platform');
     expect(subscribeProResult.result?.data.tier).toBe('pro');
     expect(subscribeProResult.result?.data.paymentPending).toBe(true);
 
-    // Verify new service was created with pending invoice
-    const serviceAfterPro = await db.query.serviceInstances.findFirst({
-      where: and(
-        eq(serviceInstances.customerId, customerId),
-        eq(serviceInstances.serviceType, 'seal')
-      ),
+    // Verify customer has new pending invoice for Pro
+    const customerAfterPro = await db.query.customers.findFirst({
+      where: eq(customers.customerId, customerId),
     });
-    expect(serviceAfterPro).toBeDefined();
-    expect(serviceAfterPro?.subPendingInvoiceId).not.toBeNull();
-    const proInvoiceId = serviceAfterPro!.subPendingInvoiceId;
+    expect(customerAfterPro).toBeDefined();
+    expect(customerAfterPro?.pendingInvoiceId).not.toBeNull();
+    const proInvoiceId = customerAfterPro!.pendingInvoiceId;
     console.log(`[TEST] Pro subscription created with pending invoice ID: ${proInvoiceId}`);
 
-    // Verify the Pro invoice exists (may be 'pending' or 'failed' depending on payment status)
+    // Verify the Pro invoice exists
     const proInvoice = await db.query.billingRecords.findFirst({
       where: eq(billingRecords.id, proInvoiceId!),
     });
     expect(proInvoice).toBeDefined();
-    expect(['pending', 'failed']).toContain(proInvoice?.status); // Either pending or failed
+    expect(['pending', 'failed']).toContain(proInvoice?.status);
     expect(proInvoice?.amountUsdCents).toBe(2900); // $29 Pro
     console.log(`[TEST] Pro invoice exists with status: ${proInvoice?.status}`);
 
@@ -307,7 +315,6 @@ describe('API: Subscription Without Funds', () => {
     // ============================================================================
     console.log('[TEST] Step 4: Verify final database state...');
 
-    // Query ALL invoices for this customer directly from DB
     const allInvoices = await db.query.billingRecords.findMany({
       where: eq(billingRecords.customerId, customerId),
     });
@@ -320,7 +327,6 @@ describe('API: Subscription Without Funds', () => {
     })));
 
     // Should have exactly ONE invoice (the Pro one)
-    // The Starter invoice should have been deleted
     const unpaidInvoices = allInvoices.filter(inv =>
       inv.status === 'pending' || inv.status === 'failed'
     );
@@ -330,8 +336,8 @@ describe('API: Subscription Without Funds', () => {
     expect(unpaidInvoices[0].amountUsdCents).toBe(2900); // $29 Pro
     console.log('[TEST] Only Pro invoice exists: OK');
 
-    // Verify NO $9 Starter invoice exists (it was deleted)
-    const starterInvoiceInDb = allInvoices.find(inv => inv.amountUsdCents === 900);
+    // Verify NO $1 Starter invoice exists (it was deleted)
+    const starterInvoiceInDb = allInvoices.find(inv => inv.amountUsdCents === 100);
     expect(starterInvoiceInDb).toBeUndefined();
     console.log('[TEST] Starter invoice properly deleted: OK');
 
@@ -340,18 +346,21 @@ describe('API: Subscription Without Funds', () => {
 
   it('should show correct tier in billing history after subscribe→upgrade→deposit (BUG: shows old tier)', async () => {
     /**
-     * BUG REPRODUCTION: When user subscribes to Starter, upgrades to Enterprise (before paying),
-     * then deposits, the billing history incorrectly shows "Seal Starter tier" for the -$185 charge.
+     * BUG REPRODUCTION: When user subscribes to Starter, upgrades to Pro (before paying),
+     * then deposits, the billing history incorrectly shows "Platform Starter tier" for the -$29 charge.
      *
      * Root cause: handleTierUpgradeLocked in tier-changes.ts only updates:
-     * - service.tier (to 'enterprise')
-     * - billingRecords.amountUsdCents (to 18500)
+     * - service.tier (to 'pro')
+     * - billingRecords.amountUsdCents (to 2900)
      * But does NOT update invoice_line_items.itemType (still 'subscription_starter')
      *
      * The billing history reads itemType from invoice_line_items to generate description,
-     * so it shows "Seal Starter tier" instead of "Seal Enterprise tier".
+     * so it shows "Platform Starter tier" instead of "Platform Pro tier".
      */
     await setClockTime('2025-01-15T00:00:00Z');
+
+    // Accept TOS (required for platform subscribe)
+    await trpcMutation<any>('billing.acceptTos', {}, accessToken);
 
     // ============================================================================
     // Step 1: Subscribe to Starter without funds
@@ -360,7 +369,7 @@ describe('API: Subscription Without Funds', () => {
 
     const subscribeResult = await trpcMutation<any>(
       'services.subscribe',
-      { serviceType: 'seal', tier: 'starter' },
+      { serviceType: 'platform', tier: 'starter' },
       accessToken
     );
 
@@ -368,17 +377,14 @@ describe('API: Subscription Without Funds', () => {
     expect(subscribeResult.result?.data.tier).toBe('starter');
     expect(subscribeResult.result?.data.paymentPending).toBe(true);
 
-    // Verify service was created with pending invoice
-    let service = await db.query.serviceInstances.findFirst({
-      where: and(
-        eq(serviceInstances.customerId, customerId),
-        eq(serviceInstances.serviceType, 'seal')
-      ),
+    // Verify customer has pending invoice
+    let customerRec = await db.query.customers.findFirst({
+      where: eq(customers.customerId, customerId),
     });
-    expect(service).toBeDefined();
-    expect(service?.subPendingInvoiceId).not.toBeNull();
-    expect(service?.paidOnce).toBe(false);
-    const pendingInvoiceId = service!.subPendingInvoiceId!;
+    expect(customerRec).toBeDefined();
+    expect(customerRec?.pendingInvoiceId).not.toBeNull();
+    expect(customerRec?.paidOnce).toBe(false);
+    const pendingInvoiceId = customerRec!.pendingInvoiceId!;
     console.log(`[TEST] Starter subscription created with pending invoice ID: ${pendingInvoiceId}`);
 
     // Check invoice line item shows Starter
@@ -391,45 +397,42 @@ describe('API: Subscription Without Funds', () => {
     })));
     expect(starterLineItems.length).toBe(1);
     expect(starterLineItems[0].itemType).toBe('subscription_starter');
-    expect(starterLineItems[0].amountUsdCents).toBe(900); // $9
+    expect(starterLineItems[0].amountUsdCents).toBe(100); // $1
 
     // ============================================================================
-    // Step 2: Upgrade to Enterprise (while paidOnce=false)
+    // Step 2: Upgrade to Pro (while paidOnce=false)
     // ============================================================================
-    console.log('[TEST] Step 2: Upgrade to Enterprise without funds...');
+    console.log('[TEST] Step 2: Upgrade to Pro without funds...');
 
     const upgradeResult = await trpcMutation<any>(
       'services.upgradeTier',
-      { serviceType: 'seal', newTier: 'enterprise' },
+      { serviceType: 'platform', newTier: 'pro' },
       accessToken
     );
 
     expect(upgradeResult.result?.data).toBeDefined();
     expect(upgradeResult.result?.data.success).toBe(true);
-    expect(upgradeResult.result?.data.newTier).toBe('enterprise');
+    expect(upgradeResult.result?.data.newTier).toBe('pro');
     // Should be no charge for upgrade when paidOnce=false
     expect(upgradeResult.result?.data.chargeAmountUsdCents).toBe(0);
     console.log('[TEST] Upgrade successful (no charge)');
 
-    // Verify service tier is now Enterprise
-    service = await db.query.serviceInstances.findFirst({
-      where: and(
-        eq(serviceInstances.customerId, customerId),
-        eq(serviceInstances.serviceType, 'seal')
-      ),
+    // Verify customer tier is now Pro
+    customerRec = await db.query.customers.findFirst({
+      where: eq(customers.customerId, customerId),
     });
-    expect(service?.tier).toBe('enterprise');
-    expect(service?.paidOnce).toBe(false);
+    expect(customerRec?.platformTier).toBe('pro');
+    expect(customerRec?.paidOnce).toBe(false);
 
-    // Check that pending invoice amount was updated to Enterprise price
+    // Check that pending invoice amount was updated to Pro price
     const invoiceAfterUpgrade = await db.query.billingRecords.findFirst({
       where: eq(billingRecords.id, pendingInvoiceId),
     });
     expect(invoiceAfterUpgrade).toBeDefined();
-    expect(invoiceAfterUpgrade?.amountUsdCents).toBe(18500); // $185 Enterprise
-    console.log('[TEST] Invoice amount updated to Enterprise price: $185');
+    expect(invoiceAfterUpgrade?.amountUsdCents).toBe(2900); // $29 Pro
+    console.log('[TEST] Invoice amount updated to Pro price: $29');
 
-    // BUG CHECK: Line items should be updated to Enterprise
+    // BUG CHECK: Line items should be updated to Pro
     const lineItemsAfterUpgrade = await db.query.invoiceLineItems.findMany({
       where: eq(invoiceLineItems.billingRecordId, pendingInvoiceId),
     });
@@ -439,21 +442,22 @@ describe('API: Subscription Without Funds', () => {
     })));
 
     // BUG: This is where the bug manifests - line item still shows 'subscription_starter'
-    // FIX: Line item should be 'subscription_enterprise' with $185
+    // FIX: Line item should be 'subscription_pro' with $29
     expect(lineItemsAfterUpgrade.length).toBe(1);
-    expect(lineItemsAfterUpgrade[0].itemType).toBe('subscription_enterprise'); // BUG: was 'subscription_starter'
-    expect(lineItemsAfterUpgrade[0].amountUsdCents).toBe(18500); // BUG: was 900
+    expect(lineItemsAfterUpgrade[0].itemType).toBe('subscription_pro'); // BUG: was 'subscription_starter'
+    expect(lineItemsAfterUpgrade[0].amountUsdCents).toBe(2900); // BUG: was 100
 
     // ============================================================================
     // Step 3: Deposit funds (triggers reconciliation)
     // ============================================================================
-    console.log('[TEST] Step 3: Deposit $200...');
+    console.log('[TEST] Step 3: Deposit $50...');
 
-    await ensureTestBalance(200, { walletAddress: TEST_WALLET });
+    await ensureTestBalance(50, { walletAddress: TEST_WALLET });
+    await trpcMutation<any>('billing.addPaymentMethod', { providerType: 'escrow' }, accessToken);
 
     const depositResult = await trpcMutation<any>(
       'billing.deposit',
-      { amountUsd: 200 },
+      { amountUsd: 50 },
       accessToken
     );
 
@@ -464,15 +468,12 @@ describe('API: Subscription Without Funds', () => {
     // Trigger reconciliation (in production, this is done asynchronously by GM)
     await reconcilePendingPayments(customerId);
 
-    // Verify service is now paid
-    service = await db.query.serviceInstances.findFirst({
-      where: and(
-        eq(serviceInstances.customerId, customerId),
-        eq(serviceInstances.serviceType, 'seal')
-      ),
+    // Verify customer is now paid
+    customerRec = await db.query.customers.findFirst({
+      where: eq(customers.customerId, customerId),
     });
-    expect(service?.paidOnce).toBe(true);
-    expect(service?.subPendingInvoiceId).toBeNull();
+    expect(customerRec?.paidOnce).toBe(true);
+    expect(customerRec?.pendingInvoiceId).toBeNull();
 
     // ============================================================================
     // Step 4: Verify billing history shows correct tier name
@@ -489,19 +490,19 @@ describe('API: Subscription Without Funds', () => {
     const transactions = billingHistoryResult.result?.data?.transactions || [];
     console.log('[TEST] Billing history:', JSON.stringify(transactions, null, 2));
 
-    // Find the $185 Enterprise charge
-    const enterpriseCharge = transactions.find((tx: any) =>
+    // Find the $29 Pro charge
+    const proCharge = transactions.find((tx: any) =>
       tx.source === 'invoice' &&
       tx.type === 'charge' &&
-      tx.amountUsd === 185
+      tx.amountUsd === 29
     );
 
-    expect(enterpriseCharge).toBeDefined();
-    expect(enterpriseCharge?.status).toBe('paid');
+    expect(proCharge).toBeDefined();
+    expect(proCharge?.status).toBe('paid');
 
-    // Description should show "Seal Enterprise tier subscription" for the correct tier
-    expect(enterpriseCharge?.description).toBe('Seal Enterprise tier subscription');
-    console.log(`[TEST] Billing history description: ${enterpriseCharge?.description}`);
+    // Description should show "Platform Pro tier subscription" for the correct tier
+    expect(proCharge?.description).toBe('Platform Pro tier subscription');
+    console.log(`[TEST] Billing history description: ${proCharge?.description}`);
 
     await expectNoNotifications(customerId);
   });

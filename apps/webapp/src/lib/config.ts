@@ -4,8 +4,8 @@
  * Exposes simple variables for zero-cost access throughout the app
  *
  * Usage:
- *   import { fsubs_usd_pro } from '@/lib/config'
- *   const price = fsubs_usd_pro; // Direct variable access - fastest possible
+ *   import { fpsubs_usd_pro } from '@/lib/config'
+ *   const price = fpsubs_usd_pro; // Direct variable access - fastest possible
  */
 
 import { vanillaTrpc } from './trpc';
@@ -16,10 +16,6 @@ export let fver = 1;
 export let freg_count = 3;
 export let fbw_sta = 3;
 export let fbw_pro = 15;
-export let fbw_ent = 100;
-export let fsubs_usd_sta = 9;
-export let fsubs_usd_pro = 29;
-export let fsubs_usd_ent = 185;
 export let freqs_usd = 1.00;
 export let freqs_count = 10000;
 export let fskey_incl = 1;
@@ -37,12 +33,9 @@ export let fmax_pkg = 10;
 export let fmax_apikey = 10;
 export let fmax_ipv4 = 20;
 export let fmax_cidr = 20;
+// Platform subscription prices — platform is the only subscription
 export let fpsubs_usd_sta = 1;
 export let fpsubs_usd_pro = 29;
-export let freq_platform_sub = 1;
-export let freq_seal_sub = 0;
-export let freq_grpc_sub = 1;
-export let freq_graphql_sub = 1;
 export let mockAuth = false;
 export let stripePublishableKey = '';
 
@@ -77,27 +70,22 @@ export async function loadFrontendConfig(): Promise<void> {
         console.log('[Config] Loading frontend configuration from backend...');
         const config = await vanillaTrpc.config.getFrontendConfig.query();
 
-        // Validate that all required keys are present (mockAuth is optional)
+        // Validate that all required keys are present
         if (!config.fver || !config.freg_count || !config.fbw_sta || !config.fbw_pro ||
-            !config.fbw_ent || !config.fsubs_usd_sta || !config.fsubs_usd_pro ||
-            !config.fsubs_usd_ent || !config.freqs_usd || !config.freqs_count ||
+            !config.freqs_usd || !config.freqs_count ||
             !config.fskey_incl || !config.fskey_pkg_incl || !config.fapikey_incl ||
             !config.fipv4_incl || !config.fcidr_incl || !config.fadd_skey_usd ||
-            !config.fadd_pkg_usd || !config.fadd_apikey_usd || !config.fadd_ipv4_usd ||
-            !config.fadd_cidr_usd || !config.fmax_skey || !config.fmax_pkg ||
+            !config.fadd_pkg_usd || !config.fadd_apikey_usd ||
+            !config.fmax_skey || !config.fmax_pkg ||
             !config.fmax_apikey || !config.fmax_ipv4 || !config.fmax_cidr) {
           throw new Error('Missing required configuration keys from database');
         }
 
-        // Populate global variables with values from backend (NO DEFAULTS)
+        // Populate global variables with values from backend
         fver = parseInt(config.fver);
         freg_count = parseInt(config.freg_count);
         fbw_sta = parseInt(config.fbw_sta);
         fbw_pro = parseInt(config.fbw_pro);
-        fbw_ent = parseInt(config.fbw_ent);
-        fsubs_usd_sta = parseFloat(config.fsubs_usd_sta);
-        fsubs_usd_pro = parseFloat(config.fsubs_usd_pro);
-        fsubs_usd_ent = parseFloat(config.fsubs_usd_ent);
         freqs_usd = parseFloat(config.freqs_usd);
         freqs_count = parseInt(config.freqs_count);
         fskey_incl = parseInt(config.fskey_incl);
@@ -108,20 +96,16 @@ export async function loadFrontendConfig(): Promise<void> {
         fadd_skey_usd = parseFloat(config.fadd_skey_usd);
         fadd_pkg_usd = parseFloat(config.fadd_pkg_usd);
         fadd_apikey_usd = parseFloat(config.fadd_apikey_usd);
-        fadd_ipv4_usd = parseFloat(config.fadd_ipv4_usd);
-        fadd_cidr_usd = parseFloat(config.fadd_cidr_usd);
+        fadd_ipv4_usd = parseFloat(config.fadd_ipv4_usd ?? '0');
+        fadd_cidr_usd = parseFloat(config.fadd_cidr_usd ?? '0');
         fmax_skey = parseInt(config.fmax_skey);
         fmax_pkg = parseInt(config.fmax_pkg);
         fmax_apikey = parseInt(config.fmax_apikey);
         fmax_ipv4 = parseInt(config.fmax_ipv4);
         fmax_cidr = parseInt(config.fmax_cidr);
-        // Platform subscription config (optional - defaults used if missing)
+        // Platform subscription pricing
         if (config.fpsubs_usd_sta != null) fpsubs_usd_sta = parseFloat(config.fpsubs_usd_sta);
         if (config.fpsubs_usd_pro != null) fpsubs_usd_pro = parseFloat(config.fpsubs_usd_pro);
-        if (config.freq_platform_sub != null) freq_platform_sub = parseInt(config.freq_platform_sub);
-        if (config.freq_seal_sub != null) freq_seal_sub = parseInt(config.freq_seal_sub);
-        if (config.freq_grpc_sub != null) freq_grpc_sub = parseInt(config.freq_grpc_sub);
-        if (config.freq_graphql_sub != null) freq_graphql_sub = parseInt(config.freq_graphql_sub);
 
         mockAuth = config.mockAuth === 'true';
         stripePublishableKey = config.stripePublishableKey || '';

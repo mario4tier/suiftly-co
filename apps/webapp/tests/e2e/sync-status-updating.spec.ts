@@ -20,7 +20,7 @@
 import { test, expect } from '@playwright/test';
 import { waitAfterMutation } from '../helpers/wait-utils';
 import { waitForToastsToDisappear } from '../helpers/locators';
-import { resetCustomer, ensureTestBalance, enableSealOnlyMode } from '../helpers/db';
+import { resetCustomer, ensureTestBalance, subscribePlatformService } from '../helpers/db';
 import { waitForStabilization } from '../helpers/vault-sync';
 
 // LM and API URLs for test endpoints
@@ -29,8 +29,6 @@ const API_URL = 'http://localhost:22700';
 
 test.describe('Sync Status - Updating Indicator', () => {
   test.beforeEach(async ({ page, request }) => {
-    await enableSealOnlyMode(request);
-
     // Step 1: Clear any lingering test delays from BOTH API and LM
     await request.post(`${API_URL}/test/delays/clear`);
     await request.post(`${LM_URL}/test/delays/clear`);
@@ -51,16 +49,12 @@ test.describe('Sync Status - Updating Indicator', () => {
     // Step 5: Ensure customer has funds for subscription
     await ensureTestBalance(request, 100, { spendingLimitUsd: 250 });
 
-    // Step 6: Subscribe to seal service via UI
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
-    await page.locator('label:has-text("Agree to")').click();
-    await page.getByRole('heading', { name: 'STARTER' }).click();
-    await page.locator('button:has-text("Subscribe to Service")').click();
-    await expect(page.locator('[data-sonner-toast]').filter({ hasText: /Subscription successful/i })).toBeVisible({ timeout: 5000 });
-    await page.waitForURL(/\/services\/seal\/overview/, { timeout: 5000 });
-    await waitForToastsToDisappear(page);
-    console.log('✅ Subscribed to seal service');
+    // Step 6: Subscribe to platform (auto-provisions seal as disabled)
+    await subscribePlatformService(page);
+    // Navigate to seal overview
+    await page.goto('/services/seal/overview');
+    await page.waitForLoadState('networkidle');
+    console.log('✅ Subscribed to platform, seal auto-provisioned');
 
     // Step 7: Enable the service (toggle ON)
     const toggleSwitch = page.locator('#service-toggle');

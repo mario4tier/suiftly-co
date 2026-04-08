@@ -308,7 +308,7 @@ suiftly-co/
 │  └─ api/
 │     ├─ src/
 │     │  ├─ routes/             # tRPC routers
-│     │  ├─ services/           # Enterprise logic
+│     │  ├─ services/           # Business logic
 │     │  ├─ db/                 # DB connection
 │     │  └─ server.ts
 │     └─ package.json
@@ -432,10 +432,8 @@ Controls what is displayed on the Seal service overview page:
 | `freg_count` | Number of regions (for calculating global bandwidth) | `3` |
 | `fbw_sta` | Starter tier bandwidth (req/s per region) | `3` |
 | `fbw_pro` | Pro tier bandwidth (req/s per region) | `15` |
-| `fbw_ent` | Enterprise tier bandwidth (req/s per region) | `100` |
-| `fsubs_usd_sta` | Starter tier subscription fee | `9` |
+| `fsubs_usd_sta` | Starter tier subscription fee | `1` |
 | `fsubs_usd_pro` | Pro tier subscription fee | `29` |
-| `fsubs_usd_ent` | Enterprise tier subscription fee | `185` |
 | `freqs_usd` | Usage-based pricing (USD) | `1.00` |
 | `freqs_count` | Requests per pricing unit | `10000` |
 | `fskey_incl` | Included Seal keys | `1` |
@@ -454,7 +452,6 @@ Controls backend behavior and rate limiting:
 |-----|-------------|---------------|
 | `bglim_sta` | Guaranteed limit for Starter tier (req/s) | `3` |
 | `bglim_pro` | Guaranteed limit for Pro tier (req/s) | `15` |
-| `bglim_ent` | Guaranteed limit for Enterprise tier (req/s) | `100` |
 
 **Usage Pattern:**
 ```typescript
@@ -477,7 +474,7 @@ SELECT add_retention_policy('haproxy_logs', INTERVAL '90 days');
 SELECT add_compression_policy('haproxy_logs', INTERVAL '7 days');
 ```
 
-**Tiers:** Starter, Pro, Enterprise (see [UI_DESIGN.md](./UI_DESIGN.md) (pricing and tier configuration) for rate limits and pricing)
+**Tiers:** Starter, Pro (see [UI_DESIGN.md](./UI_DESIGN.md) (pricing and tier configuration) for rate limits and pricing)
 
 ---
 

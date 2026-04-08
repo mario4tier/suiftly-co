@@ -10,9 +10,9 @@
  * See BILLING_DESIGN.md for detailed requirements.
  */
 
-import { eq, and } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import type { Database } from '../db';
-import { serviceInstances, customers } from '../schema';
+import { customers } from '../schema';
 import { withCustomerLock, type LockedTransaction } from './locking';
 import { createAndChargeImmediately } from './invoices';
 import { processInvoicePayment } from './payments';
@@ -36,7 +36,7 @@ export interface SubscriptionBillingResult {
   amountUsdCents: number;
   paymentSuccessful: boolean;
   /** Invoice ID if payment is still pending, null if paid */
-  subPendingInvoiceId: number | null;
+  pendingInvoiceId: number | null;
   error?: string;
 }
 
@@ -137,21 +137,11 @@ export async function handleSubscriptionBillingLocked(
       clock
     );
 
-    // If payment succeeded, mark both service and customer as having paid at least once
+    // If payment succeeded, mark customer as having paid at least once
     // and issue reconciliation credit (all in same transaction)
     if (paymentResult.fullyPaid) {
-      // Service-level paidOnce: Unlocks key operations (generate/import) and changes tier change behavior
-      await tx
-        .update(serviceInstances)
-        .set({ paidOnce: true })
-        .where(
-          and(
-            eq(serviceInstances.customerId, customerId),
-            eq(serviceInstances.serviceType, serviceType)
-          )
-        );
-
       // Customer-level paidOnce: Enables grace period eligibility on future payment failures
+      // and unlocks key operations (generate/import) and changes tier change behavior
       await tx
         .update(customers)
         .set({ paidOnce: true })
@@ -199,7 +189,7 @@ export async function handleSubscriptionBillingLocked(
     invoiceId,
     amountUsdCents: monthlyPriceUsdCents,
     paymentSuccessful: paymentResult.fullyPaid,
-    subPendingInvoiceId: paymentResult.fullyPaid ? null : invoiceId,
+    pendingInvoiceId: paymentResult.fullyPaid ? null : invoiceId,
     error: paymentResult.error?.message,
   };
 }

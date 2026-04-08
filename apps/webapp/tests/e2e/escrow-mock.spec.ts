@@ -14,15 +14,13 @@
 
 import { test, expect } from '@playwright/test';
 import { waitAfterMutation, waitForCondition } from '../helpers/wait-utils';
-import { enableSealOnlyMode, subscribeSealService } from '../helpers/db';
+import { subscribePlatformService } from '../helpers/db';
 
 const MOCK_WALLET_ADDRESS = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const API_BASE = 'http://localhost:22700';
 
 test.describe('Escrow Mock - Wallet Operations', () => {
   test.beforeEach(async ({ page }) => {
-    await enableSealOnlyMode(page.request);
-
     // Reset customer data
     await page.request.post(`${API_BASE}/test/data/reset`, {
       data: {
@@ -198,8 +196,6 @@ test.describe('Escrow Mock - Wallet Operations', () => {
 
 test.describe('Escrow Mock - Service Subscription Scenarios', () => {
   test.beforeEach(async ({ page }) => {
-    await enableSealOnlyMode(page.request);
-
     // Reset customer data
     await page.request.post(`${API_BASE}/test/data/reset`, {
       data: {
@@ -222,8 +218,8 @@ test.describe('Escrow Mock - Service Subscription Scenarios', () => {
     await page.waitForLoadState('networkidle');
   });
 
-  test('can subscribe to service with sufficient balance', async ({ page }) => {
-    // Deposit $100
+  test('can subscribe to platform with sufficient balance', async ({ page }) => {
+    // Deposit $100 (auto-adds escrow as payment method)
     await page.request.post(`${API_BASE}/test/wallet/deposit`, {
       data: {
         walletAddress: MOCK_WALLET_ADDRESS,
@@ -232,42 +228,21 @@ test.describe('Escrow Mock - Service Subscription Scenarios', () => {
       },
     });
 
-    // Navigate to Seal service page
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
+    // Subscribe to platform Starter ($1) via the platform subscription UI
+    await subscribePlatformService(page);
 
-    // Should see onboarding form
-    await expect(page.locator('h3:has-text("Guaranteed Bandwidth")')).toBeVisible();
+    // Verify via API that balance decreased by $1 (Starter tier charged immediately via escrow)
+    const balanceResponse = await page.request.get(`${API_BASE}/test/wallet/balance`, {
+      params: { walletAddress: MOCK_WALLET_ADDRESS },
+    });
+    const balanceData = await balanceResponse.json();
+    expect(balanceData.balanceUsd).toBe(99);
 
-    // Accept terms
-    await page.locator('label:has-text("Agree to")').click();
-
-    // Subscribe to PRO tier ($29)
-    const subscribeButton = page.locator('button:has-text("Subscribe to Service")');
-    await expect(subscribeButton).toBeEnabled();
-    await subscribeButton.click();
-
-    // Should transition to provisioning state, or directly to service page
-    // After subscription, heading changes from "Configure Seal Service" to just "Seal"
-    await expect(
-      page.locator('h1:has-text("Seal")').first()
-    ).toBeVisible({ timeout: 10000 });
-
-    console.log('✅ Subscription successful with sufficient balance');
-
-    // Navigate to billing page to verify balance (real user flow)
-    await page.click('text=Billing');
-    await page.waitForURL(/\/billing/, { timeout: 5000 });
-
-    // Wait for balance to load and be displayed
-    // Balance should be $100 - $29 = $71 (PRO tier charges immediately in mock)
-    await expect(page.getByText('Balance', { exact: true }).locator('..').locator('text=$71.00')).toBeVisible({ timeout: 10000 });
-
-    console.log('✅ Balance correctly displayed as $71.00 on billing page');
+    console.log('✅ Balance correctly updated to $99.00 after platform Starter subscription');
   });
 
-  test('cannot subscribe with insufficient balance', async ({ page }) => {
-    // Deposit only $10 (not enough for $20 Starter tier)
+  test('platform subscription with insufficient Pro balance creates pending payment', async ({ page }) => {
+    // Deposit $10 (enough for Starter $1, but not Pro $29)
     await page.request.post(`${API_BASE}/test/wallet/deposit`, {
       data: {
         walletAddress: MOCK_WALLET_ADDRESS,
@@ -276,34 +251,31 @@ test.describe('Escrow Mock - Service Subscription Scenarios', () => {
       },
     });
 
-    // Navigate to Seal service page
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
+    // Navigate to billing and subscribe to Pro tier ($29)
+    await page.click('text=Billing');
+    await page.waitForURL('/billing', { timeout: 5000 });
 
-    // Accept terms
-    await page.locator('label:has-text("Agree to")').click();
-
-    // Subscribe button should be enabled (frontend validation not yet implemented)
-    const subscribeButton = page.locator('button:has-text("Subscribe to Service")');
+    // Select Pro tier
+    await page.locator('text=Pro').first().click();
+    await page.locator('#platform-tos').click();
+    const subscribeButton = page.locator('button:has-text("Subscribe to")');
+    await expect(subscribeButton).toBeEnabled({ timeout: 5000 });
     await subscribeButton.click();
-
-    // Backend should reject with insufficient balance error
-    // Wait for API call to complete (smart wait - returns as soon as network idle)
     await waitAfterMutation(page);
 
-    console.log('✅ Subscription correctly rejected - insufficient balance');
-
-    // Balance should still be $10
+    // Subscription is created but payment is pending (escrow $10 < Pro $29)
     const balanceResponse = await page.request.get(`${API_BASE}/test/wallet/balance`, {
       params: { walletAddress: MOCK_WALLET_ADDRESS },
     });
     const balanceData = await balanceResponse.json();
+    // Balance unchanged — charge was blocked (insufficient funds for Pro)
     expect(balanceData.balanceUsd).toBe(10);
+
+    console.log('✅ Pro subscription payment pending - balance unchanged at $10');
   });
 
   test('cannot exceed 28-day spending limit', async ({ page }) => {
-    // IMPORTANT: Clear escrow account first, then create with $50 limit
-    // beforeEach already set limit to $250, so we need to start fresh
+    // Create escrow account with $1000 balance but LOW $10 spending limit
     await page.request.post(`${API_BASE}/test/data/reset`, {
       data: {
         balanceUsdCents: 0,
@@ -311,46 +283,35 @@ test.describe('Escrow Mock - Service Subscription Scenarios', () => {
         clearEscrowAccount: true, // Remove escrow account to start fresh
       },
     });
-
-    // Now create escrow account with $1000 balance but LOW $50 spending limit
     await page.request.post(`${API_BASE}/test/wallet/deposit`, {
       data: {
         walletAddress: MOCK_WALLET_ADDRESS,
         amountUsd: 1000,
-        initialSpendingLimitUsd: 50, // Set limit to $50
+        initialSpendingLimitUsd: 10, // $10 limit — blocks Pro ($29)
       },
     });
 
-    // Navigate to Seal service
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
-
-    // Accept terms
-    await page.locator('label:has-text("Agree to")').click();
-
-    // Select ENTERPRISE tier ($185/month - exceeds $50 limit)
-    // Click on the tier card by its unique price
-    await page.locator('text=$185/month').click();
-
-    // Wait for button to update to show ENTERPRISE price
-    await expect(page.locator('button:has-text("Subscribe to Service for $185/month")')).toBeVisible({ timeout: 5000 });
-
-    // Try to subscribe - should fail because $185 > $50 limit
-    await page.locator('button:has-text("Subscribe to Service")').click();
-
-    // Wait for subscription request to complete (smart wait - returns as soon as network idle)
+    // Navigate to billing, select Pro tier ($29 exceeds $10 limit), subscribe
+    await page.click('text=Billing');
+    await page.waitForURL('/billing', { timeout: 5000 });
+    await page.locator('text=Pro').first().click();
+    await page.locator('#platform-tos').click();
+    const subscribeButton = page.locator('button:has-text("Subscribe to")');
+    await expect(subscribeButton).toBeEnabled({ timeout: 5000 });
+    await subscribeButton.click();
     await waitAfterMutation(page);
 
-    // Wait for service to be created in database (with polling)
+    // Wait for platform service to be created in database (with polling)
     await waitForCondition(
       async () => {
         const response = await page.request.get(`${API_BASE}/test/data/customer`, {
           params: { walletAddress: MOCK_WALLET_ADDRESS },
         });
         const data = await response.json();
-        return data.services && data.services.length === 1;
+        // Platform tier set on customer; seal/grpc/graphql only provisioned after successful payment
+        return data.customer && data.customer.platformTier !== null;
       },
-      { timeout: 3000, message: 'Service to be created in database' }
+      { timeout: 5000, message: 'Platform subscription to be created in database' }
     );
 
     // Verify spending limit was enforced (service-first architecture):
@@ -360,13 +321,14 @@ test.describe('Escrow Mock - Service Subscription Scenarios', () => {
     });
     const customerInfo = await customerData.json();
 
-    // 1. Service was created (for audit trail)
-    expect(customerInfo.services).toHaveLength(1);
+    // 1. Platform subscription was created on customer; seal/grpc/graphql NOT yet provisioned
+    expect(customerInfo.customer.platformTier).toBe('pro');
+    expect(customerInfo.services).toHaveLength(0);
 
     // 2. But charge is pending (failed due to spending limit)
-    expect(customerInfo.services[0].subscriptionChargePending).toBe(true);
-    expect(customerInfo.services[0].state).toBe('disabled');
-    expect(customerInfo.services[0].tier).toBe('enterprise');
+    // Platform subscription is active (it's a billing concept, not infrastructure)
+    // The pending invoice is what blocks further provisioning
+    expect(customerInfo.customer.subscriptionChargePending).toBe(true);
 
     // 3. Balance unchanged - charge was rejected
     expect(customerInfo.customer.balanceUsd).toBe(1000);
@@ -377,8 +339,6 @@ test.describe('Escrow Mock - Service Subscription Scenarios', () => {
 
 test.describe('Subscription Charge Architecture - Critical Business Logic', () => {
   test.beforeEach(async ({ page }) => {
-    await enableSealOnlyMode(page.request);
-
     // Reset customer data (database only, doesn't create mock wallet)
     await page.request.post(`${API_BASE}/test/data/reset`, {
       data: {
@@ -409,10 +369,9 @@ test.describe('Subscription Charge Architecture - Critical Business Logic', () =
 
   test('idempotency: retry subscription returns existing service without double charge', async ({ page }) => {
     // Subscribe to PRO ($29) using the helper (handles tier selection + TOS)
-    await subscribeSealService(page, 'PRO');
-
-    // Wait for redirect to overview page (subscription successful)
-    await page.waitForURL(/\/services\/seal\/overview/, { timeout: 10000 });
+    await subscribePlatformService(page, 'PRO');
+    await page.goto('/services/seal/overview');
+    await page.waitForLoadState('networkidle');
 
     // Verify balance decreased via API (robust — no DOM scraping race)
     const balanceAfterFirst = await page.request.get(`${API_BASE}/test/wallet/balance`, {
@@ -436,7 +395,8 @@ test.describe('Subscription Charge Architecture - Critical Business Logic', () =
   });
 
   test('charge failure: service created with pending=true, cannot be enabled', async ({ page }) => {
-    // Set balance to $10 (insufficient for $29 PRO tier - default selection)
+    // beforeEach deposited $100 and added escrow payment method.
+    // Reset balance to $10 (insufficient for Pro $29, but escrow method remains).
     await page.request.post(`${API_BASE}/test/data/reset`, {
       data: {
         balanceUsdCents: 1000, // $10
@@ -444,40 +404,33 @@ test.describe('Subscription Charge Architecture - Critical Business Logic', () =
       },
     });
 
-    // Navigate to Seal service
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
-
-    // Accept terms
-    await page.locator('label:has-text("Agree to")').click();
-
-    // Subscribe with default PRO tier ($29) - should succeed with pending=true
-    const subscribeButton = page.locator('button:has-text("Subscribe to Service")');
+    // Navigate to billing and subscribe to platform PRO ($29 > $10 escrow)
+    await page.click('text=Billing');
+    await page.waitForURL('/billing', { timeout: 5000 });
+    await page.locator('text=Pro').first().click();
+    await page.locator('#platform-tos').click();
+    const subscribeButton = page.locator('button:has-text("Subscribe to")');
+    await expect(subscribeButton).toBeEnabled({ timeout: 5000 });
     await subscribeButton.click();
-
-    // Wait for subscription to complete (service-first architecture: returns success with pending=true)
     await waitAfterMutation(page);
 
-    // Should see warning banner about pending payment (not an error toast)
-    const pendingBanner = page.locator('[data-testid="banner-section"]').getByText('Subscription payment pending');
+    // Should see warning banner about pending payment
+    const pendingBanner = page.locator('text=Subscription payment pending');
     await expect(pendingBanner).toBeVisible({ timeout: 5000 });
 
-    // CRITICAL: Verify service was created in DISABLED state with pending=true
+    // CRITICAL: Verify service was created with pending invoice
     const customerData = await page.request.get(`${API_BASE}/test/data/customer`, {
       params: { walletAddress: MOCK_WALLET_ADDRESS },
     });
     const customerInfo = await customerData.json();
 
-    // Service-first architecture: Service IS created even when charge fails
-    // This ensures audit trail exists before any payment attempt:
-    //   1. Create service with pending=true
-    //   2. Attempt charge
-    //   3. If charge fails, service stays with pending=true (cannot be enabled)
-    expect(customerInfo.services).toHaveLength(1);
-    expect(customerInfo.services[0].subscriptionChargePending).toBe(true);
-    expect(customerInfo.services[0].state).toBe('disabled');
+    // Platform subscription is set on customer even when charge fails (payment pending).
+    // No seal/grpc/graphql services are auto-provisioned until payment succeeds.
+    expect(customerInfo.services).toHaveLength(0);
+    expect(customerInfo.customer.platformTier).toBe('pro');
+    expect(customerInfo.customer.subscriptionChargePending).toBe(true);
 
-    // Verify balance unchanged (charge correctly rejected)
+    // Verify balance unchanged (charge correctly rejected - insufficient funds)
     expect(customerInfo.customer.balanceUsd).toBe(10);
 
     console.log('✅ Service created with pending=true when charge fails');
@@ -538,26 +491,19 @@ test.describe('Subscription Charge Architecture - Critical Business Logic', () =
     // 3. Should see error: "Cannot enable service: subscription payment pending"
   });
 
-  test('crash recovery: pending flag persists across page reload', async ({ page }) => {
-    // Subscribe to service successfully
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
+  test('crash recovery: platform subscription state persists across page reload', async ({ page }) => {
+    // Subscribe to platform (auto-provisions seal)
+    await subscribePlatformService(page, 'PRO');
 
-    await page.locator('label:has-text("Agree to")').click();
-
-    const subscribeButton = page.locator('button:has-text("Subscribe to Service")');
-    await subscribeButton.click();
-
-    // Wait for subscription
-    await page.waitForURL(/\/services\/seal\/overview/, { timeout: 10000 });
+    // Navigate to seal overview (auto-provisioned after platform subscription)
+    await page.goto('/services/seal/overview');
+    await page.waitForLoadState('networkidle');
 
     // Reload page (simulates crash recovery)
     await page.reload();
     await page.waitForURL(/\/services\/seal\/overview/, { timeout: 10000 });
 
-    // Service should still be accessible and in correct state
-    // This verifies the pending flag is persisted in database
-
+    // Seal should still be accessible in disabled state (not enabled yet - user must toggle)
     await expect(page.locator('h1:has-text("Seal")')).toBeVisible();
 
     console.log('✅ Service state persists across page reload');

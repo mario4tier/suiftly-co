@@ -38,11 +38,10 @@ export const serviceStateEnum = pgEnum('service_state', [
   'cancellation_pending'  // Added in Phase 1C for 7-day grace period after billing period ends
 ]);
 
-// Service tiers
+// Service tiers (platform only: starter and pro; enterprise removed)
 export const serviceTierEnum = pgEnum('service_tier', [
   'starter',
   'pro',
-  'enterprise'
 ]);
 
 // Transaction types (for escrow and ledger)
@@ -123,10 +122,9 @@ export const sealOpStatusEnum = pgEnum('seal_op_status', [
 // Invoice line item types (semantic categorization of invoice charges)
 // Used for structured billing display instead of string descriptions
 export const invoiceLineItemTypeEnum = pgEnum('invoice_line_item_type', [
-  // Tier subscriptions (per service, per tier)
+  // Tier subscriptions (platform only: starter and pro)
   'subscription_starter',
   'subscription_pro',
-  'subscription_enterprise',
   // Tier upgrade (pro-rated charge for remaining days in month)
   'tier_upgrade',
   // Usage-based charges

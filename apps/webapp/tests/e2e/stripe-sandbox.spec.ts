@@ -9,7 +9,7 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { resetCustomer, getCustomerData, subscribeSealService, enableSealOnlyMode } from '../helpers/db';
+import { resetCustomer, getCustomerData, subscribePlatformService } from '../helpers/db';
 import { waitAfterMutation } from '../helpers/wait-utils';
 import { getStripePublishableKey, findStripeFrame, fillStripeCard } from '../helpers/stripe';
 
@@ -47,8 +47,6 @@ test.describe('Stripe Sandbox', () => {
   });
 
   test.beforeEach(async ({ page }) => {
-    await enableSealOnlyMode(page.request);
-
     // Ensure force-mock is disabled for real Stripe tests
     await page.request.post(`${API_BASE}/test/stripe/force-mock`, {
       data: { enabled: false },
@@ -176,23 +174,16 @@ test.describe('Stripe Sandbox', () => {
     // Extended timeout: Stripe webhook → API handler → GM sync → charge → UI update
     test.setTimeout(120000);
 
-    // Step 1: Subscribe to Seal service without payment methods (payment will be pending)
-    await page.goto('/services/seal/overview');
-    await page.waitForLoadState('networkidle');
-
-    // Select Starter tier (cheapest)
-    await page.click('text=STARTER');
-
-    // Accept terms of service
-    await page.locator('#terms').click();
-
-    // Subscribe — payment will fail (no payment methods configured)
-    await page.click('button:has-text("Subscribe to Service")');
-    await waitAfterMutation(page);
-
-    // Step 2: Navigate to billing and verify pending banner
+    // Step 1: Subscribe to Platform without payment methods (payment will be pending)
     await page.click('text=Billing');
     await page.waitForURL('/billing', { timeout: 5000 });
+    await page.locator('#platform-tos').click();
+    const subscribeButton = page.locator('button:has-text("Subscribe to")');
+    await expect(subscribeButton).toBeEnabled({ timeout: 5000 });
+    await subscribeButton.click();
+    await waitAfterMutation(page);
+
+    // Step 2: Verify pending banner on billing page
     await expect(page.locator('text=Subscription payment pending')).toBeVisible({ timeout: 5000 });
 
     // Step 3: Add credit card via real Stripe Elements
@@ -218,7 +209,7 @@ test.describe('Stripe Sandbox', () => {
 
     // Step 4: Wait for GM to process the payment via Stripe.
     // The webhook fires setup_intent.succeeded → saves payment method → triggers GM sync-customer.
-    // GM calls retryUnpaidInvoices → StripePaymentProvider charges the card → clears subPendingInvoiceId.
+    // GM calls retryUnpaidInvoices → StripePaymentProvider charges the card → clears pendingInvoiceId.
     // The frontend polls services.list after card setup (added in handleCardDialogSuccess).
     // Poll until the pending banner disappears.
     // Generous timeout: real Stripe webhook delivery + GM retry + charge can take 30-60s.
@@ -227,9 +218,7 @@ test.describe('Stripe Sandbox', () => {
 
     // Step 5: Verify via test endpoint that payment is no longer pending
     const customerData = await getCustomerData(page.request);
-    const sealService = customerData.services.find((s: any) => s.serviceType === 'seal');
-    expect(sealService).toBeDefined();
-    expect(sealService.subscriptionChargePending).toBe(false);
+    expect(customerData.customer.subscriptionChargePending).toBe(false);
   });
 
   test('should subscribe with pre-configured card and pay immediately', async ({ page }) => {
@@ -260,16 +249,17 @@ test.describe('Stripe Sandbox', () => {
     // Wait for webhook to update card details (Visa 4242)
     await expect(creditCardRow).toContainText('Visa', { timeout: 15000 });
 
-    // Step 2: Subscribe to Seal service (card already configured → payment succeeds)
-    await subscribeSealService(page, 'STARTER', { successTimeout: 30000 });
+    // Step 2: Subscribe to Platform service (card already configured → payment succeeds)
+    await subscribePlatformService(page, 'STARTER', { successTimeout: 30000 });
+    // Navigate to seal overview (auto-provisioned after payment succeeds)
+    await page.goto('/services/seal/overview');
+    await page.waitForLoadState('networkidle');
 
     // Should show service disabled banner (not payment pending)
     await expect(page.locator('text=/Service is currently OFF/i')).toBeVisible({ timeout: 5000 });
 
     // Step 3: Verify via test endpoint that payment is not pending
     const customerData = await getCustomerData(page.request);
-    const sealService = customerData.services.find((s: any) => s.serviceType === 'seal');
-    expect(sealService).toBeDefined();
-    expect(sealService.subscriptionChargePending).toBe(false);
+    expect(customerData.customer.subscriptionChargePending).toBe(false);
   });
 });

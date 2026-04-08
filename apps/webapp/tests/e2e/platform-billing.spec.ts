@@ -16,7 +16,6 @@ import {
   authenticateWithMockWallet,
   ensureTestBalance,
   subscribePlatformService,
-  setConfigFlags,
 } from '../helpers/db';
 import { setMockClock, resetClock } from '../helpers/clock';
 import { waitAfterMutation } from '../helpers/wait-utils';
@@ -27,13 +26,7 @@ const API_BASE = 'http://localhost:22700';
 test.describe('Platform Billing', () => {
   test.beforeEach(async ({ page, request }) => {
     await resetCustomer(request);
-    await setConfigFlags(request, { freq_platform_sub: '1', freq_seal_sub: '0' });
     await authenticateWithMockWallet(page);
-  });
-
-  test.afterAll(async ({ request }) => {
-    // Restore production default: platform-only mode
-    await setConfigFlags(request, { freq_platform_sub: '1', freq_seal_sub: '0' });
   });
 
   // =========================================================================
@@ -189,10 +182,10 @@ test.describe('Platform Billing', () => {
       await waitAfterMutation(page);
       await page.locator('button:has-text("Subscribe to Starter Plan")').click();
 
-      // Should succeed (exact $1 available)
+      // Should succeed: onboarding form disappears
       await expect(
-        page.locator('[data-sonner-toast]').filter({ hasText: /Subscribed to Platform/i })
-      ).toBeVisible({ timeout: 10000 });
+        page.locator('h3:has-text("Choose a Platform Plan")')
+      ).not.toBeVisible({ timeout: 10000 });
     });
 
     test('Pro ($29) should succeed with exact funds', async ({ page, request }) => {
@@ -217,10 +210,10 @@ test.describe('Platform Billing', () => {
       await waitAfterMutation(page);
       await page.locator('button:has-text("Subscribe to Pro Plan")').click();
 
-      // Should succeed (exact $29 available)
+      // Should succeed: onboarding form disappears
       await expect(
-        page.locator('[data-sonner-toast]').filter({ hasText: /Subscribed to Platform/i })
-      ).toBeVisible({ timeout: 10000 });
+        page.locator('h3:has-text("Choose a Platform Plan")')
+      ).not.toBeVisible({ timeout: 10000 });
     });
   });
 

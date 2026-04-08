@@ -69,6 +69,7 @@ export function ChangeTierModal({
     onSuccess: (data) => {
       utils.services.list.invalidate();
       utils.services.getTierOptions.invalidate();
+      utils.billing.getBalance.invalidate();
       utils.billing.getNextScheduledPayment.invalidate();
       const chargeText = data.chargeAmountUsdCents > 0
         ? ` You were charged ${formatUsd(data.chargeAmountUsdCents / 100)}.`
@@ -86,6 +87,7 @@ export function ChangeTierModal({
     onSuccess: (data) => {
       utils.services.list.invalidate();
       utils.services.getTierOptions.invalidate();
+      utils.billing.getBalance.invalidate();
       utils.billing.getNextScheduledPayment.invalidate();
       // Use paidOnce from tierOptions to determine if change is immediate
       if (!tierOptions?.paidOnce) {
@@ -93,12 +95,9 @@ export function ChangeTierModal({
         toast.success(`Changed to ${data.scheduledTier.toUpperCase()}`);
       } else {
         // Scheduled downgrade for paid subscriptions
-        const effectiveDate = new Date(data.effectiveDate).toLocaleDateString('en-US', {
-          year: 'numeric',
-          month: 'long',
-          day: 'numeric',
-          timeZone: 'UTC',
-        });
+        const effectiveDate = data.effectiveDate
+          ? new Date(data.effectiveDate).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' })
+          : '';
         toast.success(`Downgrade to ${data.scheduledTier.toUpperCase()} scheduled for ${effectiveDate}`);
       }
       onSuccess?.();
@@ -113,6 +112,7 @@ export function ChangeTierModal({
     onSuccess: (data) => {
       utils.services.list.invalidate();
       utils.services.getTierOptions.invalidate();
+      utils.billing.getBalance.invalidate();
       utils.billing.getNextScheduledPayment.invalidate();
       // Use paidOnce from tierOptions to determine if change is immediate
       if (!tierOptions?.paidOnce) {
@@ -120,12 +120,9 @@ export function ChangeTierModal({
         toast.success(`${serviceType.charAt(0).toUpperCase() + serviceType.slice(1)} subscription cancelled`);
       } else {
         // Scheduled cancellation for paid subscriptions
-        const effectiveDate = new Date(data.effectiveDate).toLocaleDateString('en-US', {
-          year: 'numeric',
-          month: 'long',
-          day: 'numeric',
-          timeZone: 'UTC',
-        });
+        const effectiveDate = data.effectiveDate
+          ? new Date(data.effectiveDate).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' })
+          : '';
         toast.success(`Cancellation scheduled. Service will end on ${effectiveDate}`);
       }
       onSuccess?.();
@@ -140,6 +137,7 @@ export function ChangeTierModal({
     onSuccess: () => {
       utils.services.list.invalidate();
       utils.services.getTierOptions.invalidate();
+      utils.billing.getBalance.invalidate();
       utils.billing.getNextScheduledPayment.invalidate();
       toast.success('Cancellation undone. Your subscription will continue.');
       onSuccess?.();
@@ -154,6 +152,7 @@ export function ChangeTierModal({
     onSuccess: () => {
       utils.services.list.invalidate();
       utils.services.getTierOptions.invalidate();
+      utils.billing.getBalance.invalidate();
       utils.billing.getNextScheduledPayment.invalidate();
       toast.success('Scheduled tier change cancelled. Continuing with current tier.');
       onSuccess?.();

@@ -1,52 +1,51 @@
 /**
  * API Test: Reconciliation Credit Bug
  *
- * BUG REPRODUCTION: When user changes tier while initial payment is pending,
+ * BUG REPRODUCTION: When user changes platform tier while initial payment is pending,
  * the reconciliation credit should be based on the tier that was ACTUALLY CHARGED,
  * not the original subscription tier.
  *
  * Scenario:
- * 1. User subscribes to starter ($9/month) - payment fails (no funds)
- * 2. User upgrades to enterprise ($185/month) - tier changes, no payment needed (paidOnce=false)
+ * 1. User subscribes to platform starter ($1/month) - payment fails (no funds)
+ * 2. User upgrades to platform pro ($29/month) - tier changes, no payment needed (paidOnce=false)
  * 3. User deposits funds -> reconcilePayments runs
- * 4. BUG: Credit is calculated based on starter ($9) instead of enterprise ($185)
+ * 4. BUG: Credit is calculated based on starter ($1) instead of pro ($29)
  *
- * Expected: Credit should be ~$166 (enterprise × 27/30 days)
- * Actual: Credit was $8.10 (starter × 27/30 days)
+ * Expected: Credit should be ~$1.87 (pro × 2/31 days)
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { db } from '@suiftly/database';
-import { serviceInstances, customerCredits, billingRecords } from '@suiftly/database/schema';
+import { customers, customerCredits, billingRecords } from '@suiftly/database/schema';
 import { eq, and, desc, ne } from 'drizzle-orm';
 import {
   setClockTime,
   resetClock,
   trpcMutation,
   resetTestData,
-  restCall,
   reconcilePendingPayments,
 } from './helpers/http.js';
-import { TEST_WALLET } from './helpers/auth.js';
-import { TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
-import { expectNoNotifications } from './helpers/notifications.js';
-import { setupBillingTest } from './helpers/setup.js';
+import { login, TEST_WALLET } from './helpers/auth.js';
+import { PLATFORM_TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
+import { expectNoNotifications, clearNotifications } from './helpers/notifications.js';
 
 describe('API: Reconciliation Credit Calculation', () => {
   let accessToken: string;
   let customerId: number;
 
   beforeEach(async () => {
-    ({ accessToken, customerId } = await setupBillingTest({ balance: 2 }));
+    // Set up customer WITHOUT subscribing to platform — these tests need to test platform billing
+    await resetClock();
+    await resetTestData(TEST_WALLET);
+    accessToken = await login(TEST_WALLET);
 
-    // Withdraw all funds to ensure payment will fail
-    const balanceResult = await restCall<any>('GET', `/test/wallet/balance?walletAddress=${TEST_WALLET}`);
-    if (balanceResult.data?.balanceUsd > 0) {
-      await restCall('POST', '/test/wallet/withdraw', {
-        walletAddress: TEST_WALLET,
-        amountUsd: balanceResult.data.balanceUsd,
-      });
-    }
+    const customer = await db.query.customers.findFirst({
+      where: eq(customers.walletAddress, TEST_WALLET),
+    });
+    if (!customer) throw new Error('Test customer not found after login');
+    customerId = customer.customerId;
+
+    await clearNotifications(customerId);
   });
 
   afterEach(async () => {
@@ -63,12 +62,15 @@ describe('API: Reconciliation Credit Calculation', () => {
        * not tier A (the original subscription).
        */
 
-      // ---- Step 1: Subscribe to starter tier with no funds ----
+      // ---- Step 1: Subscribe to platform starter with no funds ----
       await setClockTime('2025-01-03T00:00:00Z'); // Day 3 of January
+
+      // Accept TOS but don't deposit funds
+      await trpcMutation<any>('billing.acceptTos', {}, accessToken);
 
       const subscribeResult = await trpcMutation<any>(
         'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
+        { serviceType: 'platform', tier: 'starter' },
         accessToken
       );
 
@@ -76,16 +78,13 @@ describe('API: Reconciliation Credit Calculation', () => {
       expect(subscribeResult.result?.data).toBeDefined();
       expect(subscribeResult.result?.data?.paymentPending).toBe(true);
 
-      // Verify service state
-      let service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal')
-        ),
+      // Verify customer billing state
+      let customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, customerId),
       });
-      expect(service?.tier).toBe('starter');
-      expect(service?.paidOnce).toBe(false);
-      expect(service?.subPendingInvoiceId).not.toBeNull();
+      expect(customer?.platformTier).toBe('starter');
+      expect(customer?.paidOnce).toBe(false);
+      expect(customer?.pendingInvoiceId).not.toBeNull();
 
       // No credits should exist yet (payment failed)
       let credits = await db.query.customerCredits.findMany({
@@ -93,29 +92,26 @@ describe('API: Reconciliation Credit Calculation', () => {
       });
       expect(credits.length).toBe(0);
 
-      // ---- Step 2: Upgrade to enterprise tier (still no payment) ----
+      // ---- Step 2: Upgrade to pro tier (still no payment) ----
       // Since paidOnce=false, tier change should be immediate without charge
       const upgradeResult = await trpcMutation<any>(
         'services.upgradeTier',
-        { serviceType: 'seal', newTier: 'enterprise' },
+        { serviceType: 'platform', newTier: 'pro' },
         accessToken
       );
 
       expect(upgradeResult.result?.data?.success).toBe(true);
-      expect(upgradeResult.result?.data?.newTier).toBe('enterprise');
+      expect(upgradeResult.result?.data?.newTier).toBe('pro');
       expect(upgradeResult.result?.data?.chargeAmountUsdCents).toBe(0); // No charge for unpaid users
 
       // Verify tier changed
-      service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal')
-        ),
+      customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, customerId),
       });
-      expect(service?.tier).toBe('enterprise');
-      expect(service?.paidOnce).toBe(false);
-      // subPendingInvoiceId should still be set (not yet paid)
-      expect(service?.subPendingInvoiceId).not.toBeNull();
+      expect(customer?.platformTier).toBe('pro');
+      expect(customer?.paidOnce).toBe(false);
+      // pendingInvoiceId should still be set (not yet paid)
+      expect(customer?.pendingInvoiceId).not.toBeNull();
 
       // Still no credits
       credits = await db.query.customerCredits.findMany({
@@ -124,7 +120,6 @@ describe('API: Reconciliation Credit Calculation', () => {
       expect(credits.length).toBe(0);
 
       // ---- Step 3: Add escrow payment method + deposit funds ----
-      // An escrow payment method is required for the provider chain to have a provider
       await trpcMutation<any>(
         'billing.addPaymentMethod',
         { providerType: 'escrow' },
@@ -133,7 +128,7 @@ describe('API: Reconciliation Credit Calculation', () => {
 
       const depositResult = await trpcMutation<any>(
         'billing.deposit',
-        { amountUsd: 300 }, // $300 to cover enterprise ($185)
+        { amountUsd: 50 }, // $50 to cover pro ($29)
         accessToken
       );
 
@@ -143,7 +138,6 @@ describe('API: Reconciliation Credit Calculation', () => {
       await reconcilePendingPayments(customerId);
 
       // ---- Step 4: Verify the reconciliation credit ----
-      // Now check the credit that was created
       credits = await db.query.customerCredits.findMany({
         where: eq(customerCredits.customerId, customerId),
         orderBy: [desc(customerCredits.createdAt)],
@@ -156,31 +150,26 @@ describe('API: Reconciliation Credit Calculation', () => {
       // Day 3 of 31-day month
       // Days used = from day 3 to day 31 = 29 days
       // Days not used = 31 - 29 = 2 days
-      // Enterprise tier = $185/month = 18500 cents
-      // Credit = 18500 * 2 / 31 = 1193 cents (~$11.93)
+      // Pro tier = $29/month = 2900 cents
+      // Credit = 2900 * 2 / 31 = 187 cents (~$1.87)
       const daysInJanuary = 31;
       const dayOfMonth = 3;
       const daysUsed = daysInJanuary - dayOfMonth + 1; // +1 because day 3 is used
       const daysNotUsed = daysInJanuary - daysUsed;
 
-      // BUG: The credit should be based on enterprise ($185), not starter ($9)
-      // Expected: 18500 * 2 / 31 = 1193 cents
-      // BUG gives: 900 * 2 / 31 = 58 cents
+      // Expected: 2900 * 2 / 31 = 187 cents
       const expectedCreditCents = Math.floor(
-        (TIER_PRICES_USD_CENTS.enterprise * daysNotUsed) / daysInJanuary
+        (PLATFORM_TIER_PRICES_USD_CENTS.pro * daysNotUsed) / daysInJanuary
       );
 
       expect(Number(credits[0].originalAmountUsdCents)).toBe(expectedCreditCents);
 
-      // Verify service state after reconciliation
-      service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal')
-        ),
+      // Verify customer state after reconciliation
+      customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, customerId),
       });
-      expect(service?.paidOnce).toBe(true);
-      expect(service?.subPendingInvoiceId).toBeNull();
+      expect(customer?.paidOnce).toBe(true);
+      expect(customer?.pendingInvoiceId).toBeNull();
 
       await expectNoNotifications(customerId);
     });
@@ -191,17 +180,16 @@ describe('API: Reconciliation Credit Calculation', () => {
        * should be updated to the new tier price.
        */
 
-      // ---- Subscribe to starter with no funds ----
       await setClockTime('2025-01-03T00:00:00Z');
 
+      await trpcMutation<any>('billing.acceptTos', {}, accessToken);
       await trpcMutation<any>(
         'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
+        { serviceType: 'platform', tier: 'starter' },
         accessToken
       );
 
-      // Check billing record (could be pending or failed based on payment attempt)
-      // We need any non-draft, non-paid record
+      // Check billing record
       let records = await db.query.billingRecords.findMany({
         where: and(
           eq(billingRecords.customerId, customerId),
@@ -210,16 +198,16 @@ describe('API: Reconciliation Credit Calculation', () => {
         ),
       });
       expect(records.length).toBe(1);
-      expect(Number(records[0].amountUsdCents)).toBe(TIER_PRICES_USD_CENTS.starter);
+      expect(Number(records[0].amountUsdCents)).toBe(PLATFORM_TIER_PRICES_USD_CENTS.starter);
 
-      // ---- Upgrade to enterprise ----
+      // Upgrade to pro
       await trpcMutation<any>(
         'services.upgradeTier',
-        { serviceType: 'seal', newTier: 'enterprise' },
+        { serviceType: 'platform', newTier: 'pro' },
         accessToken
       );
 
-      // The pending/failed billing record should now be enterprise price ($185)
+      // The pending/failed billing record should now be pro price ($29)
       records = await db.query.billingRecords.findMany({
         where: and(
           eq(billingRecords.customerId, customerId),
@@ -228,91 +216,81 @@ describe('API: Reconciliation Credit Calculation', () => {
         ),
       });
       expect(records.length).toBe(1);
-      // BUG: Currently returns 900 (starter) instead of 18500 (enterprise)
-      expect(Number(records[0].amountUsdCents)).toBe(TIER_PRICES_USD_CENTS.enterprise);
+      expect(Number(records[0].amountUsdCents)).toBe(PLATFORM_TIER_PRICES_USD_CENTS.pro);
 
       await expectNoNotifications(customerId);
     });
 
     it('should calculate correct credit when downgrading while unpaid', async () => {
       /**
-       * Edge case: User subscribes to enterprise, downgrades to starter before paying.
+       * Edge case: User subscribes to pro, downgrades to starter before paying.
        * Credit should be based on starter (the tier actually charged).
        */
 
-      // ---- Subscribe to enterprise with no funds ----
       await setClockTime('2025-01-03T00:00:00Z');
 
+      await trpcMutation<any>('billing.acceptTos', {}, accessToken);
       await trpcMutation<any>(
         'services.subscribe',
-        { serviceType: 'seal', tier: 'enterprise' },
+        { serviceType: 'platform', tier: 'pro' },
         accessToken
       );
 
-      // Verify enterprise subscription pending
-      let service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal')
-        ),
+      // Verify pro subscription pending
+      let customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, customerId),
       });
-      expect(service?.tier).toBe('enterprise');
-      expect(service?.subPendingInvoiceId).not.toBeNull();
+      expect(customer?.platformTier).toBe('pro');
+      expect(customer?.pendingInvoiceId).not.toBeNull();
 
-      // ---- Downgrade to starter (immediate since unpaid) ----
+      // Downgrade to starter (immediate since unpaid)
       const downgradeResult = await trpcMutation<any>(
         'services.scheduleTierDowngrade',
-        { serviceType: 'seal', newTier: 'starter' },
+        { serviceType: 'platform', newTier: 'starter' },
         accessToken
       );
 
       expect(downgradeResult.result?.data?.success).toBe(true);
-      // For unpaid users, downgrade is immediate
       expect(downgradeResult.result?.data?.effectiveDate).toBeDefined();
 
       // Verify tier changed to starter
-      service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal')
-        ),
+      customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, customerId),
       });
-      expect(service?.tier).toBe('starter');
+      expect(customer?.platformTier).toBe('starter');
 
-      // ---- Add escrow payment method + deposit and pay ----
+      // Add escrow payment method + deposit and pay
       await trpcMutation<any>(
         'billing.addPaymentMethod',
         { providerType: 'escrow' },
         accessToken
       );
 
-      const depositResult = await trpcMutation<any>(
+      await trpcMutation<any>(
         'billing.deposit',
-        { amountUsd: 50 }, // $50 to cover starter ($9)
+        { amountUsd: 5 }, // $5 to cover starter ($1)
         accessToken
       );
 
-      expect(depositResult.result?.data?.success).toBe(true);
-
-      // Trigger reconciliation (now async via GM)
+      // Trigger reconciliation
       await reconcilePendingPayments(customerId);
 
-      // ---- Verify credit is based on starter (the tier that was charged) ----
+      // Verify credit is based on starter (the tier that was charged)
       const credits = await db.query.customerCredits.findMany({
         where: eq(customerCredits.customerId, customerId),
       });
 
       expect(credits.length).toBe(1);
 
-      // Credit should be based on starter ($9), not enterprise ($185)
+      // Credit should be based on starter ($1), not pro ($29)
       const daysInJanuary = 31;
       const dayOfMonth = 3;
       const daysUsed = daysInJanuary - dayOfMonth + 1;
       const daysNotUsed = daysInJanuary - daysUsed;
 
-      // Expected: 900 * 2 / 31 = 58 cents
+      // Expected: 100 * 2 / 31 = 6 cents
       const expectedCreditCents = Math.floor(
-        (TIER_PRICES_USD_CENTS.starter * daysNotUsed) / daysInJanuary
+        (PLATFORM_TIER_PRICES_USD_CENTS.starter * daysNotUsed) / daysInJanuary
       );
 
       expect(Number(credits[0].originalAmountUsdCents)).toBe(expectedCreditCents);
@@ -330,16 +308,16 @@ describe('API: Reconciliation Credit Calculation', () => {
        * same invoice/scenario should only produce one credit.
        */
 
-      // ---- Step 1: Subscribe to starter with no funds ----
-      await setClockTime('2025-01-03T00:00:00Z'); // Day 3 of January
+      await setClockTime('2025-01-03T00:00:00Z');
 
+      await trpcMutation<any>('billing.acceptTos', {}, accessToken);
       await trpcMutation<any>(
         'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
+        { serviceType: 'platform', tier: 'starter' },
         accessToken
       );
 
-      // ---- Step 2: Add escrow payment method, deposit funds and reconcile ----
+      // Add escrow payment method, deposit funds and reconcile
       await trpcMutation<any>(
         'billing.addPaymentMethod',
         { providerType: 'escrow' },
@@ -348,7 +326,7 @@ describe('API: Reconciliation Credit Calculation', () => {
 
       await trpcMutation<any>(
         'billing.deposit',
-        { amountUsd: 50 },
+        { amountUsd: 5 },
         accessToken
       );
 
@@ -364,7 +342,7 @@ describe('API: Reconciliation Credit Calculation', () => {
       expect(credits.length).toBe(1);
       const firstCreditAmount = Number(credits[0].originalAmountUsdCents);
 
-      // ---- Step 3: Reconcile AGAIN (simulates duplicate queue dispatch) ----
+      // Reconcile AGAIN (simulates duplicate queue dispatch)
       await reconcilePendingPayments(customerId);
 
       // Should still have exactly one reconciliation credit (idempotent)

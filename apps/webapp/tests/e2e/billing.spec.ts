@@ -4,7 +4,7 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { resetCustomer, addCryptoPayment, enableSealOnlyMode } from '../helpers/db';
+import { resetCustomer, addCryptoPayment, subscribePlatformService } from '../helpers/db';
 import { waitAfterMutation } from '../helpers/wait-utils';
 
 const MOCK_WALLET_ADDRESS = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
@@ -13,8 +13,6 @@ const API_BASE = 'http://localhost:22700';
 // Test suite for "no escrow payment method" scenario
 test.describe('Billing Page - No Payment Methods', () => {
   test('shows add payment buttons when no methods configured', async ({ page }) => {
-    await enableSealOnlyMode(page.request);
-
     await resetCustomer(page.request, {
       balanceUsdCents: 0,
       spendingLimitUsdCents: 0,
@@ -43,8 +41,6 @@ test.describe('Billing Page - No Payment Methods', () => {
   });
 
   test('adding crypto payment reveals escrow card with zero balance', async ({ page }) => {
-    await enableSealOnlyMode(page.request);
-
     await resetCustomer(page.request, {
       balanceUsdCents: 0,
       spendingLimitUsdCents: 0,
@@ -86,8 +82,6 @@ test.describe('Billing Page - No Payment Methods', () => {
 
 test.describe('Billing Page', () => {
   test.beforeEach(async ({ page }) => {
-    await enableSealOnlyMode(page.request);
-
     await resetCustomer(page.request, {
       balanceUsdCents: 0,
       spendingLimitUsdCents: 0,
@@ -162,7 +156,7 @@ test.describe('Billing Page', () => {
   });
 
   test('next scheduled payment is expandable', async ({ page }) => {
-    // Deposit to create account
+    // Deposit and subscribe to platform — NSP is only shown after platform subscription
     await page.request.post(`${API_BASE}/test/wallet/deposit`, {
       data: {
         walletAddress: MOCK_WALLET_ADDRESS,
@@ -171,22 +165,25 @@ test.describe('Billing Page', () => {
       },
     });
 
-    await page.click('text=Billing');
+    // Subscribe to platform (navigates to billing, subscribes, stays on billing)
+    await subscribePlatformService(page);
+
     await page.waitForURL('/billing', { timeout: 5000 });
 
-    // Next Scheduled Payment should be visible (no longer gated by escrow)
-    await expect(page.locator('text=Next Scheduled Payment')).toBeVisible();
+    // Next Scheduled Payment is visible after platform subscription
+    const nspCard = page.locator('text=Next Scheduled Payment');
+    await expect(nspCard).toBeVisible({ timeout: 10000 });
 
-    // Should NOT show details initially
-    await expect(page.locator('text=No upcoming charges')).not.toBeVisible();
+    // "Total:" is only visible when the NSP section is expanded
+    await expect(page.locator('text=Total:')).not.toBeVisible();
 
     // Click to expand
-    await page.locator('text=Next Scheduled Payment').click();
-    await expect(page.locator('text=No upcoming charges')).toBeVisible();
+    await nspCard.click();
+    await expect(page.locator('text=Total:')).toBeVisible({ timeout: 3000 });
 
     // Click again to collapse
-    await page.locator('text=Next Scheduled Payment').click();
-    await expect(page.locator('text=No upcoming charges')).not.toBeVisible();
+    await nspCard.click();
+    await expect(page.locator('text=Total:')).not.toBeVisible();
 
     console.log('✅ Next scheduled payment expandable works correctly');
   });
@@ -244,8 +241,8 @@ test.describe('Billing Page', () => {
     console.log('✅ Unlimited spending limit displayed correctly');
   });
 
-  test('shows next scheduled payment after subscribing to service', async ({ page }) => {
-    // Deposit $50 to cover Pro tier subscription ($29)
+  test('shows next scheduled payment after subscribing to platform', async ({ page }) => {
+    // Deposit $50 to cover platform starter subscription ($1)
     await page.request.post(`${API_BASE}/test/wallet/deposit`, {
       data: {
         walletAddress: MOCK_WALLET_ADDRESS,
@@ -254,41 +251,19 @@ test.describe('Billing Page', () => {
       },
     });
 
-    // Add crypto payment method (required for escrow payment to work)
-    await page.click('text=Billing');
-    await page.waitForURL('/billing', { timeout: 5000 });
-    await addCryptoPayment(page);
-
-    // Subscribe to Seal Pro tier
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
-
-    await page.locator('label:has-text("Agree to")').click();
-    const subscribeButton = page.locator('button:has-text("Subscribe to Service")');
-    await subscribeButton.click();
-    await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
+    // Subscribe to platform (auto-provisions seal/grpc/graphql)
+    await subscribePlatformService(page);
 
     // Navigate to billing page and reload to ensure fresh draft invoice data
-    await page.click('text=Billing');
     await page.waitForURL('/billing', { timeout: 5000 });
     await page.reload();
-    await page.waitForLoadState('networkidle');
+    // Don't use networkidle — billing page may have background polling after platform subscribe
+    // (auto-provisioned services trigger vault sync requests). Wait for target element directly.
 
-    // Expand Next Scheduled Payment section (no longer gated by escrow)
+    // Expand Next Scheduled Payment section
     await page.locator('text=Next Scheduled Payment').click();
-    await expect(page.locator('text=No upcoming charges')).not.toBeVisible();
-    await expect(page.locator('text=Seal Pro tier')).toBeVisible();
+    await expect(page.locator('text=Total:')).toBeVisible({ timeout: 5000 });
 
-    const creditLocator = page.locator('text=/Seal partial month credit/i');
-    const creditVisible = await creditLocator.isVisible().catch(() => false);
-    if (creditVisible) {
-      console.log('  → Partial month credit is visible');
-    } else {
-      console.log('  → No partial month credit (expected if subscribed near month end)');
-    }
-
-    await expect(page.locator('text=Total:')).toBeVisible();
-
-    console.log('✅ Next scheduled payment shows correct amount after subscription');
+    console.log('✅ Next scheduled payment shows correct amount after platform subscription');
   });
 });

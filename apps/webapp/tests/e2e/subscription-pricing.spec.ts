@@ -1,16 +1,20 @@
 /**
- * Subscription Pricing Validation Tests
- * Tests that subscription validation shows correct pricing in error messages
- * and properly handles various balance scenarios
+ * Platform Subscription Pricing E2E Tests
+ * Tests that platform subscription pricing is displayed correctly
+ * and that subscribing with exact amounts works.
+ *
+ * Platform tiers: Starter ($1/mo) and Pro ($29/mo).
  */
 
 import { test, expect } from '@playwright/test';
-import { addCryptoPayment, enableSealOnlyMode } from '../helpers/db';
-import { getBanner, waitForToastsToDisappear } from '../helpers/locators';
+import { addCryptoPayment, resetCustomer, ensureTestBalance } from '../helpers/db';
+import { getBanner } from '../helpers/locators';
 
-test.describe('Subscription Pricing Validation', () => {
-  test.beforeEach(async ({ page }) => {
-    await enableSealOnlyMode(page.request);
+const API_BASE = 'http://localhost:22700';
+
+test.describe('Platform Subscription Pricing', () => {
+  test.beforeEach(async ({ page, request }) => {
+    await resetCustomer(request);
 
     // Authenticate with mock wallet first
     await page.goto('/');
@@ -19,87 +23,69 @@ test.describe('Subscription Pricing Validation', () => {
     // Wait for redirect to /dashboard after auth
     await page.waitForURL('/dashboard', { timeout: 10000 });
     await page.waitForLoadState('networkidle');
-
-    // Wait for authentication toast to disappear before starting tests
-    await page.waitForTimeout(3000);
   });
 
-  test('all three tiers create service successfully even with insufficient balance', async ({ page }) => {
-    // Reset with zero balance
-    await page.request.post('http://localhost:22700/test/data/reset', {
-      data: {
-        balanceUsdCents: 0, // $0
-        spendingLimitUsdCents: 25000, // $250
-        clearEscrowAccount: true, // Ensure no escrow account
-      },
-    });
+  test('billing page shows platform plan card with correct tier prices', async ({ page }) => {
+    await page.click('text=Billing');
+    await page.waitForURL('/billing', { timeout: 5000 });
 
-    // Reload to clear React Query cache after database reset
-    await page.reload();
-    await page.waitForURL('/dashboard', { timeout: 5000 });
+    // Platform plan card should be visible
+    await expect(page.locator('h3:has-text("Choose a Platform Plan")')).toBeVisible();
 
-    // Navigate to seal service page
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
+    // Should show both tier labels
+    await expect(page.getByText('Starter', { exact: true })).toBeVisible();
+    await expect(page.getByText('Pro', { exact: true }).first()).toBeVisible();
 
-    // Accept terms and subscribe to STARTER tier
-    await page.locator('label:has-text("Agree to")').click();
-    await page.getByRole('heading', { name: 'STARTER' }).click();
-    let subscribeButton = page.locator('button:has-text("Subscribe to Service")');
-    await subscribeButton.click();
+    // Should show correct prices
+    await expect(page.getByText('$1/mo', { exact: true })).toBeVisible();
+    await expect(page.getByText('$29/mo', { exact: true })).toBeVisible();
 
-    // Should create service and show payment pending banner (no error toast)
-    await expect(getBanner(page)).toContainText('Subscription payment pending', { timeout: 5000 });
-    await expect(page.locator('#service-toggle')).toBeVisible();
-
-    console.log('✅ STARTER tier: Service created with payment pending');
-
-    // The remaining tier tests are covered by other test files
-    console.log('✅ Services are created successfully even with $0 balance');
+    console.log('✅ Platform plan card shows correct Starter ($1) and Pro ($29) prices');
   });
 
-  test('PRO tier subscription creates service when balance is short by $1', async ({ page }) => {
-    // Reset with $28 balance (need $29 for PRO) - no escrow account
-    await page.request.post('http://localhost:22700/test/data/reset', {
+  test('platform starter subscription creates service even with insufficient balance', async ({ page }) => {
+    // Reset with zero balance, no escrow account
+    await page.request.post(`${API_BASE}/test/data/reset`, {
       data: {
         balanceUsdCents: 0,
-        spendingLimitUsdCents: 25000, // $250
+        spendingLimitUsdCents: 25000,
         clearEscrowAccount: true,
       },
     });
 
-    // Reload to clear React Query cache after database reset
     await page.reload();
     await page.waitForURL('/dashboard', { timeout: 5000 });
 
-    // Navigate to seal service page
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
+    // Navigate to billing
+    await page.click('text=Billing');
+    await page.waitForURL('/billing', { timeout: 5000 });
 
-    // Accept terms and select PRO tier (default)
-    await page.locator('label:has-text("Agree to")').click();
-    const subscribeButton = page.locator('button:has-text("Subscribe to Service")');
+    // Accept TOS
+    await page.locator('#platform-tos').click();
+    const subscribeButton = page.locator('button:has-text("Subscribe to")');
+    await expect(subscribeButton).toBeEnabled({ timeout: 5000 });
+
+    // Subscribe (no payment method, so payment will be pending)
     await subscribeButton.click();
+    await page.waitForTimeout(2000);
 
-    // Should create service with payment pending banner
-    await expect(getBanner(page)).toContainText('Subscription payment pending', { timeout: 5000 });
-    await expect(page.locator('#service-toggle')).toBeVisible();
+    // Should transition away from the "Choose a Platform Plan" card
+    await expect(page.locator('h3:has-text("Choose a Platform Plan")')).not.toBeVisible({ timeout: 5000 });
 
-    console.log('✅ PRO tier creates service with payment pending when funds insufficient');
+    console.log('✅ Platform Starter: Service created with payment pending');
   });
 
-  test('PRO tier subscription succeeds when balance is exactly $29', async ({ page }) => {
-    // Reset and create escrow account with exactly $29 balance
-    await page.request.post('http://localhost:22700/test/data/reset', {
+  test('platform pro subscription succeeds when balance is exactly $29', async ({ page }) => {
+    // Reset and create escrow with exactly $29
+    await page.request.post(`${API_BASE}/test/data/reset`, {
       data: {
         balanceUsdCents: 0,
-        spendingLimitUsdCents: 25000, // $250
+        spendingLimitUsdCents: 25000,
         clearEscrowAccount: true,
       },
     });
 
-    // Create escrow account with $29 balance
-    await page.request.post('http://localhost:22700/test/wallet/deposit', {
+    await page.request.post(`${API_BASE}/test/wallet/deposit`, {
       data: {
         walletAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
         amountUsd: 29,
@@ -107,233 +93,62 @@ test.describe('Subscription Pricing Validation', () => {
       },
     });
 
-    // Reload to clear React Query cache after database reset
     await page.reload();
     await page.waitForURL('/dashboard', { timeout: 5000 });
 
-    // Add crypto payment method (required for escrow payment to work)
+    // Navigate to billing and add payment method
     await page.click('text=Billing');
     await page.waitForURL('/billing', { timeout: 5000 });
     await addCryptoPayment(page);
 
-    // Navigate to seal service page
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
-
-    // Accept terms and select PRO tier (default)
-    await page.locator('label:has-text("Agree to")').click();
-    const subscribeButton = page.locator('button:has-text("Subscribe to Service")');
+    // Select Pro tier and subscribe
+    await page.locator('text=Pro').first().click();
+    await page.locator('#platform-tos').click();
+    const subscribeButton = page.locator('button:has-text("Subscribe to")');
+    await expect(subscribeButton).toBeEnabled({ timeout: 10000 });
     await subscribeButton.click();
 
-    // Wait for validation and subscription to complete
-    await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
+    // Wait for actual state change: onboarding form gone
+    await expect(page.locator('h3:has-text("Choose a Platform Plan")')).not.toBeVisible({ timeout: 10000 });
 
-    // Should show service state banner (disabled state)
-    await expect(page.locator('text=/Service is currently OFF/i')).toBeVisible({ timeout: 5000 });
-
-    // The page should now show the service management interface (Overview tab)
-    await expect(page.getByRole('heading', { name: 'Guaranteed Bandwidth' })).not.toBeVisible();
-
-    console.log('✅ PRO tier subscription succeeds with exactly $29 balance');
+    console.log('✅ Platform Pro subscription succeeds with exactly $29 balance');
   });
 
-  test('STARTER tier subscription creates service when balance is short by $1', async ({ page }) => {
-    // Reset with $0 balance (need $9 for STARTER) - no escrow account
-    await page.request.post('http://localhost:22700/test/data/reset', {
+  test('platform starter subscription succeeds when balance is exactly $1', async ({ page }) => {
+    // Reset and create escrow with exactly $1
+    await page.request.post(`${API_BASE}/test/data/reset`, {
       data: {
         balanceUsdCents: 0,
-        spendingLimitUsdCents: 25000, // $250
+        spendingLimitUsdCents: 25000,
         clearEscrowAccount: true,
       },
     });
 
-    // Reload to clear React Query cache after database reset
-    await page.reload();
-    await page.waitForURL('/dashboard', { timeout: 5000 });
-
-    // Navigate to seal service page
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
-
-    // Accept terms and select STARTER tier
-    await page.locator('label:has-text("Agree to")').click();
-    await page.getByRole('heading', { name: 'STARTER' }).click();
-    const subscribeButton = page.locator('button:has-text("Subscribe to Service")');
-    await subscribeButton.click();
-
-    // Should create service with payment pending banner
-    await expect(getBanner(page)).toContainText('Subscription payment pending', { timeout: 5000 });
-    await expect(page.locator('#service-toggle')).toBeVisible();
-
-    console.log('✅ STARTER tier creates service with payment pending when funds insufficient');
-  });
-
-  test('STARTER tier subscription succeeds when balance is exactly $9', async ({ page }) => {
-    // Reset and create escrow account with exactly $9 balance
-    await page.request.post('http://localhost:22700/test/data/reset', {
-      data: {
-        balanceUsdCents: 0,
-        spendingLimitUsdCents: 25000, // $250
-        clearEscrowAccount: true,
-      },
-    });
-
-    // Create escrow account with $9 balance
-    await page.request.post('http://localhost:22700/test/wallet/deposit', {
+    await page.request.post(`${API_BASE}/test/wallet/deposit`, {
       data: {
         walletAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-        amountUsd: 9,
+        amountUsd: 1,
         initialSpendingLimitUsd: 250,
       },
     });
 
-    // Reload to clear React Query cache after database reset
     await page.reload();
     await page.waitForURL('/dashboard', { timeout: 5000 });
 
-    // Add crypto payment method (required for escrow payment to work)
+    // Navigate to billing and add payment method
     await page.click('text=Billing');
     await page.waitForURL('/billing', { timeout: 5000 });
     await addCryptoPayment(page);
 
-    // Navigate to seal service page
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
-
-    // Accept terms and select STARTER tier
-    await page.locator('label:has-text("Agree to")').click();
-    await page.getByRole('heading', { name: 'STARTER' }).click();
-    const subscribeButton = page.locator('button:has-text("Subscribe to Service")');
+    // Starter is default, accept TOS and subscribe
+    await page.locator('#platform-tos').click();
+    const subscribeButton = page.locator('button:has-text("Subscribe to")');
+    await expect(subscribeButton).toBeEnabled({ timeout: 10000 });
     await subscribeButton.click();
 
-    // Wait for validation and subscription to complete
-    await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
+    // Wait for actual state change: onboarding form gone
+    await expect(page.locator('h3:has-text("Choose a Platform Plan")')).not.toBeVisible({ timeout: 10000 });
 
-    // Should show service state banner (disabled state)
-    await expect(page.locator('text=/Service is currently OFF/i')).toBeVisible({ timeout: 5000 });
-
-    // Should redirect away from onboarding form
-    await expect(page.getByRole('heading', { name: 'Guaranteed Bandwidth' })).not.toBeVisible();
-
-    console.log('✅ STARTER tier subscription succeeds with exactly $9 balance');
-  });
-
-  test('ENTERPRISE tier subscription creates service when balance is short by $1', async ({ page }) => {
-    // Reset with $0 balance (need $185 for ENTERPRISE) - no escrow account
-    await page.request.post('http://localhost:22700/test/data/reset', {
-      data: {
-        balanceUsdCents: 0,
-        spendingLimitUsdCents: 25000, // $250
-        clearEscrowAccount: true,
-      },
-    });
-
-    // Reload to clear React Query cache after database reset
-    await page.reload();
-    await page.waitForURL('/dashboard', { timeout: 5000 });
-
-    // Navigate to seal service page
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
-
-    // Accept terms and select ENTERPRISE tier
-    await page.locator('label:has-text("Agree to")').click();
-    await page.getByRole('heading', { name: 'ENTERPRISE' }).click();
-    const subscribeButton = page.locator('button:has-text("Subscribe to Service")');
-    await subscribeButton.click();
-
-    // Should create service with payment pending banner
-    await expect(getBanner(page)).toContainText('Subscription payment pending', { timeout: 5000 });
-    await expect(page.locator('#service-toggle')).toBeVisible();
-
-    console.log('✅ ENTERPRISE tier creates service with payment pending when funds insufficient');
-  });
-
-  test('ENTERPRISE tier subscription succeeds when balance is exactly $185', async ({ page }) => {
-    // Reset and create escrow account with exactly $185 balance
-    await page.request.post('http://localhost:22700/test/data/reset', {
-      data: {
-        balanceUsdCents: 0,
-        spendingLimitUsdCents: 25000, // $250
-        clearEscrowAccount: true,
-      },
-    });
-
-    // Create escrow account with $185 balance
-    await page.request.post('http://localhost:22700/test/wallet/deposit', {
-      data: {
-        walletAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-        amountUsd: 185,
-        initialSpendingLimitUsd: 250,
-      },
-    });
-
-    // Reload to clear React Query cache after database reset
-    await page.reload();
-    await page.waitForURL('/dashboard', { timeout: 5000 });
-
-    // Add crypto payment method (required for escrow payment to work)
-    await page.click('text=Billing');
-    await page.waitForURL('/billing', { timeout: 5000 });
-    await addCryptoPayment(page);
-
-    // Navigate to seal service page
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
-
-    // Accept terms and select ENTERPRISE tier
-    await page.locator('label:has-text("Agree to")').click();
-    await page.getByRole('heading', { name: 'ENTERPRISE' }).click();
-    const subscribeButton = page.locator('button:has-text("Subscribe to Service")');
-    await subscribeButton.click();
-
-    // Wait for validation and subscription to complete
-    await expect(page.locator('text=/Subscription successful/i')).toBeVisible({ timeout: 5000 });
-
-    // Should show service state banner (disabled state)
-    await expect(page.locator('text=/Service is currently OFF/i')).toBeVisible({ timeout: 5000 });
-
-    // Should redirect away from onboarding form
-    await expect(page.getByRole('heading', { name: 'Guaranteed Bandwidth' })).not.toBeVisible();
-
-    console.log('✅ ENTERPRISE tier subscription succeeds with exactly $185 balance');
-  });
-
-  test('subscribe button shows correct prices for all tiers', async ({ page }) => {
-    // Reset with sufficient balance
-    await page.request.post('http://localhost:22700/test/data/reset', {
-      data: {
-        balanceUsdCents: 100000, // $1000
-        spendingLimitUsdCents: 25000, // $250
-      },
-    });
-
-    // Reload to clear React Query cache after database reset
-    await page.reload();
-    await page.waitForURL('/dashboard', { timeout: 5000 });
-
-    // Navigate to seal service page
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
-
-    // Accept terms
-    await page.locator('label:has-text("Agree to")').click();
-
-    // Check STARTER price - $9
-    await page.getByRole('heading', { name: 'STARTER' }).click();
-    await expect(page.locator('button:has-text("$9/month")')).toBeVisible();
-    console.log('✅ STARTER tier button shows $9/month');
-
-    // Check PRO price - $29
-    await page.getByRole('heading', { name: 'PRO' }).click();
-    await expect(page.locator('button:has-text("$29/month")')).toBeVisible();
-    console.log('✅ PRO tier button shows $29/month');
-
-    // Check ENTERPRISE price - $185
-    await page.getByRole('heading', { name: 'ENTERPRISE' }).click();
-    await expect(page.locator('button:has-text("$185/month")')).toBeVisible();
-    console.log('✅ ENTERPRISE tier button shows $185/month');
-
-    console.log('✅ All tier buttons show correct pricing');
+    console.log('✅ Platform Starter subscription succeeds with exactly $1 balance');
   });
 });

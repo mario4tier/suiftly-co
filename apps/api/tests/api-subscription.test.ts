@@ -4,15 +4,14 @@
  * Tests service subscription lifecycle through HTTP calls only.
  * NO direct internal function calls (except DB reads for assertions).
  *
- * This test simulates realistic client behavior by:
- * 1. Making HTTP calls to tRPC endpoints (services.subscribe, services.list, etc.)
- * 2. Controlling time via /test/clock/* endpoints
- * 3. Reading DB directly for assertions (read-only)
+ * Platform is the only subscription ($1/$29 Starter/Pro).
+ * Seal/gRPC/GraphQL are auto-provisioned (free features) when platform is subscribed.
+ * Their tier is null — derived from the platform tier at runtime.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { db } from '@suiftly/database';
-import { serviceInstances, billingRecords } from '@suiftly/database/schema';
+import { serviceInstances } from '@suiftly/database/schema';
 import { eq, and } from 'drizzle-orm';
 import {
   setClockTime,
@@ -20,7 +19,6 @@ import {
   trpcMutation,
   trpcQuery,
   resetTestData,
-  subscribeAndEnable,
 } from './helpers/http.js';
 import { TEST_WALLET } from './helpers/auth.js';
 import { expectNoNotifications } from './helpers/notifications.js';
@@ -31,35 +29,42 @@ describe('API: Subscription Flow', () => {
   let customerId: number;
 
   beforeEach(async () => {
-    ({ accessToken, customerId } = await setupBillingTest({ mode: 'platform-only' }));
+    // Platform subscribed at starter tier; seal/grpc/graphql auto-provisioned (disabled)
+    ({ accessToken, customerId } = await setupBillingTest());
   });
 
   afterEach(async () => {
-    // Reset clock
     await resetClock();
-    // Clean up via HTTP
     await resetTestData(TEST_WALLET);
   });
 
-  describe('Subscribe to Service', () => {
-    it('should subscribe to a service with payment', async () => {
+  describe('Auto-Provisioned Services', () => {
+    it('should auto-provision seal, grpc, and graphql after platform subscribe', async () => {
+      const services = await db.query.serviceInstances.findMany({
+        where: eq(serviceInstances.customerId, customerId),
+      });
+      // seal, grpc, graphql are all auto-provisioned (no platform service instance)
+      expect(services.length).toBe(3);
+      for (const s of services) {
+        expect(s.state).toBe('disabled'); // starts disabled, user enables manually
+      }
+    });
+
+    it('should return auto-provisioned service on subscribe (no payment required)', async () => {
       await setClockTime('2025-01-05T00:00:00Z');
 
+      // Seal is already auto-provisioned; subscribe returns existing service
       const result = await trpcMutation<any>(
         'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
+        { serviceType: 'seal' },
         accessToken
       );
 
-      // Should return service data
       expect(result.result?.data).toBeDefined();
       expect(result.result?.data.serviceType).toBe('seal');
-      expect(result.result?.data.tier).toBe('starter');
+      expect(result.result?.data.paymentPending).toBe(false);
+      expect(result.result?.data.apiKey).toBeNull(); // already created at auto-provisioning
 
-      // Should include API key for new subscription
-      expect(result.result?.data.apiKey).toBeDefined();
-
-      // Verify in database
       const service = await db.query.serviceInstances.findFirst({
         where: and(
           eq(serviceInstances.customerId, customerId),
@@ -67,33 +72,14 @@ describe('API: Subscription Flow', () => {
         ),
       });
       expect(service).toBeDefined();
-      expect(service?.tier).toBe('starter');
 
       await expectNoNotifications(customerId);
     });
 
-    it('should start in disabled state by default (requires manual enable)', async () => {
-      /**
-       * Business rule: New subscriptions start DISABLED.
-       * User must explicitly enable the service via toggleService.
-       *
-       * This ensures:
-       * - User confirms they want to start using (and being billed for) the service
-       * - Prevents accidental traffic through a service they just subscribed to
-       * - Gives user time to configure API keys, IP allowlists, etc. before enabling
-       */
+    it('should start in disabled state (requires manual enable)', async () => {
       await setClockTime('2025-01-05T00:00:00Z');
 
-      // Subscribe to service (payment succeeds)
-      const result = await trpcMutation<any>(
-        'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
-        accessToken
-      );
-      expect(result.result?.data).toBeDefined();
-      expect(result.result?.data.paymentPending).toBe(false); // Payment succeeded
-
-      // Verify service starts in DISABLED state (not auto-enabled)
+      // Auto-provisioned seal is disabled by default
       const service = await db.query.serviceInstances.findFirst({
         where: and(
           eq(serviceInstances.customerId, customerId),
@@ -101,10 +87,10 @@ describe('API: Subscription Flow', () => {
         ),
       });
       expect(service).toBeDefined();
-      expect(service?.state).toBe('disabled'); // NOT 'enabled'
-      expect(service?.isUserEnabled).toBe(false); // User has not enabled yet
+      expect(service?.state).toBe('disabled');
+      expect(service?.isUserEnabled).toBe(false);
 
-      // Now manually enable the service
+      // Enable via toggleService
       const enableResult = await trpcMutation<any>(
         'services.toggleService',
         { serviceType: 'seal', enabled: true },
@@ -113,7 +99,7 @@ describe('API: Subscription Flow', () => {
       expect(enableResult.result?.data?.isUserEnabled).toBe(true);
       expect(enableResult.result?.data?.state).toBe('enabled');
 
-      // Verify state changed in database
+      // Verify state in database
       const enabledService = await db.query.serviceInstances.findFirst({
         where: and(
           eq(serviceInstances.customerId, customerId),
@@ -126,78 +112,33 @@ describe('API: Subscription Flow', () => {
       await expectNoNotifications(customerId);
     });
 
-    it('should return existing instance on duplicate subscription (idempotent)', async () => {
+    it('should be idempotent on duplicate subscribe calls', async () => {
       await setClockTime('2025-01-05T00:00:00Z');
 
-      // First subscription should succeed
       const first = await trpcMutation<any>(
         'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
+        { serviceType: 'seal' },
         accessToken
       );
-      expect(first.result?.data).toBeDefined();
-      expect(first.result?.data.tier).toBe('starter');
+      expect(first.result?.data?.paymentPending).toBe(false);
 
-      // Second subscription should return existing instance (idempotent behavior)
-      // Note: Even though 'pro' tier is requested, the existing 'starter' is returned
       const second = await trpcMutation<any>(
         'services.subscribe',
-        { serviceType: 'seal', tier: 'pro' },
+        { serviceType: 'seal' },
         accessToken
       );
-      expect(second.result?.data).toBeDefined();
-      expect(second.result?.data.tier).toBe('starter'); // Original tier preserved
-      expect(second.result?.data.apiKey).toBeNull(); // API key not returned again
-
-      await expectNoNotifications(customerId);
-    });
-
-    it('should subscribe to different services independently', async () => {
-      await setClockTime('2025-01-05T00:00:00Z');
-
-      // Subscribe to seal
-      const sealResult = await trpcMutation<any>(
-        'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
-        accessToken
-      );
-      expect(sealResult.result?.data).toBeDefined();
-
-      // Subscribe to grpc
-      const grpcResult = await trpcMutation<any>(
-        'services.subscribe',
-        { serviceType: 'grpc', tier: 'pro' },
-        accessToken
-      );
-      expect(grpcResult.result?.data).toBeDefined();
-
-      // Verify both exist (plus platform subscription from beforeEach)
-      const services = await db.query.serviceInstances.findMany({
-        where: eq(serviceInstances.customerId, customerId),
-      });
-      expect(services.length).toBe(3); // platform + seal + grpc
-
-      const sealService = services.find(s => s.serviceType === 'seal');
-      const grpcService = services.find(s => s.serviceType === 'grpc');
-      expect(sealService?.tier).toBe('starter');
-      expect(grpcService?.tier).toBe('pro');
+      expect(second.result?.data?.paymentPending).toBe(false);
+      // API key not re-returned (already exists from auto-provisioning)
+      expect(second.result?.data?.apiKey).toBeNull();
 
       await expectNoNotifications(customerId);
     });
   });
 
   describe('List Services', () => {
-    it('should list all services for user', async () => {
+    it('should list all auto-provisioned services', async () => {
       await setClockTime('2025-01-05T00:00:00Z');
 
-      // Subscribe to a service first
-      await trpcMutation<any>(
-        'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
-        accessToken
-      );
-
-      // List services
       const listResult = await trpcQuery<any>(
         'services.list',
         {},
@@ -206,43 +147,20 @@ describe('API: Subscription Flow', () => {
 
       expect(listResult.result?.data).toBeDefined();
       expect(Array.isArray(listResult.result?.data)).toBe(true);
-      // Platform subscription from beforeEach + seal subscription = 2
+      // platform + seal + grpc + graphql = 4 total
       const nonPlatform = listResult.result?.data.filter((s: any) => s.serviceType !== 'platform');
-      expect(nonPlatform.length).toBe(1);
-      expect(nonPlatform[0].serviceType).toBe('seal');
-
-      await expectNoNotifications(customerId);
-    });
-
-    it('should return only platform when no per-service subscriptions', async () => {
-      const listResult = await trpcQuery<any>(
-        'services.list',
-        {},
-        accessToken
-      );
-
-      expect(listResult.result?.data).toBeDefined();
-      expect(Array.isArray(listResult.result?.data)).toBe(true);
-      // Only the platform subscription from beforeEach
-      const nonPlatform = listResult.result?.data.filter((s: any) => s.serviceType !== 'platform');
-      expect(nonPlatform.length).toBe(0);
+      expect(nonPlatform.length).toBe(3);
+      const serviceTypes = nonPlatform.map((s: any) => s.serviceType).sort();
+      expect(serviceTypes).toEqual(['graphql', 'grpc', 'seal']);
 
       await expectNoNotifications(customerId);
     });
   });
 
   describe('Get Service by Type', () => {
-    it('should get service by type', async () => {
+    it('should get auto-provisioned seal service', async () => {
       await setClockTime('2025-01-05T00:00:00Z');
 
-      // Subscribe first
-      await trpcMutation<any>(
-        'services.subscribe',
-        { serviceType: 'seal', tier: 'pro' },
-        accessToken
-      );
-
-      // Get by type
       const result = await trpcQuery<any>(
         'services.getByType',
         { serviceType: 'seal' },
@@ -251,19 +169,7 @@ describe('API: Subscription Flow', () => {
 
       expect(result.result?.data).toBeDefined();
       expect(result.result?.data.serviceType).toBe('seal');
-      expect(result.result?.data.tier).toBe('pro');
-
-      await expectNoNotifications(customerId);
-    });
-
-    it('should return null for non-existent service', async () => {
-      const result = await trpcQuery<any>(
-        'services.getByType',
-        { serviceType: 'seal' },
-        accessToken
-      );
-
-      expect(result.result?.data).toBeNull();
+      // tier is no longer on service instances — derived from platform at runtime
 
       await expectNoNotifications(customerId);
     });
@@ -273,10 +179,16 @@ describe('API: Subscription Flow', () => {
     it('should enable and disable service', async () => {
       await setClockTime('2025-01-05T00:00:00Z');
 
-      // Subscribe and enable (this handles payment and toggle to enabled)
-      await subscribeAndEnable('seal', 'starter', accessToken);
+      // Enable seal (auto-provisioned, starts disabled)
+      const enableResult = await trpcMutation<any>(
+        'services.toggleService',
+        { serviceType: 'seal', enabled: true },
+        accessToken
+      );
+      expect(enableResult.result?.data?.isUserEnabled).toBe(true);
+      expect(enableResult.result?.data?.state).toBe('enabled');
 
-      // Verify enabled state
+      // Verify state in DB
       let service = await db.query.serviceInstances.findFirst({
         where: and(
           eq(serviceInstances.customerId, customerId),
@@ -297,31 +209,31 @@ describe('API: Subscription Flow', () => {
       expect(disableResult.result?.data.state).toBe('disabled');
 
       // Re-enable service
-      const enableResult = await trpcMutation<any>(
+      const reEnableResult = await trpcMutation<any>(
         'services.toggleService',
         { serviceType: 'seal', enabled: true },
         accessToken
       );
-      expect(enableResult.result?.data).toBeDefined();
-      expect(enableResult.result?.data.isUserEnabled).toBe(true);
-      expect(enableResult.result?.data.state).toBe('enabled');
+      expect(reEnableResult.result?.data).toBeDefined();
+      expect(reEnableResult.result?.data.isUserEnabled).toBe(true);
+      expect(reEnableResult.result?.data.state).toBe('enabled');
 
       await expectNoNotifications(customerId);
     });
   });
 
   describe('Update Config', () => {
-    it('should update burst setting for pro tier', async () => {
+    it('should update burst setting when platform is pro tier', async () => {
       await setClockTime('2025-01-05T00:00:00Z');
 
-      // Subscribe to pro tier (which supports burst)
+      // Upgrade platform to pro (burst is pro-tier feature based on platform tier)
       await trpcMutation<any>(
-        'services.subscribe',
-        { serviceType: 'seal', tier: 'pro' },
+        'services.upgradeTier',
+        { serviceType: 'platform', newTier: 'pro' },
         accessToken
       );
 
-      // Update burst setting
+      // Update burst setting for seal
       const updateResult = await trpcMutation<any>(
         'services.updateConfig',
         { serviceType: 'seal', burstEnabled: true },
@@ -334,17 +246,10 @@ describe('API: Subscription Flow', () => {
       await expectNoNotifications(customerId);
     });
 
-    it('should reject burst for starter tier', async () => {
+    it('should reject burst when platform is starter tier', async () => {
       await setClockTime('2025-01-05T00:00:00Z');
 
-      // Subscribe to starter tier
-      await trpcMutation<any>(
-        'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
-        accessToken
-      );
-
-      // Try to enable burst (should fail)
+      // Platform is at starter (from setupBillingTest) — burst not allowed
       const updateResult = await trpcMutation<any>(
         'services.updateConfig',
         { serviceType: 'seal', burstEnabled: true },
@@ -359,26 +264,8 @@ describe('API: Subscription Flow', () => {
   });
 
   describe('Can Provision Check', () => {
-    it('should allow provisioning when no subscription exists', async () => {
-      const result = await trpcQuery<any>(
-        'services.canProvision',
-        { serviceType: 'seal' },
-        accessToken
-      );
-
-      expect(result.result?.data).toBeDefined();
-      expect(result.result?.data.allowed).toBe(true);
-
-      await expectNoNotifications(customerId);
-    });
-
-    it('should reject provisioning when already subscribed', async () => {
-      await setClockTime('2025-01-05T00:00:00Z');
-
-      // Subscribe and enable
-      await subscribeAndEnable('seal', 'starter', accessToken);
-
-      // Check canProvision
+    it('should reject provisioning for already auto-provisioned services', async () => {
+      // Seal/grpc/graphql are auto-provisioned after platform subscribe
       const result = await trpcQuery<any>(
         'services.canProvision',
         { serviceType: 'seal' },

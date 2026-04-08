@@ -365,13 +365,17 @@ describe('Billing Processor (Phase 1B)', () => {
 
   describe('Monthly Billing', () => {
     it('should process DRAFT → PENDING → PAID on 1st of month', async () => {
+      // Set platform tier so recalculateDraftInvoice computes a non-$0 amount
+      await db.update(customers)
+        .set({ platformTier: 'pro' })
+        .where(eq(customers.customerId, testCustomerId));
+
       // Create enabled service (so DRAFT validation passes)
       await db.insert(serviceInstances).values({
         customerId: testCustomerId,
         serviceType: 'seal',
-        tier: 'pro',
         isUserEnabled: true,
-        config: { tier: 'pro' },
+        config: {},
       });
 
       // Create a DRAFT invoice for Jan 2025
@@ -456,14 +460,13 @@ describe('Billing Processor (Phase 1B)', () => {
       await db.insert(serviceInstances).values({
         customerId: testCustomerId,
         serviceType: 'seal',
-        tier: 'pro',
         isUserEnabled: true,
-        config: { tier: 'pro' },
+        config: {},
       });
 
-      // Set customer as having paid before
+      // Set customer as having paid before, with platform tier for billing
       await db.update(customers)
-        .set({ paidOnce: true, currentBalanceUsdCents: 0 }) // No balance = payment will fail
+        .set({ paidOnce: true, platformTier: 'pro', currentBalanceUsdCents: 0 }) // No balance = payment will fail
         .where(eq(customers.customerId, testCustomerId));
 
       // Create DRAFT invoice
@@ -535,7 +538,6 @@ describe('Billing Processor (Phase 1B)', () => {
       await db.insert(serviceInstances).values({
         customerId: testCustomerId,
         serviceType: 'seal',
-        tier: 'pro',
         isUserEnabled: true,
       });
 
@@ -849,9 +851,8 @@ describe('Billing Processor (Phase 1B)', () => {
       await db.insert(serviceInstances).values({
         customerId: testCustomerId,
         serviceType: 'seal',
-        tier: 'starter',
         isUserEnabled: true,
-        config: { tier: 'starter' },
+        config: {},
       });
 
       // Create DRAFT invoice for Jan 2025
@@ -888,12 +889,15 @@ describe('Billing Processor (Phase 1B)', () => {
       await db.insert(serviceInstances).values({
         customerId: testCustomerId,
         serviceType: 'seal',
-        tier: 'starter',
         isUserEnabled: true,
         state: 'enabled',
-        config: { tier: 'starter' },
-        cancellationScheduledFor: '2025-01-01', // Will be cancelled on 1st
+        config: {},
       });
+
+      // Schedule platform cancellation on 1st so DRAFT becomes $0
+      await db.update(customers)
+        .set({ platformTier: 'starter', platformCancellationScheduledFor: '2025-01-01' })
+        .where(eq(customers.customerId, testCustomerId));
 
       // Create DRAFT invoice with $0 (already recalculated to $0 after cancellation)
       await db.insert(billingRecords).values({
@@ -1068,17 +1072,23 @@ describe('Billing Processor (Phase 1B)', () => {
         createdAt: clock.now(),
       });
 
-      // Create a service with scheduled tier change (pro → starter) on 1st
+      // Create a service so customer has an active subscription
       await db.insert(serviceInstances).values({
         customerId: testCustomerId,
         serviceType: 'seal',
-        tier: 'pro',
         isUserEnabled: true,
         state: 'enabled',
-        config: { tier: 'pro' },
-        scheduledTier: 'starter',
-        scheduledTierEffectiveDate: '2025-01-01',
+        config: {},
       });
+
+      // Set platform tier with scheduled tier change (pro → starter) on 1st
+      await db.update(customers)
+        .set({
+          platformTier: 'pro',
+          scheduledPlatformTier: 'starter',
+          scheduledPlatformTierEffectiveDate: '2025-01-01',
+        })
+        .where(eq(customers.customerId, testCustomerId));
 
       // Create a DRAFT so monthly billing runs
       await db.insert(billingRecords).values({
@@ -1166,11 +1176,14 @@ describe('Billing Processor (Phase 1B)', () => {
       await db.insert(serviceInstances).values({
         customerId: testCustomerId,
         serviceType: 'seal',
-        tier: 'starter',
         isUserEnabled: true,
-        config: { tier: 'starter' },
-        subPendingInvoiceId: invoice.id,
+        config: {},
       });
+
+      // Set pendingInvoiceId on customer (platform billing field)
+      await db.update(customers)
+        .set({ platformTier: 'starter', pendingInvoiceId: invoice.id })
+        .where(eq(customers.customerId, testCustomerId));
 
       // Run reconciliation
       const result = await reconcileStuckInvoices(db, clock);
@@ -1332,9 +1345,8 @@ describe('Billing Processor (Phase 1B)', () => {
       await db.insert(serviceInstances).values({
         customerId: testCustomerId,
         serviceType: 'seal',
-        tier: 'starter',
         isUserEnabled: true,
-        config: { tier: 'starter' },
+        config: {},
       });
 
       // Create a stale January DRAFT (processor was down all of January)
@@ -1389,23 +1401,15 @@ describe('Billing Processor (Phase 1B)', () => {
       //   With fix: recalculateDraftInvoice populates the DRAFT before the amount check.
 
       await db.update(customers)
-        .set({ currentBalanceUsdCents: 100000 }) // $1000 — plenty
+        .set({ currentBalanceUsdCents: 100000, platformTier: 'starter' }) // $1000 — plenty
         .where(eq(customers.customerId, testCustomerId));
-
-      await db.insert(serviceInstances).values({
-        customerId: testCustomerId,
-        serviceType: 'seal',
-        tier: 'starter',
-        isUserEnabled: true,
-        config: { tier: 'starter' },
-      });
 
       // Create a stale January DRAFT
       await db.insert(billingRecords).values({
         customerId: testCustomerId,
         billingPeriodStart: new Date('2025-01-01'),
         billingPeriodEnd: new Date('2025-01-31'),
-        amountUsdCents: 900,
+        amountUsdCents: 100,
         type: 'charge',
         status: 'draft',
         createdAt: new Date('2024-12-15T00:00:00Z'),
@@ -1437,7 +1441,7 @@ describe('Billing Processor (Phase 1B)', () => {
       });
       expect(febInvoice).toBeDefined();
       expect(febInvoice!.status).toBe('paid');
-      expect(Number(febInvoice!.amountUsdCents)).toBe(900); // Starter price
+      expect(Number(febInvoice!.amountUsdCents)).toBe(100); // Platform starter price
 
       // No February invoice should be voided
       const febVoided = allInvoices2.find(i => {
@@ -1469,9 +1473,8 @@ describe('Billing Processor (Phase 1B)', () => {
       await db.insert(serviceInstances).values({
         customerId: testCustomerId,
         serviceType: 'seal',
-        tier: 'starter',
         isUserEnabled: true,
-        config: { tier: 'starter' },
+        config: {},
       });
 
       // Create a stale January DRAFT
@@ -1577,12 +1580,16 @@ describe('Billing Processor (Phase 1B)', () => {
       // DRAFT's billing period (January), NOT from today (February).
       // Otherwise, February's own billing would be skipped as "already processed."
 
+      // Set platform tier so recalculateDraftInvoice computes a non-$0 amount
+      await db.update(customers)
+        .set({ platformTier: 'starter' })
+        .where(eq(customers.customerId, testCustomerId));
+
       await db.insert(serviceInstances).values({
         customerId: testCustomerId,
         serviceType: 'seal',
-        tier: 'starter',
         isUserEnabled: true,
-        config: { tier: 'starter' },
+        config: {},
       });
 
       // Create a stale January DRAFT (processor was down Jan 1)

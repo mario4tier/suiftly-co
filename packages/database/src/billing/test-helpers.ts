@@ -184,9 +184,9 @@ export async function cleanupCustomerData(
   await db.execute(sql`DELETE FROM api_keys WHERE customer_id = ${customerId}`);
   // service_cancellation_history references customers
   await db.execute(sql`DELETE FROM service_cancellation_history WHERE customer_id = ${customerId}`);
-  // service_instances references both customers and billing_records (subPendingInvoiceId)
   await db.execute(sql`DELETE FROM service_instances WHERE customer_id = ${customerId}`);
-  // billing_records references customers
+  // Clear customer FK to billing_records before deleting them
+  await db.execute(sql`UPDATE customers SET pending_invoice_id = NULL WHERE customer_id = ${customerId}`);
   await db.execute(sql`DELETE FROM billing_records WHERE customer_id = ${customerId}`);
   // Other tables referencing customers
   await db.execute(sql`DELETE FROM customer_credits WHERE customer_id = ${customerId}`);
@@ -208,6 +208,8 @@ export async function cleanupCustomerData(
     SELECT id FROM billing_records WHERE customer_id = ${customerId}
   )`);
   await db.execute(sql`DELETE FROM service_instances WHERE customer_id = ${customerId}`);
+  // Clear customer FK to billing_records before deleting them
+  await db.execute(sql`UPDATE customers SET pending_invoice_id = NULL WHERE customer_id = ${customerId}`);
   await db.execute(sql`DELETE FROM billing_records WHERE customer_id = ${customerId}`);
   await db.execute(sql`DELETE FROM admin_notifications WHERE customer_id = ${customerId}`);
   // customers last

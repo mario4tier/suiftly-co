@@ -5,16 +5,16 @@
  * 1. User is on Pro tier
  * 2. User schedules downgrade to Starter (DRAFT should show Starter price)
  * 3. User tries to "cancel" the downgrade by pressing Change Plan
- * 4. User accidentally upgrades to Enterprise instead
+ * 4. User upgrades back to Pro (Pro is the highest platform tier)
  * 5. DRAFT invoice gets messed up
  *
  * Expected after upgrade:
- * - service.tier = 'enterprise'
+ * - service.tier = 'pro'
  * - service.scheduledTier = null (cleared)
- * - DRAFT invoice amount = Enterprise price ($185)
+ * - DRAFT invoice amount = Pro price ($29)
  *
  * What might be going wrong:
- * - DRAFT shows Pro price instead of Enterprise
+ * - DRAFT shows Starter price instead of Pro
  * - DRAFT shows Starter price (scheduled tier not cleared)
  * - DRAFT shows wrong amount entirely
  */
@@ -23,15 +23,12 @@ import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
 import { db } from '../db';
 import {
   customers,
-  serviceInstances,
   billingRecords,
   customerCredits,
   invoicePayments,
   billingIdempotency,
   escrowTransactions,
   mockSuiTransactions,
-  sealKeys,
-  sealPackages,
   apiKeys,
   userActivityLogs,
   customerPaymentMethods,
@@ -40,11 +37,10 @@ import { eq, and, sql } from 'drizzle-orm';
 import { MockDBClock } from '@suiftly/shared/db-clock';
 import type { ISuiService, TransactionResult, ChargeParams, EscrowAccount } from '@suiftly/shared/sui-service';
 import {
-  handleTierUpgrade,
   scheduleTierDowngrade,
   cancelScheduledTierChange,
 } from './tier-changes';
-import { TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
+import { PLATFORM_TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
 import { toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData, resetTestState, suspendGMProcessing } from './test-helpers';
 
 // ============================================================================
@@ -141,23 +137,13 @@ describe('Bug: Upgrade while downgrade is scheduled', () => {
       currentPeriodChargedUsdCents: 0,
       currentPeriodStart: '2025-01-01',
       paidOnce: true,
+      platformTier: 'pro',
+      pendingInvoiceId: null,
       createdAt: clock.now(),
       updatedAt: clock.now(),
     }).returning();
 
     testCustomerId = customer.customerId;
-
-    // Start with Pro tier, already paid
-    await db.insert(serviceInstances).values({
-      customerId: testCustomerId,
-      serviceType: 'seal',
-      tier: 'pro',
-      state: 'enabled',
-      isUserEnabled: true,
-      subPendingInvoiceId: null,
-      paidOnce: true,
-      config: {},
-    });
 
     // Ensure escrow payment method exists for provider chain
     await ensureEscrowPaymentMethod(db, testCustomerId);
@@ -167,83 +153,70 @@ describe('Bug: Upgrade while downgrade is scheduled', () => {
     await cleanupCustomerData(db, testCustomerId);
   });
 
-  it('SCENARIO: Schedule downgrade then upgrade - DRAFT should show Enterprise price', async () => {
+  it('SCENARIO: Schedule downgrade then cancel it - DRAFT should show Pro price', async () => {
+    // With only Starter/Pro tiers, there is no higher tier to "upgrade to" while a downgrade
+    // is scheduled. The correct resolution is cancelScheduledTierChange. This test verifies
+    // that canceling a scheduled downgrade properly restores the DRAFT to the Pro price.
     console.log('\n========================================');
-    console.log('REPRODUCING: Upgrade while downgrade scheduled');
+    console.log('SCENARIO: Schedule downgrade then cancel - DRAFT should show Pro price');
     console.log('========================================\n');
 
     // ========== STEP 1: Initial state ==========
     console.log('STEP 1: Initial state');
-    let [service] = await db.select().from(serviceInstances).where(eq(serviceInstances.customerId, testCustomerId));
-    console.log(`  tier: ${service.tier}`);
-    console.log(`  scheduledTier: ${service.scheduledTier}`);
-    console.log(`  Expected: tier=pro, scheduledTier=null`);
-    expect(service.tier).toBe('pro');
-    expect(service.scheduledTier).toBeNull();
+    let customer = await db.query.customers.findFirst({ where: eq(customers.customerId, testCustomerId) });
+    console.log(`  tier: ${customer!.platformTier}`);
+    console.log(`  scheduledTier: ${customer!.scheduledPlatformTier}`);
+    expect(customer!.platformTier).toBe('pro');
+    expect(customer!.scheduledPlatformTier).toBeNull();
 
     // ========== STEP 2: Schedule downgrade Pro → Starter ==========
     console.log('\nSTEP 2: Schedule downgrade Pro → Starter');
-    const downgradeResult = await scheduleTierDowngrade(db, testCustomerId, 'seal', 'starter', clock);
+    const downgradeResult = await scheduleTierDowngrade(db, testCustomerId, 'platform', 'starter', clock);
     console.log(`  Result: success=${downgradeResult.success}`);
     expect(downgradeResult.success).toBe(true);
 
-    [service] = await db.select().from(serviceInstances).where(eq(serviceInstances.customerId, testCustomerId));
-    console.log(`  tier: ${service.tier}`);
-    console.log(`  scheduledTier: ${service.scheduledTier}`);
-    console.log(`  scheduledTierEffectiveDate: ${service.scheduledTierEffectiveDate}`);
-    expect(service.tier).toBe('pro'); // Still Pro
-    expect(service.scheduledTier).toBe('starter'); // Starter scheduled
+    customer = await db.query.customers.findFirst({ where: eq(customers.customerId, testCustomerId) });
+    expect(customer!.platformTier).toBe('pro'); // Still Pro
+    expect(customer!.scheduledPlatformTier).toBe('starter'); // Starter scheduled
 
     let [draft] = await db.select().from(billingRecords).where(and(
       eq(billingRecords.customerId, testCustomerId),
       eq(billingRecords.status, 'draft')
     ));
-    console.log(`  DRAFT amount: ${draft?.amountUsdCents} cents`);
-    console.log(`  Expected DRAFT: ${TIER_PRICES_USD_CENTS.starter} cents (Starter = $9)`);
-    expect(draft.amountUsdCents).toBe(TIER_PRICES_USD_CENTS.starter);
+    console.log(`  DRAFT amount: ${draft?.amountUsdCents} cents (expected: ${PLATFORM_TIER_PRICES_USD_CENTS.starter} = Starter)`);
+    expect(draft.amountUsdCents).toBe(PLATFORM_TIER_PRICES_USD_CENTS.starter);
 
-    // ========== STEP 3: Upgrade Pro → Enterprise (while Starter is scheduled) ==========
-    console.log('\nSTEP 3: Upgrade Pro → Enterprise (while Starter is scheduled)');
-    const upgradeResult = await handleTierUpgrade(db, testCustomerId, 'seal', 'enterprise', paymentServices, clock);
-    console.log(`  Result: success=${upgradeResult.success}, newTier=${upgradeResult.newTier}`);
-    console.log(`  Charge amount: ${upgradeResult.chargeAmountUsdCents} cents`);
-    expect(upgradeResult.success).toBe(true);
-    expect(upgradeResult.newTier).toBe('enterprise');
+    // ========== STEP 3: Cancel the scheduled downgrade ==========
+    console.log('\nSTEP 3: Cancel scheduled downgrade (Pro is the highest tier, no upgrade possible)');
+    const cancelResult = await cancelScheduledTierChange(db, testCustomerId, 'platform', clock);
+    console.log(`  Result: success=${cancelResult.success}`);
+    expect(cancelResult.success).toBe(true);
 
     // ========== STEP 4: Verify final state ==========
     console.log('\nSTEP 4: Verify final state');
-    [service] = await db.select().from(serviceInstances).where(eq(serviceInstances.customerId, testCustomerId));
-    console.log(`  tier: ${service.tier}`);
-    console.log(`  scheduledTier: ${service.scheduledTier}`);
-    console.log(`  scheduledTierEffectiveDate: ${service.scheduledTierEffectiveDate}`);
-    console.log(`  Expected: tier=enterprise, scheduledTier=null`);
-
-    // Critical assertions
-    expect(service.tier).toBe('enterprise');
-    expect(service.scheduledTier).toBeNull();
-    expect(service.scheduledTierEffectiveDate).toBeNull();
+    customer = await db.query.customers.findFirst({ where: eq(customers.customerId, testCustomerId) });
+    console.log(`  tier: ${customer!.platformTier}, scheduledTier: ${customer!.scheduledPlatformTier}`);
+    expect(customer!.platformTier).toBe('pro');
+    expect(customer!.scheduledPlatformTier).toBeNull();
+    expect(customer!.scheduledPlatformTierEffectiveDate).toBeNull();
 
     [draft] = await db.select().from(billingRecords).where(and(
       eq(billingRecords.customerId, testCustomerId),
       eq(billingRecords.status, 'draft')
     ));
-    console.log(`  DRAFT amount: ${draft?.amountUsdCents} cents`);
-    console.log(`  Expected DRAFT: ${TIER_PRICES_USD_CENTS.enterprise} cents (Enterprise = $185)`);
-
-    // THE CRITICAL CHECK - is DRAFT correct?
-    expect(draft.amountUsdCents).toBe(TIER_PRICES_USD_CENTS.enterprise);
+    console.log(`  DRAFT amount: ${draft?.amountUsdCents} cents (expected: ${PLATFORM_TIER_PRICES_USD_CENTS.pro} = Pro)`);
+    expect(draft.amountUsdCents).toBe(PLATFORM_TIER_PRICES_USD_CENTS.pro);
 
     console.log('\n========================================');
-    console.log('TEST PASSED - DRAFT shows correct Enterprise price');
+    console.log('TEST PASSED - DRAFT shows correct Pro price after cancel');
     console.log('========================================\n');
   });
 
-  it('should show all billing records to help debug DRAFT state', async () => {
-    // Setup: schedule downgrade then upgrade
-    await scheduleTierDowngrade(db, testCustomerId, 'seal', 'starter', clock);
-    await handleTierUpgrade(db, testCustomerId, 'seal', 'enterprise', paymentServices, clock);
+  it('should show all billing records after schedule downgrade + cancel', async () => {
+    // Setup: schedule downgrade then cancel — verify billing record state
+    await scheduleTierDowngrade(db, testCustomerId, 'platform', 'starter', clock);
+    await cancelScheduledTierChange(db, testCustomerId, 'platform', clock);
 
-    // List ALL billing records
     const allRecords = await db.select().from(billingRecords).where(
       eq(billingRecords.customerId, testCustomerId)
     );
@@ -256,66 +229,54 @@ describe('Bug: Upgrade while downgrade is scheduled', () => {
       console.log(`    status: ${record.status}`);
       console.log(`    type: ${record.type}`);
       console.log(`    amount: ${record.amountUsdCents} cents ($${(record.amountUsdCents / 100).toFixed(2)})`);
-      console.log(`    id: ${record.id}`);
       console.log('    ---');
     }
 
-    // Should have:
-    // 1. DRAFT invoice for next month (Enterprise price)
-    // 2. PENDING/PAID invoice for pro-rated upgrade charge
+    // After cancel: only the DRAFT for next month at Pro price
     const draftRecords = allRecords.filter(r => r.status === 'draft');
     expect(draftRecords.length).toBe(1);
-    expect(draftRecords[0].amountUsdCents).toBe(TIER_PRICES_USD_CENTS.enterprise);
+    expect(draftRecords[0].amountUsdCents).toBe(PLATFORM_TIER_PRICES_USD_CENTS.pro);
 
     console.log('\nDRAFT invoice is correct: $' + (draftRecords[0].amountUsdCents / 100).toFixed(2));
   });
 
-  it('alternative scenario: cancel scheduled downgrade THEN upgrade', async () => {
+  it('alternative scenario: cancel scheduled downgrade and verify state is clean', async () => {
+    // Canceling a scheduled downgrade is the only way to "undo" it with a 2-tier model.
+    // Verify: after cancel, tier=Pro, scheduledTier=null, DRAFT=Pro price.
     console.log('\n========================================');
-    console.log('ALTERNATIVE: Cancel downgrade first, then upgrade');
+    console.log('ALTERNATIVE: Cancel scheduled downgrade, verify clean state');
     console.log('========================================\n');
 
     // Step 1: Schedule downgrade
-    await scheduleTierDowngrade(db, testCustomerId, 'seal', 'starter', clock);
+    await scheduleTierDowngrade(db, testCustomerId, 'platform', 'starter', clock);
 
-    let [service] = await db.select().from(serviceInstances).where(eq(serviceInstances.customerId, testCustomerId));
-    expect(service.scheduledTier).toBe('starter');
+    let customer = await db.query.customers.findFirst({ where: eq(customers.customerId, testCustomerId) });
+    expect(customer!.scheduledPlatformTier).toBe('starter');
 
-    // Step 2: Cancel the scheduled downgrade
-    console.log('Canceling scheduled downgrade...');
-    const cancelResult = await cancelScheduledTierChange(db, testCustomerId, 'seal', clock);
-    console.log(`  Cancel result: success=${cancelResult.success}`);
-    expect(cancelResult.success).toBe(true);
-
-    [service] = await db.select().from(serviceInstances).where(eq(serviceInstances.customerId, testCustomerId));
-    console.log(`  After cancel: tier=${service.tier}, scheduledTier=${service.scheduledTier}`);
-    expect(service.tier).toBe('pro');
-    expect(service.scheduledTier).toBeNull();
-
-    // Check DRAFT after cancel
     let [draft] = await db.select().from(billingRecords).where(and(
       eq(billingRecords.customerId, testCustomerId),
       eq(billingRecords.status, 'draft')
     ));
-    console.log(`  DRAFT after cancel: ${draft?.amountUsdCents} cents (should be Pro = ${TIER_PRICES_USD_CENTS.pro})`);
-    expect(draft.amountUsdCents).toBe(TIER_PRICES_USD_CENTS.pro);
+    console.log(`  DRAFT after schedule downgrade: ${draft?.amountUsdCents} cents (should be Starter = ${PLATFORM_TIER_PRICES_USD_CENTS.starter})`);
+    expect(draft.amountUsdCents).toBe(PLATFORM_TIER_PRICES_USD_CENTS.starter);
 
-    // Step 3: Now upgrade
-    console.log('\nUpgrading to Enterprise...');
-    const upgradeResult = await handleTierUpgrade(db, testCustomerId, 'seal', 'enterprise', paymentServices, clock);
-    console.log(`  Upgrade result: success=${upgradeResult.success}`);
-    expect(upgradeResult.success).toBe(true);
+    // Step 2: Cancel the scheduled downgrade
+    console.log('Canceling scheduled downgrade...');
+    const cancelResult = await cancelScheduledTierChange(db, testCustomerId, 'platform', clock);
+    console.log(`  Cancel result: success=${cancelResult.success}`);
+    expect(cancelResult.success).toBe(true);
 
-    [service] = await db.select().from(serviceInstances).where(eq(serviceInstances.customerId, testCustomerId));
-    console.log(`  Final: tier=${service.tier}, scheduledTier=${service.scheduledTier}`);
-    expect(service.tier).toBe('enterprise');
+    customer = await db.query.customers.findFirst({ where: eq(customers.customerId, testCustomerId) });
+    console.log(`  After cancel: tier=${customer!.platformTier}, scheduledTier=${customer!.scheduledPlatformTier}`);
+    expect(customer!.platformTier).toBe('pro');
+    expect(customer!.scheduledPlatformTier).toBeNull();
 
     [draft] = await db.select().from(billingRecords).where(and(
       eq(billingRecords.customerId, testCustomerId),
       eq(billingRecords.status, 'draft')
     ));
-    console.log(`  Final DRAFT: ${draft?.amountUsdCents} cents (should be Enterprise = ${TIER_PRICES_USD_CENTS.enterprise})`);
-    expect(draft.amountUsdCents).toBe(TIER_PRICES_USD_CENTS.enterprise);
+    console.log(`  Final DRAFT: ${draft?.amountUsdCents} cents (should be Pro = ${PLATFORM_TIER_PRICES_USD_CENTS.pro})`);
+    expect(draft.amountUsdCents).toBe(PLATFORM_TIER_PRICES_USD_CENTS.pro);
 
     console.log('\n========================================');
     console.log('ALTERNATIVE SCENARIO PASSED');

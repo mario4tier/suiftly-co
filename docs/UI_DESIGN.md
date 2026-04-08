@@ -235,104 +235,59 @@ See **[AUTHENTICATION_DESIGN.md](./AUTHENTICATION_DESIGN.md)** for complete tech
 
 ## Service States
 
-**Service State Machine: 6 Distinct States**
+**Service State Machine: 3 Primary States (+ 2 Suspended)**
 
-A service (Seal, gRPC, GraphQL) exists in one of six states, controlling subscription status, service availability, and configuration access.
+Services (Seal, gRPC, GraphQL) are free features that are auto-provisioned once the customer has an active platform subscription. There are no per-service subscriptions. The platform subscription ($1 Starter / $29 Pro) is managed on the Billing page.
 
 ### State Definitions
 
 #### **(1) Not Provisioned** (Default)
 
-**Meaning:** No active subscription exists for this service.
+**Meaning:** Customer does not have an active platform subscription, so the service has not been provisioned.
 
 **User Experience & UI:**
-- Service page shows onboarding form with interactive configuration fields
-- Page title: "Configure [Service Name]"
-- Prominent "Subscribe to Service" button at bottom of form
-- No billing charges
+- Service page shows a message directing the user to subscribe on the Billing page
+- Page title: "[Service Name]"
+- No configuration form, no tier selection
+- No billing charges from this service
 
 **Allowed Actions:**
-- Browse configuration options
-- Calculate pricing estimates
-- Subscribe to service (transitions to State 2)
-
----
-
-#### **(2) Provisioning** (Transient/Reserved)
-
-**⚠️ Current Implementation Note:** This state is **transient** in the current atomic transaction implementation. The entire subscription flow (payment + state transition) completes in ~50ms, so the frontend never observes this state directly. Users see a "Processing your subscription..." spinner and then immediately transition to State 3 (Disabled).
-
-**Meaning:** Payment is being processed (exists only within the database transaction).
-
-**Future Use:** Reserved for asynchronous payment processing scenarios such as:
-- On-chain escrow transactions (blockchain confirmation delays)
-- External payment gateway integration
-- Manual payment approval workflows
-
-**Current Backend Flow:**
-```
-not_provisioned → provisioning (transient) → disabled
-                  ↑ All happens in single atomic transaction
-```
-
-**User Experience & UI (Current):**
-- User clicks "Subscribe to Service"
-- Button shows "Processing your subscription..." with spinner (~50ms)
-- Page reloads, showing State 3 (Disabled) UI immediately
-- No separate "Provisioning" UI exists currently
-
-**User Experience & UI (Future with Async Payments):**
-- Shows the **onboarding form** (same as State 1) with loading overlay
-- Banner: "Processing your subscription..." with spinner
-- Form fields remain visible but disabled during payment processing
-- Cannot modify tier selection or submit again during payment processing
-- Poll for state updates or use WebSocket for real-time status
-
-**Allowed Actions (Future):**
-- View selected tier (onboarding form remains visible but disabled)
-- Wait for payment confirmation
-- Admin: Cancel pending subscription (returns to State 1)
+- View service description and documentation
+- Navigate to Billing page to subscribe to the platform
 
 **Transitions:**
-- **(2) → (3):** Payment confirmed → Service subscribed, defaulting to disabled state (automatic in current implementation)
+- **(1) → (2):** Platform subscription payment succeeds → services are auto-provisioned in disabled state
 
 ---
 
-#### **(3) Disabled** (Subscribed but Service OFF)
+#### **(2) Disabled** (Auto-Provisioned, Service OFF)
 
-**Meaning:** Active subscription exists, but service is currently disabled by user choice.
+**Meaning:** Platform subscription is active. Service has been auto-provisioned but is currently disabled by user choice (toggle off).
 
 **User Experience & UI:**
-- Service page shows tab-based layout (Config / Keys)
-- Configuration (normal): tab displays current settings (editable)
-- Configuration (if cancelled): Everything is greyed out. No edits allowed.
+- Service page shows tab-based layout (Overview / X-API-Key / Seal Keys / More Settings)
+- Configuration displays current settings (editable)
 - Toggle switch: [OFF] ⟳ ON
-- Banner (normal): "Service is subscribed but currently disabled. Enable to start serving traffic."
-- Banner (if cancelled): "Subscription cancelled. You can re-enable anytime by selecting Change Plan."
+- Banner: "Service is currently disabled. Enable to start serving traffic."
 - All keys (API keys and Seal keys) return `503 Service Unavailable` when called
-- **Billing:**
-    if normal: User is still charged full base monthly fee (maintaining subscription/capacity reservation)
-    if cancelled: There is no monthly charge. Re-enabling will incur new charges.
-
+- **Billing:** No per-service base fee (services are free). Only per-request usage charges apply when enabled.
 
 **Allowed Actions:**
-- Edit configuration (tier, burst, keys, packages)
+- Edit configuration (burst, keys, packages)
 - Manage keys (create, revoke, copy) - keys are authenticated but return 503 when called
-- Enable service (toggle switch to ON → transitions to State 4)
-- Change Plan (allows user to select a different tier, re-enable, or cancel subscription)
+- Enable service (toggle switch to ON → transitions to State 3)
 
 **Transitions:**
-- **(3) → (4):** User toggles service ON (immediate effect)
-- **(3) → (3):** Cancel subscription via Change Plan (stays in State 3, shows cancellation message)
-- **(3) → (6):** Admin suspends for non-payment
+- **(2) → (3):** User toggles service ON (immediate effect)
+- **(2) → (5):** Admin suspends customer for non-payment (customer-level)
 
 **Note:** Individual API keys and Seal keys can also be disabled independently. Disabled keys return `503` regardless of service state.
 
 ---
 
-#### **(4) Enabled** (Subscribed and Service ON)
+#### **(3) Enabled** (Service ON)
 
-**Meaning:** Active subscription with service fully operational and serving traffic.
+**Meaning:** Platform subscription is active, service is fully operational and serving traffic.
 
 **User Experience & UI:**
 - Same as Disabled, except the Service is Enabled!
@@ -340,48 +295,43 @@ not_provisioned → provisioning (transient) → disabled
 - Toggle switch: OFF ⟳ [ON]
 - API/Seal keys working, traffic should be flowing normally
 - User will use stats/logs to monitor health and usage.
-- **Billing:** Base monthly fee + usage charges apply
+- **Billing:** Per-request usage charges apply. No per-service base fee.
 
 **Allowed Actions:**
-- Edit configuration (tier, burst, keys, packages) - **changes apply immediately without affecting traffic**
-- Disable service (toggle switch to OFF → transitions to State 3)
+- Edit configuration (burst, keys, packages) - **changes apply immediately without affecting traffic**
+- Disable service (toggle switch to OFF → transitions to State 2)
 - Manage keys (create, revoke, copy, enable/disable individual keys)
 - View stats and logs (live data accumulating)
 
 **Configuration Change Behavior:**
-- **Tier changes:** Apply immediately, no traffic disruption
-- **Add/remove keys/packages:** Immediate effect, billing adjusted
+- **Add/remove keys/packages:** Immediate effect
 - **Burst enable/disable:** Takes effect immediately
-- **Important:** Disabling service (State 4 → 3) is the ONLY action that stops traffic
+- **Important:** Disabling service (State 3 → 2) is the ONLY action that stops traffic
 
 **Transitions:**
-- **(4) → (3):** User toggles service OFF (immediate effect, all keys return 503)
-- **(4) → (3):** User cancel subscription
-- **(4) → (5):** User initiates maintenance suspension (future feature, end-of-cycle transition)
-- **(4) → (6):** Admin suspends for non-payment
+- **(3) → (2):** User toggles service OFF (immediate effect, all keys return 503)
+- **(3) → (4):** User initiates maintenance suspension (future feature, end-of-cycle transition)
+- **(3) → (5):** Admin suspends customer for non-payment (customer-level)
 
 ---
 
-#### **(5) Suspended - Maintenance** (Future Feature)
+#### **(4) Suspended - Maintenance** (Future Feature)
 
-**Meaning:** User-initiated long-term suspension to maintain configuration and key ownership at significantly reduced cost.
+**Meaning:** User-initiated long-term suspension to maintain configuration and key ownership at reduced cost.
 
 **User Experience & UI:**
-- Same UI state as when service is cancelled (service is disabled, everything is greyed out).
+- Service is disabled, everything is greyed out.
 - "Resume Service" button replaces toggle switch
-- Banner: "Service suspended for maintenance. Configuration and keys preserved at $2/month. Resume anytime."
-- Info note: "Suspension takes effect at end of current billing cycle (DD/MM/YYYY). Current charges are non-refundable."
+- Banner: "Service suspended for maintenance. Configuration and keys preserved. Resume anytime."
 - All keys (API keys and Seal keys) return `503 Service Unavailable`
 - In future, may allow key export feature only.
-- **Billing:** Flat $2/month (no usage charges)
-- **Important:** Transition to this state happens at end of current payment cycle (non-refundable if re-enabled)
+- **Billing:** Platform subscription still applies (managed on Billing page). No per-service charges.
 
 **Allowed Actions:**
 - View configuration (read-only)
 - View keys (read-only, cannot create/revoke)
 - View historical stats and logs
-- Resume service (transitions to State 4 at end of cycle, or immediately with no refund)
-- Change Plan (allows user to select a different tier, re-enable, or cancel subscription)
+- Resume service (transitions to State 2 Disabled, allowing config adjustment before re-enabling)
 
 **Use Cases:**
 - Planned infrastructure changes (multi-week downtime)
@@ -389,43 +339,44 @@ not_provisioned → provisioning (transient) → disabled
 - Long-term cost optimization while retaining configuration and key ownership
 
 **Transitions:**
-- **(5) → (3):** User clicks "Resume Service" (resumes to Disabled state, allowing config adjustment before re-enabling)
-- **(5) → (5):** Cancel subscription via Change Plan (stays in State 5, shows cancellation message)
-- **(5) → (6):** Admin suspends for non-payment
+- **(4) → (2):** User clicks "Resume Service" (resumes to Disabled state, allowing config adjustment before re-enabling)
+- **(4) → (5):** Admin suspends customer for non-payment (customer-level)
 
-**Difference from State (3) Disabled:**
-- **State (3):** Quick on/off toggle, full base monthly fee, instant effect, config changes allowed
-- **State (5):** Long-term suspension, $2/month flat rate, end-of-cycle transition, config locked (simpler state management)
+**Difference from State (2) Disabled:**
+- **State (2):** Quick on/off toggle, instant effect, config changes allowed
+- **State (4):** Long-term suspension, end-of-cycle transition, config locked (simpler state management)
 
 **Note:** Not implemented in MVP. Planned for future release.
 
 ---
 
-#### **(6) Suspended - No Payment** (Admin-Only)
+#### **(5) Suspended - No Payment** (Customer-Level, Admin-Only)
 
-**Meaning:** Service and configuration locked due to payment failure or insufficient escrow balance.
+**Meaning:** All services locked due to platform-level payment failure or insufficient escrow balance. This is a customer-level suspension, not per-service.
 
 **User Experience & UI:**
-- Same as "Suspended - Maintenance", except no key export feature. The user is somewhat locked out.
-- Banner: "Service suspended due to payment issues. Contact support or deposit to your account to restore service."
-- **Billing:** No new charges (service frozen)
+- All service pages show read-only state, everything greyed out.
+- Banner: "Account suspended due to payment issues. Please resolve on the Billing page or contact support."
+- **Billing:** No new charges (all services frozen)
 
 **Allowed Actions:**
 - View configuration (read-only)
 - View keys, stats, logs (read-only)
+- Navigate to Billing page to resolve payment
 - Top up escrow balance (resolves suspension)
 - Contact support
 
 **Transitions:**
-- **(6) → (3):** Admin resolves payment issue or user tops up balance → Service restored to disabled state
+- **(5) → (2):** Admin resolves payment issue or user tops up balance → Services restored to disabled state
 
 **Trigger Conditions:**
 - Escrow balance reaches $0 for >7 days (grace period expired)
 - Monthly spending limit exceeded (on-chain protection)
 - Admin manually suspends account
+- Platform subscription payment fails
 
 **HTTP Status Code Consistency:**
-- **All suspended/disabled states (3, 5, 6):** Return `503 Service Unavailable`
+- **All suspended/disabled states (2, 4, 5):** Return `503 Service Unavailable`
 - **Authentication:** Always validated first (proper authentication flow)
 - **Authorization:** Independent of enable/disable state
 
@@ -440,44 +391,29 @@ not_provisioned → provisioning (transient) → disabled
 
     (1) Not Provisioned
          │
-         │ User clicks "Subscribe to Service"
+         │ Platform subscription payment succeeds (on Billing page)
+         │ Services auto-provisioned
          ↓
-    (2) Provisioning (Payment Pending)
-         │
-         │ Payment confirmed
-         ↓
-    (3) Disabled (Subscribed, Service OFF)
+    (2) Disabled (Service OFF)
          │                            ↑
          │ User toggles ON            │ User toggles OFF
          ↓                            │
-    (4) Enabled (Subscribed, Service ON)
+    (3) Enabled (Service ON)
          │                            │
          │ User suspends (future)     │
          ↓                            │
-    (5) Suspended - Maintenance       │
+    (4) Suspended - Maintenance       │
          │                            │
          │ User resumes               │
          └────────────────────────────┘
 
-    Admin Actions (from any state with subscription):
-    (3), (4), (5) ──→ (6) Suspended - No Payment
-    (6) ──────────→ (3) Disabled (after payment resolved)
-    (3), (4), (5) ──→ (1) Not Provisioned (cancel subscription)
+    Customer-Level Admin Actions:
+    (2), (3), (4) ──→ (5) Suspended - No Payment (customer-level)
+    (5) ──────────→ (2) Disabled (after payment resolved)
+
+    Platform Cancellation (on Billing page):
+    All services return to (1) Not Provisioned when platform sub cancelled
 ```
-
----
-
-### Subscription Terminology Clarification
-
-**"Subscribe to Service"** vs. **"Enable/Disable Service"**:
-
-- **Subscribe:** Create a subscription (State 1 → 2 → 3). This reserves capacity and begins billing.
-- **Enable/Disable:** Toggle service ON/OFF within an active subscription (State 3 ↔ 4). User continues to be billed base monthly fee when disabled.
-
-**Why the distinction?**
-- Avoids confusion: "Enable" used to mean both "subscribe" and "turn on traffic"
-- Clearer intent: Subscribing commits to billing, enabling controls traffic flow
-- Better UX: Users understand they're creating a subscription relationship first
 
 ---
 
@@ -485,12 +421,11 @@ not_provisioned → provisioning (transient) → disabled
 
 | State                           | Config Changes Allowed | Notes                                                        |
 | ------------------------------- | ---------------------- | ------------------------------------------------------------ |
-| **(1) Not Provisioned**         | ✅ Yes (form mode)     | No billing impact until subscription                         |
-| **(2) Provisioning**            | ❌ No                  | Locked during payment processing                             |
-| **(3) Disabled**                | ✅ Yes                 | Can prepare changes before enabling                          |
-| **(4) Enabled**                 | ✅ Yes                 | Changes apply immediately **without traffic disruption**     |
-| **(5) Suspended - Maintenance** | ❌ No (view-only)      | Locked during suspension, simpler state management           |
-| **(6) Suspended - No Payment**  | ❌ No                  | Admin-locked until payment resolved                          |
+| **(1) Not Provisioned**         | ❌ No                  | No platform subscription yet                                 |
+| **(2) Disabled**                | ✅ Yes                 | Can prepare changes before enabling                          |
+| **(3) Enabled**                 | ✅ Yes                 | Changes apply immediately **without traffic disruption**     |
+| **(4) Suspended - Maintenance** | ❌ No (view-only)      | Locked during suspension, simpler state management           |
+| **(5) Suspended - No Payment**  | ❌ No                  | Admin-locked until payment resolved                          |
 
 ---
 
@@ -498,60 +433,52 @@ not_provisioned → provisioning (transient) → disabled
 
 | State                           | Create/Revoke Keys | Notes                                     |
 | ------------------------------- | ------------------ | ----------------------------------------- |
-| **(1) Not Provisioned**         | ❌ No              | Must subscribe first                      |
-| **(2) Provisioning**            | ❌ No              | Wait for payment confirmation             |
-| **(3) Disabled**                | ✅ Yes             | Keys inactive (return 503) but manageable |
-| **(4) Enabled**                 | ✅ Yes             | Full key management + keys active         |
-| **(5) Suspended - Maintenance** | ❌ No (view-only)  | Cannot modify during maintenance          |
-| **(6) Suspended - No Payment**  | ❌ No (view-only)  | Locked until payment resolved             |
+| **(1) Not Provisioned**         | ❌ No              | Must subscribe to platform first          |
+| **(2) Disabled**                | ✅ Yes             | Keys inactive (return 503) but manageable |
+| **(3) Enabled**                 | ✅ Yes             | Full key management + keys active         |
+| **(4) Suspended - Maintenance** | ❌ No (view-only)  | Cannot modify during maintenance          |
+| **(5) Suspended - No Payment**  | ❌ No (view-only)  | Locked until payment resolved             |
 
 ---
 
 ### Billing Behavior by State
 
-| State                           | Monthly Base Fee          | Usage Fees | Notes                                                   |
-| ------------------------------- | ------------------------- | ---------- | ------------------------------------------------------- |
-| **(1) Not Provisioned**         | ❌ No                     | ❌ No      | No billing                                              |
-| **(2) Provisioning**            | ❌ No (pending)           | ❌ No      | Charge applied on transition to (3)                     |
-| **(3) Disabled**                | ✅ Yes (full tier fee)    | ❌ No      | Maintains subscription/capacity reservation, no traffic |
-| **(4) Enabled**                 | ✅ Yes (full tier fee)    | ✅ Yes     | Full billing (base + usage), traffic flowing            |
-| **(5) Suspended - Maintenance** | ⚠️ Flat $2/month          | ❌ No      | Long-term suspension, config/keys preserved             |
-| **(6) Suspended - No Payment**  | ❌ No                     | ❌ No      | Billing frozen until payment resolved                   |
+| State                           | Platform Sub Fee              | Per-Service Usage Fees | Notes                                                   |
+| ------------------------------- | ----------------------------- | ---------------------- | ------------------------------------------------------- |
+| **(1) Not Provisioned**         | ❌ No                         | ❌ No                  | No platform subscription                                |
+| **(2) Disabled**                | ✅ Yes (on Billing page)      | ❌ No                  | Service off, no traffic, no usage charges               |
+| **(3) Enabled**                 | ✅ Yes (on Billing page)      | ✅ Yes                 | Per-request usage charges, traffic flowing              |
+| **(4) Suspended - Maintenance** | ✅ Yes (on Billing page)      | ❌ No                  | Long-term suspension, config/keys preserved             |
+| **(5) Suspended - No Payment**  | ❌ No                         | ❌ No                  | Billing frozen until payment resolved                   |
+
+**Note:** The platform subscription fee ($1 Starter / $29 Pro) is managed on the Billing page, not on individual service pages. Services themselves are free; only per-request usage costs appear on service pages.
 
 ---
 
 ### Design Decisions - CONFIRMED
 
 1. **HTTP Status Codes (All States):** ✅ CONFIRMED
-   - **All disabled/suspended states (3, 5, 6):** Return `503 Service Unavailable`
+   - **All disabled/suspended states (2, 4, 5):** Return `503 Service Unavailable`
    - **Authentication:** Always validated before checking service state
    - **No 401 usage:** Authorization problems are independent of enable/disable state
 
-2. **Billing in State (3) Disabled:** ✅ CONFIRMED
-   - Full base monthly fee charged (maintains subscription and capacity reservation)
-   - Quick on/off toggle for temporary traffic control
-   - No usage fees while disabled
+2. **Billing Model:** ✅ CONFIRMED
+   - No per-service base fee. Services are free with platform subscription.
+   - Platform subscription ($1 Starter / $29 Pro) managed on Billing page.
+   - Only per-request usage charges shown on service pages.
+   - Quick on/off toggle for temporary traffic control.
 
-3. **Configuration Changes While Enabled (State 4):** ✅ CONFIRMED
-   - All configuration changes (tier, burst, keys, packages) apply immediately
+3. **Configuration Changes While Enabled (State 3):** ✅ CONFIRMED
+   - All configuration changes (burst, keys, packages) apply immediately
    - **Zero traffic disruption:** Changes do not affect serving traffic
-   - Only disabling service (State 4 → 3) stops traffic flow
+   - Only disabling service (State 3 → 2) stops traffic flow
 
-4. **Key Management in State (3) Disabled:** ✅ CONFIRMED
+4. **Key Management in State (2) Disabled:** ✅ CONFIRMED
    - Keys can be created, revoked, and managed while service is disabled
    - All keys return `503` when called in disabled state
    - Individual keys can also be enabled/disabled independently (returns 503 when key is disabled)
 
-5. **State (5) Maintenance Suspension Pricing:** ✅ CONFIRMED
-   - Flat $2/month (regardless of tier)
-   - Transition occurs at end of current payment cycle
-   - Non-refundable if user re-enables before cycle ends
-
-6. **State (2) Cancellation:** ✅ CONFIRMED
-   - Admin-only for MVP
-   - User-facing cancellation deferred to future releases
-
-7. **Stats/Logs in Disabled State:** ✅ CONFIRMED
+5. **Stats/Logs in Disabled State:** ✅ CONFIRMED
    - Historical stats visible from when service was previously enabled
    - New stats do not accumulate while disabled
    - Logs preserve all state transitions and configuration changes
@@ -599,72 +526,16 @@ See: [copyable-value.tsx](../apps/webapp/src/components/ui/copyable-value.tsx), 
 
 **URL Pattern:** `/services/seal`, `/services/grpc`, `/services/graphql`
 
-Each service page has **2 major modes of operation**:
+Each service page has a single **interactive form** layout. There is no onboarding form or tier selection on service pages -- the platform subscription (and its tier) is managed entirely on the Billing page.
 
-1. **Onboarding Form**. For when the service state are (1) Not Provisioned and (2) Provisioning. Traditional submit pattern after the user select the service tier.
-
-2. **Interactive Form** This is for all other service states (e.g. Disabled, Enabled, Suspended...). Field level actions with immediate effect. No single "submit" button.
+- **State (1) Not Provisioned:** Page shows a message directing the user to subscribe on the Billing page.
+- **States (2)-(5):** Interactive form with tabs, enable/disable toggle, and field-level actions with immediate effect.
 
 **Note:** For MVP, only the Seal service is fully implemented. gRPC and GraphQL show "coming soon" placeholders (see [grpc.lazy.tsx](../apps/webapp/src/routes/services/grpc.lazy.tsx) and [graphql.lazy.tsx](../apps/webapp/src/routes/services/graphql.lazy.tsx)).
 
 ---
 
-#### Seal Onboarding Form (Service State 1 & 2)
-
-```
-┌──────────────────────────────────────────────────────┐
-│ Seal Configuration                                   │
-│                                                      │
-│  Per-Request Pricing (i)                             │
-│    • $1 per 10,000 requests                          │
-│                                                      │
-│  Guaranteed Bandwidth (?)                            │
-│                                                      │
-│  ┌───────────────────────────────────────────┐       │
-│  │ STARTER                                   │       │
-│  ├───────────────────────────────────────────┤       │
-│  │ 3 req/s per region • ~9 req/s globally    │       │
-│  │ $9/month                                  │       │
-│  └───────────────────────────────────────────┘       │
-│                                                      │
-│  ┌───────────────────────────────────────────┐       │
-│  │ PRO                         [SELECTED]    │       │
-│  ├───────────────────────────────────────────┤       │
-│  │ 15 req/s per region • ~45 req/s globally  │       │
-│  │ $29/month                                 │       │
-│  └───────────────────────────────────────────┘       │
-│                                                      │
-│  ┌───────────────────────────────────────────┐       │
-│  │ ENTERPRISE                                │       │
-│  ├───────────────────────────────────────────┤       │
-│  │ 100 req/s per region • ~300 req/s globally│       │
-│  │ $185/month                                │       │
-│  └───────────────────────────────────────────┘       │
-│                                                      │
-│  ✓ Included with every subscription                  │
-│    • Global geo-steering and failover (i)            │
-│    • 1x Seal Key, 3x packages id                     │
-│    • 2x API-Key                                      │
-│    ...                                               │
-│                                                      │
-│  Optional add-ons are available (i)                  │
-│                                                      │
-│     [ ] Agree to terms of service                    │
-│                                                      │
-│  ┌──────────────────────────────────────────┐        │
-│  │ Subscribe to Service for $55.00/month    │        │
-│  └──────────────────────────────────────────┘        │
-│                                                      │
-└──────────────────────────────────────────────────────┘
-```
-
-**Behavior:**
-- **Tooltips (i):** Click to show explanation
-- **Tier Cards** User can switch between tiers and price on bottom button is updated.
-- **Terms of service** link opens a modal window that can be scrolled down for the TOS, and download as PDF button and "Agree and close" button. The user can also simply checkbox the "Agree" without clicking the link.
-- **DB Driven**: All numbers (pricing, capacities) are DB driven *but can be heavily cached or used to generate static content*.
-
-#### Seal Interactive Form (Service State >= 3)
+#### Seal Interactive Form (Service State >= 2)
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -674,15 +545,12 @@ Each service page has **2 major modes of operation**:
 │  [ Overview ]  [ X-API-Key ]  [ Seal Keys ]  [ More Settings ]  │  ← Tabs
 │  ──────────                                         │
 │                                                     │
-|  Monthly Charges - ENTERPRISE [Change Plan]         |
+|  Usage Costs (Current Billing Period)               |
 |                                                     |
-│  Guaranteed Bandwidth:      2K req/s/region   $9.00 │
-|  Seal Keys            (1 of 1)  [Add More]     0.00 │
-|  IPv4 Allowlist       (1 of 1)  [Add More]     0.00 │
-|  Packages per Key           5   [Add More]    $2.00 │
+│  Per-Request Usage:         12,500 requests   $1.25 │
 │                                                     │
 │                ┌───────────────────────────────────┐│
-│                │ Total Monthly Fee           $11.00││
+│                │ Current Usage Total         $1.25 ││
 │                └───────────────────────────────────┘│
 │                                                     │
 └─────────────────────────────────────────────────────┘
@@ -696,13 +564,12 @@ Each service page has **2 major modes of operation**:
   - Default: Disabled
   - Controls if the service is enabled or disabled.
 
-- **Monthly Charged Items Table**
-  - Title shows tier (STARTER/PRO/ENTERPRISE) with [Change Plan] button next to it.
-  - 4 columns: Description | Usage/Count | [Add More] button | Monthly Price (Total)
-  - Show tier details as Guaranteed Bandwidth on next line (e.g 3 req/s per region)
-  - Displays other various items that are included or can be add-on.
-  - When applicable, display which portion of the included/paid items are being used e.g (0 of 3),(3 of 3)
-  - Total monthly is shown.
+- **Usage Costs Table**
+  - Shows per-request usage costs from the current DRAFT invoice.
+  - No tier display, no "Change Plan" button (tier is managed on the Billing page).
+  - No "Guaranteed Bandwidth" row (this is an internal backend concept, not shown to users).
+  - Displays current billing period usage count and cost.
+  - Total usage cost is shown.
 
 **Note:** When gRPC and GraphQL are implemented in the future, they will use similar interactive form and pricing model as Seal.
 
@@ -816,22 +683,23 @@ Each service page has **2 major modes of operation**:
 
 - **Burst (?)**
   - Type: Checkbox
-  - Default: Checked for Pro and Enterprise tiers
-  - Grayed out for Starter tier with label "Pro/Enterprise feature"
-  - Tooltip: "Allow temporary traffic bursts beyond guaranteed bandwidth. Billed per-request for burst traffic."
+  - Default: Checked for Pro platform tier
+  - Grayed out for Starter platform tier with label "Pro feature"
+  - Tooltip: "Allow temporary traffic bursts beyond your rate limit. Billed per-request for burst traffic."
   - Pricing: No monthly fee (usage-based billing only)
+  - Gated by platform tier: Pro platform subscribers get burst capability
   - Future: May add premium burst tier with higher priority at additional monthly cost
 
 - **IP Allowlist (?)**
   - Type: Multi-line text area or tag input
   - Default: Empty (no IP restrictions)
-  - Pro/Enterprise: Up to 2 IPv4 addresses
-  - Enterprise only: Up to 2 CIDR ranges (in addition to IPv4 addresses)
-  - Grayed out for Starter tier with label "Pro/Enterprise feature"
+  - Pro: Up to 2 IPv4 addresses
+  - Grayed out for Starter platform tier with label "Pro feature"
   - Tooltip: "Restrict API access to specific IP addresses or CIDR ranges. Leave empty to allow all IPs."
   - Format: Accepts space, newline, or comma as delimiters (e.g., "192.168.1.100, 10.0.0.0/24" or one per line)
   - Validation: Validates IPv4 format and CIDR notation
-  - Pricing: Included with Pro/Enterprise tiers (no additional cost)
+  - Pricing: Included with Pro platform tier (no additional cost)
+  - Gated by platform tier: Only available for Pro platform subscribers
 
 ### Anti-Abuse & Rate Limiting (Key Operations)
 
@@ -976,11 +844,11 @@ All abuse throttling are to be implemented later.
 │  Frequently Asked Questions                          │
 │  ┌────────────────────────────────────────┐          │
 │  │  ▶ How do I configure my first service?│          │
-│  │  ▶ What is guaranteed bandwidth?       │          │
+│  │  ▶ What is the platform subscription?  │          │
 │  │  ▶ How does burst pricing work?        │          │
 │  │  ▶ How do I generate additional keys?  │          │
 │  │  ▶ What payment methods are supported? │          │
-│  │  ▶ How do I cancel a service?          │          │
+│  │  ▶ How do I cancel my subscription?    │          │
 │  └────────────────────────────────────────┘          │
 │                                                      │
 └──────────────────────────────────────────────────────┘
@@ -1002,11 +870,11 @@ All abuse throttling are to be implemented later.
    - Common questions with detailed answers
    - Examples:
      - How do I configure my first service?
-     - What is guaranteed bandwidth?
+     - What is the platform subscription?
      - How does burst pricing work?
      - How do I generate additional keys?
      - What payment methods are supported?
-     - How do I cancel a service?
+     - How do I cancel my subscription?
    - Can be expanded as needed
 
 **Note:** Keep support page simple for MVP. Can add knowledge base, video tutorials, API docs later.
@@ -1018,7 +886,7 @@ All abuse throttling are to be implemented later.
 
 **URL:** `/billing`
 
-**Purpose:** Manage on-chain escrow spending protections, view balance and transaction history.
+**Purpose:** Manage platform subscription (tier selection, cancellation), on-chain escrow spending protections, view balance and transaction history.
 
 
 **Main Content**
@@ -1035,12 +903,12 @@ All abuse throttling are to be implemented later.
 │  │  [ Adjust Spending Limit ]             │          │
 │  └────────────────────────────────────────┘          │
 │                                                       │
-│  Next Scheduled Payment              $58.00  [›]     │
+│  Next Scheduled Payment              $30.25  [›]     │
 │  February 1, 2025                                     │
 │  ┌────────────────────────────────────────┐          │
-│  │  Seal Service - Pro tier    $40.00    │  (shown  │
-│  │  gRPC Service - Starter      $9.00    │   when   │
-│  │  API Keys (3)                $9.00    │  chevron │
+│  │  Platform Subscription (Pro) $29.00   │  (shown  │
+│  │  Seal usage (12.5K req)       $1.25   │   when   │
+│  │                                       │  chevron │
 │  └────────────────────────────────────────┘  opened) │
 │                                                       │
 │  Billing History  [›]                                 │
@@ -1059,15 +927,13 @@ All abuse throttling are to be implemented later.
 **When history item expanded (click chevron):**
 ```
 │  ┌────────────────────────────────────────┐          │
-│  │  Jan 1, 2025   $66.75  [▽]             │          │
+│  │  Jan 1, 2025   $41.75  [▽]             │          │
 │  │                                        │          │
-│  │  Subscription Charges:                 │          │
-│  │    Seal Service - Pro       $40.00     │          │
-│  │    gRPC Service - Starter    $9.00     │          │
-│  │    API Keys (3)              $9.00     │          │
+│  │  Platform Subscription:                │          │
+│  │    Pro tier                  $29.00    │          │
 │  │                                        │          │
 │  │  Usage Charges:                        │          │
-│  │    Seal requests (125k)      $8.75     │          │
+│  │    Seal requests (125k)     $12.75     │          │
 │  │                                        │          │
 │  │  TX: 0xabc123...           [View ↗]    │          │
 │  └────────────────────────────────────────┘          │
@@ -1109,7 +975,7 @@ All abuse throttling are to be implemented later.
 2. **Next Scheduled Payment (Below Escrow Box)**
    - **Next Scheduled Payment:** What will be charged on 1st of next month
      - Chevron expands to show itemized breakdown
-     - Includes: subscription fees + pending usage charges
+     - Includes: platform subscription fee + pending per-service usage charges
 
 3. **Billing History (Bottom, Collapsible)**
    - Header shows "Billing History [›]" - click chevron to expand
@@ -1118,7 +984,7 @@ All abuse throttling are to be implemented later.
      - List of past charges (paginated, 20 per page)
      - Each line shows: date, total amount, chevron to expand
      - Expanded view shows:
-       - Subscription charges (itemized by service/tier)
+       - Platform subscription charge (tier)
        - Usage charges (itemized by service)
        - Transaction hash (if on-chain charge)
      - Navigation: Previous / Next buttons
@@ -1201,9 +1067,9 @@ All prices displayed in USD. Deposits/withdrawals use **USDC** tokens on Sui blo
   - No failed save attempts
 
 - **Charging Behavior:**
-  - Immediate: Service enable, tier changes, add keys/packages
-  - Deferred: Usage fees (billed monthly on 1st)
-  - Credits: Instant (revoke keys, tier downgrades)
+  - Immediate: Platform tier changes (on Billing page)
+  - Deferred: Per-request usage fees (billed monthly on 1st)
+  - Credits: Instant (platform tier downgrades)
 
 - **Low Balance Warnings:**
   - Balance < estimate: Warning toast
@@ -1297,46 +1163,38 @@ All prices displayed in USD. Deposits/withdrawals use **USDC** tokens on Sui blo
 
 ---
 
-### Flow 2: Subscribe to First Service (Onboarding)
+### Flow 2: Subscribe to Platform and Enable a Service
 
 ```
-1. User navigates to /services/seal (already authenticated)
+1. User navigates to /services/seal (already authenticated, no platform subscription)
    ↓
-2. Onboarding form visible (tier selection only)
+2. Page shows message: "Subscribe to the platform on the Billing page to access services."
    ↓
-3. Select tier: Pro (shows $100/month base price)
+3. User navigates to /billing
    ↓
-4. Click tooltips (?) to learn about guaranteed bandwidth and features
+4. Selects platform tier (Starter $1/month or Pro $29/month)
    ↓
-5. Review per-request pricing ($0.0001/req, $1 per 10K requests)
+5. Accepts terms of service, completes payment
    ↓
-6. Check "Agree to terms of service" checkbox
+6. Platform subscription active → all services auto-provisioned in Disabled state
    ↓
-7. Click "Subscribe to Service for $100.00/month" button
+7. User navigates to /services/seal
    ↓
-8. Service provisioning (State: Provisioning, spinner shown)
+8. Interactive form visible (Overview tab active)
    ↓
-9. Backend provisions service infrastructure
+9. User can configure: burst, IP allowlist, keys, packages
    ↓
-10. Service moves to Disabled state (State: Disabled)
+10. User clicks [Enable Service] toggle
     ↓
-11. Page updates to show Interactive Form (Config tab active)
+11. Service enabled (State: Enabled)
     ↓
-12. User can now configure: burst, IP allowlist, and future add-ons
-    ↓
-13. User clicks [Enable Service] toggle
-    ↓
-14. Service enabled (State: Enabled)
-    ↓
-15. Escrow balance charged: $100.00 (pro-rated for current month)
-    ↓
-16. Toast: "Seal service enabled. $100.00 charged."
+12. Toast: "Seal service enabled."
 ```
 
 **Note:**
-- Onboarding (State: NotProvisioned) only allows tier selection and ToS acceptance
-- After provisioning completes (State: Disabled), user can configure burst, packages, IP allowlist, etc.
-- Service must be explicitly enabled to start billing
+- Platform subscription is managed on the Billing page (not on service pages)
+- Services are free and auto-provisioned after platform payment succeeds
+- Only per-request usage charges apply (no per-service base fees)
 - Charges are auto-deducted from escrow balance (no wallet signature required)
 
 ---
@@ -1344,45 +1202,27 @@ All prices displayed in USD. Deposits/withdrawals use **USDC** tokens on Sui blo
 ### Flow 3: Edit Existing Service Configuration
 
 ```
-1. User on /services/seal (configured state, Config tab active)
+1. User on /services/seal (configured state, Overview tab active)
    ↓
-2. Click [Edit 󰏫] icon (top-right of config section)
+2. User changes configuration (e.g., enable burst, add packages)
    ↓
-3. Modal opens with current config pre-filled
+3. Changes apply immediately (field-level actions, no "Save" button)
    ↓
-4. Change tier: Starter ($20) → Pro ($40)
+4. Toast: "Configuration updated."
    ↓
-5. See new Monthly Estimate: $40.00 (live calculation updates)
-   ↓
-6. See note: "You'll be charged $X.XX (pro-rated) immediately from your escrow balance"
-   ↓
-7. Balance validation (if insufficient, error shown: "Insufficient balance. Top up required.")
-   ↓
-8. Click "Save Changes"
-   ↓
-9. Saving spinner shown
-   ↓
-10. Configuration updated successfully
-    ↓
-11. Modal closes
-    ↓
-12. Balance updates: $127.50 → $117.50 (example: $10 pro-rated charge)
-    ↓
-13. Logs tab shows new entry: "Configuration updated - Pro tier enabled - Charged $10.00 (pro-rated)"
-    ↓
-14. Toast: "Configuration updated. $10.00 charged from escrow balance."
+5. Usage costs update to reflect new configuration
 ```
 
-**Downgrade Example (Credit Applied):**
+**Platform Tier Change (on Billing page):**
 ```
-User changes tier: Pro ($40) → Starter ($20)
-→ Pro-rated credit: +$X.XX added to escrow balance
-→ Toast: "Configuration updated. $X.XX credit applied to your balance."
-→ Balance increases immediately
-→ User can withdraw credit at any time
+User navigates to /billing
+→ Changes platform tier: Starter ($1) → Pro ($29)
+→ Pro-rated charge applied from escrow balance
+→ All services gain Pro features (burst, IP allowlist)
+→ Toast: "Platform upgraded to Pro."
 ```
 
-**Note:** All charges/credits auto-deducted from escrow balance (no wallet signature needed for config changes).
+**Note:** Tier changes are managed on the Billing page. Service pages only show per-request usage costs and service-specific configuration (burst, keys, packages).
 
 ---
 
@@ -1627,7 +1467,7 @@ import { CancelButton } from '@/components/ui/cancel-button';
 
 | Component | Purpose | Location |
 |-----------|---------|----------|
-| `ServiceConfigForm` | Onboarding form | `components/services/` |
+| `ServiceConfigForm` | Service configuration form | `components/services/` |
 | `ServiceConfigDisplay` | Read-only config view | `components/services/` |
 | `ServiceTabs` | Tab navigation (Config/Keys/Stats/Logs) | `components/services/` |
 | `PricingCalculator` | Live monthly fee calculator | `components/services/` |
@@ -1691,7 +1531,7 @@ import { CancelButton } from '@/components/ui/cancel-button';
 | `Tabs` | Service page tabs (Config/Keys/Stats/Logs) |
 | `Table` | Usage table, invoice list |
 | `Input` | Form fields (number inputs for keys/packages) |
-| `RadioGroup` | Tier selection (Starter/Pro/Business) |
+| `RadioGroup` | Platform tier selection on Billing page (Starter/Pro) |
 | `Checkbox` | Burst enable/disable |
 | `Toast` | Success/error notifications |
 | `Tooltip` | Help text for (?) icons |
@@ -1737,7 +1577,7 @@ Protected routes (require authentication):
 
 ```typescript
 const serviceConfigSchema = z.object({
-  guaranteedBandwidth: z.enum(['starter', 'pro', 'enterprise']),
+  guaranteedBandwidth: z.enum(['starter', 'pro']),
   burstEnabled: z.boolean(),
   packagesPerSealKey: z.number().min(3), // Comes with 3, can add more
   totalApiKeys: z.number().min(1),       // Total API keys (1 included)
@@ -1749,7 +1589,7 @@ const serviceConfigSchema = z.object({
   }
   return true
 }, {
-  message: "Burst is only available for Pro and Enterprise tiers",
+  message: "Burst is only available for Pro tier",
   path: ["burstEnabled"]
 })
 ```
@@ -1760,7 +1600,6 @@ const PRICING = {
   tiers: {
     starter: { base: 20, reqPerSec: 100 },
     pro: { base: 40, reqPerSec: 500 },
-    enterprise: { base: 80, reqPerSec: 2000 },
   },
   // burst: No monthly fee (usage-based billing only)
   additionalPackagePerKey: 1, // $1/month per package (after 3) per seal key
@@ -2314,17 +2153,17 @@ colors: {
 - Before enable: Check balance, show warning if insufficient
 - Error modal: "Insufficient balance ($X needed, $Y available). Top up your wallet to continue."
 - [Top Up] button in error modal
-- [Cancel] returns to onboarding form
+- [Cancel] returns to service page
 
 **Validation Errors:**
 - Inline form errors (Zod schema validation)
 - Highlight invalid fields in red
 - Show specific error message below field
-- Example: "Burst is only available for Pro and Enterprise tiers"
+- Example: "Burst is only available for Pro tier"
 
 **Backend Error (500, timeout):**
 - Toast: "An error occurred. Please try again."
-- Onboarding form state preserved (don't lose user's input)
+- Form state preserved (don't lose user's input)
 - Retry button or manual retry
 
 **Rate Limit:**
@@ -2395,8 +2234,8 @@ colors: {
 ### Empty States (Not Errors, but Worth Documenting)
 
 **No Services Configured:**
-- Show onboarding card: "Get started by configuring your first service"
-- Large [Configure Seal] button
+- Show card: "Subscribe to the platform on the Billing page to get started"
+- Large [Go to Billing] button
 
 **No Usage Data Yet:**
 - Stats tab: "Stats updated hourly. Data appears after 24 hours of activity."
@@ -2524,11 +2363,11 @@ const toggleMutation = trpc.services.toggleService.useMutation({
 3. Toggle updates immediately on success
 4. No global overlay shown
 
-**Subscription (slow operation):**
-1. User clicks "Subscribe to Service"
+**Platform Subscription (slow operation):**
+1. User subscribes on the Billing page
 2. Button shows inline spinner
 3. After 2 seconds → Global overlay appears
-4. On success → Overlay disappears, page refreshes
+4. On success → Overlay disappears, page refreshes, services auto-provisioned
 5. On error → Overlay disappears, error toast shown
 
 **Key Creation:**
@@ -2678,7 +2517,7 @@ Once this UI design is approved:
 2. **Create database schema** (customers, service_configs, billing, logs)
 3. **Setup API** (Fastify + tRPC routers based on pages above)
 4. **Build webapp skeleton** (routes, layouts, components)
-5. **Implement onboarding flow** (connect wallet → configure first service)
+5. **Implement platform subscription flow** (connect wallet → subscribe on Billing page → services auto-provisioned)
 6. **Add mock data** (for UI development without backend)
 7. **Iterate on UI** (styling, interactions, responsiveness)
 
@@ -2695,12 +2534,11 @@ Once this UI design is approved:
 - ✅ **Connect Wallet button in header:** Top-right, prominent (changes to address+balance when connected)
 - ✅ **Cloudflare cf-ui design system:** Colors, typography, spacing from Cloudflare's style guide
 - ✅ Cloudflare-inspired sidebar navigation (Seal, gRPC, GraphQL, Billing, Support)
-- ✅ Service pages: Onboarding form → Tab-based view (Config/Keys/Stats/Logs)
+- ✅ Service pages: Interactive form with tab-based view (Overview/X-API-Key/Seal Keys/More Settings)
 - ✅ **Always-included features banner:** Shows geo-steering and auto-failover (top of config)
-- ✅ **Horizontal tier cards:** Starter/Pro/Enterprise shown as full-width stacked cards (not radio buttons)
+- ✅ **Platform tier selection on Billing page:** Starter/Pro shown as full-width stacked cards
 - ✅ **Selection indicators:** Border highlight (3px orange) + "SELECTED" badge (top-right)
-- ✅ **Per-region and global capacity:** Each tier shows req/s per region + global (~3x)
-- ✅ Tier-based pricing with live "Total Monthly Fee" calculator
+- ✅ Per-request usage costs shown on service pages (from DRAFT invoice)
 - ✅ Seal service fully configured; gRPC/GraphQL show "coming soon" pages
 - ✅ Tooltip (?) on each config field for explanations
 - ✅ Keys tab for managing API keys, Seal keys, and packages

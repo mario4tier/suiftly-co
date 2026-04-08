@@ -53,13 +53,14 @@ test.describe('Tailwind Color System', () => {
   });
 
   test('custom Cloudflare colors are applied correctly', async ({ page }) => {
-    // Navigate to Seal service page to access subscribe button
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
+    // Navigate to billing page to access the platform subscribe button (has Suiftly orange brand color)
+    await page.click('text=Billing');
+    await page.waitForURL('/billing', { timeout: 5000 });
+    await page.waitForLoadState('networkidle');
 
-    // Test the orange (#f38020) branding color on subscribe button
-    const subscribeButton = page.locator('button:has-text("Subscribe to Service")');
-    await expect(subscribeButton).toBeVisible();
+    // Test the orange (#f38020) branding color on the platform subscribe button
+    const subscribeButton = page.locator('button').filter({ hasText: /Subscribe to.*Plan/ });
+    await expect(subscribeButton).toBeVisible({ timeout: 5000 });
 
     // Get computed background color
     const bgColor = await subscribeButton.evaluate((el) => {
@@ -89,17 +90,19 @@ test.describe('Tailwind Color System', () => {
   });
 
   test('standard Tailwind amber colors are applied correctly', async ({ page }) => {
-    // Navigate to Seal service page to access Guaranteed Bandwidth section
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
+    // Navigate to billing page to access Pro tier feature info popovers (amber styled)
+    await page.click('text=Billing');
+    await page.waitForURL('/billing', { timeout: 5000 });
+    await page.waitForLoadState('networkidle');
 
-    // Click an info icon to open tooltip with amber background
-    const infoButton = page.locator('h3:has-text("Guaranteed Bandwidth")').locator('..').locator('button').first();
+    // Click info icon next to "200 RPS/region" in the Pro plan feature list
+    const infoButton = page.locator('li').filter({ hasText: '200 RPS/region' }).locator('button');
+    await expect(infoButton).toBeVisible({ timeout: 5000 });
     await infoButton.click();
 
     // Get the popover element (Playwright auto-retries toBeVisible)
-    const popover = page.locator('[role="dialog"]').or(page.locator('.z-50').filter({ hasText: /regions/ })).first();
-    await expect(popover).toBeVisible();
+    const popover = page.locator('[role="dialog"]').or(page.locator('.z-50').filter({ hasText: /Per-region rate/ })).first();
+    await expect(popover).toBeVisible({ timeout: 5000 });
 
     const bgColor = await popover.evaluate((el) => {
       return window.getComputedStyle(el).backgroundColor;
@@ -230,9 +233,10 @@ test.describe('Tailwind Color System', () => {
   });
 
   test('popover dark mode colors switch correctly', async ({ page }) => {
-    // Navigate to Seal service page to access Guaranteed Bandwidth section
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
+    // Navigate to billing page to access Pro tier feature info popovers (amber styled)
+    await page.click('text=Billing');
+    await page.waitForURL('/billing', { timeout: 5000 });
+    await page.waitForLoadState('networkidle');
 
     // Switch to dark mode first
     await page.evaluate(() => {
@@ -242,13 +246,13 @@ test.describe('Tailwind Color System', () => {
     // Small wait for CSS recomputation
     await page.waitForTimeout(200);
 
-    // Click info icon to open tooltip
-    const infoButton = page.locator('h3:has-text("Guaranteed Bandwidth")').locator('..').locator('button').first();
+    // Click info icon next to "200 RPS/region" in the Pro plan feature list
+    const infoButton = page.locator('li').filter({ hasText: '200 RPS/region' }).locator('button');
     await infoButton.click();
 
     // Get the popover element (Playwright auto-retries toBeVisible)
-    const popover = page.locator('[role="dialog"]').or(page.locator('.z-50').filter({ hasText: /regions/ })).first();
-    await expect(popover).toBeVisible();
+    const popover = page.locator('[role="dialog"]').or(page.locator('.z-50').filter({ hasText: /Per-region rate/ })).first();
+    await expect(popover).toBeVisible({ timeout: 5000 });
 
     const darkBgColor = await popover.evaluate((el) => {
       return window.getComputedStyle(el).backgroundColor;

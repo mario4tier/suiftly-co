@@ -194,7 +194,7 @@ export const billingIdempotency = pgTable('billing_idempotency', {
  * Uses PostgreSQL ENUMs for type safety at database level.
  *
  * itemType uses invoiceLineItemTypeEnum (invoice_line_item_type):
- * - subscription_starter, subscription_pro, subscription_enterprise
+ * - subscription_starter, subscription_pro
  * - tier_upgrade (pro-rated upgrade charges)
  * - requests (usage-based charges)
  * - extra_api_keys, extra_seal_keys, extra_allowlist_ips, extra_packages
@@ -227,7 +227,7 @@ export const invoiceLineItems = pgTable('invoice_line_items', {
   // Optional: credit month name for credit line items
   creditMonth: varchar('credit_month', { length: 20 }),
 
-  // Optional: extra context appended to semantic description (e.g., "Pro → Enterprise" for tier upgrades)
+  // Optional: extra context appended to semantic description (e.g., "Starter → Pro" for tier upgrades)
   description: varchar('description', { length: 100 }),
 
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

@@ -12,7 +12,6 @@ import {
   customers,
   billingRecords,
   invoiceLineItems,
-  serviceInstances,
   customerPaymentMethods,
 } from '../schema';
 import { MockDBClock } from '@suiftly/shared/db-clock';
@@ -104,20 +103,14 @@ describe('Cancellation should remove service from DRAFT invoice', () => {
   });
 
   it('should remove platform subscription from DRAFT after cancellation', async () => {
-    // 1. Create platform service instance, then process billing
-    await db.insert(serviceInstances).values({
-      customerId: CUSTOMER_ID,
-      serviceType: 'platform',
-      tier: 'starter',
-      state: 'enabled',
-      isUserEnabled: true,
-      paidOnce: false,
-      config: { tier: 'starter' },
-    });
+    // 1. Set platform tier on customer, then process billing
+    await db.update(customers).set({
+      platformTier: 'starter',
+    }).where(eq(customers.customerId, CUSTOMER_ID));
 
     const platformResult = await handleSubscriptionBilling(
       db, CUSTOMER_ID, 'platform', 'starter',
-      getTierPriceUsdCents('starter', 'platform'),
+      getTierPriceUsdCents('starter'),
       paymentServices, clock
     );
     expect(platformResult.paymentSuccessful).toBe(true);
@@ -166,26 +159,21 @@ describe('Cancellation should remove service from DRAFT invoice', () => {
     expect(Number(draftAfter!.amountUsdCents)).toBe(-45);
   });
 
-  it('should remove seal subscription from DRAFT after cancellation (control test)', async () => {
-    // 1. Create seal service instance, then process billing
-    await db.insert(serviceInstances).values({
-      customerId: CUSTOMER_ID,
-      serviceType: 'seal',
-      tier: 'pro',
-      state: 'disabled',
-      isUserEnabled: false,
-      paidOnce: false,
-      config: { tier: 'pro' },
-    });
+  it('should remove platform pro subscription from DRAFT after cancellation (control test)', async () => {
+    // 1. Set platform pro tier on customer, then process billing
+    // (Control test: verifies cancellation DRAFT removal works for pro tier too)
+    await db.update(customers).set({
+      platformTier: 'pro',
+    }).where(eq(customers.customerId, CUSTOMER_ID));
 
-    const sealResult = await handleSubscriptionBilling(
-      db, CUSTOMER_ID, 'seal', 'pro',
-      getTierPriceUsdCents('pro', 'seal'),
+    const proResult = await handleSubscriptionBilling(
+      db, CUSTOMER_ID, 'platform', 'pro',
+      getTierPriceUsdCents('pro'),
       paymentServices, clock
     );
-    expect(sealResult.paymentSuccessful).toBe(true);
+    expect(proResult.paymentSuccessful).toBe(true);
 
-    // 2. Verify DRAFT includes seal subscription
+    // 2. Verify DRAFT includes platform pro subscription
     const draftBefore = await db.query.billingRecords.findFirst({
       where: and(
         eq(billingRecords.customerId, CUSTOMER_ID),
@@ -196,17 +184,17 @@ describe('Cancellation should remove service from DRAFT invoice', () => {
 
     const lineItemsBefore = await db.select().from(invoiceLineItems)
       .where(eq(invoiceLineItems.billingRecordId, draftBefore!.id));
-    const sealItemBefore = lineItemsBefore.find(li => li.serviceType === 'seal');
-    expect(sealItemBefore).toBeDefined();
-    console.log(`DRAFT before cancellation: $${Number(draftBefore!.amountUsdCents) / 100}, seal line item: $${Number(sealItemBefore!.amountUsdCents) / 100}`);
+    const proItemBefore = lineItemsBefore.find(li => li.serviceType === 'platform');
+    expect(proItemBefore).toBeDefined();
+    console.log(`DRAFT before cancellation: $${Number(draftBefore!.amountUsdCents) / 100}, platform pro line item: $${Number(proItemBefore!.amountUsdCents) / 100}`);
 
     // 3. Schedule cancellation
     const cancelResult = await scheduleCancellation(
-      db, CUSTOMER_ID, 'seal', clock
+      db, CUSTOMER_ID, 'platform', clock
     );
     expect(cancelResult.success).toBe(true);
 
-    // 4. Verify DRAFT no longer includes seal subscription
+    // 4. Verify DRAFT no longer includes platform subscription
     const draftAfter = await db.query.billingRecords.findFirst({
       where: and(
         eq(billingRecords.customerId, CUSTOMER_ID),
@@ -217,15 +205,15 @@ describe('Cancellation should remove service from DRAFT invoice', () => {
 
     const lineItemsAfter = await db.select().from(invoiceLineItems)
       .where(eq(invoiceLineItems.billingRecordId, draftAfter!.id));
-    const sealSubItemAfter = lineItemsAfter.find(
-      li => li.serviceType === 'seal' && li.itemType !== 'credit'
+    const proSubItemAfter = lineItemsAfter.find(
+      li => li.serviceType === 'platform' && li.itemType !== 'credit'
     );
 
-    console.log(`DRAFT after cancellation: $${Number(draftAfter!.amountUsdCents) / 100}, seal sub items: ${lineItemsAfter.filter(li => li.serviceType === 'seal' && li.itemType !== 'credit').length}`);
+    console.log(`DRAFT after cancellation: $${Number(draftAfter!.amountUsdCents) / 100}, platform sub items: ${lineItemsAfter.filter(li => li.serviceType === 'platform' && li.itemType !== 'credit').length}`);
 
-    expect(sealSubItemAfter).toBeUndefined();
-    // DRAFT negative because seal credit remains after sub removed.
-    // Seal Pro on Jan 15: credit = floor(2900*14/31) = 1309 cents
+    expect(proSubItemAfter).toBeUndefined();
+    // DRAFT negative because platform pro credit remains after sub removed.
+    // Platform Pro on Jan 15: credit = floor(2900*14/31) = 1309 cents
     expect(Number(draftAfter!.amountUsdCents)).toBe(-1309);
   });
 });

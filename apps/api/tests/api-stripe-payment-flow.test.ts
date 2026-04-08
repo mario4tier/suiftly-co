@@ -4,12 +4,13 @@
  * Tests the Stripe payment path through tRPC endpoints, verifying:
  * - Stripe as sole payment provider (subscribe, charge, billing records)
  * - Stripe charge failure handling (mock config for declined, retryable errors)
- * - Stripe retry on service enable after fixing mock config
+ * - Stripe retry after fixing mock config
  * - Billing record and invoice_payment population after Stripe charge
  * - Provider chain: Stripe fallback when escrow fails
  *
  * All tests use MockStripeService (no real Stripe API calls).
  * Uses /test/stripe/config to control mock behavior.
+ * Platform subscription is the billing trigger (starter = $1/month).
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -32,15 +33,13 @@ import {
   ensureTestBalance,
   runPeriodicBillingJob,
   addStripePaymentMethod,
+  reconcilePendingPayments,
 } from './helpers/http.js';
-import { TEST_WALLET } from './helpers/auth.js';
+import { login, TEST_WALLET } from './helpers/auth.js';
 import { clearNotifications, expectNotifications, expectNoNotifications } from './helpers/notifications.js';
-import { setupBillingTest } from './helpers/setup.js';
 
 /**
  * Find a Stripe payment across all paid billing records.
- * Platform subscription is paid via escrow, so the first paid record
- * may not be the Stripe-charged one.
  */
 async function findStripePayment(paidRecords: { id: number }[]) {
   for (const pr of paidRecords) {
@@ -58,28 +57,27 @@ describe('API: Stripe Payment Flow', () => {
   let customerId: number;
 
   beforeEach(async () => {
-    ({ accessToken, customerId } = await setupBillingTest({ balance: 2 }));
+    await resetClock();
+    await resetTestData(TEST_WALLET);
 
-    // Remove escrow payment method (auto-added by ensureTestBalance) so Stripe-specific
-    // tests start with no payment methods as originally intended.
-    const escrowMethods = await db.select()
-      .from(customerPaymentMethods)
-      .where(and(
-        eq(customerPaymentMethods.customerId, customerId),
-        eq(customerPaymentMethods.providerType, 'escrow'),
-        eq(customerPaymentMethods.status, 'active')
-      ));
-    for (const m of escrowMethods) {
-      await trpcMutation<any>('billing.removePaymentMethod', { paymentMethodId: m.id }, accessToken);
-    }
+    accessToken = await login(TEST_WALLET);
+
+    const customer = await db.query.customers.findFirst({
+      where: eq(customers.walletAddress, TEST_WALLET),
+    });
+    if (!customer) throw new Error('Test customer not found');
+    customerId = customer.customerId;
+
+    // Small balance — insufficient for platform Pro ($29) so Stripe handles it.
+    // Note: ensureTestBalance auto-adds escrow as a payment method, but $2 is
+    // insufficient for Pro ($29), so Stripe handles payment in tests using Pro tier.
+    await ensureTestBalance(2, { walletAddress: TEST_WALLET });
+    await clearNotifications(customerId);
 
     // Force mock Stripe service (even if STRIPE_SECRET_KEY is configured)
     await restCall('POST', '/test/stripe/force-mock', { enabled: true });
     // Clear stripe mock config
     await restCall('POST', '/test/stripe/config/clear');
-
-    // Clear any notifications from escrow removal
-    await clearNotifications(customerId);
   });
 
   afterEach(async () => {
@@ -99,23 +97,23 @@ describe('API: Stripe Payment Flow', () => {
       // Add stripe as only payment method (setup + webhook)
       await addStripePaymentMethod(accessToken);
 
-      // Subscribe to seal starter ($9/month)
+      // Subscribe to platform pro ($29/month) — Stripe handles the charge (escrow has only $2)
+      await trpcMutation<any>('billing.acceptTos', {}, accessToken);
       const result = await trpcMutation<any>(
         'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
+        { serviceType: 'platform', tier: 'pro' },
         accessToken
       );
 
       expect(result.result?.data).toBeDefined();
       expect(result.result?.data.paymentPending).toBe(false);
-      expect(result.result?.data.tier).toBe('starter');
+      expect(result.result?.data.tier).toBe('pro');
 
       // Verify billing record was created and marked as paid
       const records = await db.select()
         .from(billingRecords)
         .where(eq(billingRecords.customerId, customerId));
 
-      // Should have at least one paid record (subscription charge)
       const paidRecords = records.filter(r => r.status === 'paid');
       expect(paidRecords.length).toBeGreaterThanOrEqual(1);
 
@@ -144,23 +142,21 @@ describe('API: Stripe Payment Flow', () => {
       await addStripePaymentMethod(accessToken);
 
       // Subscribe — Stripe declines, payment should be pending
+      await trpcMutation<any>('billing.acceptTos', {}, accessToken);
       const result = await trpcMutation<any>(
         'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
+        { serviceType: 'platform', tier: 'pro' },
         accessToken
       );
 
       expect(result.result?.data).toBeDefined();
       expect(result.result?.data.paymentPending).toBe(true);
 
-      // Verify service has pending invoice
-      const service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal')
-        ),
+      // Verify customer has pending invoice
+      const customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, customerId),
       });
-      expect(service?.subPendingInvoiceId).not.toBeNull();
+      expect(customer?.pendingInvoiceId).not.toBeNull();
       await expectNoNotifications(customerId, { tolerateGM: true });
     });
 
@@ -175,9 +171,10 @@ describe('API: Stripe Payment Flow', () => {
 
       await addStripePaymentMethod(accessToken);
 
+      await trpcMutation<any>('billing.acceptTos', {}, accessToken);
       const result = await trpcMutation<any>(
         'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
+        { serviceType: 'platform', tier: 'pro' },
         accessToken
       );
 
@@ -188,16 +185,17 @@ describe('API: Stripe Payment Flow', () => {
   });
 
   // =========================================================================
-  // Stripe retry on enable (subscribe without payment → add Stripe → enable)
+  // Stripe retry (subscribe without payment → add Stripe → reconcile)
   // =========================================================================
-  describe('Stripe retry on enable', () => {
-    it('should pay pending invoice via Stripe when enabled after adding Stripe', async () => {
+  describe('Stripe retry after adding payment method', () => {
+    it('should pay pending invoice via Stripe when reconciled after adding Stripe', async () => {
       await setClockTime('2025-01-05T00:00:00Z');
 
       // Subscribe without any payment methods → payment pending
+      await trpcMutation<any>('billing.acceptTos', {}, accessToken);
       const subscribeResult = await trpcMutation<any>(
         'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
+        { serviceType: 'platform', tier: 'pro' },
         accessToken
       );
       expect(subscribeResult.result?.data?.paymentPending).toBe(true);
@@ -205,28 +203,16 @@ describe('API: Stripe Payment Flow', () => {
       // Add Stripe as payment method (setup + webhook)
       await addStripePaymentMethod(accessToken);
 
-      // Enable — retries pending invoice via Stripe (first attempt) → succeeds
-      const toggleResult = await trpcMutation<any>(
-        'services.toggleService',
-        { serviceType: 'seal', enabled: true },
-        accessToken
-      );
+      // Reconcile pending payments → retries platform pending invoice via Stripe
+      await reconcilePendingPayments(customerId);
 
-      expect(toggleResult.result?.data).toBeDefined();
-      expect(toggleResult.result?.data.isUserEnabled).toBe(true);
-
-      // Verify pending invoice was cleared
-      const service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal')
-        ),
+      // Verify pending invoice was cleared on customer
+      const customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, customerId),
       });
-      expect(service?.subPendingInvoiceId).toBeNull();
+      expect(customer?.pendingInvoiceId).toBeNull();
 
       // Verify billing record is now paid with Stripe source
-      // Note: paidRecords may include the platform subscription (paid via escrow),
-      // so search across all paid records for one with a Stripe payment.
       const records = await db.select()
         .from(billingRecords)
         .where(eq(billingRecords.customerId, customerId));
@@ -248,8 +234,8 @@ describe('API: Stripe Payment Flow', () => {
     it('should use Stripe when escrow has insufficient funds and verify billing record', async () => {
       await setClockTime('2025-01-05T00:00:00Z');
 
-      // Create escrow with $1 (insufficient for $9 starter)
-      await ensureTestBalance(1, { walletAddress: TEST_WALLET });
+      // Create escrow with $0 (insufficient for $1 platform starter)
+      await ensureTestBalance(0, { walletAddress: TEST_WALLET });
 
       // Add escrow (priority 1) + stripe (priority 2)
       await trpcMutation<any>(
@@ -259,10 +245,11 @@ describe('API: Stripe Payment Flow', () => {
       );
       await addStripePaymentMethod(accessToken);
 
-      // Subscribe — escrow fails, stripe succeeds
+      // Subscribe — escrow fails (insufficient), stripe succeeds
+      await trpcMutation<any>('billing.acceptTos', {}, accessToken);
       const result = await trpcMutation<any>(
         'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
+        { serviceType: 'platform', tier: 'starter' },
         accessToken
       );
 
@@ -300,9 +287,10 @@ describe('API: Stripe Payment Flow', () => {
       await addStripePaymentMethod(accessToken);
 
       // Subscribe — Stripe requires 3DS, payment should be pending
+      await trpcMutation<any>('billing.acceptTos', {}, accessToken);
       const result = await trpcMutation<any>(
         'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
+        { serviceType: 'platform', tier: 'pro' },
         accessToken
       );
 
@@ -322,7 +310,7 @@ describe('API: Stripe Payment Flow', () => {
       await expectNoNotifications(customerId, { tolerateGM: true });
     });
 
-    it('should return paymentActionUrl in error when Stripe requires 3DS on retry', async () => {
+    it('should NOT auto-resolve 3DS pending invoice when reconciled (requires manual authentication)', async () => {
       await setClockTime('2025-01-05T00:00:00Z');
 
       // Configure mock to require 3DS
@@ -330,30 +318,41 @@ describe('API: Stripe Payment Flow', () => {
         forceChargeRequiresAction: true,
       });
 
-      // Subscribe without payment methods → pending
+      // Add Stripe BEFORE subscribing. This triggers a GM async sync, but there are
+      // no pending invoices yet, so GM is a no-op. If we subscribed first, the initial
+      // subscribe would fail (escrow only has $2, pro is $29) → 'failed' billing record.
+      // Then addStripePaymentMethod would trigger GM, which resolves it using GM's own
+      // Stripe mock (separate process, doesn't have forceChargeRequiresAction configured).
+      await addStripePaymentMethod(accessToken);
+
+      // Wait for GM to finish processing the sync-customer (it's a no-op but needs to complete
+      // before subscribe, so GM doesn't interfere with the subscribe's 3DS billing record)
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
+      // Subscribe — escrow ($2) insufficient for Pro ($29), Stripe requires 3DS → pending
+      await trpcMutation<any>('billing.acceptTos', {}, accessToken);
       const subscribeResult = await trpcMutation<any>(
         'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
+        { serviceType: 'platform', tier: 'pro' },
         accessToken
       );
       expect(subscribeResult.result?.data?.paymentPending).toBe(true);
 
-      // Add Stripe with 3DS still configured (setup + webhook)
-      await addStripePaymentMethod(accessToken);
+      // Reconcile — Stripe still requires 3DS, so invoice stays pending
+      await reconcilePendingPayments(customerId);
 
-      // Enable — retry via Stripe, but 3DS is required → still fails
-      const toggleResult = await trpcMutation<any>(
-        'services.toggleService',
-        { serviceType: 'seal', enabled: true },
-        accessToken
-      );
+      // Verify: customer still has pending invoice (3DS can't be done server-side)
+      const customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, customerId),
+      });
+      expect(customer?.pendingInvoiceId).not.toBeNull();
 
-      // Should fail because Stripe requires 3DS which can't be done server-side
-      expect(toggleResult.error).toBeDefined();
-      expect(toggleResult.error.data?.code).toBe('PRECONDITION_FAILED');
-
-      // Error message should mention authentication/3DS
-      expect(toggleResult.error.message).toContain('authentication');
+      // Verify: billing record still has paymentActionUrl (not auto-resolved)
+      const records = await db.select()
+        .from(billingRecords)
+        .where(eq(billingRecords.customerId, customerId));
+      const pendingRecord = records.find(r => r.status === 'pending' && r.paymentActionUrl);
+      expect(pendingRecord).toBeDefined();
 
       await expectNoNotifications(customerId, { tolerateGM: true });
     });
@@ -374,9 +373,10 @@ describe('API: Stripe Payment Flow', () => {
       await addStripePaymentMethod(accessToken);
 
       // Subscribe — Stripe declines
+      await trpcMutation<any>('billing.acceptTos', {}, accessToken);
       await trpcMutation<any>(
         'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
+        { serviceType: 'platform', tier: 'pro' },
         accessToken
       );
 
@@ -389,14 +389,11 @@ describe('API: Stripe Payment Flow', () => {
       expect(failedRecord).toBeDefined();
       expect(failedRecord!.failureReason).toContain('declined');
 
-      // Service should have pending invoice (needs manual retry after fixing card)
-      const service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal')
-        ),
+      // Customer should have pending invoice (needs manual retry after fixing card)
+      const customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, customerId),
       });
-      expect(service?.subPendingInvoiceId).not.toBeNull();
+      expect(customer?.pendingInvoiceId).not.toBeNull();
       await expectNoNotifications(customerId, { tolerateGM: true });
     });
   });
@@ -446,9 +443,10 @@ describe('API: Stripe Payment Flow', () => {
       await addStripePaymentMethod(accessToken);
 
       // Subscribe — Stripe declines
+      await trpcMutation<any>('billing.acceptTos', {}, accessToken);
       const result = await trpcMutation<any>(
         'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
+        { serviceType: 'platform', tier: 'pro' },
         accessToken
       );
 
@@ -467,10 +465,10 @@ describe('API: Stripe Payment Flow', () => {
   });
 
   // =========================================================================
-  // 3DS → Add new card → Retry succeeds (Bug fix validation)
+  // 3DS → Clear config → Retry succeeds (Bug fix validation)
   // =========================================================================
-  describe('3DS recovery: add new card and retry', () => {
-    it('should charge new card after 3DS by using fresh idempotency key', async () => {
+  describe('3DS recovery: clear 3DS config and retry', () => {
+    it('should charge after 3DS by using fresh idempotency key when 3DS config cleared', async () => {
       await setClockTime('2025-01-05T00:00:00Z');
 
       // Configure mock to require 3DS
@@ -481,9 +479,10 @@ describe('API: Stripe Payment Flow', () => {
       // Add Stripe (setup + webhook) + subscribe → 3DS pending
       await addStripePaymentMethod(accessToken);
 
+      await trpcMutation<any>('billing.acceptTos', {}, accessToken);
       const subscribeResult = await trpcMutation<any>(
         'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
+        { serviceType: 'platform', tier: 'pro' },
         accessToken
       );
       expect(subscribeResult.result?.data?.paymentPending).toBe(true);
@@ -498,16 +497,9 @@ describe('API: Stripe Payment Flow', () => {
       // Simulate: customer adds a new non-3DS card — clear 3DS config
       await restCall('POST', '/test/stripe/config/clear');
 
-      // Enable service → retryPendingInvoice → processInvoicePayment with fresh
-      // idempotency key (retryCount was incremented in the 3DS path) → succeeds
-      const toggleResult = await trpcMutation<any>(
-        'services.toggleService',
-        { serviceType: 'seal', enabled: true },
-        accessToken
-      );
-
-      expect(toggleResult.result?.data).toBeDefined();
-      expect(toggleResult.result?.data.isUserEnabled).toBe(true);
+      // Reconcile → retryPendingInvoice → processInvoicePayment with fresh
+      // idempotency key (retryCount incremented in 3DS path) → succeeds
+      await reconcilePendingPayments(customerId);
 
       // Verify billing record is now paid
       records = await db.select()
@@ -516,14 +508,11 @@ describe('API: Stripe Payment Flow', () => {
       const paidRecords = records.filter(r => r.status === 'paid');
       expect(paidRecords.length).toBeGreaterThanOrEqual(1);
 
-      // Verify subPendingInvoiceId is cleared
-      const service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal')
-        ),
+      // Verify pendingInvoiceId is cleared on customer
+      const customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, customerId),
       });
-      expect(service?.subPendingInvoiceId).toBeNull();
+      expect(customer?.pendingInvoiceId).toBeNull();
       await expectNoNotifications(customerId, { tolerateGM: true });
     });
   });
@@ -532,7 +521,7 @@ describe('API: Stripe Payment Flow', () => {
   // Card declined → Fix card → Retry succeeds
   // =========================================================================
   describe('Card declined recovery: fix card and retry', () => {
-    it('should succeed after clearing declined config and retrying via toggleService', async () => {
+    it('should succeed after clearing declined config and retrying via reconcile', async () => {
       await setClockTime('2025-01-05T00:00:00Z');
 
       // Configure mock to decline
@@ -543,9 +532,10 @@ describe('API: Stripe Payment Flow', () => {
       // Add Stripe (setup + webhook) + subscribe → declined, billing record failed
       await addStripePaymentMethod(accessToken);
 
+      await trpcMutation<any>('billing.acceptTos', {}, accessToken);
       const subscribeResult = await trpcMutation<any>(
         'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
+        { serviceType: 'platform', tier: 'pro' },
         accessToken
       );
       expect(subscribeResult.result?.data?.paymentPending).toBe(true);
@@ -559,15 +549,8 @@ describe('API: Stripe Payment Flow', () => {
       // Simulate: customer fixes their card — clear declined config
       await restCall('POST', '/test/stripe/config/clear');
 
-      // Enable service → retryPendingInvoice retries the failed invoice → succeeds
-      const toggleResult = await trpcMutation<any>(
-        'services.toggleService',
-        { serviceType: 'seal', enabled: true },
-        accessToken
-      );
-
-      expect(toggleResult.result?.data).toBeDefined();
-      expect(toggleResult.result?.data.isUserEnabled).toBe(true);
+      // Reconcile → retries the failed invoice → succeeds
+      await reconcilePendingPayments(customerId);
 
       // Verify billing record is now paid
       records = await db.select()
@@ -576,42 +559,37 @@ describe('API: Stripe Payment Flow', () => {
       const paidRecords = records.filter(r => r.status === 'paid');
       expect(paidRecords.length).toBeGreaterThanOrEqual(1);
 
-      // Verify subPendingInvoiceId is cleared
-      const service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal')
-        ),
+      // Verify pendingInvoiceId is cleared on customer
+      const customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, customerId),
       });
-      expect(service?.subPendingInvoiceId).toBeNull();
+      expect(customer?.pendingInvoiceId).toBeNull();
       await expectNoNotifications(customerId, { tolerateGM: true });
     });
   });
 
   // =========================================================================
-  // Monthly billing clears subPendingInvoiceId gate
+  // Monthly billing clears pendingInvoiceId gate
   // =========================================================================
   describe('Monthly billing clears pending invoice gate', () => {
-    it('should allow service enable after monthly billing pays and toggleService retries initial invoice', async () => {
+    it('should allow platform gate clear after monthly billing pays and reconcile retries initial invoice', async () => {
       await setClockTime('2025-01-15T00:00:00Z');
 
       // Subscribe WITHOUT a payment method → initial payment fails
+      await trpcMutation<any>('billing.acceptTos', {}, accessToken);
       const subscribeResult = await trpcMutation<any>(
         'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
+        { serviceType: 'platform', tier: 'pro' },
         accessToken
       );
       expect(subscribeResult.result?.data?.paymentPending).toBe(true);
 
-      // Verify subPendingInvoiceId is set
-      let service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal'),
-        ),
+      // Verify pendingInvoiceId is set on customer
+      let customerRec = await db.query.customers.findFirst({
+        where: eq(customers.customerId, customerId),
       });
-      expect(service?.subPendingInvoiceId).not.toBeNull();
-      const pendingInvoiceId = service!.subPendingInvoiceId;
+      expect(customerRec?.pendingInvoiceId).not.toBeNull();
+      const pendingInvoiceId = customerRec!.pendingInvoiceId;
 
       // Add a Stripe card (after the failed initial payment)
       await addStripePaymentMethod(accessToken);
@@ -631,41 +609,28 @@ describe('API: Stripe Payment Flow', () => {
         );
       expect(paidRecords.length).toBeGreaterThanOrEqual(1);
 
-      // Monthly billing does NOT blanket-clear subPendingInvoiceId — the initial
+      // Monthly billing does NOT blanket-clear pendingInvoiceId — the initial
       // subscription invoice is a separate debt. The gate clears only when that
       // specific invoice is paid, preserving reconciliation credit correctness.
-      service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal'),
-        ),
+      customerRec = await db.query.customers.findFirst({
+        where: eq(customers.customerId, customerId),
       });
-      // subPendingInvoiceId may or may not be cleared depending on whether the
-      // periodic retry picked up the initial invoice (GM's async retry may have
-      // poisoned lastRetryAt with real time). Either way, toggleService will
-      // retry the pending invoice.
+      // pendingInvoiceId may or may not be cleared depending on whether the
+      // periodic retry picked up the initial invoice already. Either way,
+      // reconcilePendingPayments will retry it.
 
-      // Toggle service → triggers retryPendingInvoice → pays initial invoice
-      // via Stripe (API mock, forceMock=true) → clears gate + issues
-      // reconciliation credit for the partial first month.
-      const toggleResult = await trpcMutation<any>(
-        'services.toggleService',
-        { serviceType: 'seal', enabled: true },
-        accessToken
-      );
-      expect(toggleResult.result?.data?.isUserEnabled).toBe(true);
+      // Reconcile → triggers retryPendingInvoice → pays initial invoice
+      // via Stripe (API mock, forceMock=true) → clears gate
+      await reconcilePendingPayments(customerId);
 
       // Verify: gate is now cleared
-      service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal'),
-        ),
+      customerRec = await db.query.customers.findFirst({
+        where: eq(customers.customerId, customerId),
       });
-      expect(service?.subPendingInvoiceId).toBeNull();
-      expect(service?.paidOnce).toBe(true);
+      expect(customerRec?.pendingInvoiceId).toBeNull();
+      expect(customerRec?.paidOnce).toBe(true);
 
-      // The initial invoice was paid via toggleService's retryPendingInvoice
+      // The initial invoice was paid via reconcile's retryPendingInvoice
       const [oldInvoice] = await db.select()
         .from(billingRecords)
         .where(eq(billingRecords.id, pendingInvoiceId!));
@@ -690,9 +655,10 @@ describe('API: Stripe Payment Flow', () => {
       // Add Stripe (setup + webhook) + subscribe → 3DS pending with paymentActionUrl
       await addStripePaymentMethod(accessToken);
 
+      await trpcMutation<any>('billing.acceptTos', {}, accessToken);
       const subscribeResult = await trpcMutation<any>(
         'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
+        { serviceType: 'platform', tier: 'pro' },
         accessToken
       );
       expect(subscribeResult.result?.data?.paymentPending).toBe(true);
@@ -738,9 +704,10 @@ describe('API: Stripe Payment Flow', () => {
       // Add Stripe + subscribe → 3DS pending
       await addStripePaymentMethod(accessToken);
 
+      await trpcMutation<any>('billing.acceptTos', {}, accessToken);
       const subscribeResult = await trpcMutation<any>(
         'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
+        { serviceType: 'platform', tier: 'pro' },
         accessToken
       );
       expect(subscribeResult.result?.data?.paymentPending).toBe(true);
@@ -785,7 +752,7 @@ describe('API: Stripe Payment Flow', () => {
     it('should pay via escrow when Stripe requires 3DS and clear paymentActionUrl', async () => {
       await setClockTime('2025-01-05T00:00:00Z');
 
-      // Fund escrow with sufficient balance ($50 for $9 starter)
+      // Fund escrow with sufficient balance ($50 for $1 platform starter)
       await ensureTestBalance(50, { walletAddress: TEST_WALLET });
 
       // Configure mock to require 3DS on Stripe
@@ -802,9 +769,10 @@ describe('API: Stripe Payment Flow', () => {
       await addStripePaymentMethod(accessToken);
 
       // Subscribe — escrow is tried first (priority 1) and succeeds
+      await trpcMutation<any>('billing.acceptTos', {}, accessToken);
       const result = await trpcMutation<any>(
         'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
+        { serviceType: 'platform', tier: 'starter' },
         accessToken
       );
 
@@ -838,17 +806,17 @@ describe('API: Stripe Payment Flow', () => {
     it('should notify on grace period start and customer suspension after expiry', async () => {
       await setClockTime('2025-01-05T00:00:00Z');
 
-      // Add Stripe as payment method and subscribe successfully (sets paidOnce=true)
+      // Add Stripe as payment method and subscribe to platform successfully (sets paidOnce=true)
       await addStripePaymentMethod(accessToken);
-
+      await trpcMutation<any>('billing.acceptTos', {}, accessToken);
       const subscribeResult = await trpcMutation<any>(
         'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
+        { serviceType: 'platform', tier: 'pro' },
         accessToken
       );
       expect(subscribeResult.result?.data?.paymentPending).toBe(false);
 
-      // Enable the service
+      // Enable the auto-provisioned seal service (gives suspension something to disable)
       const toggleResult = await trpcMutation<any>(
         'services.toggleService',
         { serviceType: 'seal', enabled: true },
@@ -856,7 +824,7 @@ describe('API: Stripe Payment Flow', () => {
       );
       expect(toggleResult.result?.data?.isUserEnabled).toBe(true);
 
-      // Verify paidOnce is set
+      // Verify paidOnce is set at customer level
       const customer = await db.query.customers.findFirst({
         where: eq(customers.customerId, customerId),
       });
@@ -895,19 +863,20 @@ describe('API: Stripe Payment Flow', () => {
     });
 
     it('should resume suspended customer when payment retry succeeds after adding new card', async () => {
-      // === PHASE 1: Set up a suspended customer (same flow as above) ===
+      // === PHASE 1: Set up a suspended customer ===
       await setClockTime('2025-01-05T00:00:00Z');
 
       // Subscribe with Stripe and pay successfully (sets paidOnce=true)
       await addStripePaymentMethod(accessToken);
+      await trpcMutation<any>('billing.acceptTos', {}, accessToken);
       const subscribeResult = await trpcMutation<any>(
         'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
+        { serviceType: 'platform', tier: 'pro' },
         accessToken
       );
       expect(subscribeResult.result?.data?.paymentPending).toBe(false);
 
-      // Enable the service
+      // Enable the auto-provisioned seal service
       await trpcMutation<any>(
         'services.toggleService',
         { serviceType: 'seal', enabled: true },
@@ -936,7 +905,7 @@ describe('API: Stripe Payment Flow', () => {
       });
       expect(suspendedCustomer?.status).toBe('suspended');
 
-      // Verify service is disabled
+      // Verify seal service is disabled (suspended)
       const suspendedService = await db.query.serviceInstances.findFirst({
         where: and(
           eq(serviceInstances.customerId, customerId),

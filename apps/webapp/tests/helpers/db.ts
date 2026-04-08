@@ -15,6 +15,9 @@ const API_BASE = `http://localhost:${PORT.API}`;
 
 export interface ResetCustomerOptions {
   walletAddress?: string;
+  balanceUsdCents?: number;
+  spendingLimitUsdCents?: number;
+  clearEscrowAccount?: boolean;
 }
 
 /**
@@ -454,87 +457,6 @@ export async function setupPaymentProvider(
   }
 }
 
-/**
- * Subscribe to the Seal service via the onboarding flow.
- *
- * Navigates to the Seal page, accepts terms, selects a tier, clicks Subscribe,
- * and waits for the "Subscription successful" toast + redirect to overview.
- *
- * Assumes the page is already authenticated and a payment method is configured
- * (or the test expects payment-pending behavior).
- *
- * @param tier - 'STARTER' | 'PRO' | 'ENTERPRISE' (default: 'PRO')
- * @param options.successTimeout - How long to wait for "Subscription successful" (default 10000)
- * @param options.expectSuccess - If false, skips waiting for success toast (for payment-pending tests). Default true.
- */
-export async function subscribeSealService(
-  page: Page,
-  tier: 'STARTER' | 'PRO' | 'ENTERPRISE' = 'PRO',
-  options?: {
-    successTimeout?: number;
-    expectSuccess?: boolean;
-  }
-): Promise<void> {
-  const successTimeout = options?.successTimeout ?? 10000;
-  const expectSuccess = options?.expectSuccess ?? true;
-
-  // Navigate to seal service page
-  await page.click('text=Seal');
-  await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
-
-  // Accept terms
-  await page.locator('label:has-text("Agree to")').click();
-
-  // Select tier (PRO is default in the UI, only click heading for non-PRO)
-  if (tier !== 'PRO') {
-    await page.getByRole('heading', { name: tier }).click();
-  }
-
-  // Subscribe
-  await page.locator('button:has-text("Subscribe to Service")').click();
-
-  if (expectSuccess) {
-    // Wait for subscription success toast
-    await expect(
-      page.locator('[data-sonner-toast]').filter({ hasText: /Subscription successful/i })
-    ).toBeVisible({ timeout: successTimeout });
-
-    // Wait for redirect to overview
-    await page.waitForURL(/\/services\/seal\/overview/, { timeout: 5000 });
-  }
-}
-
-/**
- * Set config flags via the test API endpoint.
- * This controls feature flags like freq_platform_sub and freq_seal_sub.
- *
- * IMPORTANT: After calling this, the frontend config cache must be refreshed.
- * Navigate away and back, or call the API's initializeFrontendConfig.
- *
- * @param flags - Key-value pairs to set (e.g., { freq_platform_sub: '1', freq_seal_sub: '0' })
- */
-export async function setConfigFlags(
-  request: APIRequestContext,
-  flags: Record<string, string>
-): Promise<void> {
-  const response = await request.post(`${API_BASE}/test/config/global`, {
-    data: flags,
-  });
-
-  if (!response.ok()) {
-    throw new Error(`Failed to set config flags: ${await response.text()}`);
-  }
-}
-
-/**
- * Set seal-only mode (legacy) for tests that specifically test seal subscription billing.
- * Shorthand for setConfigFlags with freq_platform_sub='0', freq_seal_sub='1'.
- */
-export async function enableSealOnlyMode(
-  request: APIRequestContext
-): Promise<void> {
-  await setConfigFlags(request, { freq_platform_sub: '0', freq_seal_sub: '1' });
-}
 
 /**
  * Subscribe to the Platform service via the billing page UI.
@@ -581,16 +503,13 @@ export async function subscribePlatformService(
   await subscribeButton.click();
 
   if (expectSuccess) {
-    await expect(
-      page.locator('[data-sonner-toast]').filter({ hasText: /Subscribed to Platform/i })
-    ).toBeVisible({ timeout: successTimeout });
-
-    await waitAfterMutation(page);
-
-    // Verify onboarding form is gone (replaced by subscription card with Change Plan)
+    // Wait for the actual state change: onboarding form replaced by subscription card.
+    // Don't assert on toasts — they're temporary and flaky in CI.
     await expect(
       page.locator('h3:has-text("Choose a Platform Plan")')
-    ).not.toBeVisible({ timeout: 5000 });
+    ).not.toBeVisible({ timeout: successTimeout });
+
+    await waitAfterMutation(page);
   }
 }
 

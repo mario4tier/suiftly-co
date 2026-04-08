@@ -35,7 +35,7 @@ All payment methods are equal at the priority/ordering layer — none gets hardc
 - System **auto-falls back** to next method if preferred fails
 - **Service gate** (already implemented for escrow): tier selection and configuration are always allowed, but **enabling** a service or adding keys is blocked until:
   1. A payment method is configured, AND
-  2. Any pending subscription invoice (`subPendingInvoiceId`) is resolved
+  2. Any pending subscription invoice (`pendingInvoiceId`) is resolved
   3. `paidOnce` is set on the service (proven ability to pay — see [BILLING_DESIGN.md](./BILLING_DESIGN.md) for how `paidOnce` controls tier change semantics, cancellation policy, key operations, and grace period eligibility)
 
 ---
@@ -907,12 +907,12 @@ await server.register(fastifyTRPCPlugin, { ... });
 
 ## 5. Service Gate / Payment Gate Changes
 
-The service gate currently checks `subPendingInvoiceId` + escrow balance. The new gate checks `subPendingInvoiceId` + payment method existence.
+The service gate currently checks `pendingInvoiceId` + escrow balance. The new gate checks `pendingInvoiceId` + payment method existence.
 
 ### Current Logic (services.ts toggleService, seal.ts createKey)
 
 ```typescript
-if (service.subPendingInvoiceId !== null && input.enabled) {
+if (service.pendingInvoiceId !== null && input.enabled) {
   if (!customer.escrowContractId) { throw ... 'No escrow account' }
   if ((customer.currentBalanceUsdCents ?? 0) < tierPrice) { throw ... 'Insufficient funds' }
   // Retry payment ...
@@ -922,7 +922,7 @@ if (service.subPendingInvoiceId !== null && input.enabled) {
 ### New Logic
 
 ```typescript
-if (service.subPendingInvoiceId !== null && input.enabled) {
+if (service.pendingInvoiceId !== null && input.enabled) {
   // Pending invoice exists — check if customer can potentially pay
   const activePaymentMethods = await tx.select()
     .from(customerPaymentMethods)
@@ -941,7 +941,7 @@ if (service.subPendingInvoiceId !== null && input.enabled) {
   // Has methods — retry payment using provider chain
   const providers = await getCustomerProviders(customer.customerId, services, tx);
   const paymentResult = await processInvoicePayment(
-    tx, service.subPendingInvoiceId, providers, clock
+    tx, service.pendingInvoiceId, providers, clock
   );
 
   if (!paymentResult.fullyPaid) {
@@ -958,7 +958,7 @@ if (service.subPendingInvoiceId !== null && input.enabled) {
       // 3DS authentication needed — read the persisted URL
       const record = await tx.select({ paymentActionUrl: billingRecords.paymentActionUrl })
         .from(billingRecords)
-        .where(eq(billingRecords.id, service.subPendingInvoiceId))
+        .where(eq(billingRecords.id, service.pendingInvoiceId))
         .limit(1);
       actionUrl = record[0]?.paymentActionUrl ?? undefined;
       message = 'Your card requires authentication. Complete payment to continue.';
@@ -974,7 +974,7 @@ if (service.subPendingInvoiceId !== null && input.enabled) {
 
   // Payment succeeded — clear pending invoice + set paidOnce
   await tx.update(serviceInstances)
-    .set({ subPendingInvoiceId: null, paidOnce: true })
+    .set({ pendingInvoiceId: null, paidOnce: true })
     .where(eq(serviceInstances.instanceId, service.instanceId));
   await tx.update(customers)
     .set({ paidOnce: true })
@@ -983,7 +983,7 @@ if (service.subPendingInvoiceId !== null && input.enabled) {
 ```
 
 **Key points:**
-- `subPendingInvoiceId` logic is PRESERVED — this was missing in v2.0
+- `pendingInvoiceId` logic is PRESERVED — this was missing in v2.0
 - The gate now retries payment using the provider chain instead of just checking escrow balance
 - If the retry succeeds (via any provider), the pending invoice is cleared and `paidOnce` is set
 - `paidOnce` is set at both service and customer level (see [BILLING_DESIGN.md](./BILLING_DESIGN.md) for how it controls tier change semantics, cancellation policy, key operations, and grace period eligibility)
@@ -1019,10 +1019,10 @@ if (activePaymentMethods.length === 0) {
   }
 
   // Warn if a pending invoice has a 3DS action URL (user needs to complete authentication)
-  if (service.subPendingInvoiceId) {
+  if (service.pendingInvoiceId) {
     const record = await db.select({ paymentActionUrl: billingRecords.paymentActionUrl })
       .from(billingRecords)
-      .where(eq(billingRecords.id, service.subPendingInvoiceId))
+      .where(eq(billingRecords.id, service.pendingInvoiceId))
       .limit(1);
     if (record[0]?.paymentActionUrl) {
       warnings.push({
@@ -1171,8 +1171,8 @@ addPaymentMethod: protectedProcedure
 | `packages/database/src/schema/customers.ts` | Add `stripeCustomerId` column |
 | `packages/database/src/schema/index.ts` | Export new tables |
 | `apps/api/src/routes/billing.ts` | Add payment method management endpoints |
-| `apps/api/src/routes/services.ts` | Update gate to check `customer_payment_methods` + preserve `subPendingInvoiceId` |
-| `apps/api/src/routes/seal.ts` | Update gate to check `customer_payment_methods` + preserve `subPendingInvoiceId` |
+| `apps/api/src/routes/services.ts` | Update gate to check `customer_payment_methods` + preserve `pendingInvoiceId` |
+| `apps/api/src/routes/seal.ts` | Update gate to check `customer_payment_methods` + preserve `pendingInvoiceId` |
 | `apps/api/src/lib/config.ts` | Add Stripe + PayPal env vars + safety checks |
 | `apps/api/src/server.ts` | Mount webhook routes before tRPC |
 
@@ -1292,7 +1292,7 @@ Update the sudob `/api/test/reset-all` endpoint to also clear payment-related da
 | 9 | Config changes (Stripe + PayPal env vars) | None |
 | 10 | Webhook routes (Stripe, PayPal stubs) | Steps 1, 3 |
 | 11 | Billing API endpoints (add/remove/reorder payment methods) | Steps 1, 6 |
-| 12 | Service gate updates (services.ts, seal.ts) — preserve `subPendingInvoiceId` | Steps 1, 7 |
+| 12 | Service gate updates (services.ts, seal.ts) — preserve `pendingInvoiceId` | Steps 1, 7 |
 | 13 | Update existing tests | Steps 7-8 |
 | 14 | New provider-specific tests | Steps 5, 10-11 |
 | 15 | Update sudob reset-all | Step 1 |
@@ -1351,11 +1351,11 @@ Escrow balance changes with every deposit/withdrawal/charge. Caching it in `cust
 
 Local payment sources (credits, escrow) keep typed foreign keys for referential integrity. External providers (Stripe, PayPal) use a generic `providerReferenceId` varchar — the external system is the source of record. This scales to new providers without schema changes.
 
-### Service gate preserves `subPendingInvoiceId` and sets `paidOnce`
+### Service gate preserves `pendingInvoiceId` and sets `paidOnce`
 
-The `subPendingInvoiceId` mechanism on `service_instances` is preserved. The gate logic is:
-1. If `subPendingInvoiceId` is NULL → normal enable flow (no payment gate)
-2. If `subPendingInvoiceId` is set → must have at least one active payment method → retry payment via provider chain → clear on success → set `paidOnce` on both service and customer
+The `pendingInvoiceId` mechanism on `service_instances` is preserved. The gate logic is:
+1. If `pendingInvoiceId` is NULL → normal enable flow (no payment gate)
+2. If `pendingInvoiceId` is set → must have at least one active payment method → retry payment via provider chain → clear on success → set `paidOnce` on both service and customer
 
 This prevents the scenario where a user bypasses a pending invoice just by adding any payment method.
 

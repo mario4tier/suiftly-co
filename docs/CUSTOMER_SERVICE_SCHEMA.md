@@ -214,7 +214,7 @@ Before allowing escrow charges, the backend validates:
 
 With multi-provider payments, service enabling requires:
 1. At least one active payment method in `customer_payment_methods`
-2. Any pending subscription invoice (`sub_pending_invoice_id`) resolved
+2. Any pending subscription invoice (`pending_invoice_id`) resolved
 
 A user with $0 escrow but a valid Stripe card passes the gate — actual payment validation happens at charge time via the provider chain. See [PAYMENT_DESIGN.md](./PAYMENT_DESIGN.md) for details.
 
@@ -246,13 +246,12 @@ A user with $0 escrow but a valid Stripe card passes the gate — actual payment
 **Performance**: With proper indexing, querying 100K seal instances from 300K total rows has the same performance as a dedicated `seal_instances` table.
 
 ### Service Tiers
-Each service can be configured independently with different tiers:
+Platform tiers (Starter and Pro) determine the level of service:
 
 | Tier | Description |
 |------|-------------|
-| **Starter** | Entry-level, no burst, no allowlist |
-| **Pro** | More guaranteed bandwidth, burst and allowlist supported. |
-| **Enterprise** | Significantly more guaranteed bandwidth. |
+| **Starter** | Entry-level ($1/month), no burst, no allowlist |
+| **Pro** | More guaranteed bandwidth ($29/month), burst and allowlist supported. |
 
 **For complete tier definitions and rate limits, see [UI_DESIGN.md](./UI_DESIGN.md) (pricing and tier configuration).**
 
@@ -494,7 +493,7 @@ The Drizzle schema files are the authoritative reference for all table definitio
 - `billing_records` 1:N `invoice_payments` (multi-source payment tracking)
 - `service_instances` 1:N `seal_keys` 1:N `seal_packages`
 - `seal_keys` 1:N `seal_registration_ops` (async on-chain registration queue)
-- `service_instances` has `sub_pending_invoice_id` FK → `billing_records` (payment gate)
+- `service_instances` has `pending_invoice_id` FK → `billing_records` (payment gate)
 
 **For billing/payment schema details**, see [BILLING_DESIGN.md](./BILLING_DESIGN.md) and [PAYMENT_DESIGN.md](./PAYMENT_DESIGN.md).
 

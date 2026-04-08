@@ -46,8 +46,6 @@ function formatLineItemDescription(
       return `${serviceName} Starter tier subscription`;
     case INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_PRO:
       return `${serviceName} Pro tier subscription`;
-    case INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_ENTERPRISE:
-      return `${serviceName} Enterprise tier subscription`;
     case INVOICE_LINE_ITEM_TYPE.TIER_UPGRADE: {
       const base = `${serviceName} tier upgrade (pro-rated)`;
       return description ? `${base}: ${description}` : base;
@@ -105,6 +103,16 @@ export const billingRouter = router({
     const suiService = getSuiService();
     const account = await suiService.getAccount(ctx.user.walletAddress);
 
+    // Platform subscription fields from customer record
+    const platformFields = {
+      platformTier: customer?.platformTier ?? null,
+      paidOnce: customer?.paidOnce ?? false,
+      pendingInvoiceId: customer?.pendingInvoiceId ?? null,
+      scheduledPlatformTier: customer?.scheduledPlatformTier ?? null,
+      scheduledPlatformTierEffectiveDate: customer?.scheduledPlatformTierEffectiveDate ?? null,
+      platformCancellationScheduledFor: customer?.platformCancellationScheduledFor ?? null,
+    };
+
     if (!account) {
       return {
         found: false,
@@ -116,6 +124,7 @@ export const billingRouter = router({
         message: 'No escrow account created yet',
         escrowContractId: customer?.escrowContractId || null,
         tosAcceptedAt: customer?.tosAcceptedAt ?? null,
+        ...platformFields,
       };
     }
 
@@ -145,6 +154,7 @@ export const billingRouter = router({
       accountAddress: account.accountAddress,
       escrowContractId: customer?.escrowContractId || account.accountAddress,
       tosAcceptedAt: customer?.tosAcceptedAt ?? null,
+      ...platformFields,
     };
   }),
 

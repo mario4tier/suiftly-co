@@ -1,240 +1,144 @@
 /**
  * Seal Service Configuration E2E Test
- * Tests the onboarding form for subscribing to Seal service
+ * Tests the seal service management UI after platform subscription.
+ *
+ * After platform subscription, seal is auto-provisioned (disabled by default).
+ * Tests verify the interactive management form (toggle + config) is shown,
+ * and that enabling/disabling the service works.
  */
 
 import { test, expect } from '@playwright/test';
 import { waitAfterMutation } from '../helpers/wait-utils';
-import { enableSealOnlyMode } from '../helpers/db';
+import { resetCustomer, ensureTestBalance, subscribePlatformService } from '../helpers/db';
+import { waitForToastsToDisappear } from '../helpers/locators';
 
-test.describe('Seal Service Onboarding Form', () => {
-  test.beforeEach(async ({ page }) => {
-    await enableSealOnlyMode(page.request);
+test.describe('Seal Service Management UI', () => {
+  test.beforeEach(async ({ page, request }) => {
+    // Reset and fund customer
+    await resetCustomer(request);
+    await ensureTestBalance(request, 50);
 
-    // Reset customer test data (delete all services, reset balance)
-    await page.request.post('http://localhost:22700/test/data/reset', {
-      data: {
-        balanceUsdCents: 100000, // $1000
-        spendingLimitUsdCents: 25000, // $250
-      },
-    });
-
-    // Authenticate with mock wallet
+    // Authenticate
     await page.goto('/');
     await page.click('button:has-text("Mock Wallet 0")');
-
-    // Wait for authentication to complete (smart wait - returns as soon as auth complete)
-    await waitAfterMutation(page);
     await page.waitForURL('/dashboard', { timeout: 10000 });
     await page.waitForLoadState('networkidle');
 
-    // Navigate to seal service page (should show onboarding form)
-    await page.click('text=Seal');
-    await page.waitForURL(/\/services\/seal/, { timeout: 5000 });
+    // Subscribe to platform (auto-provisions seal as disabled)
+    await subscribePlatformService(page);
+    await waitForToastsToDisappear(page);
+
+    // Navigate to seal overview
+    await page.goto('/services/seal/overview');
+    await page.waitForLoadState('networkidle');
   });
 
-  test('onboarding form loads with all required elements', async ({ page }) => {
-    // Should see "Guaranteed Bandwidth" section
-    await expect(page.locator('h3:has-text("Guaranteed Bandwidth")')).toBeVisible();
+  test('seal page shows service toggle after platform subscribe', async ({ page }) => {
+    // Service toggle should be visible (service management UI)
+    await expect(page.locator('#service-toggle')).toBeVisible({ timeout: 5000 });
 
-    // Should see info tooltip button
-    await expect(page.locator('button').filter({ has: page.locator('svg[class*="lucide-info"]') }).first()).toBeVisible();
+    // Service should start as disabled (auto-provisioned but not enabled)
+    await expect(page.locator('#service-toggle')).toHaveAttribute('aria-checked', 'false');
 
-    // Should see all three tier cards
-    await expect(page.getByRole('heading', { name: 'STARTER' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'PRO' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'ENTERPRISE' })).toBeVisible();
+    // Should NOT show the old onboarding form heading
+    await expect(page.locator('h3:has-text("Guaranteed Bandwidth")')).not.toBeVisible();
 
-    // Should see "Included with every subscription" section
-    await expect(page.locator('text=Included with every subscription')).toBeVisible();
-
-    // Should see Per-Request Pricing section
-    await expect(page.locator('text=Per-Request Pricing')).toBeVisible();
-
-    // Should see terms checkbox
-    await expect(page.locator('text=Agree to')).toBeVisible();
-
-    // Should see Subscribe button (initially disabled)
-    const subscribeButton = page.locator('button:has-text("Subscribe to Service")');
-    await expect(subscribeButton).toBeVisible();
-    await expect(subscribeButton).toBeDisabled();
-
-    console.log('✅ All onboarding form elements are visible');
+    console.log('✅ Seal page shows service toggle in disabled state after platform subscribe');
   });
 
-  test('PRO tier is selected by default', async ({ page }) => {
-    // PRO tier card should have orange border and SELECTED badge
-    const proCard = page.locator('div').filter({ hasText: /^PRO/ }).first();
-    await expect(proCard).toHaveClass(/border-\[#f38020\]/);
-    await expect(page.locator('text=SELECTED')).toBeVisible();
+  test('enabling seal service transitions to enabled state', async ({ page }) => {
+    // Toggle service ON
+    await page.locator('#service-toggle').click();
+    await waitAfterMutation(page);
 
-    // Subscribe button should show PRO price ($29)
-    await expect(page.locator('button:has-text("$29/month")')).toBeVisible();
+    // Service should now be enabled
+    await expect(page.locator('#service-toggle')).toHaveAttribute('aria-checked', 'true', { timeout: 5000 });
 
-    console.log('✅ PRO tier is selected by default with correct price');
+    console.log('✅ Seal service enabled successfully via toggle');
   });
 
-  test('selecting different tier updates price on subscribe button', async ({ page }) => {
-    // Initially PRO ($29)
-    await expect(page.locator('button:has-text("$29/month")')).toBeVisible();
+  test('disabling seal service transitions back to disabled state', async ({ page }) => {
+    // Enable first
+    await page.locator('#service-toggle').click();
+    await waitAfterMutation(page);
+    await expect(page.locator('#service-toggle')).toHaveAttribute('aria-checked', 'true', { timeout: 5000 });
 
-    // Click STARTER tier
-    await page.getByRole('heading', { name: 'STARTER' }).click();
+    // Disable
+    await page.locator('#service-toggle').click();
+    await waitAfterMutation(page);
+    await expect(page.locator('#service-toggle')).toHaveAttribute('aria-checked', 'false', { timeout: 5000 });
 
-    // Price should update to $9
-    await expect(page.locator('button:has-text("$9/month")')).toBeVisible();
-
-    // SELECTED badge should move to STARTER
-    await expect(page.locator('text=SELECTED')).toBeVisible();
-
-    // Click ENTERPRISE tier
-    await page.getByRole('heading', { name: 'ENTERPRISE' }).click();
-
-    // Price should update to $185
-    await expect(page.locator('button:has-text("$185/month")')).toBeVisible();
-
-    console.log('✅ Tier selection updates subscribe button price correctly');
+    console.log('✅ Seal service disabled successfully via toggle');
   });
 
-  test('tier cards show correct hover states', async ({ page }) => {
-    // Hover over STARTER heading (not selected)
-    const starterHeading = page.getByRole('heading', { name: 'STARTER' });
-    await starterHeading.hover();
+  test('seal tabs are visible after platform subscribe', async ({ page }) => {
+    // Service management tabs should be visible
+    await expect(page.locator('button[role="tab"]:has-text("Overview")')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('button[role="tab"]:has-text("X-API-Key")')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('button[role="tab"]:has-text("Seal Keys")')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('button[role="tab"]:has-text("More Settings")')).toBeVisible({ timeout: 5000 });
 
-    // Just verify we can hover without error - visual hover states are CSS-based
-    await expect(starterHeading).toBeVisible();
-
-    console.log('✅ Tier card hover states work');
+    console.log('✅ All seal management tabs are visible');
   });
 
-  test('tooltips are functional', async ({ page }) => {
-    // Check that info icon buttons exist
-    const infoButtons = page.locator('button').filter({ has: page.locator('svg[class*="lucide-info"]') });
-    await expect(infoButtons.first()).toBeVisible();
+  test('config-needed banner points to Seal Keys tab when no seal keys registered', async ({ page }) => {
+    // Enable the service — API key exists (auto-provisioned) but no seal keys → config_needed
+    await page.locator('#service-toggle').click();
+    await waitAfterMutation(page);
 
-    console.log('✅ Tooltips info buttons are present');
+    // Banner should appear with the seal key message
+    const banner = page.locator('[data-testid="config-needed-banner"]');
+    await expect(banner).toBeVisible({ timeout: 5000 });
+    await expect(banner).toContainText('No seal keys registered');
+
+    // Link must point to the Seal Keys tab, not the API Key tab
+    await expect(banner.locator('a, [href]')).toContainText('Seal Keys tab');
+    await expect(banner).not.toContainText('API Key tab');
   });
 
-  test('terms of service link opens modal', async ({ page }) => {
-    // Click terms of service link
-    await page.locator('button:has-text("terms of service")').click();
+  test('config-needed banner points to API Key tab (and takes priority) when API key is disabled', async ({ page }) => {
+    // Enable the service first
+    await page.locator('#service-toggle').click();
+    await waitAfterMutation(page);
 
-    // Modal should open
-    await expect(page.getByRole('dialog')).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Terms of Service' })).toBeVisible();
+    // Navigate to X-API-Key tab and disable the auto-created key
+    await page.locator('[role="tab"]:has-text("X-API-Key")').click();
+    await expect(page.locator('button:has-text("Disable")')).toBeVisible({ timeout: 5000 });
+    await page.locator('button:has-text("Disable")').click();
 
-    // Should see Download PDF button (on larger screens)
-    await expect(page.locator('button').filter({ hasText: /Download PDF|PDF/ })).toBeVisible();
+    // Confirm the disable dialog
+    await expect(page.locator('[role="alertdialog"]')).toBeVisible({ timeout: 3000 });
+    await page.locator('[role="alertdialog"] button:has-text("Disable Key")').click();
+    await waitAfterMutation(page);
 
-    // Should see I Agree button
-    await expect(page.locator('button:has-text("I Agree")')).toBeVisible();
+    // Navigate back to Overview tab
+    await page.locator('[role="tab"]:has-text("Overview")').click();
 
-    // Should see Cancel button
-    await expect(page.locator('button:has-text("Cancel")').last()).toBeVisible();
+    // Banner must show API key error — takes priority over the seal key error
+    const banner = page.locator('[data-testid="config-needed-banner"]');
+    await expect(banner).toBeVisible({ timeout: 5000 });
+    await expect(banner).toContainText('No active API key');
 
-    console.log('✅ Terms of service modal opens and displays content');
+    // Link must point to the API Key tab, not Seal Keys tab
+    await expect(banner.locator('a, [href]')).toContainText('API Key tab');
+    await expect(banner).not.toContainText('Seal Keys tab');
   });
 
-  test('accepting terms via modal enables subscribe button', async ({ page }) => {
-    // Subscribe button should be disabled initially
-    const subscribeButton = page.locator('button:has-text("Subscribe to Service")');
-    await expect(subscribeButton).toBeDisabled();
+  test('page refresh after platform subscribe maintains service state', async ({ page }) => {
+    // Service should be in disabled state
+    await expect(page.locator('#service-toggle')).toHaveAttribute('aria-checked', 'false');
 
-    // Open TOS modal
-    await page.locator('button:has-text("terms of service")').click();
+    // Refresh page
+    await page.reload();
+    await page.waitForLoadState('networkidle');
 
-    // Click "I Agree"
-    await page.locator('button:has-text("I Agree")').click();
+    // Should still show management UI (not redirect to billing or show old form)
+    await expect(page.locator('#service-toggle')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('#service-toggle')).toHaveAttribute('aria-checked', 'false');
 
-    // Modal should close
-    await expect(page.getByRole('dialog')).not.toBeVisible();
+    // Old onboarding form should not reappear
+    await expect(page.locator('h3:has-text("Guaranteed Bandwidth")')).not.toBeVisible();
 
-    // Checkbox should be checked
-    const termsCheckbox = page.locator('#terms');
-    await expect(termsCheckbox).toBeChecked();
-
-    // Subscribe button should now be enabled
-    await expect(subscribeButton).toBeEnabled();
-
-    console.log('✅ Accepting terms via modal enables subscribe button');
-  });
-
-  test('checking terms checkbox directly enables subscribe button', async ({ page }) => {
-    // Subscribe button should be disabled initially
-    const subscribeButton = page.locator('button:has-text("Subscribe to Service")');
-    await expect(subscribeButton).toBeDisabled();
-
-    // Click the checkbox directly (not the modal)
-    await page.locator('label:has-text("Agree to")').click();
-
-    // Checkbox should be checked
-    const termsCheckbox = page.locator('#terms');
-    await expect(termsCheckbox).toBeChecked();
-
-    // Subscribe button should now be enabled
-    await expect(subscribeButton).toBeEnabled();
-
-    console.log('✅ Checking terms checkbox directly enables subscribe button');
-  });
-
-  test('subscribe button shows correct tier and price', async ({ page }) => {
-    // Enable subscribe button
-    await page.locator('label:has-text("Agree to")').click();
-
-    // Check default PRO tier ($29/month)
-    let subscribeButton = page.locator('button:has-text("Subscribe to Service for $29/month")');
-    await expect(subscribeButton).toBeVisible();
-
-    // Switch to STARTER ($9/month)
-    await page.getByRole('heading', { name: 'STARTER' }).click();
-    subscribeButton = page.locator('button:has-text("Subscribe to Service for $9/month")');
-    await expect(subscribeButton).toBeVisible();
-
-    // Switch to ENTERPRISE ($185/month)
-    await page.getByRole('heading', { name: 'ENTERPRISE' }).click();
-    subscribeButton = page.locator('button:has-text("Subscribe to Service for $185/month")');
-    await expect(subscribeButton).toBeVisible();
-
-    console.log('✅ Subscribe button displays correct tier and price');
-  });
-
-  // Note: "subscribe button click logs to console (placeholder)" test removed
-  // Subscription is now fully implemented with real API calls.
-  // See service-state-transitions.spec.ts for comprehensive subscription tests.
-
-  test('included features are displayed correctly', async ({ page }) => {
-    // Should see all included features
-    await expect(page.locator('text=Global geo-steering and failover')).toBeVisible();
-    await expect(page.locator('text=/1x Seal Key \\(3 packages\\)/i')).toBeVisible();
-    await expect(page.locator('text=2x API-Key')).toBeVisible();
-    await expect(page.locator('text=On-chain spending-limit protection')).toBeVisible();
-
-    // Should see checkmark icon
-    await expect(page.locator('svg[class*="lucide-check"]').first()).toBeVisible();
-
-    console.log('✅ Included features are displayed correctly');
-  });
-
-  test('per-request pricing section is displayed', async ({ page }) => {
-    // Should see Per-Request Pricing section
-    await expect(page.locator('text=Per-Request Pricing')).toBeVisible();
-    // UI shows: "$0.0001/req ($1 per 10,000 successful requests)"
-    await expect(page.locator('text=/\\$1 per 10,000 successful requests/i')).toBeVisible();
-
-    console.log('✅ Per-Request Pricing section is displayed correctly');
-  });
-
-  test('optional add-ons info is present', async ({ page }) => {
-    // Should see optional add-ons text with tooltip
-    await expect(page.locator('text=Optional add-ons are available')).toBeVisible();
-
-    // Click info icon
-    const addonsTooltip = page.locator('text=Optional add-ons are available').locator('..').locator('button').first();
-    await addonsTooltip.click();
-
-    // Should show tooltip content
-    await expect(page.locator('text=/Additional Seal Keys.*packages.*API keys/i')).toBeVisible();
-
-    console.log('✅ Optional add-ons info is present with functional tooltip');
+    console.log('✅ Service state persists across page refresh');
   });
 });

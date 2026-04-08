@@ -374,15 +374,15 @@ async function processMonthlyBilling(
 
           // Shared finalization: set customer paidOnce, clear grace period,
           // recalculate DRAFT for upcoming month, and issue reconciliation credit
-          // if any service's subPendingInvoiceId matches this invoice.
+          // if any service's pendingInvoiceId matches this invoice.
           //
-          // NOTE: We do NOT blanket-set paidOnce/subPendingInvoiceId on all services.
+          // NOTE: We do NOT blanket-set paidOnce/pendingInvoiceId on all services.
           // A monthly billing invoice is a separate charge from initial subscription
-          // invoices. Clearing subPendingInvoiceId here would break reconciliation
+          // invoices. Clearing pendingInvoiceId here would break reconciliation
           // credits: when the initial invoice is later retried and paid,
           // finalizeSuccessfulPayment wouldn't find the pending service and would
           // skip the credit. Each service's gate clears only when its own initial
-          // invoice (subPendingInvoiceId) is actually paid.
+          // invoice (pendingInvoiceId) is actually paid.
           await finalizeSuccessfulPayment(tx, customerId, invoice.id, config.clock);
         } else {
           // Payment failed
@@ -526,19 +526,22 @@ async function processExcessCreditRefunds(
     return result;
   }
 
-  // Get current monthly subscription cost
-  const activeServices = await tx
+  // Get current monthly subscription cost from customer's platform tier
+  const [customer] = await tx
     .select()
-    .from(serviceInstances)
-    .where(eq(serviceInstances.customerId, customerId));
+    .from(customers)
+    .where(eq(customers.customerId, customerId))
+    .limit(1);
 
   let monthlyCostCents = 0;
-  for (const svc of activeServices) {
-    // Skip cancelled services: cancellationScheduledFor is set during the month,
-    // then cleared by processScheduledCancellations on the 1st (which sets state='cancellation_pending')
-    if (!svc.cancellationScheduledFor && svc.state !== 'cancellation_pending') {
-      monthlyCostCents += getTierPriceUsdCents(svc.tier as ServiceTier, svc.serviceType as ServiceType);
-    }
+  // Skip if platform cancellation is scheduled or effective
+  if (
+    customer &&
+    customer.platformTier &&
+    !customer.platformCancellationScheduledFor &&
+    !customer.platformCancellationEffectiveAt
+  ) {
+    monthlyCostCents = getTierPriceUsdCents(customer.platformTier);
   }
 
   // Account for outstanding unpaid invoices — don't refund credits needed to pay them

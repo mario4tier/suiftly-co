@@ -12,7 +12,7 @@
 
 import { eq, and, lte, gt, isNotNull, sql, inArray } from 'drizzle-orm';
 import type { Database } from '../db';
-import { serviceInstances, serviceCancellationHistory, billingRecords, invoiceLineItems } from '../schema';
+import { customers, serviceCancellationHistory, billingRecords, invoiceLineItems } from '../schema';
 import { withCustomerLock, type LockedTransaction } from './locking';
 import {
   createAndChargeImmediately,
@@ -27,7 +27,7 @@ import { INVOICE_LINE_ITEM_TYPE, TIER_TO_SUBSCRIPTION_ITEM } from '@suiftly/shar
 import type { DBClock } from '@suiftly/shared/db-clock';
 import type { PaymentServices } from './providers';
 import { getCustomerProviders } from './providers';
-import type { ServiceType, ServiceTier, ServiceState } from '../schema/enums';
+import type { ServiceType, ServiceTier } from '../schema/enums';
 
 // ============================================================================
 // Types
@@ -126,28 +126,31 @@ export async function handleTierUpgradeLocked(
   services: PaymentServices,
   clock: DBClock
 ): Promise<TierUpgradeResult> {
-  // 1. Get current service
-  const [service] = await tx
-    .select()
-    .from(serviceInstances)
-    .where(and(
-      eq(serviceInstances.customerId, customerId),
-      eq(serviceInstances.serviceType, serviceType)
-    ))
-    .limit(1);
+  // 1. Get customer platform state
+  const customer = await tx.query.customers.findFirst({
+    where: eq(customers.customerId, customerId),
+  });
 
-  if (!service) {
+  if (!customer) {
     return {
       success: false,
       newTier,
       chargeAmountUsdCents: 0,
-      error: 'Service not found',
+      error: 'Customer not found',
+    };
+  }
+
+  if (!customer.platformTier) {
+    return {
+      success: false,
+      newTier,
+      chargeAmountUsdCents: 0,
+      error: 'No active platform subscription',
     };
   }
 
   // 1.5. Block tier changes if cancellation is scheduled
-  // User must explicitly undo cancellation first to avoid confusing state transitions
-  if (service.cancellationScheduledFor) {
+  if (customer.platformCancellationScheduledFor) {
     return {
       success: false,
       newTier,
@@ -157,8 +160,8 @@ export async function handleTierUpgradeLocked(
   }
 
   // 2. Validate upgrade (new tier must be higher priced)
-  const currentTierPrice = getTierPriceUsdCents(service.tier, serviceType);
-  const newTierPrice = getTierPriceUsdCents(newTier, serviceType);
+  const currentTierPrice = getTierPriceUsdCents(customer.platformTier);
+  const newTierPrice = getTierPriceUsdCents(newTier);
 
   if (newTierPrice <= currentTierPrice) {
     return {
@@ -170,31 +173,26 @@ export async function handleTierUpgradeLocked(
   }
 
   // 2.5. If user has never paid, allow immediate tier change without charge
-  // This handles the case where user subscribed but hasn't completed payment yet
-  if (!service.paidOnce) {
+  if (!customer.paidOnce) {
     await tx
-      .update(serviceInstances)
+      .update(customers)
       .set({
-        tier: newTier,
-        // Clear any scheduled changes
-        scheduledTier: null,
-        scheduledTierEffectiveDate: null,
-        cancellationScheduledFor: null,
+        platformTier: newTier,
+        scheduledPlatformTier: null,
+        scheduledPlatformTierEffectiveDate: null,
+        platformCancellationScheduledFor: null,
       })
-      .where(eq(serviceInstances.instanceId, service.instanceId));
+      .where(eq(customers.customerId, customerId));
 
     // Update pending billing record to reflect the new tier price
-    // Use subPendingInvoiceId to target the exact invoice for this service
-    if (service.subPendingInvoiceId) {
+    if (customer.pendingInvoiceId) {
       await tx
         .update(billingRecords)
         .set({
           amountUsdCents: newTierPrice,
         })
-        .where(eq(billingRecords.id, service.subPendingInvoiceId));
+        .where(eq(billingRecords.id, customer.pendingInvoiceId));
 
-      // Update line items to reflect the new tier
-      // This ensures billing history shows correct tier name (e.g., "Seal Enterprise tier" not "Seal Starter tier")
       const newSubscriptionItemType = TIER_TO_SUBSCRIPTION_ITEM[newTier];
       await tx
         .update(invoiceLineItems)
@@ -203,10 +201,9 @@ export async function handleTierUpgradeLocked(
           unitPriceUsdCents: newTierPrice,
           amountUsdCents: newTierPrice,
         })
-        .where(eq(invoiceLineItems.billingRecordId, service.subPendingInvoiceId));
+        .where(eq(invoiceLineItems.billingRecordId, customer.pendingInvoiceId));
     }
 
-    // Recalculate DRAFT invoice to reflect the new tier
     await recalculateDraftInvoice(tx, customerId, clock);
 
     return {
@@ -226,18 +223,15 @@ export async function handleTierUpgradeLocked(
   // 4. If charge is $0 (grace period), upgrade immediately without payment
   if (chargeAmountCents === 0) {
     await tx
-      .update(serviceInstances)
+      .update(customers)
       .set({
-        tier: newTier,
-        // Clear any scheduled downgrade since we're upgrading
-        scheduledTier: null,
-        scheduledTierEffectiveDate: null,
-        // Clear any cancellation since user is upgrading
-        cancellationScheduledFor: null,
+        platformTier: newTier,
+        scheduledPlatformTier: null,
+        scheduledPlatformTierEffectiveDate: null,
+        platformCancellationScheduledFor: null,
       })
-      .where(eq(serviceInstances.instanceId, service.instanceId));
+      .where(eq(customers.customerId, customerId));
 
-    // Recalculate DRAFT invoice for next billing cycle
     await recalculateDraftInvoice(tx, customerId, clock);
 
     return {
@@ -255,7 +249,7 @@ export async function handleTierUpgradeLocked(
       amountUsdCents: chargeAmountCents,
       type: 'charge',
       status: 'pending',
-      description: `${serviceType} tier upgrade: ${service.tier} → ${newTier} (pro-rated)`,
+      description: `Platform tier upgrade: ${customer.platformTier} → ${newTier} (pro-rated)`,
       billingPeriodStart: clock.now(),
       billingPeriodEnd: getEndOfMonth(clock),
       dueDate: clock.now(),
@@ -265,7 +259,7 @@ export async function handleTierUpgradeLocked(
         quantity: 1,
         unitPriceUsdCents: chargeAmountCents,
         amountUsdCents: chargeAmountCents,
-        description: `${service.tier} → ${newTier}`,
+        description: `${customer.platformTier} → ${newTier}`,
       },
     },
     clock
@@ -281,11 +275,6 @@ export async function handleTierUpgradeLocked(
   );
 
   if (!paymentResult.fullyPaid) {
-    // Payment failed - void the upgrade invoice to prevent the periodic retry
-    // job from charging the customer without applying the tier change.
-    // Use voidInvoice (not deleteUnpaidInvoice) because credits may have been
-    // partially applied, creating invoicePayments FK references.
-    // voidInvoice automatically restores any consumed credits.
     await voidInvoice(tx, invoiceId, 'Tier upgrade payment failed');
 
     return {
@@ -299,16 +288,14 @@ export async function handleTierUpgradeLocked(
 
   // 7. Payment succeeded - update tier immediately
   await tx
-    .update(serviceInstances)
+    .update(customers)
     .set({
-      tier: newTier,
-      // Clear any scheduled downgrade
-      scheduledTier: null,
-      scheduledTierEffectiveDate: null,
-      // Clear any cancellation
-      cancellationScheduledFor: null,
+      platformTier: newTier,
+      scheduledPlatformTier: null,
+      scheduledPlatformTierEffectiveDate: null,
+      platformCancellationScheduledFor: null,
     })
-    .where(eq(serviceInstances.instanceId, service.instanceId));
+    .where(eq(customers.customerId, customerId));
 
   // 8. Recalculate DRAFT invoice for next billing cycle
   await recalculateDraftInvoice(tx, customerId, clock);
@@ -378,26 +365,29 @@ export async function prepareTierUpgradePhase1Locked(
   newTier: ServiceTier,
   clock: DBClock
 ): Promise<TierUpgradePhase1Result> {
-  // Get current service
-  const [service] = await tx
-    .select()
-    .from(serviceInstances)
-    .where(and(
-      eq(serviceInstances.customerId, customerId),
-      eq(serviceInstances.serviceType, serviceType)
-    ))
-    .limit(1);
+  // Get customer platform state
+  const customer = await tx.query.customers.findFirst({
+    where: eq(customers.customerId, customerId),
+  });
 
-  if (!service) {
+  if (!customer) {
     return {
       canProceed: false,
       chargeAmountUsdCents: 0,
-      error: 'Service not found',
+      error: 'Customer not found',
+    };
+  }
+
+  if (!customer.platformTier) {
+    return {
+      canProceed: false,
+      chargeAmountUsdCents: 0,
+      error: 'No active platform subscription',
     };
   }
 
   // Block tier changes if cancellation is scheduled
-  if (service.cancellationScheduledFor) {
+  if (customer.platformCancellationScheduledFor) {
     return {
       canProceed: false,
       chargeAmountUsdCents: 0,
@@ -406,8 +396,8 @@ export async function prepareTierUpgradePhase1Locked(
   }
 
   // Validate upgrade (new tier must be higher priced)
-  const currentTierPrice = getTierPriceUsdCents(service.tier, serviceType);
-  const newTierPrice = getTierPriceUsdCents(newTier, serviceType);
+  const currentTierPrice = getTierPriceUsdCents(customer.platformTier);
+  const newTierPrice = getTierPriceUsdCents(newTier);
 
   if (newTierPrice <= currentTierPrice) {
     return {
@@ -418,10 +408,10 @@ export async function prepareTierUpgradePhase1Locked(
   }
 
   // If user has never paid, use simple single-transaction path
-  if (!service.paidOnce) {
+  if (!customer.paidOnce) {
     return {
       canProceed: true,
-      currentTier: service.tier,
+      currentTier: customer.platformTier,
       chargeAmountUsdCents: 0,
       serviceType,
       useSimplePath: true,
@@ -439,7 +429,7 @@ export async function prepareTierUpgradePhase1Locked(
   if (chargeAmountCents === 0) {
     return {
       canProceed: true,
-      currentTier: service.tier,
+      currentTier: customer.platformTier,
       newTier,
       chargeAmountUsdCents: 0,
       serviceType,
@@ -449,11 +439,11 @@ export async function prepareTierUpgradePhase1Locked(
 
   return {
     canProceed: true,
-    currentTier: service.tier,
+    currentTier: customer.platformTier,
     newTier,
     chargeAmountUsdCents: chargeAmountCents,
     serviceType,
-    description: `${serviceType} tier upgrade: ${service.tier} → ${newTier} (pro-rated)`,
+    description: `Platform tier upgrade: ${customer.platformTier} → ${newTier} (pro-rated)`,
   };
 }
 
@@ -528,16 +518,11 @@ export async function executeTierUpgradePhase2Locked(
   clock: DBClock
 ): Promise<TierUpgradeResult> {
   // Re-validate that tier hasn't changed since Phase 1
-  const [service] = await tx
-    .select()
-    .from(serviceInstances)
-    .where(and(
-      eq(serviceInstances.customerId, customerId),
-      eq(serviceInstances.serviceType, serviceType)
-    ))
-    .limit(1);
+  const customer = await tx.query.customers.findFirst({
+    where: eq(customers.customerId, customerId),
+  });
 
-  if (!service || service.tier !== expectedCurrentTier) {
+  if (!customer || customer.platformTier !== expectedCurrentTier) {
     // Tier changed between phases - delete unpaid invoice
     await deleteUnpaidInvoice(tx, invoiceId);
     return {
@@ -545,11 +530,11 @@ export async function executeTierUpgradePhase2Locked(
       newTier,
       chargeAmountUsdCents: 0,
       invoiceId,
-      error: 'Service tier changed. Please retry the upgrade.',
+      error: 'Platform tier changed. Please retry the upgrade.',
     };
   }
 
-  if (service.cancellationScheduledFor) {
+  if (customer.platformCancellationScheduledFor) {
     await deleteUnpaidInvoice(tx, invoiceId);
     return {
       success: false,
@@ -586,14 +571,14 @@ export async function executeTierUpgradePhase2Locked(
 
   // Payment succeeded - update tier immediately
   await tx
-    .update(serviceInstances)
+    .update(customers)
     .set({
-      tier: newTier,
-      scheduledTier: null,
-      scheduledTierEffectiveDate: null,
-      cancellationScheduledFor: null,
+      platformTier: newTier,
+      scheduledPlatformTier: null,
+      scheduledPlatformTierEffectiveDate: null,
+      platformCancellationScheduledFor: null,
     })
-    .where(eq(serviceInstances.instanceId, service.instanceId));
+    .where(eq(customers.customerId, customerId));
 
   // Recalculate DRAFT invoice for next billing cycle
   await recalculateDraftInvoice(tx, customerId, clock);
@@ -636,27 +621,30 @@ export async function scheduleTierDowngradeLocked(
   newTier: ServiceTier,
   clock: DBClock
 ): Promise<TierDowngradeResult> {
-  // 1. Get current service
-  const [service] = await tx
-    .select()
-    .from(serviceInstances)
-    .where(and(
-      eq(serviceInstances.customerId, customerId),
-      eq(serviceInstances.serviceType, serviceType)
-    ))
-    .limit(1);
+  // 1. Get customer platform state
+  const customer = await tx.query.customers.findFirst({
+    where: eq(customers.customerId, customerId),
+  });
 
-  if (!service) {
+  if (!customer) {
     return {
       success: false,
       scheduledTier: newTier,
-      error: 'Service not found',
+      error: 'Customer not found',
+    };
+  }
+
+  if (!customer.platformTier) {
+    return {
+      success: false,
+      scheduledTier: newTier,
+      error: 'No active platform subscription',
     };
   }
 
   // 1.5. Block tier changes if cancellation is scheduled
   // User must explicitly undo cancellation first to avoid confusing state transitions
-  if (service.cancellationScheduledFor) {
+  if (customer.platformCancellationScheduledFor) {
     return {
       success: false,
       scheduledTier: newTier,
@@ -665,8 +653,8 @@ export async function scheduleTierDowngradeLocked(
   }
 
   // 2. Validate downgrade (new tier must be lower priced)
-  const currentTierPrice = getTierPriceUsdCents(service.tier, serviceType);
-  const newTierPrice = getTierPriceUsdCents(newTier, serviceType);
+  const currentTierPrice = getTierPriceUsdCents(customer.platformTier);
+  const newTierPrice = getTierPriceUsdCents(newTier);
 
   if (newTierPrice >= currentTierPrice) {
     return {
@@ -678,28 +666,28 @@ export async function scheduleTierDowngradeLocked(
 
   // 2.5. If user has never paid, allow immediate tier change (no scheduling needed)
   // This handles the case where user subscribed but hasn't completed payment yet
-  if (!service.paidOnce) {
+  if (!customer.paidOnce) {
     await tx
-      .update(serviceInstances)
+      .update(customers)
       .set({
-        tier: newTier,
+        platformTier: newTier,
         // Clear any scheduled changes
-        scheduledTier: null,
-        scheduledTierEffectiveDate: null,
-        cancellationScheduledFor: null,
+        scheduledPlatformTier: null,
+        scheduledPlatformTierEffectiveDate: null,
+        platformCancellationScheduledFor: null,
       })
-      .where(eq(serviceInstances.instanceId, service.instanceId));
+      .where(eq(customers.customerId, customerId));
 
-    // Update the specific pending invoice using subPendingInvoiceId
+    // Update the specific pending invoice using pendingInvoiceId
     // This ensures reconcilePayments charges the correct amount for the new tier
-    if (service.subPendingInvoiceId) {
+    if (customer.pendingInvoiceId) {
       await tx
         .update(billingRecords)
         .set({ amountUsdCents: newTierPrice })
-        .where(eq(billingRecords.id, service.subPendingInvoiceId));
+        .where(eq(billingRecords.id, customer.pendingInvoiceId));
 
       // Update line items to reflect the new tier
-      // This ensures billing history shows correct tier name (e.g., "Seal Starter tier" not "Seal Enterprise tier")
+      // Update line items so billing history shows the new tier name
       const newSubscriptionItemType = TIER_TO_SUBSCRIPTION_ITEM[newTier];
       await tx
         .update(invoiceLineItems)
@@ -708,7 +696,7 @@ export async function scheduleTierDowngradeLocked(
           unitPriceUsdCents: newTierPrice,
           amountUsdCents: newTierPrice,
         })
-        .where(eq(invoiceLineItems.billingRecordId, service.subPendingInvoiceId));
+        .where(eq(invoiceLineItems.billingRecordId, customer.pendingInvoiceId));
     }
 
     // Recalculate DRAFT invoice to reflect the new tier
@@ -729,14 +717,14 @@ export async function scheduleTierDowngradeLocked(
 
   // 4. Schedule the downgrade
   await tx
-    .update(serviceInstances)
+    .update(customers)
     .set({
-      scheduledTier: newTier,
-      scheduledTierEffectiveDate: effectiveDate.toISOString().split('T')[0],
+      scheduledPlatformTier: newTier,
+      scheduledPlatformTierEffectiveDate: effectiveDate.toISOString().split('T')[0],
       // Clear any cancellation since user is changing tier
-      cancellationScheduledFor: null,
+      platformCancellationScheduledFor: null,
     })
-    .where(eq(serviceInstances.instanceId, service.instanceId));
+    .where(eq(customers.customerId, customerId));
 
   // 5. Update DRAFT invoice to reflect scheduled change
   await recalculateDraftInvoice(tx, customerId, clock);
@@ -780,13 +768,12 @@ async function recalculateFailedInvoiceSubscription(
   if (failedInvoices.length === 0) return;
 
   const newSubscriptionItemType = TIER_TO_SUBSCRIPTION_ITEM[newTier];
-  const newTierPrice = getTierPriceUsdCents(newTier, serviceType);
+  const newTierPrice = getTierPriceUsdCents(newTier);
 
   // All subscription item types to match against
   const subscriptionItemTypes = [
     INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_STARTER,
     INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_PRO,
-    INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_ENTERPRISE,
   ];
 
   for (const invoice of failedInvoices) {
@@ -844,36 +831,31 @@ export async function cancelScheduledTierChangeLocked(
   serviceType: ServiceType,
   clock: DBClock
 ): Promise<{ success: boolean; error?: string }> {
-  const [service] = await tx
-    .select()
-    .from(serviceInstances)
-    .where(and(
-      eq(serviceInstances.customerId, customerId),
-      eq(serviceInstances.serviceType, serviceType)
-    ))
-    .limit(1);
+  const customer = await tx.query.customers.findFirst({
+    where: eq(customers.customerId, customerId),
+  });
 
-  if (!service) {
-    return { success: false, error: 'Service not found' };
+  if (!customer) {
+    return { success: false, error: 'Customer not found' };
   }
 
-  if (!service.scheduledTier) {
+  if (!customer.scheduledPlatformTier) {
     return { success: false, error: 'No tier change scheduled' };
   }
 
   await tx
-    .update(serviceInstances)
+    .update(customers)
     .set({
-      scheduledTier: null,
-      scheduledTierEffectiveDate: null,
+      scheduledPlatformTier: null,
+      scheduledPlatformTierEffectiveDate: null,
     })
-    .where(eq(serviceInstances.instanceId, service.instanceId));
+    .where(eq(customers.customerId, customerId));
 
   // Recalculate DRAFT to use current tier
   await recalculateDraftInvoice(tx, customerId, clock);
 
   // Revert any FAILED invoices back to the current tier price
-  await recalculateFailedInvoiceSubscription(tx, customerId, serviceType, service.tier as ServiceTier);
+  await recalculateFailedInvoiceSubscription(tx, customerId, serviceType, customer.platformTier as ServiceTier);
 
   return { success: true };
 }
@@ -903,44 +885,54 @@ export async function scheduleCancellationLocked(
   serviceType: ServiceType,
   clock: DBClock
 ): Promise<CancellationResult> {
-  // 1. Get current service
-  const [service] = await tx
-    .select()
-    .from(serviceInstances)
-    .where(and(
-      eq(serviceInstances.customerId, customerId),
-      eq(serviceInstances.serviceType, serviceType)
-    ))
-    .limit(1);
+  // 1. Get customer platform state
+  const customer = await tx.query.customers.findFirst({
+    where: eq(customers.customerId, customerId),
+  });
 
-  if (!service) {
+  if (!customer) {
     return {
       success: false,
-      error: 'Service not found',
+      error: 'Customer not found',
     };
   }
 
-  // 2. Validate service state - can only cancel active subscriptions
-  if (service.state === 'not_provisioned' || service.state === 'cancellation_pending') {
+  // 2. Validate platform state - can only cancel active subscriptions
+  if (!customer.platformTier) {
     return {
       success: false,
-      error: `Cannot cancel service in state: ${service.state}`,
+      error: 'Cannot cancel: no active platform subscription',
     };
   }
 
-  // 2.5. If user has never paid, allow immediate cancellation (delete service instance)
+  if (customer.platformCancellationEffectiveAt) {
+    return {
+      success: false,
+      error: 'Cannot cancel: platform subscription is already in cancellation_pending state',
+    };
+  }
+
+  // 2.5. If user has never paid, allow immediate cancellation (clear platform fields)
   // This handles "change of mind" before first payment - no cost to us
   // No cooldown period needed since they never actually used the service
-  if (!service.paidOnce) {
-    // Save invoice ID before deleting service (service has FK to invoice)
-    const pendingInvoiceId = service.subPendingInvoiceId;
+  if (!customer.paidOnce) {
+    // Save invoice ID before clearing (customer has FK to invoice)
+    const pendingInvoiceId = customer.pendingInvoiceId;
 
-    // Delete service FIRST (removes FK reference to billing_records)
+    // Clear platform subscription fields
     await tx
-      .delete(serviceInstances)
-      .where(eq(serviceInstances.instanceId, service.instanceId));
+      .update(customers)
+      .set({
+        platformTier: null,
+        pendingInvoiceId: null,
+        scheduledPlatformTier: null,
+        scheduledPlatformTierEffectiveDate: null,
+        platformCancellationScheduledFor: null,
+        platformCancellationEffectiveAt: null,
+      })
+      .where(eq(customers.customerId, customerId));
 
-    // THEN delete the pending invoice (prevents database bloat from abuse)
+    // Delete the pending invoice (prevents database bloat from abuse)
     // We use delete instead of void because the customer never paid
     if (pendingInvoiceId) {
       await deleteUnpaidInvoice(tx, pendingInvoiceId);
@@ -957,14 +949,14 @@ export async function scheduleCancellationLocked(
 
   // 4. Schedule the cancellation
   await tx
-    .update(serviceInstances)
+    .update(customers)
     .set({
-      cancellationScheduledFor: effectiveDate.toISOString().split('T')[0],
+      platformCancellationScheduledFor: effectiveDate.toISOString().split('T')[0],
       // Clear any scheduled tier change since service is being cancelled
-      scheduledTier: null,
-      scheduledTierEffectiveDate: null,
+      scheduledPlatformTier: null,
+      scheduledPlatformTierEffectiveDate: null,
     })
-    .where(eq(serviceInstances.instanceId, service.instanceId));
+    .where(eq(customers.customerId, customerId));
 
   // 5. Update DRAFT invoice to remove this service
   await recalculateDraftInvoice(tx, customerId, clock);
@@ -995,22 +987,17 @@ export async function undoCancellationLocked(
   serviceType: ServiceType,
   clock: DBClock
 ): Promise<UndoCancellationResult> {
-  const [service] = await tx
-    .select()
-    .from(serviceInstances)
-    .where(and(
-      eq(serviceInstances.customerId, customerId),
-      eq(serviceInstances.serviceType, serviceType)
-    ))
-    .limit(1);
+  const customer = await tx.query.customers.findFirst({
+    where: eq(customers.customerId, customerId),
+  });
 
-  if (!service) {
-    return { success: false, error: 'Service not found' };
+  if (!customer) {
+    return { success: false, error: 'Customer not found' };
   }
 
   // Cannot undo if already in cancellation_pending state (billing period ended)
-  // Check state first since cancellationScheduledFor is cleared when transitioning to cancellation_pending
-  if (service.state === 'cancellation_pending') {
+  // Check platformCancellationEffectiveAt since platformCancellationScheduledFor is cleared when transitioning
+  if (customer.platformCancellationEffectiveAt) {
     return {
       success: false,
       error: 'Cannot undo cancellation after billing period has ended. Contact support.',
@@ -1018,16 +1005,16 @@ export async function undoCancellationLocked(
   }
 
   // Can only undo if cancellation is scheduled
-  if (!service.cancellationScheduledFor) {
+  if (!customer.platformCancellationScheduledFor) {
     return { success: false, error: 'No cancellation scheduled' };
   }
 
   await tx
-    .update(serviceInstances)
+    .update(customers)
     .set({
-      cancellationScheduledFor: null,
+      platformCancellationScheduledFor: null,
     })
-    .where(eq(serviceInstances.instanceId, service.instanceId));
+    .where(eq(customers.customerId, customerId));
 
   // Recalculate DRAFT to re-include this service
   await recalculateDraftInvoice(tx, customerId, clock);
@@ -1061,29 +1048,24 @@ export async function canProvisionService(
 ): Promise<CanProvisionResult> {
   const now = clock.now();
 
-  // 1. Check if service already exists
-  const [existingService] = await db
-    .select()
-    .from(serviceInstances)
-    .where(and(
-      eq(serviceInstances.customerId, customerId),
-      eq(serviceInstances.serviceType, serviceType)
-    ))
-    .limit(1);
+  // 1. Check customer platform state
+  const customer = await db.query.customers.findFirst({
+    where: eq(customers.customerId, customerId),
+  });
 
-  if (existingService) {
-    // Check if it's in cancellation_pending state
-    if (existingService.state === 'cancellation_pending') {
+  if (customer) {
+    // Check if it's in cancellation_pending state (platformCancellationEffectiveAt is set)
+    if (customer.platformCancellationEffectiveAt) {
       return {
         allowed: false,
         reason: 'cancellation_pending',
-        availableAt: existingService.cancellationEffectiveAt || undefined,
+        availableAt: customer.platformCancellationEffectiveAt,
         message: 'Service is pending deletion. Please wait until the grace period ends.',
       };
     }
 
-    // Service exists and is not in cancellation_pending - already subscribed
-    if (existingService.state !== 'not_provisioned') {
+    // Platform tier exists and not in cancellation_pending - already subscribed
+    if (customer.platformTier) {
       return {
         allowed: false,
         reason: 'already_subscribed',
@@ -1136,36 +1118,31 @@ export async function canPerformKeyOperation(
   customerId: number,
   serviceType: ServiceType
 ): Promise<CanPerformKeyOperationResult> {
-  // Get the service instance
-  const [service] = await db
-    .select()
-    .from(serviceInstances)
-    .where(and(
-      eq(serviceInstances.customerId, customerId),
-      eq(serviceInstances.serviceType, serviceType)
-    ))
-    .limit(1);
+  // Get customer platform state
+  const customer = await db.query.customers.findFirst({
+    where: eq(customers.customerId, customerId),
+  });
 
-  if (!service) {
+  if (!customer || !customer.platformTier) {
     return {
       allowed: false,
       reason: 'service_not_found',
-      message: 'Service subscription not found. Subscribe first.',
+      message: 'Platform subscription not found. Subscribe first.',
     };
   }
 
-  // Check if service is in an active state
-  const activeStates: ServiceState[] = ['enabled', 'disabled'];
-  if (!activeStates.includes(service.state as ServiceState)) {
+  // Check if platform subscription is in an active state
+  // Active = has platformTier AND no platformCancellationEffectiveAt (not in cancellation_pending)
+  if (customer.platformCancellationEffectiveAt) {
     return {
       allowed: false,
       reason: 'service_not_active',
-      message: `Cannot perform key operations while service is in state: ${service.state}`,
+      message: 'Cannot perform key operations while platform subscription is pending cancellation',
     };
   }
 
   // Check if user has made at least one payment
-  if (!service.paidOnce) {
+  if (!customer.paidOnce) {
     return {
       allowed: false,
       reason: 'no_payment_yet',
@@ -1198,31 +1175,26 @@ export async function getTierChangeOptions(
   serviceType: ServiceType,
   clock: DBClock
 ): Promise<TierChangeOptions | null> {
-  const [service] = await db
-    .select()
-    .from(serviceInstances)
-    .where(and(
-      eq(serviceInstances.customerId, customerId),
-      eq(serviceInstances.serviceType, serviceType)
-    ))
-    .limit(1);
+  const customer = await db.query.customers.findFirst({
+    where: eq(customers.customerId, customerId),
+  });
 
-  if (!service) {
+  if (!customer || !customer.platformTier) {
     return null;
   }
 
-  const currentTierPrice = getTierPriceUsdCents(service.tier, serviceType);
+  const currentTierPrice = getTierPriceUsdCents(customer.platformTier);
   const tiers = getAvailableTiers(serviceType) as ServiceTier[];
 
-  // Get currently scheduled tier (if any) from the service
-  const scheduledTier = service.scheduledTier as ServiceTier | null;
-  const scheduledTierEffectiveDate = service.scheduledTierEffectiveDate
-    ? new Date(service.scheduledTierEffectiveDate)
+  // Get currently scheduled tier (if any) from the customer
+  const scheduledTier = customer.scheduledPlatformTier as ServiceTier | null;
+  const scheduledTierEffectiveDate = customer.scheduledPlatformTierEffectiveDate
+    ? new Date(customer.scheduledPlatformTierEffectiveDate)
     : undefined;
 
   const availableTiers = tiers.map((tier) => {
-    const priceUsdCents = getTierPriceUsdCents(tier, serviceType);
-    const isCurrentTier = tier === service.tier;
+    const priceUsdCents = getTierPriceUsdCents(tier);
+    const isCurrentTier = tier === customer.platformTier;
     const isUpgrade = priceUsdCents > currentTierPrice;
     const isDowngrade = priceUsdCents < currentTierPrice;
     // This tier is scheduled if it matches the currently scheduled downgrade
@@ -1232,7 +1204,7 @@ export async function getTierChangeOptions(
     let effectiveDate: Date | undefined;
 
     // If user has never paid, all tier changes are immediate with no charge
-    if (!service.paidOnce) {
+    if (!customer.paidOnce) {
       // No charges, no scheduling - all changes are immediate
       upgradeChargeCents = 0;
       effectiveDate = undefined;
@@ -1261,16 +1233,16 @@ export async function getTierChangeOptions(
   });
 
   return {
-    currentTier: service.tier,
-    paidOnce: service.paidOnce,
+    currentTier: customer.platformTier,
+    paidOnce: customer.paidOnce,
     availableTiers,
     // Scheduled tier change info (downgrade only - upgrades are immediate)
     scheduledTier: scheduledTier ?? undefined,
     scheduledTierEffectiveDate,
     // Cancellation info
-    cancellationScheduled: !!service.cancellationScheduledFor,
-    cancellationEffectiveDate: service.cancellationScheduledFor
-      ? new Date(service.cancellationScheduledFor)
+    cancellationScheduled: !!customer.platformCancellationScheduledFor,
+    cancellationEffectiveDate: customer.platformCancellationScheduledFor
+      ? new Date(customer.platformCancellationScheduledFor)
       : undefined,
   };
 }
@@ -1298,32 +1270,29 @@ export async function applyScheduledTierChanges(
   const today = clock.today();
   const todayStr = today.toISOString().split('T')[0];
 
-  // Find services with scheduled tier changes effective today or earlier
-  const servicesWithChanges = await tx
-    .select()
-    .from(serviceInstances)
-    .where(
-      and(
-        eq(serviceInstances.customerId, customerId),
-        isNotNull(serviceInstances.scheduledTier),
-        lte(serviceInstances.scheduledTierEffectiveDate, todayStr)
-      )
-    );
+  // Check if customer has a scheduled platform tier change effective today or earlier
+  const customer = await tx.query.customers.findFirst({
+    where: and(
+      eq(customers.customerId, customerId),
+      isNotNull(customers.scheduledPlatformTier),
+      lte(customers.scheduledPlatformTierEffectiveDate, todayStr)
+    ),
+  });
 
-  for (const service of servicesWithChanges) {
-    if (service.scheduledTier) {
-      await tx
-        .update(serviceInstances)
-        .set({
-          tier: service.scheduledTier,
-          scheduledTier: null,
-          scheduledTierEffectiveDate: null,
-        })
-        .where(eq(serviceInstances.instanceId, service.instanceId));
-    }
+  if (customer && customer.scheduledPlatformTier) {
+    await tx
+      .update(customers)
+      .set({
+        platformTier: customer.scheduledPlatformTier,
+        scheduledPlatformTier: null,
+        scheduledPlatformTierEffectiveDate: null,
+      })
+      .where(eq(customers.customerId, customerId));
+
+    return 1;
   }
 
-  return servicesWithChanges.length;
+  return 0;
 }
 
 /**
@@ -1346,35 +1315,31 @@ export async function processScheduledCancellations(
   const today = clock.today();
   const todayStr = today.toISOString().split('T')[0];
 
-  // Find services with scheduled cancellations effective today or earlier
-  const cancelledServices = await tx
-    .select()
-    .from(serviceInstances)
-    .where(
-      and(
-        eq(serviceInstances.customerId, customerId),
-        isNotNull(serviceInstances.cancellationScheduledFor),
-        lte(serviceInstances.cancellationScheduledFor, todayStr)
-      )
-    );
+  // Check if customer has a scheduled platform cancellation effective today or earlier
+  const customer = await tx.query.customers.findFirst({
+    where: and(
+      eq(customers.customerId, customerId),
+      isNotNull(customers.platformCancellationScheduledFor),
+      lte(customers.platformCancellationScheduledFor, todayStr)
+    ),
+  });
 
-  // Calculate cancellation effective date (7 days from now)
-  const cancellationEffectiveAt = clock.addDays(7);
+  if (customer) {
+    // Calculate cancellation effective date (7 days from now)
+    const cancellationEffectiveAt = clock.addDays(7);
 
-  if (cancelledServices.length > 0) {
-    const instanceIds = cancelledServices.map(s => s.instanceId);
     await tx
-      .update(serviceInstances)
+      .update(customers)
       .set({
-        state: 'cancellation_pending',
-        isUserEnabled: false,
-        cancellationScheduledFor: null,
-        cancellationEffectiveAt,
+        platformCancellationScheduledFor: null,
+        platformCancellationEffectiveAt: cancellationEffectiveAt,
       })
-      .where(inArray(serviceInstances.instanceId, instanceIds));
+      .where(eq(customers.customerId, customerId));
+
+    return 1;
   }
 
-  return cancelledServices.length;
+  return 0;
 }
 
 // ============================================================================

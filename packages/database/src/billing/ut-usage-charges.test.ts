@@ -61,8 +61,8 @@ describe('Usage Charges', () => {
 
     // Create service instance
     await db.execute(sql`
-      INSERT INTO service_instances (customer_id, service_type, state, tier)
-      VALUES (${TEST_CUSTOMER_ID}, 'seal', 'enabled', 'starter')
+      INSERT INTO service_instances (customer_id, service_type, state)
+      VALUES (${TEST_CUSTOMER_ID}, 'seal', 'enabled')
       ON CONFLICT (customer_id, service_type) DO NOTHING
     `);
 

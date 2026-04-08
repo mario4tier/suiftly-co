@@ -22,12 +22,6 @@ const DEFAULT_FRONTEND_CONFIG: Record<string, string> = {
   // Bandwidth limits (GB)
   fbw_sta: '3',
   fbw_pro: '15',
-  fbw_ent: '100',
-
-  // Subscription prices (USD)
-  fsubs_usd_sta: '9',
-  fsubs_usd_pro: '29',
-  fsubs_usd_ent: '185',
 
   // Request pricing
   freqs_usd: '1.00',
@@ -54,16 +48,9 @@ const DEFAULT_FRONTEND_CONFIG: Record<string, string> = {
   fmax_ipv4: '20',
   fmax_cidr: '20',
 
-  // Platform subscription prices (USD)
+  // Platform subscription prices (USD) — platform is the only subscription
   fpsubs_usd_sta: '1',
   fpsubs_usd_pro: '29',
-
-  // Feature flags: require subscription for each service type
-  // '1' = required, '0' = not required
-  freq_platform_sub: '1',
-  freq_seal_sub: '0',
-  freq_grpc_sub: '1',
-  freq_graphql_sub: '1',
 };
 
 /**

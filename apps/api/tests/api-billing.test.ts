@@ -13,7 +13,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { db } from '@suiftly/database';
-import { serviceInstances, billingRecords, customerCredits } from '@suiftly/database/schema';
+import { serviceInstances, billingRecords, customerCredits, customers } from '@suiftly/database/schema';
 import { eq, and } from 'drizzle-orm';
 import {
   setClockTime,
@@ -21,7 +21,6 @@ import {
   trpcMutation,
   resetTestData,
   runPeriodicBillingJob,
-  subscribeAndEnable,
 } from './helpers/http.js';
 import { TEST_WALLET } from './helpers/auth.js';
 import { expectNoNotifications } from './helpers/notifications.js';
@@ -32,7 +31,7 @@ describe('API: Billing Flow', () => {
   let customerId: number;
 
   beforeEach(async () => {
-    ({ accessToken, customerId } = await setupBillingTest({ mode: 'platform-only' }));
+    ({ accessToken, customerId } = await setupBillingTest());
   });
 
   afterEach(async () => {
@@ -44,10 +43,8 @@ describe('API: Billing Flow', () => {
 
   describe('Periodic Billing Job', () => {
     it('should run periodic billing job for specific customer', async () => {
-      // ---- Setup: Subscribe to a service ----
+      // ---- Setup: Platform DRAFT invoice was already created by setupBillingTest ----
       await setClockTime('2025-01-05T00:00:00Z');
-
-      await subscribeAndEnable('seal', 'starter', accessToken);
 
       // ---- Run periodic billing job ----
       await setClockTime('2025-02-01T00:00:00Z');
@@ -62,32 +59,30 @@ describe('API: Billing Flow', () => {
     });
 
     it('should apply scheduled tier downgrade on 1st of month', async () => {
-      // ---- Setup: Subscribe and schedule downgrade ----
+      // ---- Setup: Upgrade platform to pro, then schedule downgrade ----
       await setClockTime('2025-01-05T00:00:00Z');
 
-      await subscribeAndEnable('seal', 'pro', accessToken);
-
-      // Get service for assertions
-      let service = await db.query.serviceInstances.findFirst({
-        where: and(
-          eq(serviceInstances.customerId, customerId),
-          eq(serviceInstances.serviceType, 'seal')
-        ),
-      });
+      // Platform is at starter from setupBillingTest — upgrade to pro
+      const upgradeResult = await trpcMutation<any>(
+        'services.upgradeTier',
+        { serviceType: 'platform', newTier: 'pro' },
+        accessToken
+      );
+      expect(upgradeResult.result?.data?.success).toBe(true);
 
       // Schedule downgrade
       await trpcMutation<any>(
         'services.scheduleTierDowngrade',
-        { serviceType: 'seal', newTier: 'starter' },
+        { serviceType: 'platform', newTier: 'starter' },
         accessToken
       );
 
-      // Verify scheduled
-      service = await db.query.serviceInstances.findFirst({
-        where: eq(serviceInstances.instanceId, service!.instanceId),
+      // Verify scheduled via customer record
+      let customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, customerId),
       });
-      expect(service?.tier).toBe('pro');
-      expect(service?.scheduledTier).toBe('starter');
+      expect(customer?.platformTier).toBe('pro');   // platform currently at pro
+      expect(customer?.scheduledPlatformTier).toBe('starter');
 
       // ---- Advance to 1st of next month and run billing ----
       await setClockTime('2025-02-01T00:00:00Z');
@@ -96,20 +91,25 @@ describe('API: Billing Flow', () => {
       expect(result.success).toBe(true);
 
       // Verify tier changed
-      service = await db.query.serviceInstances.findFirst({
-        where: eq(serviceInstances.instanceId, service!.instanceId),
+      customer = await db.query.customers.findFirst({
+        where: eq(customers.customerId, customerId),
       });
-      expect(service?.tier).toBe('starter');
-      expect(service?.scheduledTier).toBeNull();
+      expect(customer?.platformTier).toBe('starter');
+      expect(customer?.scheduledPlatformTier).toBeNull();
 
       await expectNoNotifications(customerId);
     });
 
     it('should process scheduled cancellation on 1st of month', async () => {
-      // ---- Setup: Subscribe and schedule cancellation ----
+      // ---- Setup: Enable seal (auto-provisioned) and schedule cancellation ----
       await setClockTime('2025-01-05T00:00:00Z');
 
-      await subscribeAndEnable('seal', 'starter', accessToken);
+      // Seal is auto-provisioned from setupBillingTest — enable it first
+      await trpcMutation<any>(
+        'services.toggleService',
+        { serviceType: 'seal', enabled: true },
+        accessToken
+      );
 
       // Get service for assertions
       let service = await db.query.serviceInstances.findFirst({
@@ -119,7 +119,7 @@ describe('API: Billing Flow', () => {
         ),
       });
 
-      // Schedule cancellation
+      // Schedule cancellation (cancellation is platform-level for all services)
       const cancelResult = await trpcMutation<any>(
         'services.scheduleCancellation',
         { serviceType: 'seal' },
@@ -127,11 +127,15 @@ describe('API: Billing Flow', () => {
       );
       expect(cancelResult.result?.data?.success).toBe(true);
 
-      // Verify scheduled
+      // Verify cancellation scheduled on customer (platform-level)
+      let customerRec = await db.query.customers.findFirst({
+        where: eq(customers.customerId, customerId),
+      });
+      expect(customerRec?.platformCancellationScheduledFor).toBeTruthy();
+      // Seal service should still be enabled
       service = await db.query.serviceInstances.findFirst({
         where: eq(serviceInstances.instanceId, service!.instanceId),
       });
-      expect(service?.cancellationScheduledFor).toBeTruthy();
       expect(service?.state).toBe('enabled'); // Still enabled
 
       // ---- Advance to 1st of next month and run billing ----
@@ -140,13 +144,12 @@ describe('API: Billing Flow', () => {
       const result = await runPeriodicBillingJob(customerId);
       expect(result.success).toBe(true);
 
-      // Verify state changed to cancellation_pending
-      service = await db.query.serviceInstances.findFirst({
-        where: eq(serviceInstances.instanceId, service!.instanceId),
+      // Verify platform cancellation state
+      customerRec = await db.query.customers.findFirst({
+        where: eq(customers.customerId, customerId),
       });
-      expect(service?.state).toBe('cancellation_pending');
-      expect(service?.cancellationScheduledFor).toBeNull();
-      expect(service?.cancellationEffectiveAt).toBeTruthy();
+      expect(customerRec?.platformCancellationScheduledFor).toBeNull();
+      expect(customerRec?.platformCancellationEffectiveAt).toBeTruthy();
 
       await expectNoNotifications(customerId);
     });
@@ -156,11 +159,7 @@ describe('API: Billing Flow', () => {
     it('should create DRAFT invoice for next month on subscription', async () => {
       await setClockTime('2025-01-15T00:00:00Z');
 
-      await trpcMutation<any>(
-        'services.subscribe',
-        { serviceType: 'seal', tier: 'starter' },
-        accessToken
-      );
+      // Platform DRAFT invoice was created by setupBillingTest at platform subscribe
 
       // Check for DRAFT invoice
       const drafts = await db.query.billingRecords.findMany({
@@ -179,10 +178,8 @@ describe('API: Billing Flow', () => {
 
   describe('Invoice Transitions', () => {
     it('should transition DRAFT to PENDING on 1st of month', async () => {
-      // ---- Setup ----
+      // ---- Setup: Platform DRAFT from setupBillingTest ----
       await setClockTime('2025-01-05T00:00:00Z');
-
-      await subscribeAndEnable('seal', 'starter', accessToken);
 
       // Check for DRAFT invoice before month end
       const draftsBefore = await db.query.billingRecords.findMany({
