@@ -16,7 +16,7 @@ import { decryptSecret } from '../lib/encryption';
 import { generateSealKey } from '../lib/seal-key-generation';
 import { dbClock } from '@suiftly/shared/db-clock';
 import { triggerVaultSync, markConfigChanged } from '../lib/gm-sync';
-import { retryPendingInvoice } from '../lib/payment-gates';
+import { retryPendingInvoice, assertPlatformSubscription } from '../lib/payment-gates';
 import { getSealProcessGroup, isProduction } from '@mhaxbe/system-config';
 
 /**
@@ -1257,6 +1257,9 @@ export const sealRouter = router({
         ctx.user.customerId,
         'createApiKey',
         async (tx) => {
+          // Require paid platform subscription for user-requested API keys
+          await assertPlatformSubscription(tx, ctx.user!.customerId);
+
           // Get service instance
           const service = await tx.query.serviceInstances.findFirst({
             where: and(

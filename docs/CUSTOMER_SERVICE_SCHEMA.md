@@ -250,8 +250,8 @@ Platform tiers (Starter and Pro) determine the level of service:
 
 | Tier | Description |
 |------|-------------|
-| **Starter** | Entry-level ($1/month), no burst, no allowlist |
-| **Pro** | More guaranteed bandwidth ($29/month), burst and allowlist supported. |
+| **Starter** | Entry-level ($2/month), no burst, no allowlist |
+| **Pro** | More guaranteed bandwidth ($39/month), burst and allowlist supported. |
 
 **For complete tier definitions and rate limits, see [UI_DESIGN.md](./UI_DESIGN.md) (pricing and tier configuration).**
 

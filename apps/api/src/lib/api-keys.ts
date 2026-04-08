@@ -13,7 +13,8 @@
 
 import { randomBytes, createCipheriv, createDecipheriv, createHmac, createHash } from 'crypto';
 import { db } from '@suiftly/database';
-import { apiKeys } from '@suiftly/database/schema';
+import { apiKeys, serviceInstances } from '@suiftly/database/schema';
+import { DEFAULT_SERVICE_CONFIG } from '@suiftly/shared/schemas';
 import { eq, and, isNull } from 'drizzle-orm';
 import { encryptSecret, decryptSecret } from './encryption';
 import { dbClock } from '@suiftly/shared/db-clock';
@@ -521,6 +522,49 @@ export async function storeApiKey(options: {
 
   // Should never reach here due to throw in loop, but TypeScript needs this
   throw new Error('Failed to generate unique API key fingerprint');
+}
+
+/**
+ * Ensure seal/grpc/graphql service instances exist, each with one initial API key.
+ * Called on every login so customers always see their API key and config —
+ * even before subscribing to platform. Services are disabled and can only
+ * be enabled after platform payment clears.
+ *
+ * Fully idempotent: onConflictDoNothing for service instances, skips key
+ * creation if a key already exists for the customer+serviceType.
+ */
+export async function ensureServiceInstancesProvisioned(customerId: number): Promise<void> {
+  const nonPlatformServices = ['seal', 'grpc', 'graphql'] as const;
+  for (const serviceType of nonPlatformServices) {
+    // Create service instance (idempotent via unique constraint)
+    await db.insert(serviceInstances).values({
+      customerId,
+      serviceType,
+      state: 'disabled',
+      config: DEFAULT_SERVICE_CONFIG,
+      isUserEnabled: false,
+    }).onConflictDoNothing();
+
+    // Create initial API key only if none exists for this customer+service
+    const existingKey = await db.query.apiKeys.findFirst({
+      where: and(
+        eq(apiKeys.customerId, customerId),
+        eq(apiKeys.serviceType, serviceType),
+        isNull(apiKeys.deletedAt),
+      ),
+    });
+
+    if (!existingKey) {
+      await storeApiKey({
+        customerId,
+        serviceType,
+        ...(serviceType === 'seal' && {
+          sealType: { network: 'mainnet', access: 'open' },
+        }),
+        metadata: { generatedAt: 'service_provisioning' },
+      });
+    }
+  }
 }
 
 /**

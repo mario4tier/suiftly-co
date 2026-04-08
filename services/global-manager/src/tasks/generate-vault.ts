@@ -65,8 +65,8 @@ import { eq, and, isNull, isNotNull, inArray } from 'drizzle-orm';
  * - bqos: Burst QoS priority (0-15, 0 = burst disabled)
  */
 const TIER_CONFIG: Record<string, { ilim: number; glim: number; blim: number; bqos: number }> = {
-  starter: { ilim: 0x02, glim: 0x02, blim: 0x00, bqos: 0x0 }, // 8 req/sec, no burst
-  pro: { ilim: 0x10, glim: 0x06, blim: 0x06, bqos: 0x2 },     // 24 req/sec + burst
+  starter: { ilim: 0x03, glim: 0x03, blim: 0x00, bqos: 0x0 }, // 12 req/sec, no burst
+  pro: { ilim: 0x32, glim: 0x32, blim: 0x7D, bqos: 0x2 },     // 200 req/sec + 500 burst
 };
 
 // Type for vault type codes

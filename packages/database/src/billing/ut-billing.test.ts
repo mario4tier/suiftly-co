@@ -28,6 +28,7 @@ import { unsafeAsLockedTransaction, toPaymentServices, toEscrowProviders, ensure
 import type { BillingProcessorConfig } from './types';
 import { eq, sql, and } from 'drizzle-orm';
 import { voidInvoice } from './invoices';
+import { PLATFORM_TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
 
 /**
  * Simple mock Sui service for testing
@@ -94,6 +95,9 @@ describe('Billing Processor (Phase 1B)', () => {
   const clock = new MockDBClock();
   const suiService = new TestMockSuiService();
   const paymentServices = toPaymentServices(suiService);
+  const STARTER_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.starter;
+  const PRO_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.pro;
+
 
   beforeAll(async () => {
     await resetTestState(db);
@@ -383,7 +387,7 @@ describe('Billing Processor (Phase 1B)', () => {
         customerId: testCustomerId,
         billingPeriodStart: new Date('2025-01-01'),
         billingPeriodEnd: new Date('2025-01-31'),
-        amountUsdCents: 2900, // $29.00 (matches Pro tier)
+        amountUsdCents: PRO_PRICE, // Pro tier
         type: 'charge',
         status: 'draft',
         createdAt: clock.now(),
@@ -407,7 +411,7 @@ describe('Billing Processor (Phase 1B)', () => {
       });
 
       expect(paidInvoice?.status).toBe('paid');
-      expect(Number(paidInvoice?.amountPaidUsdCents)).toBe(2900);
+      expect(Number(paidInvoice?.amountPaidUsdCents)).toBe(PRO_PRICE);
 
       // Verify paid_once flag set
       const updatedCustomer = await db.query.customers.findFirst({
@@ -423,7 +427,7 @@ describe('Billing Processor (Phase 1B)', () => {
         customerId: testCustomerId,
         billingPeriodStart: new Date('2025-01-01'),
         billingPeriodEnd: new Date('2025-01-31'),
-        amountUsdCents: 2900,
+        amountUsdCents: PRO_PRICE,
         type: 'charge',
         status: 'draft',
         createdAt: clock.now(),
@@ -474,7 +478,7 @@ describe('Billing Processor (Phase 1B)', () => {
         customerId: testCustomerId,
         billingPeriodStart: new Date('2025-01-01'),
         billingPeriodEnd: new Date('2025-01-31'),
-        amountUsdCents: 2900, // Matches Pro tier
+        amountUsdCents: PRO_PRICE, // Pro tier
         type: 'charge',
         status: 'draft',
         createdAt: clock.now(),
@@ -506,7 +510,7 @@ describe('Billing Processor (Phase 1B)', () => {
         customerId: testCustomerId,
         billingPeriodStart: new Date('2025-01-01'),
         billingPeriodEnd: new Date('2025-01-31'),
-        amountUsdCents: 2900,
+        amountUsdCents: PRO_PRICE,
         type: 'charge',
         status: 'draft',
         createdAt: clock.now(),
@@ -575,7 +579,7 @@ describe('Billing Processor (Phase 1B)', () => {
         customerId: testCustomerId,
         billingPeriodStart: clock.now(),
         billingPeriodEnd: clock.addDays(30),
-        amountUsdCents: 2900,
+        amountUsdCents: PRO_PRICE,
         type: 'charge',
         status: 'failed',
         retryCount: 0,
@@ -607,7 +611,7 @@ describe('Billing Processor (Phase 1B)', () => {
         customerId: testCustomerId,
         billingPeriodStart: clock.now(),
         billingPeriodEnd: clock.addDays(30),
-        amountUsdCents: 2900,
+        amountUsdCents: PRO_PRICE,
         type: 'charge',
         status: 'failed',
         retryCount: 3, // Max retries reached
@@ -652,7 +656,7 @@ describe('Billing Processor (Phase 1B)', () => {
         customerId: testCustomerId,
         billingPeriodStart: new Date('2025-01-01'),
         billingPeriodEnd: new Date('2025-01-31'),
-        amountUsdCents: 900, // $9.00 starter
+        amountUsdCents: STARTER_PRICE, // Starter tier
         type: 'charge',
         status: 'failed',
         billingType: 'immediate',
@@ -691,7 +695,7 @@ describe('Billing Processor (Phase 1B)', () => {
         customerId: testCustomerId,
         billingPeriodStart: new Date('2025-01-01'),
         billingPeriodEnd: new Date('2025-01-31'),
-        amountUsdCents: 900,
+        amountUsdCents: STARTER_PRICE,
         type: 'charge',
         status: 'failed',
         billingType: 'immediate',
@@ -737,7 +741,7 @@ describe('Billing Processor (Phase 1B)', () => {
         customerId: testCustomerId,
         billingPeriodStart: new Date('2025-01-01'),
         billingPeriodEnd: new Date('2025-01-31'),
-        amountUsdCents: 900,
+        amountUsdCents: STARTER_PRICE,
         type: 'charge',
         status: 'failed',
         billingType: 'immediate',
@@ -761,7 +765,7 @@ describe('Billing Processor (Phase 1B)', () => {
         customerId: secondCustomerId,
         billingPeriodStart: new Date('2025-01-01'),
         billingPeriodEnd: new Date('2025-01-31'),
-        amountUsdCents: 2900,
+        amountUsdCents: PRO_PRICE,
         type: 'charge',
         status: 'failed',
         billingType: 'immediate',
@@ -816,7 +820,7 @@ describe('Billing Processor (Phase 1B)', () => {
         customerId: testCustomerId,
         billingPeriodStart: new Date('2025-01-01'),
         billingPeriodEnd: new Date('2025-01-31'),
-        amountUsdCents: 900, // $9.00 starter — covered by $10 credit
+        amountUsdCents: STARTER_PRICE, // Starter tier — covered by $10 credit
         type: 'charge',
         status: 'failed',
         billingType: 'immediate',
@@ -834,7 +838,7 @@ describe('Billing Processor (Phase 1B)', () => {
         where: eq(billingRecords.id, invoice.id),
       });
       expect(updatedInvoice?.status).toBe('paid');
-      expect(Number(updatedInvoice?.amountPaidUsdCents)).toBe(900);
+      expect(Number(updatedInvoice?.amountPaidUsdCents)).toBe(STARTER_PRICE);
     });
   });
 
@@ -860,7 +864,7 @@ describe('Billing Processor (Phase 1B)', () => {
         customerId: testCustomerId,
         billingPeriodStart: new Date('2025-01-01'),
         billingPeriodEnd: new Date('2025-01-31'),
-        amountUsdCents: 900, // $9.00 Starter
+        amountUsdCents: STARTER_PRICE, // Starter tier
         type: 'charge',
         status: 'draft',
         createdAt: clock.now(),
@@ -937,7 +941,7 @@ describe('Billing Processor (Phase 1B)', () => {
         customerId: testCustomerId,
         billingPeriodStart: clock.now(),
         billingPeriodEnd: clock.addDays(30),
-        amountUsdCents: 900,
+        amountUsdCents: STARTER_PRICE,
         type: 'charge',
         status: 'voided',
         failureReason: 'Test void',
@@ -979,7 +983,7 @@ describe('Billing Processor (Phase 1B)', () => {
 
       // Issue a credit and then mark it as fully consumed
       await db.transaction(async (tx) => {
-        await issueCredit(tx, testCustomerId, 500, 'promo', 'Test credit', null);
+        await issueCredit(tx, testCustomerId, 100, 'promo', 'Test credit', null);
       });
       const [creditRow] = await db.select()
         .from(customerCredits)
@@ -996,8 +1000,8 @@ describe('Billing Processor (Phase 1B)', () => {
         customerId: testCustomerId,
         billingPeriodStart: new Date('2025-01-01'),
         billingPeriodEnd: new Date('2025-01-31'),
-        amountUsdCents: 900, // $9.00
-        amountPaidUsdCents: 500, // $5.00 from credits previously applied
+        amountUsdCents: STARTER_PRICE, // Starter tier
+        amountPaidUsdCents: 100, // $1.00 from credits previously applied
         type: 'charge',
         status: 'failed',
         billingType: 'immediate',
@@ -1011,7 +1015,7 @@ describe('Billing Processor (Phase 1B)', () => {
       await db.insert(invoicePayments).values({
         billingRecordId: invoice.id,
         sourceType: 'credit',
-        amountUsdCents: 500,
+        amountUsdCents: 100,
         creditId,
         escrowTransactionId: null,
         providerReferenceId: null,
@@ -1021,7 +1025,7 @@ describe('Billing Processor (Phase 1B)', () => {
       clock.setTime(new Date('2025-01-15T00:00:00Z'));
       await processCustomerBilling(db, testCustomerId, config, paymentServices);
 
-      // A compensating reconciliation credit should be issued for the 500 cents
+      // A compensating reconciliation credit should be issued for the 100 cents
       const credits = await db.select().from(customerCredits)
         .where(and(
           eq(customerCredits.customerId, testCustomerId),
@@ -1032,7 +1036,7 @@ describe('Billing Processor (Phase 1B)', () => {
         c.description?.includes('Credit restoration')
       );
       expect(restoredCredit).toBeDefined();
-      expect(Number(restoredCredit?.remainingAmountUsdCents)).toBe(500);
+      expect(Number(restoredCredit?.remainingAmountUsdCents)).toBe(100);
 
       // The abandoned invoice should have its applied credit reversed so retries
       // later charge the full amount.
@@ -1062,7 +1066,7 @@ describe('Billing Processor (Phase 1B)', () => {
         customerId: testCustomerId,
         billingPeriodStart: new Date('2024-12-01'),
         billingPeriodEnd: new Date('2024-12-31'),
-        amountUsdCents: 2900, // $29.00 unpaid
+        amountUsdCents: PRO_PRICE, // Pro tier unpaid
         amountPaidUsdCents: 0,
         type: 'charge',
         status: 'failed',
@@ -1095,7 +1099,7 @@ describe('Billing Processor (Phase 1B)', () => {
         customerId: testCustomerId,
         billingPeriodStart: new Date('2025-01-01'),
         billingPeriodEnd: new Date('2025-01-31'),
-        amountUsdCents: 2900, // Pro price (will be recalculated after tier change)
+        amountUsdCents: PRO_PRICE, // Pro price (will be recalculated after tier change)
         type: 'charge',
         status: 'draft',
         createdAt: clock.now(),
@@ -1106,9 +1110,9 @@ describe('Billing Processor (Phase 1B)', () => {
       await processCustomerBilling(db, testCustomerId, config, paymentServices);
 
       // Check remaining reconciliation credits — they should NOT have been
-      // fully refunded because the FAILED invoice needs $29 of coverage.
-      // Without the fix: reserve = $9 (monthly), excess = $50 - $9 = $41
-      // With the fix: reserve = $9 + $29 = $38, excess = $50 - $38 = $12
+      // fully refunded because the FAILED invoice needs $39 of coverage.
+      // Without the fix: reserve = $2 (monthly), excess = $50 - $2 = $48
+      // With the fix: reserve = $2 + $39 = $41, excess = $50 - $41 = $9
       // Since there's no Stripe payment to refund against, the refund is skipped
       // entirely, but the reserve check itself is what we're validating.
       const remainingCredits = await db.select().from(customerCredits)
@@ -1120,8 +1124,8 @@ describe('Billing Processor (Phase 1B)', () => {
       const totalRemaining = remainingCredits.reduce(
         (sum, c) => sum + Number(c.remainingAmountUsdCents), 0
       );
-      // Should have at least $29 remaining (the unpaid invoice amount shouldn't be refunded)
-      expect(totalRemaining).toBeGreaterThanOrEqual(2900);
+      // Should have at least $39 remaining (the unpaid invoice amount shouldn't be refunded)
+      expect(totalRemaining).toBeGreaterThanOrEqual(PRO_PRICE);
     });
 
     it('Bug 7: reconcileStuckInvoices should create invoice_payments row when marking paid', async () => {
@@ -1143,7 +1147,7 @@ describe('Billing Processor (Phase 1B)', () => {
         customerId: testCustomerId,
         billingPeriodStart: new Date('2025-01-15'),
         billingPeriodEnd: new Date('2025-02-14'),
-        amountUsdCents: 900,
+        amountUsdCents: STARTER_PRICE,
         type: 'charge',
         status: 'pending',
         billingType: 'immediate',
@@ -1157,7 +1161,7 @@ describe('Billing Processor (Phase 1B)', () => {
         customerId: testCustomerId,
         txDigest,
         txType: 'charge',
-        amountUsd: '9.00',
+        amountUsd: '2.00',
         assetType: '0xtest',
         timestamp: createdAt,
       }).returning();
@@ -1166,7 +1170,7 @@ describe('Billing Processor (Phase 1B)', () => {
       await db.insert(ledgerEntries).values({
         customerId: testCustomerId,
         type: 'charge',
-        amountUsdCents: 900,
+        amountUsdCents: STARTER_PRICE,
         txDigest,
         invoiceId: invoice.id,
         description: 'Escrow charge for subscription',
@@ -1195,7 +1199,7 @@ describe('Billing Processor (Phase 1B)', () => {
         .from(billingRecords)
         .where(eq(billingRecords.id, invoice.id));
       expect(paidInvoice.status).toBe('paid');
-      expect(Number(paidInvoice.amountPaidUsdCents)).toBe(900);
+      expect(Number(paidInvoice.amountPaidUsdCents)).toBe(STARTER_PRICE);
 
       // CRITICAL: An invoice_payments row should exist for audit trail
       const payments = await db.select()
@@ -1206,20 +1210,20 @@ describe('Billing Processor (Phase 1B)', () => {
       // The payment should be an escrow source with the correct escrow transaction ID
       const escrowPayment = payments.find(p => p.sourceType === 'escrow');
       expect(escrowPayment).toBeDefined();
-      expect(Number(escrowPayment!.amountUsdCents)).toBe(900);
+      expect(Number(escrowPayment!.amountUsdCents)).toBe(STARTER_PRICE);
       expect(Number(escrowPayment!.escrowTransactionId)).toBe(escrowTx.txId);
     });
 
     it('Bug 4b: should not double-credit when reactive retry runs after credit restoration', async () => {
       // Scenario:
-      // 1. Invoice $9.00, customer has $5 credit applied → amountPaidUsdCents=500
-      // 2. Provider fails, retries exhaust → credit restored (new $5 credit issued)
+      // 1. Invoice $2.00, customer has $1 credit applied → amountPaidUsdCents=100
+      // 2. Provider fails, retries exhaust → credit restored (new $1 credit issued)
       // 3. Customer adds payment method → reactive retry runs
       //
-      // BUG: The invoice still has amountPaidUsdCents=500 and the old credit
-      // invoice_payments row. On retry, remainingAmount = 900-500 = 400.
-      // The restored credit applies $4 to the $4 remaining, provider charges $0.
-      // Customer effectively gets $5 double-counted (old + restored credit).
+      // BUG: The invoice still has amountPaidUsdCents=100 and the old credit
+      // invoice_payments row. On retry, remainingAmount = STARTER_PRICE-100 = 100.
+      // The restored credit applies $1 to the $1 remaining, provider charges $0.
+      // Customer effectively gets $1 double-counted (old + restored credit).
       //
       // FIX: When restoring credits, also reverse the invoice's credit payments
       // (delete invoice_payments credit rows, reset amountPaidUsdCents).
@@ -1231,7 +1235,7 @@ describe('Billing Processor (Phase 1B)', () => {
 
       // Issue a credit and mark it consumed (simulates prior applyCreditsToInvoice)
       await db.transaction(async (tx) => {
-        await issueCredit(tx, testCustomerId, 500, 'promo', 'Test credit', null);
+        await issueCredit(tx, testCustomerId, 100, 'promo', 'Test credit', null);
       });
       const [creditRow] = await db.select()
         .from(customerCredits)
@@ -1246,8 +1250,8 @@ describe('Billing Processor (Phase 1B)', () => {
         customerId: testCustomerId,
         billingPeriodStart: new Date('2025-01-01'),
         billingPeriodEnd: new Date('2025-01-31'),
-        amountUsdCents: 900,
-        amountPaidUsdCents: 500, // $5 from credits
+        amountUsdCents: STARTER_PRICE,
+        amountPaidUsdCents: 100, // $1 from credits
         type: 'charge',
         status: 'failed',
         billingType: 'immediate',
@@ -1261,7 +1265,7 @@ describe('Billing Processor (Phase 1B)', () => {
       await db.insert(invoicePayments).values({
         billingRecordId: invoice.id,
         sourceType: 'credit',
-        amountUsdCents: 500,
+        amountUsdCents: 100,
         creditId,
         escrowTransactionId: null,
         providerReferenceId: null,
@@ -1284,7 +1288,7 @@ describe('Billing Processor (Phase 1B)', () => {
 
       // CRITICAL CHECK: After restoration, the invoice's amountPaidUsdCents
       // should be reset to 0 (credit payments reversed), so a reactive retry
-      // sees the full $9.00 remaining instead of only $4.00.
+      // sees the full $2.00 remaining instead of only $1.00.
       const [invoiceAfterExhaust] = await db.select()
         .from(billingRecords)
         .where(eq(billingRecords.id, invoice.id));
@@ -1312,21 +1316,21 @@ describe('Billing Processor (Phase 1B)', () => {
 
       expect(retryResult.paidCount).toBe(1);
 
-      // The invoice should be fully paid for $9.00 total
+      // The invoice should be fully paid for $2.00 total
       const [finalInvoice] = await db.select()
         .from(billingRecords)
         .where(eq(billingRecords.id, invoice.id));
       expect(finalInvoice.status).toBe('paid');
-      // Total paid should be $9.00 (restored credit applied fresh + escrow for remainder)
-      expect(Number(finalInvoice.amountPaidUsdCents)).toBe(900);
+      // Total paid should be $2.00 (restored credit applied fresh + escrow for remainder)
+      expect(Number(finalInvoice.amountPaidUsdCents)).toBe(STARTER_PRICE);
 
-      // Customer should NOT get a $5 discount — escrow should have been charged
+      // Customer should NOT get a $1 discount — escrow should have been charged
       // for the portion not covered by the restored credit
       const allPayments = await db.select()
         .from(invoicePayments)
         .where(eq(invoicePayments.billingRecordId, invoice.id));
       const totalPaid = allPayments.reduce((sum, p) => sum + Number(p.amountUsdCents), 0);
-      expect(totalPaid).toBe(900); // Full $9.00, no double-credit
+      expect(totalPaid).toBe(STARTER_PRICE); // Full Starter price, no double-credit
     });
 
     it('Bug 6c: catch-up should create DRAFT for current month, not skip it', async () => {
@@ -1354,7 +1358,7 @@ describe('Billing Processor (Phase 1B)', () => {
         customerId: testCustomerId,
         billingPeriodStart: new Date('2025-01-01'),
         billingPeriodEnd: new Date('2025-01-31'),
-        amountUsdCents: 900,
+        amountUsdCents: STARTER_PRICE,
         type: 'charge',
         status: 'draft',
         createdAt: new Date('2024-12-15T00:00:00Z'),
@@ -1409,7 +1413,7 @@ describe('Billing Processor (Phase 1B)', () => {
         customerId: testCustomerId,
         billingPeriodStart: new Date('2025-01-01'),
         billingPeriodEnd: new Date('2025-01-31'),
-        amountUsdCents: 100,
+        amountUsdCents: STARTER_PRICE,
         type: 'charge',
         status: 'draft',
         createdAt: new Date('2024-12-15T00:00:00Z'),
@@ -1441,7 +1445,7 @@ describe('Billing Processor (Phase 1B)', () => {
       });
       expect(febInvoice).toBeDefined();
       expect(febInvoice!.status).toBe('paid');
-      expect(Number(febInvoice!.amountUsdCents)).toBe(100); // Platform starter price
+      expect(Number(febInvoice!.amountUsdCents)).toBe(STARTER_PRICE); // Platform starter price
 
       // No February invoice should be voided
       const febVoided = allInvoices2.find(i => {
@@ -1482,7 +1486,7 @@ describe('Billing Processor (Phase 1B)', () => {
         customerId: testCustomerId,
         billingPeriodStart: new Date('2025-01-01'),
         billingPeriodEnd: new Date('2025-01-31'),
-        amountUsdCents: 900,
+        amountUsdCents: STARTER_PRICE,
         type: 'charge',
         status: 'draft',
         createdAt: new Date('2024-12-15T00:00:00Z'),
@@ -1528,26 +1532,26 @@ describe('Billing Processor (Phase 1B)', () => {
       // With fix: voidInvoice issues a compensating credit before voiding.
 
       // Give customer credits
-      await issueCredit(db, testCustomerId, 500, 'reconciliation', 'Test credit');
+      await issueCredit(db, testCustomerId, 100, 'reconciliation', 'Test credit');
 
       // Create a pending invoice with amount > credits (so provider is needed)
       const [invoice] = await db.insert(billingRecords).values({
         customerId: testCustomerId,
         billingPeriodStart: new Date('2025-01-01'),
         billingPeriodEnd: new Date('2025-01-31'),
-        amountUsdCents: 900,
+        amountUsdCents: STARTER_PRICE,
         type: 'charge',
         status: 'pending',
       }).returning();
 
       // Apply credits to the invoice (simulates what processInvoicePayment does)
       const tx = unsafeAsLockedTransaction(db);
-      const creditResult = await applyCreditsToInvoice(tx, testCustomerId, invoice.id, 900, clock);
-      expect(creditResult.totalAppliedCents).toBe(500); // All 500 cents used
+      const creditResult = await applyCreditsToInvoice(tx, testCustomerId, invoice.id, STARTER_PRICE, clock);
+      expect(creditResult.totalAppliedCents).toBe(100); // All 100 cents used
 
       // Update invoice to reflect partial payment
       await db.update(billingRecords)
-        .set({ amountPaidUsdCents: 500, status: 'failed' })
+        .set({ amountPaidUsdCents: 100, status: 'failed' })
         .where(eq(billingRecords.id, invoice.id));
 
       // Verify credits are consumed
@@ -1568,7 +1572,7 @@ describe('Billing Processor (Phase 1B)', () => {
       const allCredits = await db.select().from(customerCredits)
         .where(eq(customerCredits.customerId, testCustomerId));
       const compensatingCredit = allCredits.find(c =>
-        Number(c.remainingAmountUsdCents) === 500 && c.reason === 'reconciliation'
+        Number(c.remainingAmountUsdCents) === 100 && c.reason === 'reconciliation'
       );
       expect(compensatingCredit).toBeDefined();
     });
@@ -1597,7 +1601,7 @@ describe('Billing Processor (Phase 1B)', () => {
         customerId: testCustomerId,
         billingPeriodStart: new Date('2025-01-01'),
         billingPeriodEnd: new Date('2025-01-31'),
-        amountUsdCents: 900,
+        amountUsdCents: STARTER_PRICE,
         type: 'charge',
         status: 'draft',
         createdAt: new Date('2024-12-15T00:00:00Z'),

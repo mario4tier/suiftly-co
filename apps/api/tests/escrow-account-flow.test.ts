@@ -14,8 +14,13 @@ import { customers } from '@suiftly/database/schema';
 import { eq } from 'drizzle-orm';
 import { getSuiService, MockSuiService } from '@suiftly/database/sui-mock';
 import { cleanupCustomerByWallet } from './helpers/cleanup.js';
+import { PLATFORM_TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
 
 describe('Escrow Account Flow', () => {
+  const STARTER_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.starter;
+  const PRO_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.pro;
+
+
   const testWallet = '0x1234567890123456789012345678901234567890123456789012345678901234';
   const testEscrowAddress = '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890';
 
@@ -150,7 +155,7 @@ describe('Escrow Account Flow', () => {
     // Charge should work with escrow address
     const chargeResult = await suiService.charge({
       userAddress: testWallet,
-      amountUsdCents: 900,
+      amountUsdCents: STARTER_PRICE,
       description: 'Test subscription charge',
       escrowAddress: testEscrowAddress,
     });
@@ -160,8 +165,8 @@ describe('Escrow Account Flow', () => {
     // Verify balance and charges
     const account = await suiService.getAccount(testWallet);
     expect(account).toBeDefined();
-    expect(account!.balanceUsdCents).toBe(4100); // 5000 - 900
-    expect(account!.currentPeriodChargedUsdCents).toBe(900);
+    expect(account!.balanceUsdCents).toBe(5000 - STARTER_PRICE); // 5000 - starter
+    expect(account!.currentPeriodChargedUsdCents).toBe(STARTER_PRICE);
   });
 
   it('should fail charge without escrow address when account does not exist', async () => {

@@ -6,12 +6,12 @@
  * not the original subscription tier.
  *
  * Scenario:
- * 1. User subscribes to platform starter ($1/month) - payment fails (no funds)
- * 2. User upgrades to platform pro ($29/month) - tier changes, no payment needed (paidOnce=false)
+ * 1. User subscribes to platform starter ($2/month) - payment fails (no funds)
+ * 2. User upgrades to platform pro ($39/month) - tier changes, no payment needed (paidOnce=false)
  * 3. User deposits funds -> reconcilePayments runs
- * 4. BUG: Credit is calculated based on starter ($1) instead of pro ($29)
+ * 4. BUG: Credit is calculated based on starter ($2) instead of pro ($39)
  *
- * Expected: Credit should be ~$1.87 (pro × 2/31 days)
+ * Expected: Credit should be ~$2.51 (pro × 2/31 days)
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -128,7 +128,7 @@ describe('API: Reconciliation Credit Calculation', () => {
 
       const depositResult = await trpcMutation<any>(
         'billing.deposit',
-        { amountUsd: 50 }, // $50 to cover pro ($29)
+        { amountUsd: 50 }, // $50 to cover pro ($39)
         accessToken
       );
 
@@ -150,14 +150,14 @@ describe('API: Reconciliation Credit Calculation', () => {
       // Day 3 of 31-day month
       // Days used = from day 3 to day 31 = 29 days
       // Days not used = 31 - 29 = 2 days
-      // Pro tier = $29/month = 2900 cents
-      // Credit = 2900 * 2 / 31 = 187 cents (~$1.87)
+      // Pro tier = $39/month = 3900 cents
+      // Credit = 3900 * 2 / 31 = 251 cents (~$2.51)
       const daysInJanuary = 31;
       const dayOfMonth = 3;
       const daysUsed = daysInJanuary - dayOfMonth + 1; // +1 because day 3 is used
       const daysNotUsed = daysInJanuary - daysUsed;
 
-      // Expected: 2900 * 2 / 31 = 187 cents
+      // Expected: 3900 * 2 / 31 = 251 cents
       const expectedCreditCents = Math.floor(
         (PLATFORM_TIER_PRICES_USD_CENTS.pro * daysNotUsed) / daysInJanuary
       );
@@ -207,7 +207,7 @@ describe('API: Reconciliation Credit Calculation', () => {
         accessToken
       );
 
-      // The pending/failed billing record should now be pro price ($29)
+      // The pending/failed billing record should now be pro price ($39)
       records = await db.query.billingRecords.findMany({
         where: and(
           eq(billingRecords.customerId, customerId),
@@ -268,7 +268,7 @@ describe('API: Reconciliation Credit Calculation', () => {
 
       await trpcMutation<any>(
         'billing.deposit',
-        { amountUsd: 5 }, // $5 to cover starter ($1)
+        { amountUsd: 5 }, // $5 to cover starter ($2)
         accessToken
       );
 
@@ -282,7 +282,7 @@ describe('API: Reconciliation Credit Calculation', () => {
 
       expect(credits.length).toBe(1);
 
-      // Credit should be based on starter ($1), not pro ($29)
+      // Credit should be based on starter ($2), not pro ($39)
       const daysInJanuary = 31;
       const dayOfMonth = 3;
       const daysUsed = daysInJanuary - dayOfMonth + 1;

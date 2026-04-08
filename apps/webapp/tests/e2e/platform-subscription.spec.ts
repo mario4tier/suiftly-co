@@ -18,8 +18,14 @@ import {
 } from '../helpers/db';
 import { waitAfterMutation } from '../helpers/wait-utils';
 import { waitForToastsToDisappear } from '../helpers/locators';
+import { PLATFORM_TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
 
 const API_BASE = 'http://localhost:22700';
+
+const STARTER_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.starter; // cents
+const PRO_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.pro; // cents
+const STARTER_PRICE_USD = STARTER_PRICE / 100;
+const PRO_PRICE_USD = PRO_PRICE / 100;
 
 test.describe('Platform Subscription', () => {
   test.beforeEach(async ({ page, request }) => {
@@ -42,9 +48,9 @@ test.describe('Platform Subscription', () => {
       await expect(page.getByText('Starter', { exact: true })).toBeVisible();
       await expect(page.getByText('Pro', { exact: true }).first()).toBeVisible();
 
-      // Should show tier prices ($1/mo and $29/mo) in the tier cards
-      await expect(page.getByText('$1/mo', { exact: true })).toBeVisible();
-      await expect(page.getByText('$29/mo', { exact: true })).toBeVisible();
+      // Should show tier prices in the tier cards
+      await expect(page.getByText(`$${STARTER_PRICE_USD}/mo`, { exact: true })).toBeVisible();
+      await expect(page.getByText(`$${PRO_PRICE_USD}/mo`, { exact: true })).toBeVisible();
 
       // Subscribe button should be disabled (TOS not accepted)
       await expect(page.locator('button:has-text("Subscribe to")')).toBeDisabled();

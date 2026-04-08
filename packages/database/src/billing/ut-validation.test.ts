@@ -26,6 +26,7 @@ import { unsafeAsLockedTransaction, toPaymentServices, ensureEscrowPaymentMethod
 import { eq, and, sql } from 'drizzle-orm';
 import type { ISuiService, TransactionResult, ChargeParams } from '@suiftly/shared/sui-service';
 import { adminNotifications } from '../schema/admin';
+import { PLATFORM_TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
 
 // Simple mock Sui service
 class TestMockSuiService implements ISuiService {
@@ -66,6 +67,9 @@ describe('Invoice Validation', () => {
   const clock = new MockDBClock();
   const suiService = new TestMockSuiService();
   const paymentServices = toPaymentServices(suiService);
+  const STARTER_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.starter;
+  const PRO_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.pro;
+
   const testWalletAddress = '0xVAL3100567890abcdefABCDEF1234567890abcdefABCDEF1234567890abc';
   let testCustomerId: number;
 
@@ -112,7 +116,7 @@ describe('Invoice Validation', () => {
         customerId: testCustomerId,
         billingPeriodStart: clock.now(),
         billingPeriodEnd: clock.addDays(30),
-        amountUsdCents: -2900, // BUG: Negative amount on non-draft
+        amountUsdCents: -PRO_PRICE, // BUG: Negative amount on non-draft
         type: 'charge',
         status: 'pending',
         createdAt: clock.now(),
@@ -153,7 +157,7 @@ describe('Invoice Validation', () => {
         customerId: testCustomerId,
         billingPeriodStart: clock.now(),
         billingPeriodEnd: clock.addDays(30),
-        amountUsdCents: 2900,
+        amountUsdCents: PRO_PRICE,
         type: 'charge',
         status: 'draft',
         createdAt: clock.now(),
@@ -164,7 +168,7 @@ describe('Invoice Validation', () => {
         customerId: testCustomerId,
         billingPeriodStart: clock.now(),
         billingPeriodEnd: clock.addDays(30),
-        amountUsdCents: 900,
+        amountUsdCents: STARTER_PRICE,
         type: 'charge',
         status: 'draft',
         createdAt: clock.now(),
@@ -225,7 +229,7 @@ describe('Invoice Validation', () => {
         testCustomerId,
         'seal',
         'pro',
-        2900,
+        PRO_PRICE,
         paymentServices,
         clock
       );
@@ -278,7 +282,7 @@ describe('Invoice Validation', () => {
         customerId: testCustomerId,
         billingPeriodStart: clock.now(),
         billingPeriodEnd: clock.addDays(30),
-        amountUsdCents: 900, // Wrong: Starter price, but service is Pro
+        amountUsdCents: STARTER_PRICE, // Wrong: Starter price, but service is Pro
         type: 'charge',
         status: 'draft',
         createdAt: clock.now(),
@@ -291,7 +295,7 @@ describe('Invoice Validation', () => {
           category: 'billing',
           code: 'DRAFT_AMOUNT_MISMATCH',
           message: 'DRAFT invoice amount mismatch',
-          details: { draftAmount: 9, expectedAmount: 29 },
+          details: { draftAmount: 2, expectedAmount: 39 },
           customerId: testCustomerId,
           invoiceId: invoice.id,
         });

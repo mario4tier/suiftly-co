@@ -19,6 +19,7 @@ import { runPeriodicJobForCustomer } from './periodic-job';
 import type { BillingProcessorConfig } from './types';
 import type { ISuiService, ChargeParams, TransactionResult } from '@suiftly/shared/sui-service';
 import { toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData, resetTestState, suspendGMProcessing } from './test-helpers';
+import { PLATFORM_TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
 
 // Each test gets a unique customer ID to avoid cross-test contamination.
 const BASE_CUSTOMER_ID = 99950;
@@ -115,6 +116,8 @@ describe('Monthly Usage Billing - Month Boundary', () => {
   const clock = new MockDBClock();
   const suiService = new TestMockSuiService();
   const paymentServices = toPaymentServices(suiService);
+  const PRO_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.pro;
+
 
   const config: BillingProcessorConfig = {
     clock,
@@ -155,7 +158,7 @@ describe('Monthly Usage Billing - Month Boundary', () => {
       customerId,
       billingPeriodStart: new Date('2025-03-01T00:00:00Z'),
       billingPeriodEnd: new Date('2025-03-31T23:59:59Z'),
-      amountUsdCents: 2900,
+      amountUsdCents: PRO_PRICE,
       type: 'charge',
       status: 'draft',
       createdAt: clock.now(),
@@ -198,7 +201,7 @@ describe('Monthly Usage Billing - Month Boundary', () => {
       customerId,
       billingPeriodStart: new Date('2024-03-01T00:00:00Z'),
       billingPeriodEnd: new Date('2024-03-31T23:59:59Z'),
-      amountUsdCents: 2900,
+      amountUsdCents: PRO_PRICE,
       type: 'charge',
       status: 'draft',
       createdAt: clock.now(),
@@ -244,7 +247,7 @@ describe('Monthly Usage Billing - Month Boundary', () => {
       customerId,
       billingPeriodStart: new Date('2025-01-01T00:00:00Z'),
       billingPeriodEnd: new Date('2025-01-31T23:59:59Z'),
-      amountUsdCents: 2900,
+      amountUsdCents: PRO_PRICE,
       type: 'charge',
       status: 'draft',
       createdAt: clock.now(),
@@ -284,7 +287,7 @@ describe('Monthly Usage Billing - Month Boundary', () => {
       customerId,
       billingPeriodStart: new Date('2025-02-01T00:00:00Z'),
       billingPeriodEnd: new Date('2025-02-28T23:59:59Z'),
-      amountUsdCents: 2900,
+      amountUsdCents: PRO_PRICE,
       type: 'charge',
       status: 'draft',
       createdAt: clock.now(),
@@ -332,7 +335,7 @@ describe('Monthly Usage Billing - Month Boundary', () => {
       customerId,
       billingPeriodStart: new Date('2025-02-01T00:00:00Z'),
       billingPeriodEnd: new Date('2025-02-28T23:59:59Z'),
-      amountUsdCents: 2900,
+      amountUsdCents: PRO_PRICE,
       type: 'charge',
       status: 'draft',
       createdAt: clock.now(),

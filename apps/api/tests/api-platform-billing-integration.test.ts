@@ -36,8 +36,13 @@ import {
 import { login, TEST_WALLET } from './helpers/auth.js';
 import { expectNoNotifications, clearNotifications } from './helpers/notifications.js';
 import { setupBillingTest } from './helpers/setup.js';
+import { PLATFORM_TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
 
 describe('API: Platform Billing Integration', () => {
+  const STARTER_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.starter;
+  const PRO_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.pro;
+
+
   let accessToken: string;
   let customerId: number;
 
@@ -71,26 +76,26 @@ describe('API: Platform Billing Integration', () => {
         );
 
       // Should have exactly ONE credit: for platform only
-      // Platform Starter = $1 = 100 cents
+      // Platform Starter = $2 = STARTER_PRICE cents
       // Jan: 31 days, subscribed day 15 → daysUsed = 17, daysNotUsed = 14
-      // Credit = floor(100 * 14 / 31) = 45 cents
+      // Credit = floor(STARTER_PRICE * 14 / 31) = 90 cents
       expect(credits.length).toBe(1);
 
       const platformCredit = credits.find(c =>
         c.description?.includes('platform')
       );
       expect(platformCredit).toBeDefined();
-      expect(Number(platformCredit!.originalAmountUsdCents)).toBe(45);
+      expect(Number(platformCredit!.originalAmountUsdCents)).toBe(Math.floor(STARTER_PRICE * 14 / 31));
 
       await expectNoNotifications(customerId);
     });
 
     it('should include credit line item in DRAFT for platform mid-month subscription', async () => {
-      // Platform subscribed Jan 15 → 45 cent reconciliation credit exists
+      // Platform subscribed Jan 15 → reconciliation credit exists
       // DRAFT invoice for next month should include:
-      // - Platform subscription line item ($1 = 100 cents)
-      // - Credit line item (-45 cents, from the reconciliation credit)
-      // - Total = 100 - 45 = 55 cents
+      // - Platform subscription line item ($2 = STARTER_PRICE cents)
+      // - Credit line item (from the reconciliation credit)
+      // - Total = STARTER_PRICE - credit
 
       // Get the DRAFT invoice
       const drafts = await db.query.billingRecords.findMany({
@@ -112,7 +117,7 @@ describe('API: Platform Billing Integration', () => {
         li => li.serviceType === 'platform' && li.itemType?.startsWith('subscription_')
       );
       expect(platformSub).toBeDefined();
-      expect(Number(platformSub!.amountUsdCents)).toBe(100); // Platform starter = $1
+      expect(Number(platformSub!.amountUsdCents)).toBe(STARTER_PRICE); // Platform starter = $2
 
       // Should have exactly 1 credit line item (platform credit)
       const creditItems = lineItems.filter(li => li.itemType === 'credit');
@@ -122,10 +127,11 @@ describe('API: Platform Billing Integration', () => {
         li.description?.includes('platform')
       );
       expect(platformCreditItem).toBeDefined();
-      expect(Number(platformCreditItem!.amountUsdCents)).toBe(-45);
+      const expectedCredit = Math.floor(STARTER_PRICE * 14 / 31);
+      expect(Number(platformCreditItem!.amountUsdCents)).toBe(-expectedCredit);
 
-      // DRAFT total is net (100 - 45 = 55 cents)
-      expect(Number(drafts[0].amountUsdCents)).toBe(55);
+      // DRAFT total is net (STARTER_PRICE - credit)
+      expect(Number(drafts[0].amountUsdCents)).toBe(STARTER_PRICE - expectedCredit);
 
       await expectNoNotifications(customerId);
     });
@@ -186,8 +192,8 @@ describe('API: Platform Billing Integration', () => {
         ),
       });
 
-      // Should have at least one paid record with $1 (platform starter)
-      const paidPlatform = records.find(r => Number(r.amountUsdCents) === 100);
+      // Should have at least one paid record with $2 (platform starter)
+      const paidPlatform = records.find(r => Number(r.amountUsdCents) === STARTER_PRICE);
       expect(paidPlatform).toBeDefined();
 
       // Verify the line item is for platform service
@@ -232,7 +238,7 @@ describe('API: Platform Billing Integration', () => {
     });
 
     it('should fallback to stripe when escrow has insufficient funds for platform', async () => {
-      // Reset — create customer with $0 escrow (insufficient for $1 platform)
+      // Reset — create customer with $0 escrow (insufficient for $2 platform)
       await resetTestData(TEST_WALLET);
       const freshToken = await login(TEST_WALLET);
       await ensureTestBalance(0, { walletAddress: TEST_WALLET });
@@ -325,7 +331,7 @@ describe('API: Platform Billing Integration', () => {
       expect(customer?.platformTier).toBe('pro');
       expect(customer?.scheduledPlatformTier).toBe('starter');
 
-      // DRAFT should show scheduled tier price ($1 = 100 cents)
+      // DRAFT should show scheduled tier price ($2 = STARTER_PRICE cents)
       const drafts = await db.query.billingRecords.findMany({
         where: and(
           eq(billingRecords.customerId, customerId),
@@ -341,7 +347,7 @@ describe('API: Platform Billing Integration', () => {
         li => li.serviceType === 'platform'
       );
       expect(platformItem).toBeDefined();
-      expect(Number(platformItem!.amountUsdCents)).toBe(100); // Starter = $1
+      expect(Number(platformItem!.amountUsdCents)).toBe(STARTER_PRICE); // Starter = $2
 
       await expectNoNotifications(customerId);
     });

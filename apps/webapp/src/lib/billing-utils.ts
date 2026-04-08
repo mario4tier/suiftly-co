@@ -11,7 +11,7 @@
 import { INVOICE_LINE_ITEM_TYPE, SERVICE_TIER, SERVICE_TYPE } from '@suiftly/shared/constants';
 
 /**
- * Format USD amount: "$29" for whole dollars, "$13.09" when there are cents.
+ * Format USD amount: "$39" for whole dollars, "$13.09" when there are cents.
  * Handles negative amounts: "-$5" or "-$5.23".
  */
 export function formatUsd(amount: number): string {

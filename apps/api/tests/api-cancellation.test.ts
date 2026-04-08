@@ -29,6 +29,7 @@ import {
 } from './helpers/http.js';
 import { login, TEST_WALLET } from './helpers/auth.js';
 import { INVOICE_LINE_ITEM_TYPE } from '@suiftly/shared/constants';
+import { PLATFORM_TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
 import { clearNotifications } from './helpers/notifications.js';
 import { setupBillingTest } from './helpers/setup.js';
 
@@ -38,6 +39,10 @@ const SUBSCRIPTION_ITEM_TYPES = [
 ] as const;
 
 describe('API: Cancellation Flow', () => {
+  const STARTER_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.starter;
+  const PRO_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.pro;
+
+
   let accessToken: string;
   let customerId: number;
 
@@ -168,7 +173,7 @@ describe('API: Cancellation Flow', () => {
        * - BUT the line items still show the subscription charge
        *
        * Expected: Line items should only show the credit (if any), no subscription charge
-       * Actual (BUG): Line items show "Platform Pro tier - $29.00" even though cancelled
+       * Actual (BUG): Line items show "Platform Pro tier - $39.00" even though cancelled
        *
        * Root cause: buildDraftLineItems() in invoice-formatter.ts does not check
        * for cancellationScheduledFor when building subscription line items.
@@ -197,7 +202,7 @@ describe('API: Cancellation Flow', () => {
         (item: any) => SUBSCRIPTION_ITEM_TYPES.includes(item.itemType) && item.service === 'platform'
       );
       expect(subscriptionItem?.itemType).toBe(INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_PRO);
-      expect(subscriptionItem?.amountUsd).toBe(29); // Pro = $29
+      expect(subscriptionItem?.amountUsd).toBe(PRO_PRICE / 100); // Pro = $39
 
       // ---- Schedule cancellation ----
       await setClockTime('2025-01-15T00:00:00Z');

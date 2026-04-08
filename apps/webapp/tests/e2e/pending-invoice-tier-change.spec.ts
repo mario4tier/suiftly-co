@@ -22,13 +22,16 @@
 import { test, expect } from '@playwright/test';
 import { resetCustomer, addCryptoPayment, subscribePlatformService } from '../helpers/db';
 import { setMockClock, resetClock } from '../helpers/clock';
+import { PLATFORM_TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
 
 const MOCK_WALLET_ADDRESS = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const API_BASE = 'http://localhost:22700';
 const GM_BASE = 'http://localhost:22600';
 
-const PRO_PRICE_USD = 29; // Platform Pro = $29/month
-const STARTER_PRICE_USD = 1; // Platform Starter = $1/month
+const STARTER_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.starter; // cents
+const PRO_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.pro; // cents
+const STARTER_PRICE_USD = STARTER_PRICE / 100;
+const PRO_PRICE_USD = PRO_PRICE / 100;
 
 test.describe('FAILED Invoice Recalculation on Tier Change', () => {
   test(`BUG: downgrade should recalculate FAILED invoice amount from Pro ($${PRO_PRICE_USD}) to Starter ($${STARTER_PRICE_USD})`, async ({ page }) => {

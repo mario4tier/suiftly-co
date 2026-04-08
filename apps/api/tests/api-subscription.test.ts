@@ -4,7 +4,7 @@
  * Tests service subscription lifecycle through HTTP calls only.
  * NO direct internal function calls (except DB reads for assertions).
  *
- * Platform is the only subscription ($1/$29 Starter/Pro).
+ * Platform is the only subscription ($2/$39 Starter/Pro).
  * Seal/gRPC/GraphQL are auto-provisioned (free features) when platform is subscribed.
  * Their tier is null — derived from the platform tier at runtime.
  */

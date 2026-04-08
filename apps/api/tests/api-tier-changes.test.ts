@@ -28,6 +28,7 @@ import {
 } from './helpers/http.js';
 import { TEST_WALLET } from './helpers/auth.js';
 import { INVOICE_LINE_ITEM_TYPE } from '@suiftly/shared/constants';
+import { PLATFORM_TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
 import { expectNoNotifications } from './helpers/notifications.js';
 import { setupBillingTest } from './helpers/setup.js';
 
@@ -37,6 +38,10 @@ const SUBSCRIPTION_ITEM_TYPES = [
 ] as const;
 
 describe('API: Tier Changes Flow', () => {
+  const STARTER_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.starter;
+  const PRO_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.pro;
+
+
   let accessToken: string;
   let customerId: number;
 
@@ -175,20 +180,20 @@ describe('API: Tier Changes Flow', () => {
     it('should update DRAFT invoice line items to show scheduled tier price', async () => {
       /**
        * BUG REPRODUCTION: When user schedules a downgrade from pro to starter,
-       * the "Next Scheduled Payment" section should show the STARTER price ($1),
-       * not the current PRO price ($29).
+       * the "Next Scheduled Payment" section should show the STARTER price ($2),
+       * not the current PRO price ($39).
        *
        * Root cause: buildDraftLineItems() in invoice-formatter.ts uses service.tier
        * instead of (service.scheduledTier || service.tier).
        *
        * Scenario:
-       * 1. User is on Pro ($29/month)
-       * 2. User schedules downgrade to Starter ($1/month)
-       * 3. DRAFT invoice amount_usd_cents is updated correctly to 100
-       * 4. BUG: getNextScheduledPayment line items still show Pro ($29)
+       * 1. User is on Pro ($39/month)
+       * 2. User schedules downgrade to Starter ($2/month)
+       * 3. DRAFT invoice amount_usd_cents is updated correctly to STARTER_PRICE
+       * 4. BUG: getNextScheduledPayment line items still show Pro ($39)
        *
-       * Expected: Line items should show "Platform Starter tier - $1.00"
-       * Actual: Line items show "Platform Pro tier - $29.00"
+       * Expected: Line items should show "Platform Starter tier - $2.00"
+       * Actual: Line items show "Platform Pro tier - $39.00"
        */
 
       // ---- Setup: Upgrade platform to pro tier ----
@@ -217,7 +222,7 @@ describe('API: Tier Changes Flow', () => {
         (item: any) => SUBSCRIPTION_ITEM_TYPES.includes(item.itemType) && item.service === 'platform'
       );
       expect(subscriptionItem?.itemType).toBe(INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_PRO);
-      expect(subscriptionItem?.amountUsd).toBe(29); // Pro = $29
+      expect(subscriptionItem?.amountUsd).toBe(PRO_PRICE / 100); // Pro = $39
 
       // ---- Schedule downgrade to starter ----
       await setClockTime('2025-01-15T00:00:00Z');
@@ -244,9 +249,9 @@ describe('API: Tier Changes Flow', () => {
         (item: any) => SUBSCRIPTION_ITEM_TYPES.includes(item.itemType) && item.service === 'platform'
       );
 
-      // Line items should show the SCHEDULED tier (starter = $1), not current tier (pro = $29)
+      // Line items should show the SCHEDULED tier (starter = $2), not current tier (pro = $39)
       expect(subscriptionItem?.itemType).toBe(INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_STARTER);
-      expect(subscriptionItem?.amountUsd).toBe(1); // Starter = $1, NOT Pro = $29
+      expect(subscriptionItem?.amountUsd).toBe(STARTER_PRICE / 100); // Starter = $2, NOT Pro = $39
 
       await expectNoNotifications(customerId);
     });

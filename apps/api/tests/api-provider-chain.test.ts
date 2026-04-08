@@ -5,7 +5,7 @@
  * and service gate behavior (retry pending invoices on enable/key creation).
  *
  * Tests use /test/stripe/config to inject failures and control mock behavior.
- * Platform subscription is the billing trigger (starter = $1/month).
+ * Platform subscription is the billing trigger (starter = $2/month).
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -112,7 +112,7 @@ describe('API: Provider Chain & Service Gates', () => {
     it('should fallback to stripe when escrow has insufficient funds', async () => {
       await setClockTime('2025-01-05T00:00:00Z');
 
-      // Create escrow with $0 (insufficient for $1 starter)
+      // Create escrow with $0 (insufficient for $2 starter)
       await ensureTestBalance(0, { walletAddress: TEST_WALLET });
 
       // Add escrow as priority 1

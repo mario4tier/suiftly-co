@@ -74,8 +74,8 @@ interface ServiceVaultConfig {
 
 ```typescript
 const TIER_CONFIG = {
-  starter:    { ilim: 0x02, glim: 0x02, blim: 0x00, bqos: 0x0 },  // 8 req/sec, no burst
-  pro:        { ilim: 0x10, glim: 0x06, blim: 0x06, bqos: 0x2 },  // 24 req/sec + burst
+  starter:    { ilim: 0x03, glim: 0x03, blim: 0x00, bqos: 0x0 },  // 12 req/sec, no burst
+  pro:        { ilim: 0x32, glim: 0x32, blim: 0x7D, bqos: 0x2 },  // 200 req/sec + 500 burst
   enterprise: { ilim: 0x40, glim: 0x18, blim: 0x18, bqos: 0x3 },  // 96 req/sec + burst
 };
 ```
@@ -171,8 +171,8 @@ const TIER_CONFIG = {
 
 ## Validation Checklist
 
-- [ ] GM encodes starter tier → GLIM=0x02, BQoS=0x0
-- [ ] GM encodes pro tier → GLIM=0x06, BLIM=0x06, BQoS=0x2
+- [ ] GM encodes starter tier → GLIM=0x03, BQoS=0x0
+- [ ] GM encodes pro tier → GLIM=0x32, BLIM=0x7D, BQoS=0x2
 - [ ] GM encodes enterprise tier → GLIM=0x18, BLIM=0x18, BQoS=0x3
 - [ ] GM encodes disabled service → GLIM=0x00 (all zeros)
 - [ ] GM sets control bit 1 when ipAllowlist has entries

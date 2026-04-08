@@ -242,7 +242,7 @@ test.describe('Billing Page', () => {
   });
 
   test('shows next scheduled payment after subscribing to platform', async ({ page }) => {
-    // Deposit $50 to cover platform starter subscription ($1)
+    // Deposit $50 to cover platform starter subscription ($2)
     await page.request.post(`${API_BASE}/test/wallet/deposit`, {
       data: {
         walletAddress: MOCK_WALLET_ADDRESS,

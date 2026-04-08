@@ -12,8 +12,13 @@ import { db } from '@suiftly/database';
 import { customers, mockSuiTransactions, mockTrackingObjects } from '@suiftly/database/schema';
 import { eq, and, desc } from 'drizzle-orm';
 import { cleanupCustomerByWallet } from './helpers/cleanup.js';
+import { PLATFORM_TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
 
 describe('Sui Mock Interface', () => {
+  const STARTER_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.starter;
+  const PRO_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.pro;
+
+
   let mockSui: MockSuiService;
   let testCustomerId: number;
   let testWalletAddress: string;
@@ -218,7 +223,7 @@ describe('Sui Mock Interface', () => {
     it('should charge account successfully', async () => {
       const result = await mockSui.charge({
         userAddress: testWalletAddress,
-        amountUsdCents: 2900, // $29
+        amountUsdCents: PRO_PRICE, // $39
         description: 'Seal PRO subscription',
         escrowAddress,
       });
@@ -228,7 +233,7 @@ describe('Sui Mock Interface', () => {
 
       // Check balance after charge
       const account = await mockSui.getAccount(testWalletAddress);
-      expect(account!.balanceUsdCents).toBe(17100); // $200 - $29
+      expect(account!.balanceUsdCents).toBe(20000 - PRO_PRICE); // $200 - $39
 
       // Check transaction
       const customer = await db.query.customers.findFirst({
@@ -244,9 +249,9 @@ describe('Sui Mock Interface', () => {
         ));
 
       expect(transactions).toHaveLength(1);
-      expect(transactions[0].amountUsdCents).toBe(2900);
+      expect(transactions[0].amountUsdCents).toBe(PRO_PRICE);
       expect(transactions[0].description).toBe('Seal PRO subscription');
-      expect(transactions[0].periodChargedAfterUsdCents).toBe(2900);
+      expect(transactions[0].periodChargedAfterUsdCents).toBe(PRO_PRICE);
     });
 
     it('should enforce spending limit on charges', async () => {

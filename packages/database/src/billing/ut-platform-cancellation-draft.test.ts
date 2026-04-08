@@ -155,8 +155,8 @@ describe('Cancellation should remove service from DRAFT invoice', () => {
 
     expect(platformSubItemAfter).toBeUndefined();
     // DRAFT negative because platform credit remains after sub removed.
-    // Platform Starter on Jan 15: credit = floor(100*14/31) = 45 cents
-    expect(Number(draftAfter!.amountUsdCents)).toBe(-45);
+    // Platform Starter on Jan 15: credit = floor(starter_price*14/31) = 90 cents
+    expect(Number(draftAfter!.amountUsdCents)).toBe(-90);
   });
 
   it('should remove platform pro subscription from DRAFT after cancellation (control test)', async () => {
@@ -213,7 +213,7 @@ describe('Cancellation should remove service from DRAFT invoice', () => {
 
     expect(proSubItemAfter).toBeUndefined();
     // DRAFT negative because platform pro credit remains after sub removed.
-    // Platform Pro on Jan 15: credit = floor(2900*14/31) = 1309 cents
-    expect(Number(draftAfter!.amountUsdCents)).toBe(-1309);
+    // Platform Pro on Jan 15: credit = floor(pro_price*14/31) = 1761 cents
+    expect(Number(draftAfter!.amountUsdCents)).toBe(-1761);
   });
 });

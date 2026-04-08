@@ -50,7 +50,7 @@ const PLATFORM_TIERS: {
     price: fpsubs_usd_sta,
     features: [
       { text: '1 region' },
-      { text: '50 RPS' },
+      { text: '10 RPS' },
       { text: 'Docs + Community support' },
     ],
   },

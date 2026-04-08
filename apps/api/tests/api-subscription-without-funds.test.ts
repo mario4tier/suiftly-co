@@ -4,7 +4,7 @@
  * Tests the flow where a user subscribes without sufficient funds,
  * then deposits money to complete the subscription.
  *
- * Uses platform subscription as the billing trigger ($1 Starter / $29 Pro).
+ * Uses platform subscription as the billing trigger ($2 Starter / $39 Pro).
  * All tests use manual setup (no pre-subscribed platform) to test the
  * payment-pending billing path.
  *
@@ -32,8 +32,13 @@ import {
 } from './helpers/http.js';
 import { login, TEST_WALLET } from './helpers/auth.js';
 import { clearNotifications, expectNoNotifications } from './helpers/notifications.js';
+import { PLATFORM_TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
 
 describe('API: Subscription Without Funds', () => {
+  const STARTER_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.starter;
+  const PRO_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.pro;
+
+
   let accessToken: string;
   let customerId: number;
 
@@ -64,10 +69,10 @@ describe('API: Subscription Without Funds', () => {
     await setClockTime('2025-01-15T00:00:00Z');
 
     // ============================================================================
-    // Setup: Create escrow account with $0 (not enough for $1 platform subscription)
+    // Setup: Create escrow account with $0 (not enough for $2 platform subscription)
     // This ensures the payment will be ATTEMPTED but will FAIL (status = 'failed')
     // ============================================================================
-    console.log('[TEST] Creating escrow account with $0 (insufficient for $1 subscription)...');
+    console.log('[TEST] Creating escrow account with $0 (insufficient for $2 subscription)...');
     await ensureTestBalance(0, { walletAddress: TEST_WALLET });
     await trpcMutation<any>('billing.addPaymentMethod', { providerType: 'escrow' }, accessToken);
 
@@ -111,7 +116,7 @@ describe('API: Subscription Without Funds', () => {
     });
     expect(billingRecordsBefore.length).toBeGreaterThanOrEqual(1);
 
-    const firstMonthInvoice = billingRecordsBefore.find(br => br.amountUsdCents === 100); // $1 = 100 cents
+    const firstMonthInvoice = billingRecordsBefore.find(br => br.amountUsdCents === STARTER_PRICE); // $2 starter
     expect(firstMonthInvoice).toBeDefined();
     console.log(`[TEST] Billing record status before deposit: ${firstMonthInvoice?.status}`);
 
@@ -155,7 +160,7 @@ describe('API: Subscription Without Funds', () => {
       ),
     });
 
-    const firstMonthInvoiceAfter = billingRecordsAfter.find(br => br.amountUsdCents === 100); // $1
+    const firstMonthInvoiceAfter = billingRecordsAfter.find(br => br.amountUsdCents === STARTER_PRICE); // $2 starter
     expect(firstMonthInvoiceAfter).toBeDefined();
 
     console.log(`[TEST] Billing record status after deposit: ${firstMonthInvoiceAfter?.status}`);
@@ -195,7 +200,7 @@ describe('API: Subscription Without Funds', () => {
     const firstMonthEntry = transactions?.find((entry: any) =>
       entry.type === 'charge' &&
       entry.status === 'paid' &&
-      entry.amountUsd === 1 // $1 platform starter tier
+      entry.amountUsd === STARTER_PRICE / 100 // $2 platform starter tier
     );
 
     // BUG: The billing history should show this entry
@@ -243,7 +248,7 @@ describe('API: Subscription Without Funds', () => {
     });
     expect(starterInvoice).toBeDefined();
     expect(['pending', 'failed']).toContain(starterInvoice?.status);
-    expect(starterInvoice?.amountUsdCents).toBe(100); // $1 Starter
+    expect(starterInvoice?.amountUsdCents).toBe(STARTER_PRICE); // $2 Starter
     console.log(`[TEST] Starter invoice exists with status: ${starterInvoice?.status}`);
 
     // ============================================================================
@@ -307,7 +312,7 @@ describe('API: Subscription Without Funds', () => {
     });
     expect(proInvoice).toBeDefined();
     expect(['pending', 'failed']).toContain(proInvoice?.status);
-    expect(proInvoice?.amountUsdCents).toBe(2900); // $29 Pro
+    expect(proInvoice?.amountUsdCents).toBe(PRO_PRICE); // $39 Pro
     console.log(`[TEST] Pro invoice exists with status: ${proInvoice?.status}`);
 
     // ============================================================================
@@ -333,11 +338,11 @@ describe('API: Subscription Without Funds', () => {
     console.log(`[TEST] Unpaid invoices in DB: ${unpaidInvoices.length}`);
 
     expect(unpaidInvoices.length).toBe(1);
-    expect(unpaidInvoices[0].amountUsdCents).toBe(2900); // $29 Pro
+    expect(unpaidInvoices[0].amountUsdCents).toBe(PRO_PRICE); // $39 Pro
     console.log('[TEST] Only Pro invoice exists: OK');
 
-    // Verify NO $1 Starter invoice exists (it was deleted)
-    const starterInvoiceInDb = allInvoices.find(inv => inv.amountUsdCents === 100);
+    // Verify NO $2 Starter invoice exists (it was deleted)
+    const starterInvoiceInDb = allInvoices.find(inv => inv.amountUsdCents === STARTER_PRICE);
     expect(starterInvoiceInDb).toBeUndefined();
     console.log('[TEST] Starter invoice properly deleted: OK');
 
@@ -347,11 +352,11 @@ describe('API: Subscription Without Funds', () => {
   it('should show correct tier in billing history after subscribe→upgrade→deposit (BUG: shows old tier)', async () => {
     /**
      * BUG REPRODUCTION: When user subscribes to Starter, upgrades to Pro (before paying),
-     * then deposits, the billing history incorrectly shows "Platform Starter tier" for the -$29 charge.
+     * then deposits, the billing history incorrectly shows "Platform Starter tier" for the -$39 charge.
      *
      * Root cause: handleTierUpgradeLocked in tier-changes.ts only updates:
      * - service.tier (to 'pro')
-     * - billingRecords.amountUsdCents (to 2900)
+     * - billingRecords.amountUsdCents (to 3900)
      * But does NOT update invoice_line_items.itemType (still 'subscription_starter')
      *
      * The billing history reads itemType from invoice_line_items to generate description,
@@ -397,7 +402,7 @@ describe('API: Subscription Without Funds', () => {
     })));
     expect(starterLineItems.length).toBe(1);
     expect(starterLineItems[0].itemType).toBe('subscription_starter');
-    expect(starterLineItems[0].amountUsdCents).toBe(100); // $1
+    expect(starterLineItems[0].amountUsdCents).toBe(STARTER_PRICE); // $2
 
     // ============================================================================
     // Step 2: Upgrade to Pro (while paidOnce=false)
@@ -429,8 +434,8 @@ describe('API: Subscription Without Funds', () => {
       where: eq(billingRecords.id, pendingInvoiceId),
     });
     expect(invoiceAfterUpgrade).toBeDefined();
-    expect(invoiceAfterUpgrade?.amountUsdCents).toBe(2900); // $29 Pro
-    console.log('[TEST] Invoice amount updated to Pro price: $29');
+    expect(invoiceAfterUpgrade?.amountUsdCents).toBe(PRO_PRICE); // $39 Pro
+    console.log('[TEST] Invoice amount updated to Pro price: $39');
 
     // BUG CHECK: Line items should be updated to Pro
     const lineItemsAfterUpgrade = await db.query.invoiceLineItems.findMany({
@@ -442,10 +447,10 @@ describe('API: Subscription Without Funds', () => {
     })));
 
     // BUG: This is where the bug manifests - line item still shows 'subscription_starter'
-    // FIX: Line item should be 'subscription_pro' with $29
+    // FIX: Line item should be 'subscription_pro' with $39
     expect(lineItemsAfterUpgrade.length).toBe(1);
     expect(lineItemsAfterUpgrade[0].itemType).toBe('subscription_pro'); // BUG: was 'subscription_starter'
-    expect(lineItemsAfterUpgrade[0].amountUsdCents).toBe(2900); // BUG: was 100
+    expect(lineItemsAfterUpgrade[0].amountUsdCents).toBe(PRO_PRICE); // BUG: was STARTER_PRICE
 
     // ============================================================================
     // Step 3: Deposit funds (triggers reconciliation)
@@ -490,11 +495,11 @@ describe('API: Subscription Without Funds', () => {
     const transactions = billingHistoryResult.result?.data?.transactions || [];
     console.log('[TEST] Billing history:', JSON.stringify(transactions, null, 2));
 
-    // Find the $29 Pro charge
+    // Find the $39 Pro charge
     const proCharge = transactions.find((tx: any) =>
       tx.source === 'invoice' &&
       tx.type === 'charge' &&
-      tx.amountUsd === 29
+      tx.amountUsd === PRO_PRICE / 100
     );
 
     expect(proCharge).toBeDefined();

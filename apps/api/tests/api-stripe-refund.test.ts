@@ -2,7 +2,7 @@
  * API Test: Stripe Refund Flow
  *
  * Tests excess credit refunds when a customer downgrades platform tier.
- * Scenario: Pro ($29/month) → Starter ($1/month) mid-month, excess reconciliation
+ * Scenario: Pro ($39/month) → Starter ($2/month) mid-month, excess reconciliation
  * credit should be refunded to Stripe.
  *
  * All tests use MockStripeService (no real Stripe API calls).
@@ -28,8 +28,13 @@ import {
   runPeriodicBillingJob,
 } from './helpers/http.js';
 import { login, TEST_WALLET } from './helpers/auth.js';
+import { PLATFORM_TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
 
 describe('API: Stripe Refund Flow', () => {
+  const STARTER_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.starter;
+  const PRO_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.pro;
+
+
   let accessToken: string;
   let customerId: number;
 
@@ -49,7 +54,7 @@ describe('API: Stripe Refund Flow', () => {
     if (!customer) throw new Error('Test customer not found');
     customerId = customer.customerId;
 
-    // Small balance — insufficient for platform Pro ($29) so Stripe handles it
+    // Small balance — insufficient for platform Pro ($39) so Stripe handles it
     await ensureTestBalance(2, { walletAddress: TEST_WALLET });
   });
 
@@ -62,7 +67,7 @@ describe('API: Stripe Refund Flow', () => {
 
   /**
    * Helper: Subscribe to platform tier with Stripe as payment method.
-   * Escrow has $2 (insufficient for Pro = $29, sufficient for Starter = $1).
+   * Escrow has $2 (insufficient for Pro = $39, sufficient for Starter = $2).
    */
   async function subscribePlatformWithStripe(tier: string): Promise<void> {
     // Accept TOS (required for platform subscribe)
@@ -71,7 +76,7 @@ describe('API: Stripe Refund Flow', () => {
     // Add Stripe as payment method
     await addStripePaymentMethod(accessToken);
 
-    // Subscribe to platform (Stripe will handle Pro charge since escrow < $29)
+    // Subscribe to platform (Stripe will handle Pro charge since escrow < $39)
     const result = await trpcMutation<any>(
       'services.subscribe',
       { serviceType: 'platform', tier },
@@ -86,7 +91,7 @@ describe('API: Stripe Refund Flow', () => {
   // =========================================================================
   describe('Excess credit refund', () => {
     it('should issue refund when credits exceed monthly cost after downgrade', async () => {
-      // Subscribe to Platform Pro mid-month ($29/month = 2900 cents) via Stripe
+      // Subscribe to Platform Pro mid-month ($39/month = PRO_PRICE cents) via Stripe
       await setClockTime('2025-01-15T00:00:00Z');
       await subscribePlatformWithStripe('pro');
 
@@ -103,7 +108,7 @@ describe('API: Stripe Refund Flow', () => {
       const totalCredit = creditsAfterSub.reduce(
         (sum, c) => sum + Number(c.originalAmountUsdCents), 0
       );
-      // On Jan 15: credit = 2900 * 14/31 ≈ 1309 cents (~$13.09)
+      // On Jan 15: credit = PRO_PRICE * 14/31 ≈ 1761 cents (~$17.61)
       expect(totalCredit).toBeGreaterThan(1000); // > $10
 
       // Schedule downgrade to Starter (takes effect 1st of next month)
@@ -132,13 +137,13 @@ describe('API: Stripe Refund Flow', () => {
         (sum, c) => sum + Number(c.remainingAmountUsdCents), 0
       );
 
-      // After refund, remaining credits should be <= total monthly cost (platform starter $1 = 100 cents)
+      // After refund, remaining credits should be <= total monthly cost (platform starter $2 = STARTER_PRICE cents)
       // The refund leaves at most 1 month buffer.
-      expect(remainingCredit).toBeLessThanOrEqual(100);
+      expect(remainingCredit).toBeLessThanOrEqual(STARTER_PRICE);
     });
 
     it('should NOT refund when credits are less than monthly cost', async () => {
-      // Subscribe to Platform Starter mid-month ($1/month = 100 cents) via Stripe
+      // Subscribe to Platform Starter mid-month ($2/month = STARTER_PRICE cents) via Stripe
       await setClockTime('2025-01-15T00:00:00Z');
       await subscribePlatformWithStripe('starter');
 
@@ -154,8 +159,8 @@ describe('API: Stripe Refund Flow', () => {
       const totalCredit = creditsAfterSub.reduce(
         (sum, c) => sum + Number(c.originalAmountUsdCents), 0
       );
-      // On Jan 15: credit = 100 * 14/31 ≈ 45 cents < 100 monthly cost
-      expect(totalCredit).toBeLessThan(100);
+      // On Jan 15: credit = STARTER_PRICE * 14/31 ≈ 90 cents < STARTER_PRICE monthly cost
+      expect(totalCredit).toBeLessThan(STARTER_PRICE);
 
       // Advance to 1st of next month and run billing (no downgrade — still at starter)
       await setClockTime('2025-02-01T00:00:00Z');
@@ -173,7 +178,7 @@ describe('API: Stripe Refund Flow', () => {
 
       // Accept TOS and fund with enough for Platform Pro via escrow
       await trpcMutation<any>('billing.acceptTos', {}, accessToken);
-      await ensureTestBalance(500, { walletAddress: TEST_WALLET }); // $500 — enough for Pro ($29)
+      await ensureTestBalance(500, { walletAddress: TEST_WALLET }); // $500 — enough for Pro ($39)
       await trpcMutation<any>(
         'billing.addPaymentMethod',
         { providerType: 'escrow' },

@@ -27,6 +27,7 @@ import { calculateProRatedUpgradeCharge, handleSubscriptionBilling } from './ser
 import { eq, sql } from 'drizzle-orm';
 import type { ISuiService, TransactionResult, ChargeParams } from '@suiftly/shared/sui-service';
 import { toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData, resetTestState, suspendGMProcessing } from './test-helpers';
+import { PLATFORM_TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
 
 // Simple mock Sui service
 class TestMockSuiService implements ISuiService {
@@ -64,6 +65,9 @@ describe('Billing Edge Cases', () => {
   const clock = new MockDBClock();
   const suiService = new TestMockSuiService();
   const paymentServices = toPaymentServices(suiService);
+  const STARTER_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.starter;
+  const PRO_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.pro;
+
   const testWalletAddress = '0xEDGE5000567890abcdefABCDEF1234567890abcdefABCDEF1234567890abc';
   let testCustomerId: number;
 
@@ -155,7 +159,7 @@ describe('Billing Edge Cases', () => {
       // Jan 30 upgrade (2 days remaining: Jan 30, 31)
       clock.setTime(new Date('2025-01-30T00:00:00Z'));
 
-      const charge = calculateProRatedUpgradeCharge(900, 2900, clock);
+      const charge = calculateProRatedUpgradeCharge(STARTER_PRICE, PRO_PRICE, clock);
 
       expect(charge).toBe(0); // Grace period applies
     });
@@ -164,10 +168,10 @@ describe('Billing Edge Cases', () => {
       // Jan 29 upgrade (3 days remaining: Jan 29, 30, 31)
       clock.setTime(new Date('2025-01-29T00:00:00Z'));
 
-      const charge = calculateProRatedUpgradeCharge(900, 2900, clock);
+      const charge = calculateProRatedUpgradeCharge(STARTER_PRICE, PRO_PRICE, clock);
 
-      // $20 price difference × (3 days / 31 days in January)
-      const expected = Math.floor((2000 * 3) / 31);
+      // (PRO_PRICE - STARTER_PRICE) × (3 days / 31 days in January)
+      const expected = Math.floor(((PRO_PRICE - STARTER_PRICE) * 3) / 31);
       expect(charge).toBe(expected);
       expect(charge).toBeGreaterThan(0); // NOT grace period
     });
@@ -176,7 +180,7 @@ describe('Billing Edge Cases', () => {
       // Jan 31 upgrade (1 day remaining)
       clock.setTime(new Date('2025-01-31T00:00:00Z'));
 
-      const charge = calculateProRatedUpgradeCharge(900, 2900, clock);
+      const charge = calculateProRatedUpgradeCharge(STARTER_PRICE, PRO_PRICE, clock);
 
       expect(charge).toBe(0); // Grace period applies
     });
@@ -196,7 +200,7 @@ describe('Billing Edge Cases', () => {
         testCustomerId,
         'seal',
         'pro',
-        2900,
+        PRO_PRICE,
         paymentServices,
         clock
       );
@@ -204,12 +208,12 @@ describe('Billing Edge Cases', () => {
       // Verify reconciliation credit
       // Feb 15-29 = 15 days used
       // Feb 1-14 = 14 days NOT used
-      // Credit: $29 × (14 / 29)
+      // Credit: PRO_PRICE × (14 / 29)
       const credits = await db.select().from(customerCredits)
         .where(eq(customerCredits.customerId, testCustomerId));
 
       expect(credits).toHaveLength(1);
-      const expectedCredit = Math.floor((2900 * 14) / 29);
+      const expectedCredit = Math.floor((PRO_PRICE * 14) / 29);
       expect(Number(credits[0].originalAmountUsdCents)).toBe(expectedCredit);
     });
 
@@ -226,19 +230,19 @@ describe('Billing Edge Cases', () => {
         testCustomerId,
         'seal',
         'starter',
-        900,
+        STARTER_PRICE,
         paymentServices,
         clock
       );
 
       // Feb 15-28 = 14 days used
       // Feb 1-14 = 14 days NOT used
-      // Credit: $9 × (14 / 28) = $4.50
+      // Credit: STARTER_PRICE × (14 / 28)
       const credits = await db.select().from(customerCredits)
         .where(eq(customerCredits.customerId, testCustomerId));
 
       expect(credits).toHaveLength(1);
-      const expectedCredit = Math.floor((900 * 14) / 28);
+      const expectedCredit = Math.floor((STARTER_PRICE * 14) / 28);
       expect(Number(credits[0].originalAmountUsdCents)).toBe(expectedCredit);
     });
 
@@ -246,10 +250,10 @@ describe('Billing Edge Cases', () => {
       // Upgrade on Feb 15, 2024 (29-day February)
       clock.setTime(new Date('2024-02-15T00:00:00Z'));
 
-      const charge = calculateProRatedUpgradeCharge(900, 2900, clock);
+      const charge = calculateProRatedUpgradeCharge(STARTER_PRICE, PRO_PRICE, clock);
 
-      // $20 difference × (15 days remaining / 29 days)
-      const expected = Math.floor((2000 * 15) / 29);
+      // (PRO_PRICE - STARTER_PRICE) × (15 days remaining / 29 days)
+      const expected = Math.floor(((PRO_PRICE - STARTER_PRICE) * 15) / 29);
       expect(charge).toBe(expected);
     });
   });

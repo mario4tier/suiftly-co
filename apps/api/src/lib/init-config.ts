@@ -36,8 +36,8 @@ const DEFAULT_FRONTEND_CONFIG: Record<string, string> = {
 
   // Add-on pricing (USD)
   fadd_skey_usd: '5',
-  fadd_pkg_usd: '1',
-  fadd_apikey_usd: '1',
+  fadd_pkg_usd: '2',
+  fadd_apikey_usd: '5',
   fadd_ipv4_usd: '0',
   fadd_cidr_usd: '0',
 
@@ -49,8 +49,8 @@ const DEFAULT_FRONTEND_CONFIG: Record<string, string> = {
   fmax_cidr: '20',
 
   // Platform subscription prices (USD) — platform is the only subscription
-  fpsubs_usd_sta: '1',
-  fpsubs_usd_pro: '29',
+  fpsubs_usd_sta: '2',
+  fpsubs_usd_pro: '39',
 };
 
 /**

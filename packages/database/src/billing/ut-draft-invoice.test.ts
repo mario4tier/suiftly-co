@@ -25,6 +25,7 @@ import { handleSubscriptionBilling } from './service-billing';
 import { eq, and, sql } from 'drizzle-orm';
 import type { ISuiService, TransactionResult, ChargeParams } from '@suiftly/shared/sui-service';
 import { toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData, resetTestState, suspendGMProcessing } from './test-helpers';
+import { PLATFORM_TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
 
 // Simple mock Sui service
 class TestMockSuiService implements ISuiService {
@@ -65,6 +66,9 @@ describe('DRAFT Invoice Date and Credit Bugs', () => {
   const clock = new MockDBClock();
   const suiService = new TestMockSuiService();
   const paymentServices = toPaymentServices(suiService);
+  const STARTER_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.starter;
+  const PRO_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.pro;
+
   const testWalletAddress = '0xBUG4000567890abcdefABCDEF1234567890abcdefABCDEF1234567890abc';
   let testCustomerId: number;
 
@@ -113,7 +117,7 @@ describe('DRAFT Invoice Date and Credit Bugs', () => {
         testCustomerId,
         'seal',
         'pro',
-        2900,
+        PRO_PRICE,
         paymentServices,
         clock
       );
@@ -150,7 +154,7 @@ describe('DRAFT Invoice Date and Credit Bugs', () => {
         testCustomerId,
         'seal',
         'pro',
-        2900, // $29.00
+        PRO_PRICE,
         paymentServices,
         clock
       );
@@ -164,8 +168,8 @@ describe('DRAFT Invoice Date and Credit Bugs', () => {
 
       expect(credits).toHaveLength(1);
 
-      // Calculate expected credit: $29 × (23 unused days / 30 days in November)
-      const expectedCreditCents = Math.floor((2900 * 23) / 30);
+      // Calculate expected credit: PRO_PRICE × (23 unused days / 30 days in November)
+      const expectedCreditCents = Math.floor((PRO_PRICE * 23) / 30);
 
       expect(Number(credits[0].originalAmountUsdCents)).toBe(expectedCreditCents);
       expect(Number(credits[0].remainingAmountUsdCents)).toBe(expectedCreditCents);
@@ -188,7 +192,7 @@ describe('DRAFT Invoice Date and Credit Bugs', () => {
         testCustomerId,
         'seal',
         'starter',
-        900, // $9.00
+        STARTER_PRICE,
         paymentServices,
         clock
       );
@@ -201,7 +205,7 @@ describe('DRAFT Invoice Date and Credit Bugs', () => {
         ));
 
       expect(credits).toHaveLength(1);
-      const expectedCreditCents = Math.floor((900 * 29) / 30);
+      const expectedCreditCents = Math.floor((STARTER_PRICE * 29) / 30);
       expect(Number(credits[0].originalAmountUsdCents)).toBe(expectedCreditCents);
     });
 
@@ -221,12 +225,12 @@ describe('DRAFT Invoice Date and Credit Bugs', () => {
         testCustomerId,
         'seal',
         'pro',
-        2900, // $29.00
+        PRO_PRICE,
         paymentServices,
         clock
       );
 
-      // Verify credit: $29 × (14 / 31)
+      // Verify credit: PRO_PRICE × (14 / 31)
       const credits = await db.select().from(customerCredits)
         .where(and(
           eq(customerCredits.customerId, testCustomerId),
@@ -234,7 +238,7 @@ describe('DRAFT Invoice Date and Credit Bugs', () => {
         ));
 
       expect(credits).toHaveLength(1);
-      const expectedCreditCents = Math.floor((2900 * 14) / 31);
+      const expectedCreditCents = Math.floor((PRO_PRICE * 14) / 31);
       expect(Number(credits[0].originalAmountUsdCents)).toBe(expectedCreditCents);
     });
   });

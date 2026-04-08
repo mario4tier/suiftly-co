@@ -93,16 +93,16 @@ export async function restCall<T>(
 
   const status = response.status;
 
+  // Read body as text first to avoid double-consumption if JSON parsing fails
+  const text = await response.text();
   try {
-    const data = await response.json() as T | undefined;
+    const data = JSON.parse(text) as T | undefined;
     if (!response.ok) {
-      // Extract error from response body if present
       const errorMsg = (data as any)?.error || (data as any)?.message || `HTTP ${status}`;
       return { success: false, data, error: errorMsg, status };
     }
     return { success: true, data, status };
   } catch {
-    const text = await response.text();
     return { success: response.ok, error: text || `HTTP ${status}`, status };
   }
 }
@@ -374,7 +374,7 @@ export async function subscribeAndEnable(
  * Set config_global values and reload the API server's config cache.
  * Use this in test setup to override pricing or other global config values.
  *
- * Example: { fpsubs_usd_sta: '100', fpsubs_usd_pro: '2900' }
+ * Example: { fpsubs_usd_sta: '2', fpsubs_usd_pro: '39' }
  */
 export async function setConfigFlags(flags: Record<string, string>): Promise<void> {
   const result = await restCall('POST', '/test/config/global', flags);
@@ -388,7 +388,7 @@ export async function setConfigFlags(flags: Record<string, string>): Promise<voi
  * Creates a platform subscription (required to access seal/grpc/graphql services).
  * No-op if platform subscription already exists.
  *
- * @param tier - Platform tier (default 'starter' = $1/month)
+ * @param tier - Platform tier (default 'starter' = $2/month)
  */
 export async function subscribePlatform(
   accessToken: string,

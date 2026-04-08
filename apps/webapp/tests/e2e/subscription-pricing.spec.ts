@@ -3,14 +3,20 @@
  * Tests that platform subscription pricing is displayed correctly
  * and that subscribing with exact amounts works.
  *
- * Platform tiers: Starter ($1/mo) and Pro ($29/mo).
+ * Platform tiers: Starter and Pro (prices from @suiftly/shared/pricing).
  */
 
 import { test, expect } from '@playwright/test';
 import { addCryptoPayment, resetCustomer, ensureTestBalance } from '../helpers/db';
 import { getBanner } from '../helpers/locators';
+import { PLATFORM_TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
 
 const API_BASE = 'http://localhost:22700';
+
+const STARTER_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.starter; // cents
+const PRO_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.pro; // cents
+const STARTER_PRICE_USD = STARTER_PRICE / 100;
+const PRO_PRICE_USD = PRO_PRICE / 100;
 
 test.describe('Platform Subscription Pricing', () => {
   test.beforeEach(async ({ page, request }) => {
@@ -37,10 +43,10 @@ test.describe('Platform Subscription Pricing', () => {
     await expect(page.getByText('Pro', { exact: true }).first()).toBeVisible();
 
     // Should show correct prices
-    await expect(page.getByText('$1/mo', { exact: true })).toBeVisible();
-    await expect(page.getByText('$29/mo', { exact: true })).toBeVisible();
+    await expect(page.getByText(`$${STARTER_PRICE_USD}/mo`, { exact: true })).toBeVisible();
+    await expect(page.getByText(`$${PRO_PRICE_USD}/mo`, { exact: true })).toBeVisible();
 
-    console.log('✅ Platform plan card shows correct Starter ($1) and Pro ($29) prices');
+    console.log(`✅ Platform plan card shows correct Starter ($${STARTER_PRICE_USD}) and Pro ($${PRO_PRICE_USD}) prices`);
   });
 
   test('platform starter subscription creates service even with insufficient balance', async ({ page }) => {
@@ -75,8 +81,8 @@ test.describe('Platform Subscription Pricing', () => {
     console.log('✅ Platform Starter: Service created with payment pending');
   });
 
-  test('platform pro subscription succeeds when balance is exactly $29', async ({ page }) => {
-    // Reset and create escrow with exactly $29
+  test(`platform pro subscription succeeds when balance is exactly $${PRO_PRICE_USD}`, async ({ page }) => {
+    // Reset and create escrow with exactly Pro price
     await page.request.post(`${API_BASE}/test/data/reset`, {
       data: {
         balanceUsdCents: 0,
@@ -88,7 +94,7 @@ test.describe('Platform Subscription Pricing', () => {
     await page.request.post(`${API_BASE}/test/wallet/deposit`, {
       data: {
         walletAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-        amountUsd: 29,
+        amountUsd: PRO_PRICE_USD,
         initialSpendingLimitUsd: 250,
       },
     });
@@ -111,11 +117,11 @@ test.describe('Platform Subscription Pricing', () => {
     // Wait for actual state change: onboarding form gone
     await expect(page.locator('h3:has-text("Choose a Platform Plan")')).not.toBeVisible({ timeout: 10000 });
 
-    console.log('✅ Platform Pro subscription succeeds with exactly $29 balance');
+    console.log(`✅ Platform Pro subscription succeeds with exactly $${PRO_PRICE_USD} balance`);
   });
 
-  test('platform starter subscription succeeds when balance is exactly $1', async ({ page }) => {
-    // Reset and create escrow with exactly $1
+  test(`platform starter subscription succeeds when balance is exactly $${STARTER_PRICE_USD}`, async ({ page }) => {
+    // Reset and create escrow with exactly Starter price
     await page.request.post(`${API_BASE}/test/data/reset`, {
       data: {
         balanceUsdCents: 0,
@@ -127,7 +133,7 @@ test.describe('Platform Subscription Pricing', () => {
     await page.request.post(`${API_BASE}/test/wallet/deposit`, {
       data: {
         walletAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-        amountUsd: 1,
+        amountUsd: STARTER_PRICE_USD,
         initialSpendingLimitUsd: 250,
       },
     });
@@ -149,6 +155,6 @@ test.describe('Platform Subscription Pricing', () => {
     // Wait for actual state change: onboarding form gone
     await expect(page.locator('h3:has-text("Choose a Platform Plan")')).not.toBeVisible({ timeout: 10000 });
 
-    console.log('✅ Platform Starter subscription succeeds with exactly $1 balance');
+    console.log(`✅ Platform Starter subscription succeeds with exactly $${STARTER_PRICE_USD} balance`);
   });
 });

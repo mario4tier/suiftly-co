@@ -74,7 +74,7 @@ test.describe('Payment Fallback Flows', () => {
     // Add crypto payment method (reveals escrow card)
     await addCryptoPayment(page);
 
-    // Deposit funds ($5 to cover $1 starter subscription)
+    // Deposit funds ($5 to cover $2 starter subscription)
     await page.locator('button:has-text("Deposit")').first().click();
     await page.fill('input#depositAmount', '5');
     await page.locator('[role="dialog"]').getByRole('button', { name: 'Deposit' }).click();

@@ -11,9 +11,15 @@
 import { test, expect } from '@playwright/test';
 import { resetCustomer, subscribePlatformService } from '../helpers/db';
 import { setMockClock, resetClock } from '../helpers/clock';
+import { PLATFORM_TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
 
 const MOCK_WALLET_ADDRESS = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const API_BASE = 'http://localhost:22700';
+
+const STARTER_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.starter; // cents
+const PRO_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.pro; // cents
+const STARTER_PRICE_USD = STARTER_PRICE / 100;
+const PRO_PRICE_USD = PRO_PRICE / 100;
 
 test.describe('Subscription Billing - Bug Detection', () => {
   test('BUG 1: Next Scheduled Payment shows 1st of next month (not last day of current month)', async ({ page }) => {
@@ -83,7 +89,7 @@ test.describe('Subscription Billing - Bug Detection', () => {
 
     // Verify line items exist in expanded section (amounts vary by date)
     const expandedSection = page.locator('text=Platform Pro plan').last().locator('../..');
-    await expect(expandedSection).toContainText('$29.00'); // Seal Pro subscription (fixed price)
+    await expect(expandedSection).toContainText(`$${PRO_PRICE_USD}.00`); // Platform Pro subscription (fixed price)
     await expect(expandedSection).toContainText(/Total:/); // Total label exists
   });
 
@@ -126,7 +132,7 @@ test.describe('Subscription Billing - Bug Detection', () => {
     // Subscribing on November 24 should create credit for unused days
     // Days used: Nov 24-30 = 7 days
     // Days NOT used: Nov 1-23 = 23 days
-    // Expected credit: $29 * (23/30) = $22.23 (2223 cents)
+    // Expected credit: PRO_PRICE * (23/30) cents
 
     // This test will FAIL if credit not created, exposing the bug
     expect(data.credits).toBeDefined();
@@ -135,7 +141,7 @@ test.describe('Subscription Billing - Bug Detection', () => {
     const reconCredit = data.credits?.find((c: any) => c.reason === 'reconciliation');
     expect(reconCredit).toBeDefined();
 
-    const expectedCredit = Math.floor((2900 * 23) / 30);
+    const expectedCredit = Math.floor((PRO_PRICE * 23) / 30);
     expect(reconCredit.originalAmountUsdCents).toBe(expectedCredit); // Exact match now
 
     console.log(`✅ Nov 24: Credit = $${reconCredit.originalAmountUsdCents / 100} (expected $${expectedCredit / 100})`);
@@ -187,8 +193,8 @@ test.describe('Month Boundary Edge Cases', () => {
     // November has 30 days
     // Days used: Nov 30 only = 1 day
     // Days NOT used: Nov 1-29 = 29 days
-    // Credit: $29 * (29/30) = $28.03 (2803 cents)
-    const expectedCredit = Math.floor((2900 * 29) / 30);
+    // Credit: PRO_PRICE * (29/30) cents
+    const expectedCredit = Math.floor((PRO_PRICE * 29) / 30);
     expect(reconCredit.originalAmountUsdCents).toBe(expectedCredit);
 
     console.log(`✅ Last second of Nov 30: Credit = $${reconCredit.originalAmountUsdCents / 100} (expected $${expectedCredit / 100})`);
@@ -230,7 +236,7 @@ test.describe('Month Boundary Edge Cases', () => {
     // December has 31 days
     // Days used: Dec 1-31 = 31 days
     // Days NOT used: 0 days
-    // Credit: $29 * (0/31) = $0.00
+    // Credit: PRO_PRICE * (0/31) = $0.00
     // Since credit is 0, NO credit record should be created
     const reconCredit = data.credits?.find((c: any) => c.reason === 'reconciliation');
     expect(reconCredit).toBeUndefined(); // No credit for full month subscription
@@ -277,8 +283,8 @@ test.describe('Month Boundary Edge Cases', () => {
     // February 2025 has 28 days (non-leap year)
     // Days used: Feb 28 only = 1 day
     // Days NOT used: Feb 1-27 = 27 days
-    // Credit: $29 * (27/28) = $27.96 (2796 cents)
-    const expectedCredit = Math.floor((2900 * 27) / 28);
+    // Credit: PRO_PRICE * (27/28) cents
+    const expectedCredit = Math.floor((PRO_PRICE * 27) / 28);
     expect(reconCredit.originalAmountUsdCents).toBe(expectedCredit);
 
     console.log(`✅ Feb 28 (non-leap): Credit = $${reconCredit.originalAmountUsdCents / 100} (expected $${expectedCredit / 100})`);
@@ -322,8 +328,8 @@ test.describe('Month Boundary Edge Cases', () => {
     // February 2024 has 29 days (leap year)
     // Days used: Feb 29 only = 1 day
     // Days NOT used: Feb 1-28 = 28 days
-    // Credit: $29 * (28/29) = $28.00 (2800 cents)
-    const expectedCredit = Math.floor((2900 * 28) / 29);
+    // Credit: PRO_PRICE * (28/29) cents
+    const expectedCredit = Math.floor((PRO_PRICE * 28) / 29);
     expect(reconCredit.originalAmountUsdCents).toBe(expectedCredit);
 
     console.log(`✅ Feb 29 (leap year): Credit = $${reconCredit.originalAmountUsdCents / 100} (expected $${expectedCredit / 100})`);
@@ -365,7 +371,7 @@ test.describe('Month Boundary Edge Cases', () => {
     // January has 31 days
     // Days used: Jan 1-31 = 31 days
     // Days NOT used: 0 days
-    // Credit: $29 * (0/31) = $0.00
+    // Credit: PRO_PRICE * (0/31) = $0.00
     // Since credit is 0, NO credit record should be created
     const reconCredit = data.credits?.find((c: any) => c.reason === 'reconciliation');
     expect(reconCredit).toBeUndefined(); // No credit for full month subscription
@@ -412,8 +418,8 @@ test.describe('Month Boundary Edge Cases', () => {
     // December has 31 days
     // Days used: Dec 31 only = 1 day
     // Days NOT used: Dec 1-30 = 30 days
-    // Credit: $29 * (30/31) = $28.06 (2806 cents)
-    const expectedCredit = Math.floor((2900 * 30) / 31);
+    // Credit: PRO_PRICE * (30/31) cents
+    const expectedCredit = Math.floor((PRO_PRICE * 30) / 31);
     expect(reconCredit.originalAmountUsdCents).toBe(expectedCredit);
 
     console.log(`✅ Dec 31 last second: Credit = $${reconCredit.originalAmountUsdCents / 100} (expected $${expectedCredit / 100})`);

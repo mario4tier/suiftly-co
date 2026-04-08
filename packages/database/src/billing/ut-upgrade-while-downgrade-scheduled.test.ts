@@ -11,7 +11,7 @@
  * Expected after upgrade:
  * - service.tier = 'pro'
  * - service.scheduledTier = null (cleared)
- * - DRAFT invoice amount = Pro price ($29)
+ * - DRAFT invoice amount = Pro price ($39)
  *
  * What might be going wrong:
  * - DRAFT shows Starter price instead of Pro

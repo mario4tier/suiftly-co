@@ -27,6 +27,7 @@ import {
 import { getOrCreateDraftInvoice } from './invoices';
 import { unsafeAsLockedTransaction, toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData, resetTestState, suspendGMProcessing } from './test-helpers';
 import { eq, and, sql } from 'drizzle-orm';
+import { PLATFORM_TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
 
 // Simple mock Sui service for testing
 class TestMockSuiService implements ISuiService {
@@ -75,6 +76,9 @@ describe('Service Billing Integration (Phase 2)', () => {
   const clock = new MockDBClock();
   const suiService = new TestMockSuiService();
   const paymentServices = toPaymentServices(suiService);
+  const STARTER_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.starter;
+  const PRO_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.pro;
+
 
   const testWalletAddress = '0xSVC2000567890abcdefABCDEF1234567890abcdefABCDEF1234567890abc';
   let testCustomerId: number;
@@ -125,14 +129,14 @@ describe('Service Billing Integration (Phase 2)', () => {
         testCustomerId,
         'seal',
         'pro',
-        2900, // $29.00
+        PRO_PRICE,
         paymentServices,
         clock
       );
 
       expect(result.paymentSuccessful).toBe(true);
       expect(result.pendingInvoiceId).toBeNull();
-      expect(result.amountUsdCents).toBe(2900);
+      expect(result.amountUsdCents).toBe(PRO_PRICE);
 
       // Verify invoice created and paid
       const invoice = await db.query.billingRecords.findFirst({
@@ -140,7 +144,7 @@ describe('Service Billing Integration (Phase 2)', () => {
       });
 
       expect(invoice?.status).toBe('paid');
-      expect(Number(invoice?.amountPaidUsdCents)).toBe(2900);
+      expect(Number(invoice?.amountPaidUsdCents)).toBe(PRO_PRICE);
     });
 
     it('should issue reconciliation credit for partial month', async () => {
@@ -150,7 +154,7 @@ describe('Service Billing Integration (Phase 2)', () => {
         testCustomerId,
         'seal',
         'pro',
-        2900, // $29.00
+        PRO_PRICE,
         paymentServices,
         clock
       );
@@ -163,9 +167,9 @@ describe('Service Billing Integration (Phase 2)', () => {
       expect(credits[0].reason).toBe('reconciliation');
       expect(credits[0].expiresAt).toBeNull(); // Never expires
 
-      // Calculate expected credit: $29 × (14 days not used / 31 days in January)
+      // Calculate expected credit: PRO_PRICE × (14 days not used / 31 days in January)
       // Subscribed Jan 15: used 17 days (Jan 15-31), NOT used 14 days (Jan 1-14)
-      const expectedCredit = Math.floor((2900 * 14) / 31);
+      const expectedCredit = Math.floor((PRO_PRICE * 14) / 31);
       expect(Number(credits[0].originalAmountUsdCents)).toBe(expectedCredit);
     });
 
@@ -188,7 +192,7 @@ describe('Service Billing Integration (Phase 2)', () => {
         testCustomerId,
         'seal',
         'pro',
-        2900,
+        PRO_PRICE,
         paymentServices,
         clock
       );
@@ -201,35 +205,35 @@ describe('Service Billing Integration (Phase 2)', () => {
         ));
 
       expect(drafts).toHaveLength(1);
-      // DRAFT is net of credits: pro price (2900) minus reconciliation credit
-      // (floor(2900*14/31)=1309) for subscribing on Jan 15.
-      expect(Number(drafts[0].amountUsdCents)).toBe(2900 - Math.floor(2900 * 14 / 31));
+      // DRAFT is net of credits: PRO_PRICE minus reconciliation credit
+      // (floor(PRO_PRICE*14/31)=1761) for subscribing on Jan 15.
+      expect(Number(drafts[0].amountUsdCents)).toBe(PRO_PRICE - Math.floor(PRO_PRICE * 14 / 31));
     });
   });
 
   describe('Pro-Rated Tier Upgrades', () => {
     it('should calculate pro-rated charge for mid-month upgrade', () => {
-      // Upgrade from Starter ($9) to Pro ($29) on Jan 15
+      // Upgrade from Starter ($2) to Pro ($39) on Jan 15
       // 17 days remaining in 31-day month
       clock.setTime(new Date('2025-01-15T00:00:00Z'));
 
       const charge = calculateProRatedUpgradeCharge(
-        900, // Starter: $9.00
-        2900, // Pro: $29.00
+        STARTER_PRICE,
+        PRO_PRICE,
         clock
       );
 
-      // Expected: ($29 - $9) × (17 / 31) = $20 × 0.548 = $10.97
-      const expected = Math.floor((2000 * 17) / 31);
+      // Expected: (PRO_PRICE - STARTER_PRICE) × (17 / 31)
+      const expected = Math.floor(((PRO_PRICE - STARTER_PRICE) * 17) / 31);
       expect(charge).toBe(expected);
-      expect(charge).toBe(1096); // $10.96
+      expect(charge).toBe(2029); // $20.29
     });
 
     it('should charge $0 if 2 or fewer days remaining (grace period)', () => {
       // Upgrade on Jan 30 (2 days remaining)
       clock.setTime(new Date('2025-01-30T00:00:00Z'));
 
-      const charge = calculateProRatedUpgradeCharge(900, 2900, clock);
+      const charge = calculateProRatedUpgradeCharge(STARTER_PRICE, PRO_PRICE, clock);
 
       expect(charge).toBe(0); // Grace period
     });
@@ -238,7 +242,7 @@ describe('Service Billing Integration (Phase 2)', () => {
       // Upgrade on Jan 31 (last day)
       clock.setTime(new Date('2025-01-31T00:00:00Z'));
 
-      const charge = calculateProRatedUpgradeCharge(900, 2900, clock);
+      const charge = calculateProRatedUpgradeCharge(STARTER_PRICE, PRO_PRICE, clock);
 
       expect(charge).toBe(0); // Grace period
     });
@@ -276,8 +280,8 @@ describe('Service Billing Integration (Phase 2)', () => {
         ),
       });
 
-      // Expected: Pro tier ($29) + 2 keys ($10) + 5 packages ($10) = $49
-      expect(Number(draft?.amountUsdCents)).toBe(4900);
+      // Expected: Pro tier ($39) + 2 keys ($10) + 5 packages ($10) = $59
+      expect(Number(draft?.amountUsdCents)).toBe(5900);
     });
 
     it('should NOT change DRAFT when service is toggled off (subscription still active)', async () => {
@@ -305,7 +309,7 @@ describe('Service Billing Integration (Phase 2)', () => {
         ),
       });
 
-      expect(Number(draftWithServiceOn?.amountUsdCents)).toBe(2900); // $29 for Pro
+      expect(Number(draftWithServiceOn?.amountUsdCents)).toBe(PRO_PRICE); // Pro tier
 
       // Toggle service OFF (user temporarily disables it)
       await db.update(serviceInstances)
@@ -327,7 +331,7 @@ describe('Service Billing Integration (Phase 2)', () => {
       // CRITICAL: Amount should NOT change
       // Toggling service off/on does NOT cancel subscription
       // Customer is still billed for subscribed services
-      expect(Number(draftAfterToggleOff?.amountUsdCents)).toBe(2900); // Still $29
+      expect(Number(draftAfterToggleOff?.amountUsdCents)).toBe(PRO_PRICE); // Still Pro
       expect(draftAfterToggleOff?.id).toBe(draftWithServiceOn?.id); // Same DRAFT, just updated
 
       // Toggle service back ON
@@ -348,7 +352,7 @@ describe('Service Billing Integration (Phase 2)', () => {
       });
 
       // Amount should STILL be the same
-      expect(Number(draftAfterToggleOn?.amountUsdCents)).toBe(2900); // Still $29
+      expect(Number(draftAfterToggleOn?.amountUsdCents)).toBe(PRO_PRICE); // Still Pro
     });
   });
 });

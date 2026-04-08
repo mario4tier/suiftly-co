@@ -20,8 +20,14 @@ import {
 import { setMockClock, resetClock } from '../helpers/clock';
 import { waitAfterMutation } from '../helpers/wait-utils';
 import { waitForToastsToDisappear } from '../helpers/locators';
+import { PLATFORM_TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
 
 const API_BASE = 'http://localhost:22700';
+
+const STARTER_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.starter; // cents
+const PRO_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.pro; // cents
+const STARTER_PRICE_USD = STARTER_PRICE / 100;
+const PRO_PRICE_USD = PRO_PRICE / 100;
 
 test.describe('Platform Billing', () => {
   test.beforeEach(async ({ page, request }) => {
@@ -71,8 +77,8 @@ test.describe('Platform Billing', () => {
       await nextPaymentButton.click();
 
       // Should show credit line item for partial month
-      // Pro = $29, subscribed Jan 15, daysUsed = 31-15+1 = 17, daysNotUsed = 14
-      // credit = floor(2900*14/31) = 1309 cents = $13.09
+      // Pro subscribed Jan 15, daysUsed = 31-15+1 = 17, daysNotUsed = 14
+      // credit = floor(PRO_PRICE*14/31) cents
       await expect(
         page.locator('text=/partial month credit/i')
       ).toBeVisible({ timeout: 5000 });
@@ -89,12 +95,15 @@ test.describe('Platform Billing', () => {
       await page.waitForURL('/billing', { timeout: 5000 });
 
       // Jan 29: daysUsed = 31-29+1 = 3, daysNotUsed = 28
-      // credit = floor(2900*28/31) = 2619 cents = $26.19, DRAFT = $29 - $26.19 = $2.81
+      // credit = floor(PRO_PRICE*28/31) cents, DRAFT = PRO_PRICE - credit
+      const creditCents = Math.floor((PRO_PRICE * 28) / 31);
+      const draftCents = PRO_PRICE - creditCents;
+      const draftUsd = (draftCents / 100).toFixed(2);
       const nextPaymentButton = page.locator('button').filter({ hasText: /Next Scheduled/ });
       await expect(nextPaymentButton).toBeVisible({ timeout: 5000 });
 
-      // Verify the amount is reduced (< $29 Pro price, since credit offsets it)
-      await expect(nextPaymentButton).toContainText('$2.81');
+      // Verify the amount is reduced (< Pro price, since credit offsets it)
+      await expect(nextPaymentButton).toContainText(`$${draftUsd}`);
     });
   });
 
@@ -118,8 +127,9 @@ test.describe('Platform Billing', () => {
       }
 
       // Should show at least one transaction (platform subscription)
+      const starterPriceFormatted = `\\$${STARTER_PRICE_USD}\\.00`;
       await expect(
-        page.locator('text=/\\$1\\.00|\\$0\\.01/') // Platform Starter = $1
+        page.locator(`text=/${starterPriceFormatted}|\\$0\\.02/`) // Platform Starter charge
       ).toBeVisible({ timeout: 5000 });
     });
   });
@@ -145,17 +155,17 @@ test.describe('Platform Billing', () => {
         await waitAfterMutation(page);
       }
 
-      // Subscribe to Starter ($1)
+      // Subscribe to Starter
       await page.locator('#platform-tos').click();
       await waitAfterMutation(page);
       await page.locator('button:has-text("Subscribe to Starter Plan")').click();
       await waitAfterMutation(page);
       await waitForToastsToDisappear(page);
 
-      // Verify escrow balance decreased via API (was $10, now should be $9)
+      // Verify escrow balance decreased via API (was $10, now should be $10 - Starter price)
       const balanceResp = await request.get(`${API_BASE}/test/wallet/balance`);
       const balanceData = await balanceResp.json();
-      expect(balanceData.balanceUsd).toBe(9);
+      expect(balanceData.balanceUsd).toBe(10 - STARTER_PRICE_USD);
     });
   });
 
@@ -163,8 +173,8 @@ test.describe('Platform Billing', () => {
   // Platform Tier Pricing Display
   // =========================================================================
   test.describe('Tier Pricing', () => {
-    test('Starter ($1) should succeed with exact funds', async ({ page, request }) => {
-      await ensureTestBalance(request, 1);
+    test('Starter should succeed with exact funds', async ({ page, request }) => {
+      await ensureTestBalance(request, STARTER_PRICE_USD);
       await page.click('text=Billing');
       await page.waitForURL('/billing', { timeout: 5000 });
 
@@ -188,8 +198,8 @@ test.describe('Platform Billing', () => {
       ).not.toBeVisible({ timeout: 10000 });
     });
 
-    test('Pro ($29) should succeed with exact funds', async ({ page, request }) => {
-      await ensureTestBalance(request, 29);
+    test('Pro should succeed with exact funds', async ({ page, request }) => {
+      await ensureTestBalance(request, PRO_PRICE_USD);
       await page.click('text=Billing');
       await page.waitForURL('/billing', { timeout: 5000 });
 
@@ -223,13 +233,11 @@ test.describe('Platform Billing', () => {
   test.describe('Downgrade Recalculation', () => {
     const MOCK_WALLET = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
     const GM_BASE = 'http://localhost:22600';
-    const PRO_PRICE = 29;
-    const STARTER_PRICE = 1;
 
     test('should recalculate FAILED invoice from Pro to Starter price after downgrade', async ({ page, request }) => {
       // Step 1: Subscribe to Pro on Jan 1
       await setMockClock(request, '2025-01-01T00:00:01Z');
-      await ensureTestBalance(request, PRO_PRICE + 15);
+      await ensureTestBalance(request, PRO_PRICE_USD + 15);
       await subscribePlatformService(page, 'PRO');
       await waitForToastsToDisappear(page);
 
@@ -246,7 +254,7 @@ test.describe('Platform Billing', () => {
         });
       }
 
-      // Step 3: Run periodic billing → creates FAILED invoice at Pro price ($29)
+      // Step 3: Run periodic billing → creates FAILED invoice at Pro price
       const sync1 = await request.post(`${GM_BASE}/api/queue/sync-all?source=test`);
       expect(sync1.ok()).toBe(true);
 
@@ -266,8 +274,8 @@ test.describe('Platform Billing', () => {
       // Wait for dialog to close (downgrade scheduled)
       await expect(changePlanDialog).not.toBeVisible({ timeout: 10000 });
 
-      // Step 5: Deposit enough for Starter ($1) but not Pro ($29)
-      const retryDeposit = STARTER_PRICE + 5;
+      // Step 5: Deposit enough for Starter but not Pro
+      const retryDeposit = STARTER_PRICE_USD + 5;
       await request.post(`${API_BASE}/test/wallet/deposit`, {
         data: { walletAddress: MOCK_WALLET, amountUsd: retryDeposit },
       });
@@ -290,8 +298,8 @@ test.describe('Platform Billing', () => {
       const balanceAfter = (await afterResp.json()).balanceUsd;
       const amountCharged = balanceBefore - balanceAfter;
 
-      expect(amountCharged).toBeGreaterThanOrEqual(STARTER_PRICE - 0.5);
-      expect(amountCharged).toBeLessThanOrEqual(STARTER_PRICE + 0.5);
+      expect(amountCharged).toBeGreaterThanOrEqual(STARTER_PRICE_USD - 0.5);
+      expect(amountCharged).toBeLessThanOrEqual(STARTER_PRICE_USD + 0.5);
 
       await resetClock(request);
     });

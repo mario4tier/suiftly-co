@@ -24,8 +24,8 @@
  * config_global keys: fpsubs_usd_sta, fpsubs_usd_pro
  */
 export const PLATFORM_TIER_PRICES_USD_CENTS = {
-  starter: 100,   // $1.00/month
-  pro: 2900,      // $29.00/month
+  starter: 200,   // $2.00/month
+  pro: 3900,      // $39.00/month
 } as const;
 
 /**

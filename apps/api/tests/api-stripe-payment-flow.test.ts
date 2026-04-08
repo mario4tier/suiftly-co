@@ -10,7 +10,7 @@
  *
  * All tests use MockStripeService (no real Stripe API calls).
  * Uses /test/stripe/config to control mock behavior.
- * Platform subscription is the billing trigger (starter = $1/month).
+ * Platform subscription is the billing trigger (starter = $2/month).
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -68,9 +68,9 @@ describe('API: Stripe Payment Flow', () => {
     if (!customer) throw new Error('Test customer not found');
     customerId = customer.customerId;
 
-    // Small balance — insufficient for platform Pro ($29) so Stripe handles it.
+    // Small balance — insufficient for platform Pro ($39) so Stripe handles it.
     // Note: ensureTestBalance auto-adds escrow as a payment method, but $2 is
-    // insufficient for Pro ($29), so Stripe handles payment in tests using Pro tier.
+    // insufficient for Pro ($39), so Stripe handles payment in tests using Pro tier.
     await ensureTestBalance(2, { walletAddress: TEST_WALLET });
     await clearNotifications(customerId);
 
@@ -97,7 +97,7 @@ describe('API: Stripe Payment Flow', () => {
       // Add stripe as only payment method (setup + webhook)
       await addStripePaymentMethod(accessToken);
 
-      // Subscribe to platform pro ($29/month) — Stripe handles the charge (escrow has only $2)
+      // Subscribe to platform pro ($39/month) — Stripe handles the charge (escrow has only $2)
       await trpcMutation<any>('billing.acceptTos', {}, accessToken);
       const result = await trpcMutation<any>(
         'services.subscribe',
@@ -234,7 +234,7 @@ describe('API: Stripe Payment Flow', () => {
     it('should use Stripe when escrow has insufficient funds and verify billing record', async () => {
       await setClockTime('2025-01-05T00:00:00Z');
 
-      // Create escrow with $0 (insufficient for $1 platform starter)
+      // Create escrow with $0 (insufficient for $2 platform starter)
       await ensureTestBalance(0, { walletAddress: TEST_WALLET });
 
       // Add escrow (priority 1) + stripe (priority 2)
@@ -320,7 +320,7 @@ describe('API: Stripe Payment Flow', () => {
 
       // Add Stripe BEFORE subscribing. This triggers a GM async sync, but there are
       // no pending invoices yet, so GM is a no-op. If we subscribed first, the initial
-      // subscribe would fail (escrow only has $2, pro is $29) → 'failed' billing record.
+      // subscribe would fail (escrow only has $2, pro is $39) → 'failed' billing record.
       // Then addStripePaymentMethod would trigger GM, which resolves it using GM's own
       // Stripe mock (separate process, doesn't have forceChargeRequiresAction configured).
       await addStripePaymentMethod(accessToken);
@@ -329,7 +329,7 @@ describe('API: Stripe Payment Flow', () => {
       // before subscribe, so GM doesn't interfere with the subscribe's 3DS billing record)
       await new Promise(resolve => setTimeout(resolve, 2000));
 
-      // Subscribe — escrow ($2) insufficient for Pro ($29), Stripe requires 3DS → pending
+      // Subscribe — escrow ($2) insufficient for Pro ($39), Stripe requires 3DS → pending
       await trpcMutation<any>('billing.acceptTos', {}, accessToken);
       const subscribeResult = await trpcMutation<any>(
         'services.subscribe',
@@ -752,7 +752,7 @@ describe('API: Stripe Payment Flow', () => {
     it('should pay via escrow when Stripe requires 3DS and clear paymentActionUrl', async () => {
       await setClockTime('2025-01-05T00:00:00Z');
 
-      // Fund escrow with sufficient balance ($50 for $1 platform starter)
+      // Fund escrow with sufficient balance ($50 for $2 platform starter)
       await ensureTestBalance(50, { walletAddress: TEST_WALLET });
 
       // Configure mock to require 3DS on Stripe

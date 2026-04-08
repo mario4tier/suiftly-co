@@ -24,8 +24,8 @@ export let fapikey_incl = 2;
 export let fipv4_incl = 2;
 export let fcidr_incl = 2;
 export let fadd_skey_usd = 5;
-export let fadd_pkg_usd = 1;
-export let fadd_apikey_usd = 1;
+export let fadd_pkg_usd = 2;
+export let fadd_apikey_usd = 5;
 export let fadd_ipv4_usd = 0;
 export let fadd_cidr_usd = 0;
 export let fmax_skey = 10;
@@ -34,8 +34,8 @@ export let fmax_apikey = 10;
 export let fmax_ipv4 = 20;
 export let fmax_cidr = 20;
 // Platform subscription prices — platform is the only subscription
-export let fpsubs_usd_sta = 1;
-export let fpsubs_usd_pro = 29;
+export let fpsubs_usd_sta = 2;
+export let fpsubs_usd_pro = 39;
 export let mockAuth = false;
 export let stripePublishableKey = '';
 

@@ -94,7 +94,7 @@ export async function resetCustomerTestData(options: TestDataResetOptions = {}) 
   if (!customer) {
     console.log(`[TEST DATA] Customer not found, creating with specified balance: ${walletAddress}`);
 
-    // Generate random customer ID with collision retry (matching auth.ts pattern)
+    // Generate random customer ID with collision retry (matching rest-auth.ts pattern)
     const MAX_RETRIES = 10;
     let newCustomer: typeof customers.$inferSelect | undefined;
 

@@ -116,6 +116,9 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
   const clock = new MockDBClock();
   const suiService = new TestMockSuiService();
   const paymentServices = toPaymentServices(suiService);
+  const STARTER_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.starter;
+  const PRO_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.pro;
+
 
   const testWalletAddress = '0xTIER3000567890abcdefABCDEF1234567890abcdefABCDEF1234567890abc';
   let testCustomerId: number;
@@ -171,7 +174,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
 
   describe('Tier Upgrade (Immediate Effect)', () => {
     it('should upgrade tier with pro-rated charge', async () => {
-      // Upgrade from Starter ($1) to Pro ($29) on Jan 15
+      // Upgrade from Starter ($2) to Pro ($39) on Jan 15
       // 17 days remaining in 31-day month
       const result = await handleTierUpgrade(
         db,
@@ -185,8 +188,8 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       expect(result.success).toBe(true);
       expect(result.newTier).toBe('pro');
 
-      // Expected charge: ($29 - $1) × (17/31) = $28 × 0.548 = $15.35
-      const expectedCharge = Math.floor((2800 * 17) / 31);
+      // Expected charge: (PRO_PRICE - STARTER_PRICE) × (17/31)
+      const expectedCharge = Math.floor(((PRO_PRICE - STARTER_PRICE) * 17) / 31);
       expect(result.chargeAmountUsdCents).toBe(expectedCharge);
 
       // Verify tier was updated immediately
@@ -1409,8 +1412,8 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         // billing invoice at Pro price. Immediate downgrade to Starter should
         // recalculate both the pendingInvoiceId invoice AND the FAILED monthly invoice.
 
-        const PRO_PRICE_CENTS = 2900;   // $29
-        const STARTER_PRICE_CENTS = 100; // $1
+        const PRO_PRICE_CENTS = PRO_PRICE;
+        const STARTER_PRICE_CENTS = STARTER_PRICE;
 
         // 1. Create a pending billing record (pendingInvoiceId)
         const [pendingInvoice] = await db.insert(billingRecords).values({
@@ -1502,13 +1505,13 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         // record amount should be updated to match the new tier price.
         //
         // Scenario:
-        // 1. User subscribes to Starter ($1). Payment fails. Pending invoice for $1.
-        // 2. User upgrades to Pro ($29).
-        // 3. Pending billing record should be updated to $29 (not remain $1).
-        // 4. reconcilePayments should find the correct $29 record.
+        // 1. User subscribes to Starter ($2). Payment fails. Pending invoice for $2.
+        // 2. User upgrades to Pro ($39).
+        // 3. Pending billing record should be updated to $39 (not remain $2).
+        // 4. reconcilePayments should find the correct $39 record.
 
-        const STARTER_PRICE_CENTS = 100; // $1
-        const PRO_PRICE_CENTS = 2900;    // $29
+        const STARTER_PRICE_CENTS = STARTER_PRICE;
+        const PRO_PRICE_CENTS = PRO_PRICE;
 
         // 1. Create a pending billing record for the initial Starter tier
         const [pendingInvoice] = await db.insert(billingRecords).values({
@@ -1576,7 +1579,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         expect(customer?.paidOnce).toBe(false);
 
         // The pending billing record's amount now matches what reconcilePayments
-        // will look for when it calculates: getTierPriceUsdCents('pro') = $29
+        // will look for when it calculates: getTierPriceUsdCents('pro') = $39
       });
     });
   });
@@ -1590,14 +1593,14 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       // Scenario:
       // 1. Customer on Pro (paidOnce=true), has $50 in credits
       // 2. Monthly billing applies $50 credit, escrow charge for remaining fails
-      // 3. Invoice: amountUsdCents=2900, amountPaidUsdCents=5000, status='failed'
-      // 4. Customer downgrades to Starter ($1)
-      // 5. recalculateFailedInvoiceSubscription lowers amountUsdCents to 100
-      // 6. Now amountPaidUsdCents(5000) > amountUsdCents(100)
-      // 7. On retry: should mark invoice paid AND issue $49 refund credit
+      // 3. Invoice: amountUsdCents=PRO_PRICE, amountPaidUsdCents=5000, status='failed'
+      // 4. Customer downgrades to Starter
+      // 5. recalculateFailedInvoiceSubscription lowers amountUsdCents to STARTER_PRICE
+      // 6. Now amountPaidUsdCents(5000) > amountUsdCents(STARTER_PRICE)
+      // 7. On retry: should mark invoice paid AND issue $48 refund credit
 
-      const PRO_PRICE_CENTS = 2900;
-      const STARTER_PRICE_CENTS = 100;
+      const PRO_PRICE_CENTS = PRO_PRICE;
+      const STARTER_PRICE_CENTS = STARTER_PRICE;
       const CREDIT_AMOUNT_CENTS = 5000; // $50
 
       // Set up: Pro tier, paidOnce=true
@@ -1660,7 +1663,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         where: eq(billingRecords.id, failedInvoice.id),
       });
       expect(recalcedInvoice?.amountUsdCents).toBe(STARTER_PRICE_CENTS);
-      // amountPaidUsdCents is still $50 — exceeds the new $1 total
+      // amountPaidUsdCents is still $50 — exceeds the new $2 total
       expect(recalcedInvoice?.amountPaidUsdCents).toBe(CREDIT_AMOUNT_CENTS);
 
       // 4. Retry the invoice — should detect overpayment
@@ -1676,8 +1679,8 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       });
       expect(finalInvoice?.status).toBe('paid');
 
-      // 6. Verify refund credit was issued for the overpayment ($50 - $1 = $49)
-      const overpaymentCents = CREDIT_AMOUNT_CENTS - STARTER_PRICE_CENTS; // 4900
+      // 6. Verify refund credit was issued for the overpayment ($50 - $2 = $48)
+      const overpaymentCents = CREDIT_AMOUNT_CENTS - STARTER_PRICE_CENTS; // 4800
       const refundCredits = await db.query.customerCredits.findMany({
         where: and(
           eq(customerCredits.customerId, testCustomerId),
@@ -1701,8 +1704,8 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       // credit every time it's called on an invoice where alreadyPaid >= totalAmount.
       // A second call on an already-paid invoice mints a duplicate credit.
 
-      const PRO_PRICE_CENTS = 2900;    // $29
-      const STARTER_PRICE_CENTS = 100; // $1
+      const PRO_PRICE_CENTS = PRO_PRICE;
+      const STARTER_PRICE_CENTS = STARTER_PRICE;
       const CREDIT_AMOUNT_CENTS = 5000; // $50
 
       const tx = unsafeAsLockedTransaction(db);
@@ -1737,7 +1740,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         amountUsdCents: CREDIT_AMOUNT_CENTS,
       });
 
-      // 2. Downgrade to Starter → recalculates to $1
+      // 2. Downgrade to Starter → recalculates to $2
       await scheduleTierDowngrade(db, testCustomerId, 'platform', 'starter', clock);
 
       // 3. First call to processInvoicePayment → should mark paid + issue overpayment credit
@@ -1782,8 +1785,8 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       // exhausted max retries, the periodic job skips it permanently even
       // though it's now affordable after the tier downgrade.
 
-      const PRO_PRICE_CENTS = 2900;    // $29
-      const STARTER_PRICE_CENTS = 100; // $1
+      const PRO_PRICE_CENTS = PRO_PRICE;
+      const STARTER_PRICE_CENTS = STARTER_PRICE;
 
       // Set customer at pro tier for the downgrade to make sense
       await db.update(customers)
@@ -1814,7 +1817,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
         quantity: 1,
       });
 
-      // 2. Downgrade to Starter → recalculates invoice to $1
+      // 2. Downgrade to Starter → recalculates invoice to $2
       const result = await scheduleTierDowngrade(
         db, testCustomerId, 'platform', 'starter', clock
       );
@@ -1856,13 +1859,13 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
 
       // Compute reconciliation credit the same way production does:
       // daysUsed = 31 - 5 + 1 = 27, daysNotUsed = 31 - 27 = 4
-      // credit = floor(2900 * 4 / 31) = floor(374.19) = 374 cents
+      // credit = floor(PRO_PRICE_CENTS * 4 / 31) = floor(503.22) = 503 cents
       const daysInJan = 31;
       const subscribeDay = 5;
       const daysUsed = daysInJan - subscribeDay + 1;
       const daysNotUsed = daysInJan - daysUsed;
       const expectedCreditCents = Math.floor((PRO_PRICE_CENTS * daysNotUsed) / daysInJan);
-      expect(expectedCreditCents).toBe(374); // $3.74 sanity check
+      expect(expectedCreditCents).toBe(503); // $5.03 sanity check
 
       // Simulate subscription payment: create an immediate invoice (paid)
       const [subInvoice] = await db.insert(billingRecords).values({

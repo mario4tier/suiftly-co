@@ -26,6 +26,7 @@ import {
 } from './helpers/http.js';
 import { login, TEST_WALLET } from './helpers/auth.js';
 import { INVOICE_LINE_ITEM_TYPE, SERVICE_TYPE } from '@suiftly/shared/constants';
+import { PLATFORM_TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
 
 const API_BASE = 'http://localhost:22700';
 
@@ -76,6 +77,10 @@ async function clearLogs(): Promise<{ success: boolean }> {
 }
 
 describe('API: Invoice Line Items', () => {
+  const STARTER_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.starter;
+  const PRO_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.pro;
+
+
   let accessToken: string;
   let customerId: number;
 
@@ -201,7 +206,7 @@ describe('API: Invoice Line Items', () => {
       );
       expect(platformSubItem).toBeDefined();
       expect(platformSubItem.service).toBe(SERVICE_TYPE.PLATFORM);
-      expect(platformSubItem.amountUsd).toBe(1); // $1 for Platform Starter
+      expect(platformSubItem.amountUsd).toBe(STARTER_PRICE / 100); // $2 for Platform Starter
     }, 15000);
 
     it('should calculate usage correctly for high volume (50,000 requests = $5.00)', async () => {
@@ -268,8 +273,8 @@ describe('API: Invoice Line Items', () => {
       expect(subscriptionItem).toBeDefined();
       expect(subscriptionItem.service).toBe(SERVICE_TYPE.PLATFORM);
       expect(subscriptionItem.quantity).toBe(1);
-      expect(subscriptionItem.unitPriceUsd).toBe(29); // $29 for Platform Pro
-      expect(subscriptionItem.amountUsd).toBe(29);
+      expect(subscriptionItem.unitPriceUsd).toBe(PRO_PRICE / 100); // $39 for Platform Pro
+      expect(subscriptionItem.amountUsd).toBe(PRO_PRICE / 100);
     }, 15000);
   });
 });

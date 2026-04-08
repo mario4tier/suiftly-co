@@ -3,12 +3,12 @@
  *
  * Reproduces user-reported bug:
  * - User deposits $200
- * - User subscribes to Starter platform tier ($1 charged)
+ * - User subscribes to Starter platform tier ($2 charged)
  * - User upgrades to Pro (pro-rated charge)
  * - User schedules downgrade to Starter
  * - User upgrades back to Pro (while downgrade is scheduled)
  * - Expected: All billing records visible, DRAFT shows Pro price
- * - Bug reported: "$29 charge not showing in billing but was subtracted from escrow"
+ * - Bug reported: "$39 charge not showing in billing but was subtracted from escrow"
  */
 
 import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
@@ -118,6 +118,9 @@ describe('Full Upgrade Scenario: Deposit → Starter → Upgrade Pro → Schedul
   const clock = new MockDBClock();
   let suiService: FullScenarioMockSuiService;
   let paymentServices: ReturnType<typeof toPaymentServices>;
+  const STARTER_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.starter;
+  const PRO_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.pro;
+
 
   const testWalletAddress = '0xFULLSCENARIO890abcdefABCDEF1234567890abcdefABCDEF12345678901234';
   let testCustomerId: number;
@@ -174,7 +177,7 @@ describe('Full Upgrade Scenario: Deposit → Starter → Upgrade Pro → Schedul
     expect(suiService.getBalance()).toBe(20000);
 
     // ========== STEP 2: Subscribe to Starter tier ==========
-    console.log('\nSTEP 2: Subscribe to Starter platform tier ($1)');
+    console.log('\nSTEP 2: Subscribe to Starter platform tier ($2)');
 
     // First update customer to Starter tier, then call subscription billing
     await db.update(customers)
@@ -186,7 +189,7 @@ describe('Full Upgrade Scenario: Deposit → Starter → Upgrade Pro → Schedul
       testCustomerId,
       'platform',
       'starter',
-      PLATFORM_TIER_PRICES_USD_CENTS.starter, // $1 = 100 cents
+      PLATFORM_TIER_PRICES_USD_CENTS.starter, // $2 = 200 cents
       paymentServices,
       clock
     );
@@ -196,11 +199,11 @@ describe('Full Upgrade Scenario: Deposit → Starter → Upgrade Pro → Schedul
     console.log(`  Mock escrow balance after: ${suiService.getBalance()} cents ($${(suiService.getBalance()/100).toFixed(2)})`);
 
     expect(subscriptionResult.paymentSuccessful).toBe(true);
-    expect(subscriptionResult.amountUsdCents).toBe(100);
-    expect(suiService.getBalance()).toBe(20000 - 100); // $199
+    expect(subscriptionResult.amountUsdCents).toBe(STARTER_PRICE);
+    expect(suiService.getBalance()).toBe(20000 - STARTER_PRICE); // $198
 
     // ========== STEP 2b: Upgrade to Pro tier ==========
-    console.log('\nSTEP 2b: Upgrade to Pro tier ($29, pro-rated)');
+    console.log('\nSTEP 2b: Upgrade to Pro tier ($39, pro-rated)');
 
     const upgradeToProResult = await handleTierUpgrade(db, testCustomerId, 'platform', 'pro', paymentServices, clock);
     console.log(`  Upgrade result: success=${upgradeToProResult.success}, newTier=${upgradeToProResult.newTier}`);
@@ -212,7 +215,7 @@ describe('Full Upgrade Scenario: Deposit → Starter → Upgrade Pro → Schedul
 
     // Calculate expected pro-rated charge for Starter → Pro upgrade
     // Dec 2 → Dec 31 = 30 days remaining out of 31
-    // (Pro - Starter) * 30/31 = ($29 - $1) * 30/31 = $28 * 30/31
+    // (Pro - Starter) * 30/31 = ($39 - $2) * 30/31 = $37 * 30/31
     const expectedUpgradeToProCents = Math.floor((PLATFORM_TIER_PRICES_USD_CENTS.pro - PLATFORM_TIER_PRICES_USD_CENTS.starter) * 30 / 31);
     console.log(`  Expected pro-rated upgrade charge: ${expectedUpgradeToProCents} cents ($${(expectedUpgradeToProCents/100).toFixed(2)})`);
     expect(upgradeToProResult.chargeAmountUsdCents).toBe(expectedUpgradeToProCents);
@@ -306,9 +309,9 @@ describe('Full Upgrade Scenario: Deposit → Starter → Upgrade Pro → Schedul
     }
 
     // Expected records:
-    // 1. PAID - $1 (Starter first month)
+    // 1. PAID - $2 (Starter first month)
     // 2. PAID - pro-rated Starter → Pro upgrade charge
-    // 3. DRAFT - $29 (Pro next month)
+    // 3. DRAFT - $39 (Pro next month)
     const paidRecordsFinal = allRecords.filter(r => r.status === 'paid');
     const draftRecordsFinal = allRecords.filter(r => r.status === 'draft');
 
@@ -317,8 +320,8 @@ describe('Full Upgrade Scenario: Deposit → Starter → Upgrade Pro → Schedul
     expect(paidRecordsFinal.length).toBe(2);
     expect(draftRecordsFinal.length).toBe(1);
 
-    // Verify the $1 Starter charge exists
-    const starterCharge = paidRecordsFinal.find(r => r.amountUsdCents === 100);
+    // Verify the $2 Starter charge exists
+    const starterCharge = paidRecordsFinal.find(r => r.amountUsdCents === STARTER_PRICE);
     expect(starterCharge).toBeDefined();
     console.log(`  ✓ Starter subscription charge found: $${(starterCharge!.amountUsdCents/100).toFixed(2)}`);
 

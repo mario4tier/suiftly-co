@@ -49,10 +49,10 @@ The frontend loads configuration once at startup before rendering the app.
 
 **Usage in frontend:**
 ```typescript
-import { fsubs_usd_pro, mockAuth } from '@/lib/config';
+import { fpsubs_usd_pro, mockAuth } from '@/lib/config';
 
 // Direct variable access - fastest possible
-const price = fsubs_usd_pro; // No function call overhead
+const price = fpsubs_usd_pro; // No function call overhead
 const showMockWallet = mockAuth;
 ```
 
@@ -163,13 +163,13 @@ These are public values loaded by the frontend at startup.
 
 **Common use cases:**
 - Feature flags (`f` prefix + boolean)
-- Pricing values (`fsubs_*`, `fadd_*`)
+- Pricing values (`fpsubs_*`, `fadd_*`)
 - Resource limits (`fmax_*`, `fbw_*`)
 - UI configuration
 
 **Example keys:**
 - `fver` - Configuration version (triggers frontend reload on mismatch)
-- `fsubs_usd_pro` - Pro tier monthly price in USD
+- `fpsubs_usd_pro` - Pro tier monthly price in USD
 - `fmax_skey` - Maximum service keys allowed
 - `mockAuth` - Show mock wallet for development (backend-controlled)
 
@@ -189,7 +189,7 @@ Update directly in database:
 ```sql
 UPDATE config_global
 SET value = '50'
-WHERE key = 'fsubs_usd_pro';
+WHERE key = 'fpsubs_usd_pro';
 ```
 
 Then increment `fver` to trigger frontend reload:

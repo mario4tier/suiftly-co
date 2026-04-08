@@ -237,7 +237,7 @@ See **[AUTHENTICATION_DESIGN.md](./AUTHENTICATION_DESIGN.md)** for complete tech
 
 **Service State Machine: 3 Primary States (+ 2 Suspended)**
 
-Services (Seal, gRPC, GraphQL) are free features that are auto-provisioned once the customer has an active platform subscription. There are no per-service subscriptions. The platform subscription ($1 Starter / $29 Pro) is managed on the Billing page.
+Services (Seal, gRPC, GraphQL) are free features that are auto-provisioned once the customer has an active platform subscription. There are no per-service subscriptions. The platform subscription ($2 Starter / $39 Pro) is managed on the Billing page.
 
 ### State Definitions
 
@@ -451,7 +451,7 @@ Services (Seal, gRPC, GraphQL) are free features that are auto-provisioned once 
 | **(4) Suspended - Maintenance** | ✅ Yes (on Billing page)      | ❌ No                  | Long-term suspension, config/keys preserved             |
 | **(5) Suspended - No Payment**  | ❌ No                         | ❌ No                  | Billing frozen until payment resolved                   |
 
-**Note:** The platform subscription fee ($1 Starter / $29 Pro) is managed on the Billing page, not on individual service pages. Services themselves are free; only per-request usage costs appear on service pages.
+**Note:** The platform subscription fee ($2 Starter / $39 Pro) is managed on the Billing page, not on individual service pages. Services themselves are free; only per-request usage costs appear on service pages.
 
 ---
 
@@ -464,7 +464,7 @@ Services (Seal, gRPC, GraphQL) are free features that are auto-provisioned once 
 
 2. **Billing Model:** ✅ CONFIRMED
    - No per-service base fee. Services are free with platform subscription.
-   - Platform subscription ($1 Starter / $29 Pro) managed on Billing page.
+   - Platform subscription ($2 Starter / $39 Pro) managed on Billing page.
    - Only per-request usage charges shown on service pages.
    - Quick on/off toggle for temporary traffic control.
 
@@ -903,10 +903,10 @@ All abuse throttling are to be implemented later.
 │  │  [ Adjust Spending Limit ]             │          │
 │  └────────────────────────────────────────┘          │
 │                                                       │
-│  Next Scheduled Payment              $30.25  [›]     │
+│  Next Scheduled Payment              $40.25  [›]     │
 │  February 1, 2025                                     │
 │  ┌────────────────────────────────────────┐          │
-│  │  Platform Subscription (Pro) $29.00   │  (shown  │
+│  │  Platform Subscription (Pro) $39.00   │  (shown  │
 │  │  Seal usage (12.5K req)       $1.25   │   when   │
 │  │                                       │  chevron │
 │  └────────────────────────────────────────┘  opened) │
@@ -927,10 +927,10 @@ All abuse throttling are to be implemented later.
 **When history item expanded (click chevron):**
 ```
 │  ┌────────────────────────────────────────┐          │
-│  │  Jan 1, 2025   $41.75  [▽]             │          │
+│  │  Jan 1, 2025   $51.75  [▽]             │          │
 │  │                                        │          │
 │  │  Platform Subscription:                │          │
-│  │    Pro tier                  $29.00    │          │
+│  │    Pro tier                  $39.00    │          │
 │  │                                        │          │
 │  │  Usage Charges:                        │          │
 │  │    Seal requests (125k)     $12.75     │          │
@@ -1172,7 +1172,7 @@ All prices displayed in USD. Deposits/withdrawals use **USDC** tokens on Sui blo
    ↓
 3. User navigates to /billing
    ↓
-4. Selects platform tier (Starter $1/month or Pro $29/month)
+4. Selects platform tier (Starter $2/month or Pro $39/month)
    ↓
 5. Accepts terms of service, completes payment
    ↓
@@ -1216,7 +1216,7 @@ All prices displayed in USD. Deposits/withdrawals use **USDC** tokens on Sui blo
 **Platform Tier Change (on Billing page):**
 ```
 User navigates to /billing
-→ Changes platform tier: Starter ($1) → Pro ($29)
+→ Changes platform tier: Starter ($2) → Pro ($39)
 → Pro-rated charge applied from escrow balance
 → All services gain Pro features (burst, IP allowlist)
 → Toast: "Platform upgraded to Pro."
@@ -1595,39 +1595,22 @@ const serviceConfigSchema = z.object({
 ```
 
 **Pricing Constants:**
+
+> **Note:** Services are free — only the platform subscription ($2 Starter / $39 Pro) and
+> per-request usage are billed. The add-on fees below apply to resources beyond included
+> allowances. See `packages/shared/src/pricing/index.ts` for the single source of truth.
+
 ```typescript
-const PRICING = {
-  tiers: {
-    starter: { base: 20, reqPerSec: 100 },
-    pro: { base: 40, reqPerSec: 500 },
-  },
-  // burst: No monthly fee (usage-based billing only)
-  additionalPackagePerKey: 1, // $1/month per package (after 3) per seal key
-  additionalApiKey: 1, // $1/month per key (after 1)
-  additionalSealKey: 5, // $5/month per key (after 1)
-}
+import { PLATFORM_TIER_PRICES_USD_CENTS, ADDON_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
 
-// Calculate monthly fee
-function calculateMonthlyFee(config: ServiceConfig): number {
-  let total = PRICING.tiers[config.guaranteedBandwidth].base
+// Platform subscription: PLATFORM_TIER_PRICES_USD_CENTS.starter (200 = $2/mo)
+//                        PLATFORM_TIER_PRICES_USD_CENTS.pro     (3900 = $39/mo)
 
-  // Burst has no monthly fee (usage-based billing only)
-
-  // Additional API keys cost (1 included)
-  total += Math.max(0, config.totalApiKeys - 1) * PRICING.additionalApiKey
-
-  // Additional seal keys cost (1 included)
-  total += Math.max(0, config.totalSealKeys - 1) * PRICING.additionalSealKey
-
-  // Packages cost: per seal key, 3 included per key
-  const additionalPackagesPerKey = Math.max(0, config.packagesPerSealKey - 3)
-  total += additionalPackagesPerKey * config.totalSealKeys * PRICING.additionalPackagePerKey
-
-  return total
-}
+// Add-on pricing (beyond included allowances):
+// ADDON_PRICES_USD_CENTS.sealKey  (500 = $5/month per extra Seal key)
+// ADDON_PRICES_USD_CENTS.package  (200 = $2/month per extra package)
+// ADDON_PRICES_USD_CENTS.apiKey   (500 = $5/month per extra API key)
 ```
-
-**Note:** Pricing values in the code above are examples. Actual pricing defined in [UI_DESIGN.md (pricing section)](./UI_DESIGN.md (pricing section)#pricing-model). The implementation should import pricing constants from a shared configuration file.
 
 ---
 
@@ -1824,11 +1807,11 @@ boxShadow: {
 
   {/* Content Row */}
   <p className="tier-capacity">
-    100 req/s per region • ~300 req/s globally
+    10 RPS
   </p>
 
   {/* Footer Row */}
-  <p className="tier-price">$20/month</p>
+  <p className="tier-price">$2/month</p>
 </div>
 ```
 

@@ -2,7 +2,7 @@
  * Root tRPC router
  * Combines all route modules
  *
- * Note: Auth moved to REST at /i/auth/* (see rest-auth.ts)
+ * Auth is REST-only at /i/auth/* (see rest-auth.ts)
  */
 
 import { router } from '../lib/trpc';

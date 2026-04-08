@@ -5,11 +5,11 @@
  * This is the production MVP path: platform subscription required, per-service sub disabled.
  *
  * Tests:
- * - Platform subscribe (starter $1, pro $29)
+ * - Platform subscribe (starter $2, pro $39)
  * - Platform tier upgrade/downgrade
  * - Platform + seal: DRAFT invoice shows only platform subscription
  * - Platform cancellation removes from DRAFT
- * - Platform pricing: starter=$1, pro=$29; unknown tiers throw
+ * - Platform pricing: starter=$2, pro=$39; unknown tiers throw
  */
 
 import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
@@ -41,7 +41,7 @@ import {
   suspendGMProcessing,
 } from './test-helpers';
 import { eq, and } from 'drizzle-orm';
-import { getTierPriceUsdCents, getAvailableTiers } from '@suiftly/shared/pricing';
+import { getTierPriceUsdCents, getAvailableTiers, PLATFORM_TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
 
 // Mock SUI service
 class TestMockSuiService implements ISuiService {
@@ -114,6 +114,8 @@ describe('Platform Billing (partial: platform=1, seal_sub=0)', () => {
   const clock = new MockDBClock();
   const suiService = new TestMockSuiService();
   const paymentServices = toPaymentServices(suiService);
+  const STARTER_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.starter;
+  const PRO_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.pro;
   const CUSTOMER_ID = 8900;
   const WALLET = '0xPLATFORM8900abcdef1234567890abcdefABCDEF1234567890abcdefABCD';
 
@@ -153,8 +155,8 @@ describe('Platform Billing (partial: platform=1, seal_sub=0)', () => {
 
   describe('Platform Pricing', () => {
     it('should return correct platform tier prices', () => {
-      expect(getTierPriceUsdCents('starter')).toBe(100);  // $1
-      expect(getTierPriceUsdCents('pro')).toBe(2900);     // $29
+      expect(getTierPriceUsdCents('starter')).toBe(STARTER_PRICE);
+      expect(getTierPriceUsdCents('pro')).toBe(PRO_PRICE);
     });
 
     it('should throw for unknown/enterprise tier', () => {
@@ -177,16 +179,16 @@ describe('Platform Billing (partial: platform=1, seal_sub=0)', () => {
   // ===========================================================================
 
   describe('Platform Subscribe', () => {
-    it('should charge $1 for platform starter', async () => {
+    it('should charge $2 for platform starter', async () => {
       const result = await subscribeToService(CUSTOMER_ID, 'platform', 'starter', paymentServices, clock);
       expect(result.paymentSuccessful).toBe(true);
-      expect(result.amountUsdCents).toBe(100);
+      expect(result.amountUsdCents).toBe(STARTER_PRICE);
     });
 
-    it('should charge $29 for platform pro', async () => {
+    it('should charge $39 for platform pro', async () => {
       const result = await subscribeToService(CUSTOMER_ID, 'platform', 'pro', paymentServices, clock);
       expect(result.paymentSuccessful).toBe(true);
-      expect(result.amountUsdCents).toBe(2900);
+      expect(result.amountUsdCents).toBe(PRO_PRICE);
     });
 
     it('should set paidOnce on customer after payment', async () => {
@@ -212,11 +214,11 @@ describe('Platform Billing (partial: platform=1, seal_sub=0)', () => {
 
       const platformItem = lineItems.find(li => li.serviceType === 'platform');
       expect(platformItem).toBeDefined();
-      expect(Number(platformItem!.amountUsdCents)).toBe(100); // $1
+      expect(Number(platformItem!.amountUsdCents)).toBe(STARTER_PRICE);
     });
 
     it('should show only platform subscription in DRAFT (seal has no billing)', async () => {
-      // Subscribe to platform starter ($1)
+      // Subscribe to platform starter ($2)
       await subscribeToService(CUSTOMER_ID, 'platform', 'starter', paymentServices, clock);
       // Insert seal service instance directly — seal has no subscription billing
       await db.insert(serviceInstances).values({
@@ -233,12 +235,12 @@ describe('Platform Billing (partial: platform=1, seal_sub=0)', () => {
       const platformItem = lineItems.find(li => li.serviceType === 'platform');
       const sealItem = lineItems.find(li => li.serviceType === 'seal');
       expect(platformItem).toBeDefined();
-      expect(Number(platformItem!.amountUsdCents)).toBe(100);  // $1
+      expect(Number(platformItem!.amountUsdCents)).toBe(STARTER_PRICE);
       // Seal has no subscription billing — no seal line item in DRAFT
       expect(sealItem).toBeUndefined();
       // DRAFT total is platform price minus pro-rated credit already paid
-      // Platform credit = floor(100*14/31)=45. Net = 100 - 45 = 55
-      expect(Number(draft!.amountUsdCents)).toBe(55);
+      // Platform credit = floor(STARTER_PRICE*14/31)=90. Net = STARTER_PRICE - 90 = 110
+      expect(Number(draft!.amountUsdCents)).toBe(110);
     });
 
     it('should not include usage line item for platform ($0 pricing)', async () => {
@@ -276,8 +278,8 @@ describe('Platform Billing (partial: platform=1, seal_sub=0)', () => {
       );
 
       expect(result.success).toBe(true);
-      // Pro-rated: ($29 - $1) * 17/31 = $15.35 → 1535 cents
-      expect(result.chargeAmountUsdCents).toBe(Math.floor((2900 - 100) * 17 / 31));
+      // Pro-rated: (PRO_PRICE - STARTER_PRICE) * 17/31
+      expect(result.chargeAmountUsdCents).toBe(Math.floor((PRO_PRICE - STARTER_PRICE) * 17 / 31));
 
       // Verify platform tier changed on customer
       const customer = await db.query.customers.findFirst({
@@ -303,10 +305,10 @@ describe('Platform Billing (partial: platform=1, seal_sub=0)', () => {
       expect(customer?.scheduledPlatformTier).toBe('starter');
 
       // DRAFT should reflect the scheduled downgrade price minus credits.
-      // Pro subscription on Jan 15 created credit = floor(2900*14/31)=1309.
-      // Starter price (100) - 1309 credits = -1209 (negative = excess credit)
+      // Pro subscription on Jan 15 created credit = floor(PRO_PRICE*14/31)=1761.
+      // STARTER_PRICE - 1761 credits = -1561 (negative = excess credit)
       const { draft } = await getDraftWithLineItems(CUSTOMER_ID);
-      expect(Number(draft!.amountUsdCents)).toBe(100 - 1309);
+      expect(Number(draft!.amountUsdCents)).toBe(STARTER_PRICE - 1761);
     });
   });
 
@@ -326,9 +328,9 @@ describe('Platform Billing (partial: platform=1, seal_sub=0)', () => {
         li => li.serviceType === 'platform' && li.itemType !== 'credit'
       );
       expect(platformSubItem).toBeUndefined();
-      // DRAFT total is negative because platform credit (45 cents) remains
-      // after subscription charge is removed. Credit = floor(100*14/31)=45.
-      expect(Number(draft!.amountUsdCents)).toBe(-45);
+      // DRAFT total is negative because platform credit (90 cents) remains
+      // after subscription charge is removed. Credit = floor(STARTER_PRICE*14/31)=90.
+      expect(Number(draft!.amountUsdCents)).toBe(-90);
     });
 
     it('should restore platform to DRAFT after undo cancellation', async () => {
@@ -342,7 +344,7 @@ describe('Platform Billing (partial: platform=1, seal_sub=0)', () => {
       const { draft, lineItems } = await getDraftWithLineItems(CUSTOMER_ID);
       const platformItem = lineItems.find(li => li.serviceType === 'platform');
       expect(platformItem).toBeDefined();
-      expect(Number(platformItem!.amountUsdCents)).toBe(100); // $1 restored
+      expect(Number(platformItem!.amountUsdCents)).toBe(STARTER_PRICE); // Starter restored
     });
 
     it('should not affect seal service instance when platform is cancelled', async () => {

@@ -432,8 +432,8 @@ Controls what is displayed on the Seal service overview page:
 | `freg_count` | Number of regions (for calculating global bandwidth) | `3` |
 | `fbw_sta` | Starter tier bandwidth (req/s per region) | `3` |
 | `fbw_pro` | Pro tier bandwidth (req/s per region) | `15` |
-| `fsubs_usd_sta` | Starter tier subscription fee | `1` |
-| `fsubs_usd_pro` | Pro tier subscription fee | `29` |
+| `fpsubs_usd_sta` | Starter tier subscription fee | `2` |
+| `fpsubs_usd_pro` | Pro tier subscription fee | `39` |
 | `freqs_usd` | Usage-based pricing (USD) | `1.00` |
 | `freqs_count` | Requests per pricing unit | `10000` |
 | `fskey_incl` | Included Seal keys | `1` |
@@ -456,10 +456,10 @@ Controls backend behavior and rate limiting:
 **Usage Pattern:**
 ```typescript
 // API endpoint fetches all f* keys for frontend
-GET /api/config/frontend -> { fbw_sta: "100", ... }
+GET /api/config/frontend -> { fbw_sta: "3", ... }
 
 // Backend reads b* keys for rate limiting
-const guaranteedLimit = await getConfig('bglim_pro') // "500"
+const guaranteedLimit = await getConfig('bglim_pro') // "15"
 ```
 
 **Caching Strategy:**

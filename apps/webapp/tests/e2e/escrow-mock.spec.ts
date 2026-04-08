@@ -15,9 +15,15 @@
 import { test, expect } from '@playwright/test';
 import { waitAfterMutation, waitForCondition } from '../helpers/wait-utils';
 import { subscribePlatformService } from '../helpers/db';
+import { PLATFORM_TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
 
 const MOCK_WALLET_ADDRESS = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const API_BASE = 'http://localhost:22700';
+
+const STARTER_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.starter; // cents
+const PRO_PRICE = PLATFORM_TIER_PRICES_USD_CENTS.pro; // cents
+const STARTER_PRICE_USD = STARTER_PRICE / 100;
+const PRO_PRICE_USD = PRO_PRICE / 100;
 
 test.describe('Escrow Mock - Wallet Operations', () => {
   test.beforeEach(async ({ page }) => {
@@ -228,21 +234,21 @@ test.describe('Escrow Mock - Service Subscription Scenarios', () => {
       },
     });
 
-    // Subscribe to platform Starter ($1) via the platform subscription UI
+    // Subscribe to platform Starter via the platform subscription UI
     await subscribePlatformService(page);
 
-    // Verify via API that balance decreased by $1 (Starter tier charged immediately via escrow)
+    // Verify via API that balance decreased by Starter price (charged immediately via escrow)
     const balanceResponse = await page.request.get(`${API_BASE}/test/wallet/balance`, {
       params: { walletAddress: MOCK_WALLET_ADDRESS },
     });
     const balanceData = await balanceResponse.json();
-    expect(balanceData.balanceUsd).toBe(99);
+    expect(balanceData.balanceUsd).toBe(100 - STARTER_PRICE_USD);
 
-    console.log('✅ Balance correctly updated to $99.00 after platform Starter subscription');
+    console.log(`✅ Balance correctly updated to $${100 - STARTER_PRICE_USD}.00 after platform Starter subscription`);
   });
 
   test('platform subscription with insufficient Pro balance creates pending payment', async ({ page }) => {
-    // Deposit $10 (enough for Starter $1, but not Pro $29)
+    // Deposit $10 (enough for Starter, but not Pro)
     await page.request.post(`${API_BASE}/test/wallet/deposit`, {
       data: {
         walletAddress: MOCK_WALLET_ADDRESS,
@@ -251,7 +257,7 @@ test.describe('Escrow Mock - Service Subscription Scenarios', () => {
       },
     });
 
-    // Navigate to billing and subscribe to Pro tier ($29)
+    // Navigate to billing and subscribe to Pro tier
     await page.click('text=Billing');
     await page.waitForURL('/billing', { timeout: 5000 });
 
@@ -263,7 +269,7 @@ test.describe('Escrow Mock - Service Subscription Scenarios', () => {
     await subscribeButton.click();
     await waitAfterMutation(page);
 
-    // Subscription is created but payment is pending (escrow $10 < Pro $29)
+    // Subscription is created but payment is pending (escrow $10 < Pro)
     const balanceResponse = await page.request.get(`${API_BASE}/test/wallet/balance`, {
       params: { walletAddress: MOCK_WALLET_ADDRESS },
     });
@@ -287,11 +293,11 @@ test.describe('Escrow Mock - Service Subscription Scenarios', () => {
       data: {
         walletAddress: MOCK_WALLET_ADDRESS,
         amountUsd: 1000,
-        initialSpendingLimitUsd: 10, // $10 limit — blocks Pro ($29)
+        initialSpendingLimitUsd: 10, // $10 limit — blocks Pro
       },
     });
 
-    // Navigate to billing, select Pro tier ($29 exceeds $10 limit), subscribe
+    // Navigate to billing, select Pro tier (exceeds $10 limit), subscribe
     await page.click('text=Billing');
     await page.waitForURL('/billing', { timeout: 5000 });
     await page.locator('text=Pro').first().click();
@@ -368,35 +374,36 @@ test.describe('Subscription Charge Architecture - Critical Business Logic', () =
   });
 
   test('idempotency: retry subscription returns existing service without double charge', async ({ page }) => {
-    // Subscribe to PRO ($29) using the helper (handles tier selection + TOS)
+    // Subscribe to PRO using the helper (handles tier selection + TOS)
     await subscribePlatformService(page, 'PRO');
     await page.goto('/services/seal/overview');
     await page.waitForLoadState('networkidle');
 
     // Verify balance decreased via API (robust — no DOM scraping race)
+    const expectedBalance = 100 - PRO_PRICE_USD;
     const balanceAfterFirst = await page.request.get(`${API_BASE}/test/wallet/balance`, {
       params: { walletAddress: MOCK_WALLET_ADDRESS },
     });
     const afterFirstData = await balanceAfterFirst.json();
-    expect(afterFirstData.balanceUsd).toBe(71);
+    expect(afterFirstData.balanceUsd).toBe(expectedBalance);
 
     // Try to subscribe again by navigating back to Seal
     await page.click('text=Seal');
     await page.waitForURL(/\/services\/seal\/overview/, { timeout: 5000 }); // Should redirect to overview
 
-    // Verify balance stayed $71 (no double charge) — via API
+    // Verify balance stayed the same (no double charge) — via API
     const balanceAfterRetry = await page.request.get(`${API_BASE}/test/wallet/balance`, {
       params: { walletAddress: MOCK_WALLET_ADDRESS },
     });
     const afterRetryData = await balanceAfterRetry.json();
-    expect(afterRetryData.balanceUsd).toBe(71);
+    expect(afterRetryData.balanceUsd).toBe(expectedBalance);
 
     console.log('✅ Idempotent subscription - no double charge on retry');
   });
 
   test('charge failure: service created with pending=true, cannot be enabled', async ({ page }) => {
     // beforeEach deposited $100 and added escrow payment method.
-    // Reset balance to $10 (insufficient for Pro $29, but escrow method remains).
+    // Reset balance to $10 (insufficient for Pro, but escrow method remains).
     await page.request.post(`${API_BASE}/test/data/reset`, {
       data: {
         balanceUsdCents: 1000, // $10
@@ -404,7 +411,7 @@ test.describe('Subscription Charge Architecture - Critical Business Logic', () =
       },
     });
 
-    // Navigate to billing and subscribe to platform PRO ($29 > $10 escrow)
+    // Navigate to billing and subscribe to platform PRO (> $10 escrow)
     await page.click('text=Billing');
     await page.waitForURL('/billing', { timeout: 5000 });
     await page.locator('text=Pro').first().click();
