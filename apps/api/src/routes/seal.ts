@@ -1199,8 +1199,8 @@ export const sealRouter = router({
     const ipv4Included = getConfigInt('fipv4_incl', 2);
 
     const sealKeyPrice = getConfigNumber('fadd_skey_usd', 5);
-    const packagePrice = getConfigNumber('fadd_pkg_usd', 1);
-    const apiKeyPrice = getConfigNumber('fadd_apikey_usd', 1);
+    const packagePrice = getConfigNumber('fadd_pkg_usd', 2);
+    const apiKeyPrice = getConfigNumber('fadd_apikey_usd', 5);
     const ipv4Price = getConfigNumber('fadd_ipv4_usd', 0);
 
     return {
