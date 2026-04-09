@@ -25,7 +25,8 @@
 import { test, expect } from '@playwright/test';
 import { waitAfterMutation } from '../helpers/wait-utils';
 import { ServiceStabilityChecker } from '../helpers/service-stability';
-import { resetCustomer, ensureTestBalance, getCustomerData, waitForHaproxyLogs, subscribePlatformService } from '../helpers/db';
+import { resetCustomer, ensureTestBalance, getCustomerData, waitForHaproxyLogs, subscribePlatformService, getTestApiKeys } from '../helpers/db';
+import type { TestApiKeyInfo } from '../helpers/db';
 // Note: We intentionally don't use setupCpEnabled or createApiKey shortcuts
 // to test the real user experience through the UI
 import {
@@ -366,35 +367,10 @@ async function waitForHealthCheckStatus(
   return { status: finalResponse.status, ok: false };
 }
 
-// API key type from listApiKeys endpoint
-interface ApiKeyInfo {
-  apiKeyFp: number;
-  keyPreview: string;
-  fullKey: string;
-  metadata: unknown;
-  isUserEnabled: boolean;
-  createdAt: string;
-  revokedAt: string | null;
-}
-
-// Helper to get API keys via test endpoint
-// This endpoint doesn't require authentication and returns decrypted keys
+// Delegate to shared helper, pre-filtered to seal keys
+type ApiKeyInfo = TestApiKeyInfo;
 async function getApiKeys(request: import('@playwright/test').APIRequestContext): Promise<ApiKeyInfo[]> {
-  const response = await request.get(`${API_URL}/test/data/api-keys`);
-  if (!response.ok()) {
-    throw new Error(`Failed to get API keys: ${await response.text()}`);
-  }
-  const data = await response.json();
-  // Test endpoint returns { apiKeys: [...] } with apiKeyId (decrypted key)
-  return (data.apiKeys || []).map((k: any) => ({
-    apiKeyFp: k.apiKeyFp,
-    keyPreview: `${k.apiKeyId.slice(0, 8)}...${k.apiKeyId.slice(-4)}`,
-    fullKey: k.apiKeyId, // apiKeyId is the decrypted full key
-    metadata: k.metadata,
-    isUserEnabled: k.isUserEnabled,
-    createdAt: k.createdAt,
-    revokedAt: k.revokedAt,
-  }));
+  return getTestApiKeys(request, 'seal');
 }
 
 test.describe('Real Seal Requests', () => {

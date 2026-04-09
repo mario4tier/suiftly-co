@@ -9,7 +9,7 @@ import { router, protectedProcedure } from '../lib/trpc';
 import { db, withCustomerLockForAPI } from '@suiftly/database';
 import { customers, serviceInstances, systemControl, lmStatus, apiKeys, sealKeys, sealPackages } from '@suiftly/database/schema';
 import { eq, and, sql, min, ne, isNull, count } from 'drizzle-orm';
-import { SERVICE_TYPE, SERVICE_TIER, SERVICE_STATE } from '@suiftly/shared/constants';
+import { SERVICE_TYPE, SERVICE_TIER, SERVICE_STATE, API_KEY_ORIGIN } from '@suiftly/shared/constants';
 import type { ServiceType } from '@suiftly/shared/constants';
 import { DEFAULT_SERVICE_CONFIG } from '@suiftly/shared/schemas';
 import { testDelayManager } from '../lib/test-delays';
@@ -174,7 +174,7 @@ export const servicesRouter = router({
               sealType: { network: 'mainnet', access: 'open' },
             }),
             metadata: {
-              generatedAt: 'subscription',
+              generatedAt: API_KEY_ORIGIN.SUBSCRIPTION,
               instanceId: newService.instanceId,
             },
             tx,
@@ -292,10 +292,13 @@ export const servicesRouter = router({
           });
 
           if (existingServiceInstance) {
+            // Only create a key if no non-deleted key exists (active or revoked).
+            // Revoked keys are left as-is — the user intentionally disabled them.
             const existingKey = await tx.query.apiKeys.findFirst({
               where: and(
                 eq(apiKeys.customerId, ctx.user!.customerId),
                 eq(apiKeys.serviceType, serviceType),
+                isNull(apiKeys.deletedAt),
               ),
             });
 
@@ -307,7 +310,7 @@ export const servicesRouter = router({
                   sealType: { network: 'mainnet', access: 'open' },
                 }),
                 metadata: {
-                  generatedAt: 'platform_subscription',
+                  generatedAt: API_KEY_ORIGIN.PLATFORM_SUBSCRIPTION,
                   instanceId: existingServiceInstance.instanceId,
                 },
                 tx,

@@ -536,3 +536,41 @@ export async function addCreditCardPayment(page: Page): Promise<void> {
   // Wait for method to appear in the list with card details
   await expect(page.locator('[data-testid="payment-method-row"]').filter({ hasText: 'Credit Card' })).toBeVisible({ timeout: 5000 });
 }
+
+/** API key info returned by the test endpoint */
+export interface TestApiKeyInfo {
+  apiKeyFp: number;
+  keyPreview: string;
+  fullKey: string;
+  serviceType: string;
+  metadata: unknown;
+  isUserEnabled: boolean;
+  createdAt: string;
+  revokedAt: string | null;
+}
+
+/**
+ * Get API keys via test endpoint (returns decrypted keys).
+ * @param serviceType - Optional filter (e.g. 'seal'). Returns all keys if omitted.
+ */
+export async function getTestApiKeys(
+  request: APIRequestContext,
+  serviceType?: string,
+): Promise<TestApiKeyInfo[]> {
+  const response = await request.get(`${API_BASE}/test/data/api-keys`);
+  if (!response.ok()) {
+    throw new Error(`Failed to get API keys: ${await response.text()}`);
+  }
+  const data = await response.json();
+  const allKeys: TestApiKeyInfo[] = (data.apiKeys || []).map((k: any) => ({
+    apiKeyFp: k.apiKeyFp,
+    keyPreview: `${k.apiKeyId.slice(0, 8)}...${k.apiKeyId.slice(-4)}`,
+    fullKey: k.apiKeyId,
+    serviceType: k.serviceType,
+    metadata: k.metadata,
+    isUserEnabled: k.isUserEnabled,
+    createdAt: k.createdAt,
+    revokedAt: k.revokedAt,
+  }));
+  return serviceType ? allKeys.filter(k => k.serviceType === serviceType) : allKeys;
+}

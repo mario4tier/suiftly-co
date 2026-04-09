@@ -7,6 +7,7 @@
 
 import { test, expect } from '@playwright/test';
 import { ensureTestBalance, subscribePlatformService } from '../helpers/db';
+import { API_KEY_ORIGIN } from '@suiftly/shared/constants';
 
 test.describe('API Key Creation on Platform Subscription', () => {
   test.beforeEach(async ({ page, request }) => {
@@ -48,21 +49,27 @@ test.describe('API Key Creation on Platform Subscription', () => {
     expect(sealKey.isUserEnabled).toBe(true);
     expect(sealKey.apiKeyId).toHaveLength(37);
     expect(sealKey.apiKeyId[0]).toBe('S');
-    expect(sealKey.metadata?.generatedAt).toBe('platform_subscription');
+    // Key was auto-provisioned at login, not overwritten at subscription
+    expect(sealKey.metadata?.generatedAt).toBe(API_KEY_ORIGIN.SERVICE_PROVISIONING);
     expect(sealKey.revokedAt).toBeNull();
 
     console.log('✅ 3 API keys auto-created (seal, grpc, graphql) on platform subscription');
   });
 
-  test('API key count starts at 0 before platform subscription', async ({ page, request }) => {
-    // Query database before any subscription
+  test('API keys are auto-provisioned at login before platform subscription', async ({ page, request }) => {
+    // API keys are now auto-provisioned at login via ensureServiceInstancesProvisioned
     const apiKeysResponse = await request.get('http://localhost:22700/test/data/api-keys');
     expect(apiKeysResponse.ok()).toBe(true);
 
     const apiKeysData = await apiKeysResponse.json();
-    expect(apiKeysData.apiKeys).toHaveLength(0);
+    expect(apiKeysData.apiKeys).toHaveLength(3);
 
-    console.log('✅ Zero API keys before platform subscription');
+    // All keys should have 'service_provisioning' origin (not yet platform-subscribed)
+    for (const key of apiKeysData.apiKeys) {
+      expect(key.metadata?.generatedAt).toBe(API_KEY_ORIGIN.SERVICE_PROVISIONING);
+    }
+
+    console.log('✅ 3 API keys auto-provisioned at login (before platform subscription)');
   });
 
   test('seal service starts in DISABLED state after platform subscribe', async ({ page, request }) => {

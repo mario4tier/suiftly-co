@@ -20,10 +20,10 @@ import { waitForToastsToDisappear } from '../helpers/locators';
 
 const API_BASE = 'http://localhost:22700';
 
-/** Tier pricing (USD) */
+/** Tier pricing (USD) — must match PLATFORM_TIER_PRICES_USD_CENTS / 100 */
 const TIERS = [
-  { name: 'STARTER', price: 1 },
-  { name: 'PRO', price: 29 },
+  { name: 'STARTER', price: 2 },
+  { name: 'PRO', price: 39 },
 ] as const;
 
 for (const provider of ['escrow', 'stripe'] as const) {
@@ -93,7 +93,7 @@ for (const provider of ['escrow', 'stripe'] as const) {
 
     test('toggle enable/disable works after subscription', async ({ page, request }) => {
       // Use STARTER (cheapest tier)
-      await setupPaymentProvider(page, request, provider, 1);
+      await setupPaymentProvider(page, request, provider, TIERS[0].price);
 
       const successTimeout = provider === 'stripe' ? 30000 : 10000;
       await subscribePlatformService(page, 'STARTER', { successTimeout });

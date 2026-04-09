@@ -135,14 +135,15 @@ test.describe('Platform Stripe Payment', () => {
 
     // Step 3: Payment should resolve within 1 minute
     // Adding a card triggers GM sync-customer webhook → retries pending invoice
-    await expect(
-      page.locator('text=Change Plan')
-    ).toBeVisible({ timeout: 60000 });
-
-    // Pending notification should disappear
+    // Wait for "Subscription payment pending" to disappear — this is the definitive
+    // indicator that payment resolved. "Change Plan" appears even with pending payments.
     await expect(
       page.locator('text=Subscription payment pending')
-    ).not.toBeVisible({ timeout: 10000 });
+    ).not.toBeVisible({ timeout: 60000 });
+
+    // Verify via API that payment actually went through (not just a UI state change)
+    const customerData = await getCustomerData(request);
+    expect(customerData.customer.subscriptionChargePending).toBe(false);
   });
 
   // =========================================================================

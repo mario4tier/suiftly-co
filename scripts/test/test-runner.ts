@@ -28,12 +28,8 @@ import { PORT } from '@suiftly/shared/constants';
  * Find system.conf path
  */
 function findSystemConf(): string | null {
-  const home = homedir();
-  const paths = [
-    join(home, 'mhaxbe', 'system.conf'),
-    '/etc/mhaxbe/system.conf',
-  ];
-  return paths.find(p => existsSync(p)) || null;
+  const path = '/etc/mhaxbe/system.conf';
+  return existsSync(path) ? path : null;
 }
 
 /**
@@ -683,7 +679,6 @@ async function main() {
 
   // Stop on first failure
   if (!result.passed) {
-    await stopDevServers();
     printSummary(results);
     error('Tests stopped on first failure');
     process.exit(1);
@@ -704,7 +699,6 @@ async function main() {
 
   // Stop on first failure
   if (!result.passed) {
-    await stopDevServers();
     printSummary(results);
     error('Tests stopped on first failure');
     process.exit(1);
@@ -721,7 +715,6 @@ async function main() {
 
   // Stop on first failure
   if (!result.passed) {
-    await stopDevServers();
     printSummary(results);
     error('Tests stopped on first failure');
     process.exit(1);
@@ -769,7 +762,6 @@ async function main() {
 
   // Stop on first failure
   if (!result.passed) {
-    await stopDevServers();
     printSummary(results);
     error('Tests stopped on first failure');
     process.exit(1);
@@ -787,14 +779,13 @@ async function main() {
 
   // Stop on first failure
   if (!result.passed) {
-    await stopDevServers();
     printSummary(results);
     error('Tests stopped on first failure');
     process.exit(1);
   }
 
-  // Cleanup: Always stop servers at the end of test run
-  await stopDevServers();
+  // Servers are left running for the developer's convenience.
+  // Config validation happens in test setup (beforeAll/beforeEach), not here.
 
   // Print summary
   printSummary(results);
@@ -815,10 +806,6 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   main().catch(async (err) => {
     error(`Fatal error: ${err.message}`);
     console.error(err);
-
-    // Ensure cleanup happens even on fatal error
-    await stopDevServers();
-
     process.exit(1);
   });
 }

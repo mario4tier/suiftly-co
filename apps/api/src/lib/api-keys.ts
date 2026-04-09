@@ -19,6 +19,7 @@ import { eq, and, isNull } from 'drizzle-orm';
 import { encryptSecret, decryptSecret } from './encryption';
 import { dbClock } from '@suiftly/shared/db-clock';
 import { getSealProcessGroup } from '@mhaxbe/system-config';
+import { API_KEY_ORIGIN } from '@suiftly/shared/constants';
 
 /**
  * API_SECRET_KEY - 32-byte key for AES-128-CTR encryption and HMAC-SHA256
@@ -561,7 +562,7 @@ export async function ensureServiceInstancesProvisioned(customerId: number): Pro
         ...(serviceType === 'seal' && {
           sealType: { network: 'mainnet', access: 'open' },
         }),
-        metadata: { generatedAt: 'service_provisioning' },
+        metadata: { generatedAt: API_KEY_ORIGIN.SERVICE_PROVISIONING },
       });
     }
   }

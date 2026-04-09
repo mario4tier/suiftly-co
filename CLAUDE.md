@@ -79,7 +79,7 @@ if (isTestFeaturesEnabled()) {
 }
 ```
 
-The `system.conf` file in `~/mhaxbe/` or `~/suiftly-co/` determines the environment. Copy from `system.conf.example` and set `ENVIRONMENT=development` (dev) or `ENVIRONMENT=production` (prod).
+The single source of truth is `/etc/mhaxbe/system.conf`. Set `ENVIRONMENT=development` (dev) or `ENVIRONMENT=production` (prod). Do NOT create repo-local `system.conf` files — they risk accidentally overriding production config.
 
 ## Database Management
 
@@ -121,8 +121,8 @@ All destructive dev scripts include **four layers of protection**:
 
 **Setup production:**
 ```bash
-cp system.conf.example system.conf
-sed -i 's/ENVIRONMENT=development/ENVIRONMENT=production/' system.conf
+sudo cp system.conf.example /etc/mhaxbe/system.conf
+sudo sed -i 's/ENVIRONMENT=development/ENVIRONMENT=production/' /etc/mhaxbe/system.conf
 ```
 
 See [docs/PRODUCTION_SAFETY.md](docs/PRODUCTION_SAFETY.md) for complete details.

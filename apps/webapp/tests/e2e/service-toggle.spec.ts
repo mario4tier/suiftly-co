@@ -281,7 +281,8 @@ test.describe('Service Toggle - Enable/Disable', () => {
     await page.waitForTimeout(100); // INTENTIONAL: Small wait to test rapid click handling
 
     // Wait for completion - shows Config Needed (cpEnabled=false)
-    await expect(page.getByText('Config Needed')).toBeVisible({ timeout: 2000 });
+    // Timeout accounts for the 1-second artificial delay + UI update time
+    await expect(page.getByText('Config Needed')).toBeVisible({ timeout: 5000 });
 
     // Wait for API call to complete and database to update (smart polling)
     await waitForCondition(

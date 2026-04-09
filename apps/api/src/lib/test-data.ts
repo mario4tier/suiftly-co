@@ -139,6 +139,7 @@ export async function resetCustomerTestData(options: TestDataResetOptions = {}) 
 
   // Delete all related data and update customer in transaction
   // Use retry logic to handle deadlocks (PostgreSQL error code 40P01)
+  // and FK constraint violations (23503) from concurrent GM processing
   const MAX_RETRIES = 5;
   let lastError: Error | null = null;
 
@@ -292,21 +293,25 @@ export async function resetCustomerTestData(options: TestDataResetOptions = {}) 
     } catch (error: any) {
       lastError = error;
 
-      // Check if this is a deadlock error (PostgreSQL error code 40P01)
-      const isDeadlock = error?.cause?.code === '40P01' ||
-                         error?.message?.includes('deadlock detected');
+      // Check if this is a retryable error:
+      // - Deadlock (40P01): concurrent transactions locked same rows
+      // - FK constraint violation (23503): GM created child rows during our delete
+      const pgCode = error?.cause?.code || error?.code;
+      const isRetryable = pgCode === '40P01' || pgCode === '23503' ||
+                         error?.message?.includes('deadlock detected') ||
+                         error?.message?.includes('violates foreign key constraint');
 
-      if (isDeadlock && attempt < MAX_RETRIES) {
+      if (isRetryable && attempt < MAX_RETRIES) {
         // Exponential backoff with jitter: 50-150ms, 100-300ms, 200-600ms, 400-1200ms
         const baseDelay = 50 * Math.pow(2, attempt - 1);
         const jitter = Math.random() * baseDelay;
         const delay = Math.floor(baseDelay + jitter);
-        console.log(`[TEST DATA] Deadlock detected for customer ${customerId}, retry ${attempt}/${MAX_RETRIES} after ${delay}ms`);
+        console.log(`[TEST DATA] Retryable DB error (${pgCode}) for customer ${customerId}, retry ${attempt}/${MAX_RETRIES} after ${delay}ms`);
         await new Promise(resolve => setTimeout(resolve, delay));
         continue;
       }
 
-      // Not a deadlock or max retries exceeded - rethrow
+      // Not retryable or max retries exceeded - rethrow
       throw error;
     }
   }

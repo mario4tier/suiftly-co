@@ -11,7 +11,7 @@
 
 import { test, expect, type Page } from '@playwright/test';
 import { waitAfterMutation } from '../helpers/wait-utils';
-import { resetCustomer, ensureTestBalance, subscribePlatformService } from '../helpers/db';
+import { resetCustomer, ensureTestBalance, subscribePlatformService, getTestApiKeys } from '../helpers/db';
 import {
   sealHealthCheck,
   sealHealthCheckWithRetry,
@@ -28,12 +28,7 @@ import {
 const API_URL = 'http://localhost:22700';
 const SEAL_METERED_PORT = SEAL_PORTS.MAINNET_PUBLIC;
 
-interface ApiKeyInfo {
-  apiKeyFp: number;
-  keyPreview: string;
-  fullKey: string;
-  isUserEnabled: boolean;
-}
+type ApiKeyInfo = import('../helpers/db').TestApiKeyInfo;
 
 /**
  * Sync vault changes through the system.
@@ -53,18 +48,7 @@ async function syncVault(baselineSeq: number): Promise<void> {
 async function getApiKeys(
   request: import('@playwright/test').APIRequestContext
 ): Promise<ApiKeyInfo[]> {
-  const response = await request.get(`${API_URL}/test/data/api-keys`);
-  if (!response.ok()) throw new Error(`Failed to get API keys: ${await response.text()}`);
-  const data = await response.json();
-  // Filter to seal-only keys (grpc/graphql keys are auto-provisioned but not tested here)
-  return (data.apiKeys || [])
-    .filter((k: any) => k.serviceType === 'seal')
-    .map((k: any) => ({
-      apiKeyFp: k.apiKeyFp,
-      keyPreview: `${k.apiKeyId.slice(0, 8)}...${k.apiKeyId.slice(-4)}`,
-      fullKey: k.apiKeyId,
-      isUserEnabled: k.isUserEnabled,
-    }));
+  return getTestApiKeys(request, 'seal');
 }
 
 async function verifyKeyWorks(apiKey: string, label: string): Promise<void> {

@@ -108,6 +108,14 @@ export const SERVICE_TIER = {
   PRO: 'pro',
 } as const satisfies Record<string, ServiceTier>;
 
+// API Key Origin — tracks how/when a key was provisioned (stored in metadata.generatedAt)
+export const API_KEY_ORIGIN = {
+  SERVICE_PROVISIONING: 'service_provisioning',   // Auto-created at login
+  PLATFORM_SUBSCRIPTION: 'platform_subscription', // Created/claimed at platform subscribe
+  SUBSCRIPTION: 'subscription',                   // Created at non-platform service subscribe
+} as const;
+export type ApiKeyOrigin = typeof API_KEY_ORIGIN[keyof typeof API_KEY_ORIGIN];
+
 // Transaction Types
 export const TRANSACTION_TYPE = {
   DEPOSIT: 'deposit',
