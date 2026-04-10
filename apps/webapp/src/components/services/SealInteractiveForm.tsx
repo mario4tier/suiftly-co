@@ -30,12 +30,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { type ServiceState, type ServiceTier, SERVICE_TYPE, SERVICE_STATE, SERVICE_TIER, INVOICE_LINE_ITEM_TYPE, USAGE_PRICING_CENTS_PER_1000 } from "@suiftly/shared/constants";
+import { type ServiceState, type ServiceTier, SERVICE_TYPE, SERVICE_STATE, INVOICE_LINE_ITEM_TYPE, USAGE_PRICING_CENTS_PER_1000 } from "@suiftly/shared/constants";
 import type { InvoiceLineItem } from "@suiftly/shared/types";
 import {
-  freg_count,
-  fbw_sta,
-  fbw_pro,
   fskey_incl,
   fskey_pkg_incl,
 } from "@/lib/config";
@@ -423,29 +420,6 @@ export function SealInteractiveForm({
   // isReadOnly: all mutating actions disabled (cancelled service or gated by missing platform sub)
   const isReadOnly = isCancelled || isGated;
 
-  // Bandwidth per region derives from platform tier (seal has no subscription fee)
-  const tierInfo = {
-    [SERVICE_TIER.STARTER]: { reqPerRegion: fbw_sta },
-    [SERVICE_TIER.PRO]: { reqPerRegion: fbw_pro },
-  };
-  const currentTier = tierInfo[tier as keyof typeof tierInfo] ?? tierInfo[SERVICE_TIER.STARTER];
-
-  // Monthly charges for seal: no subscription fee (included in platform plan)
-  // Only usage-based charges apply
-  const monthlyCharges = {
-    guaranteedBandwidth: 0, // Included in platform plan
-    sealKeys: 0,
-    ipv4Allowlist: 0,
-    packagesPerKey: 0,
-    apiKeys: 0,
-  };
-
-  const totalMonthlyFee =
-    monthlyCharges.sealKeys +
-    monthlyCharges.ipv4Allowlist +
-    monthlyCharges.packagesPerKey +
-    monthlyCharges.apiKeys;
-
   // Extract Seal usage charge from DRAFT invoice (if any)
   // Filter line items by service === 'seal' and itemType === 'requests'
   const pendingSealUsage = useMemo(() => {
@@ -753,49 +727,21 @@ export function SealInteractiveForm({
               Service Overview
             </h3>
 
-            {/* Monthly Charges Table */}
+            {/* Service Resources Table */}
             <div className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
               <table className="w-full">
                 <thead className="bg-gray-50 dark:bg-gray-800/50">
                   <tr>
                     <th className="px-4 py-1.5 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
-                      Description
+                      Resource
                     </th>
                     <th className="px-4 py-1.5 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
-                      Usage/Count
+                      Included
                     </th>
-                    <th className="py-1.5 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
-                      {/* Action header removed */}
-                    </th>
-                    <th className="px-4 py-1.5 text-right text-sm font-semibold text-gray-700 dark:text-gray-300">
-                      Monthly Price
-                    </th>
+                    <th className="px-4 py-1.5"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                  {/* Guaranteed Bandwidth */}
-                  <tr>
-                    <td className="px-4 py-1.5">
-                      <div>
-                        <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                          Guaranteed Bandwidth
-                        </div>
-                        <div className="text-xs text-gray-500 dark:text-gray-400">
-                          {currentTier.reqPerRegion} req/s per region
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-4 py-1.5 text-sm text-gray-600 dark:text-gray-400">
-                      ~{currentTier.reqPerRegion * freg_count} req/s globally
-                    </td>
-                    <td className="py-1.5">
-                      {/* No action for Guaranteed Bandwidth */}
-                    </td>
-                    <td className="px-4 py-1.5 text-right text-sm font-medium text-gray-900 dark:text-gray-100">
-                      ${monthlyCharges.guaranteedBandwidth.toFixed(2)}
-                    </td>
-                  </tr>
-
                   {/* API Keys */}
                   <tr>
                     <td className="px-4 py-1.5">
@@ -806,16 +752,13 @@ export function SealInteractiveForm({
                     <td className="px-4 py-1.5 text-sm text-gray-600 dark:text-gray-400">
                       {usageStats?.apiKeys.used ?? 0} of {usageStats?.apiKeys.total ?? 2}
                     </td>
-                    <td className="py-1.5">
+                    <td className="px-4 py-1.5">
                       <LinkButton
                         to="/services/seal/overview"
                         search={{ tab: "x-api-key" }}
                       >
                         Manage
                       </LinkButton>
-                    </td>
-                    <td className="px-4 py-1.5 text-right text-sm font-medium text-gray-900 dark:text-gray-100">
-                      ${monthlyCharges.apiKeys.toFixed(2)}
                     </td>
                   </tr>
 
@@ -829,16 +772,13 @@ export function SealInteractiveForm({
                     <td className="px-4 py-1.5 text-sm text-gray-600 dark:text-gray-400">
                       {usageStats?.sealKeys.used ?? 0} of {usageStats?.sealKeys.total ?? fskey_incl}
                     </td>
-                    <td className="py-1.5">
+                    <td className="px-4 py-1.5">
                       <LinkButton
                         to="/services/seal/overview"
                         search={{ tab: "seal-keys" }}
                       >
                         Manage
                       </LinkButton>
-                    </td>
-                    <td className="px-4 py-1.5 text-right text-sm font-medium text-gray-900 dark:text-gray-100">
-                      ${monthlyCharges.sealKeys.toFixed(2)}
                     </td>
                   </tr>
 
@@ -852,12 +792,7 @@ export function SealInteractiveForm({
                     <td className="px-4 py-1.5 text-sm text-gray-600 dark:text-gray-400">
                       {usageStats?.packagesPerKey?.max ?? fskey_pkg_incl} per key
                     </td>
-                    <td className="py-1.5">
-                      {/* No action for Packages per Key */}
-                    </td>
-                    <td className="px-4 py-1.5 text-right text-sm font-medium text-gray-900 dark:text-gray-100">
-                      ${monthlyCharges.packagesPerKey.toFixed(2)}
-                    </td>
+                    <td className="px-4 py-1.5"></td>
                   </tr>
 
                   {/* IPv4 Allowlist */}
@@ -871,16 +806,13 @@ export function SealInteractiveForm({
                       <td className="px-4 py-1.5 text-sm text-gray-600 dark:text-gray-400">
                         {usageStats?.allowlist.used ?? 0} of {usageStats?.allowlist.total ?? 2}
                       </td>
-                      <td className="py-1.5">
+                      <td className="px-4 py-1.5">
                         <LinkButton
                           to="/services/seal/overview"
                           search={{ tab: "more-settings" }}
                         >
                           Manage
                         </LinkButton>
-                      </td>
-                      <td className="px-4 py-1.5 text-right text-sm font-medium text-gray-900 dark:text-gray-100">
-                        ${monthlyCharges.ipv4Allowlist.toFixed(2)}
                       </td>
                     </tr>
                   )}
@@ -889,50 +821,21 @@ export function SealInteractiveForm({
               </table>
             </div>
 
-          </div>
+            {/* Usage This Month */}
+            <div className="rounded-lg border border-gray-200 dark:border-gray-700 px-4 py-3 flex items-center justify-between">
+              <div>
+                <div className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+                  Usage This Month
+                </div>
+                <div className="text-xs text-gray-500 dark:text-gray-400">
+                  {pendingSealUsage.quantity.toLocaleString()} requests @ ${(pendingSealUsage.unitPriceUsd || USAGE_PRICING_CENTS_PER_1000[SERVICE_TYPE.SEAL] / 100 / 1000).toFixed(4)}/req
+                </div>
+              </div>
+              <div className="text-sm font-bold text-gray-900 dark:text-gray-100">
+                ${pendingSealUsage.amountUsd.toFixed(2)}
+              </div>
+            </div>
 
-          {/* Summary Section - Subscription, Usage, Grand Total */}
-          <div className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
-            <table className="w-full">
-              <tbody>
-                {/* Subscription Row */}
-                <tr className="bg-gray-50 dark:bg-gray-800/50">
-                  <td className="px-4 py-1.5">
-                    {/* Empty first column */}
-                  </td>
-                  <td colSpan={2} className="px-4 py-1.5 text-right text-sm font-semibold text-gray-900 dark:text-gray-100">
-                    Subscription
-                  </td>
-                  <td className="px-4 py-1.5 text-right text-lg font-bold text-gray-900 dark:text-gray-100">
-                    ${totalMonthlyFee.toFixed(2)}
-                  </td>
-                </tr>
-                {/* Usage This Month Row */}
-                <tr>
-                  <td className="px-4 py-1.5 text-sm text-gray-600 dark:text-gray-400">
-                    {pendingSealUsage.quantity.toLocaleString()} req @ ${(pendingSealUsage.unitPriceUsd || USAGE_PRICING_CENTS_PER_1000[SERVICE_TYPE.SEAL] / 100 / 1000).toFixed(4)}/req
-                  </td>
-                  <td colSpan={2} className="px-4 py-1.5 text-right text-sm font-semibold text-gray-900 dark:text-gray-100">
-                    Usage This Month
-                  </td>
-                  <td className="px-4 py-1.5 text-right text-lg font-bold text-gray-900 dark:text-gray-100">
-                    +${pendingSealUsage.amountUsd.toFixed(2)}
-                  </td>
-                </tr>
-                {/* Grand Total Row */}
-                <tr className="border-t border-gray-200 dark:border-gray-700">
-                  <td className="px-4 py-1.5">
-                    {/* Empty to align with Usage This Month row */}
-                  </td>
-                  <td colSpan={2} className="px-4 py-1.5 text-right text-sm font-semibold text-gray-900 dark:text-gray-100">
-                    Total
-                  </td>
-                  <td className="px-4 py-1.5 text-right text-lg font-bold text-gray-900 dark:text-gray-100">
-                    ${(totalMonthlyFee + pendingSealUsage.amountUsd).toFixed(2)}
-                  </td>
-                </tr>
-              </tbody>
-            </table>
           </div>
         </TabsContent>
 

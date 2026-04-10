@@ -77,4 +77,7 @@ export interface InvoiceLineItem {
 
   /** Optional: credit month name for credit line items */
   creditMonth?: string;
+
+  /** Optional: extra description (e.g., "starter → pro" for tier upgrades) */
+  description?: string;
 }

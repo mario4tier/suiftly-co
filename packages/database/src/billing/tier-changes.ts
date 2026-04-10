@@ -249,7 +249,7 @@ export async function handleTierUpgradeLocked(
       amountUsdCents: chargeAmountCents,
       type: 'charge',
       status: 'pending',
-      description: `Platform tier upgrade: ${customer.platformTier} → ${newTier} (pro-rated)`,
+      description: `Platform tier upgrade: ${customer.platformTier} → ${newTier} (adjustment)`,
       billingPeriodStart: clock.now(),
       billingPeriodEnd: getEndOfMonth(clock),
       dueDate: clock.now(),
@@ -443,7 +443,7 @@ export async function prepareTierUpgradePhase1Locked(
     newTier,
     chargeAmountUsdCents: chargeAmountCents,
     serviceType,
-    description: `Platform tier upgrade: ${customer.platformTier} → ${newTier} (pro-rated)`,
+    description: `Platform tier upgrade: ${customer.platformTier} → ${newTier} (adjustment)`,
   };
 }
 

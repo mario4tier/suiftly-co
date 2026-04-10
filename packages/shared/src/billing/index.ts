@@ -19,3 +19,6 @@ export {
   isLastDayOfBillingPeriod,
   hasNewPeriodStarted,
 } from './periods';
+
+// Export line item formatting
+export { formatLineItemDescription } from './formatting';

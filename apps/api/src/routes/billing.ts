@@ -15,63 +15,7 @@ import { SPENDING_LIMIT, INVOICE_LINE_ITEM_TYPE } from '@suiftly/shared/constant
 import { config } from '../lib/config';
 import { buildDraftLineItems } from '../lib/invoice-formatter';
 import { dbClock } from '@suiftly/shared/db-clock';
-
-/**
- * Format a semantic line item into a human-readable description
- * Used for billing history display
- *
- * @param itemType - The semantic item type (e.g., TIER_UPGRADE, SUBSCRIPTION_PRO)
- * @param serviceType - The service type (e.g., 'seal')
- * @param quantity - Item quantity
- * @param unitPriceUsdCents - Unit price in cents
- * @param creditMonth - Credit month for CREDIT items
- * @param description - Optional description to append (e.g., "starter → pro" for tier upgrades)
- */
-function formatLineItemDescription(
-  itemType: string,
-  serviceType: string | null,
-  quantity: number,
-  unitPriceUsdCents: number,
-  creditMonth: string | null,
-  description: string | null
-): string {
-  const serviceName = serviceType
-    ? serviceType.charAt(0).toUpperCase() + serviceType.slice(1)
-    : '';
-
-  const unitPriceUsd = unitPriceUsdCents / 100;
-
-  switch (itemType) {
-    case INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_STARTER:
-      return `${serviceName} Starter tier subscription`;
-    case INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_PRO:
-      return `${serviceName} Pro tier subscription`;
-    case INVOICE_LINE_ITEM_TYPE.TIER_UPGRADE: {
-      const base = `${serviceName} tier upgrade (pro-rated)`;
-      return description ? `${base}: ${description}` : base;
-    }
-    case INVOICE_LINE_ITEM_TYPE.REQUESTS:
-      return `${serviceName} usage: ${quantity.toLocaleString()} requests`;
-    case INVOICE_LINE_ITEM_TYPE.EXTRA_API_KEYS:
-      return `${serviceName} extra API keys: ${quantity}`;
-    case INVOICE_LINE_ITEM_TYPE.EXTRA_SEAL_KEYS:
-      return `${serviceName} extra seal keys: ${quantity}`;
-    case INVOICE_LINE_ITEM_TYPE.EXTRA_ALLOWLIST_IPS:
-      return `${serviceName} extra allowlist IPs: ${quantity}`;
-    case INVOICE_LINE_ITEM_TYPE.EXTRA_PACKAGES:
-      return `${serviceName} extra packages: ${quantity}`;
-    case INVOICE_LINE_ITEM_TYPE.CREDIT:
-      return creditMonth
-        ? `${serviceName ? serviceName + ' ' : ''}partial month credit (${creditMonth})`
-        : `${serviceName ? serviceName + ' ' : ''}credit`;
-    case INVOICE_LINE_ITEM_TYPE.TAX:
-      return 'Tax';
-    default:
-      // Log unexpected itemType - indicates new enum value or bad data
-      console.error(`[billing] Unhandled itemType in formatLineItemDescription: ${JSON.stringify(itemType)}`);
-      return 'Charge';
-  }
-}
+import { formatLineItemDescription } from '@suiftly/shared/billing';
 
 /**
  * Convert hex string to Buffer for BYTEA fields
@@ -271,15 +215,20 @@ export const billingRouter = router({
 
       for (const row of invoiceResults) {
         // Format line item into description if present
+        // unitPriceUsdCents for 'requests' items is "cents per 1000 requests"
+        // (see invoice-formatter.ts USAGE_BASED_ITEM_TYPES), so divide by extra 1000
+        const unitPriceUsd = row.itemType === INVOICE_LINE_ITEM_TYPE.REQUESTS
+          ? Number(row.unitPriceUsdCents ?? 0) / 100 / 1000
+          : Number(row.unitPriceUsdCents ?? 0) / 100;
         const lineItemDescription = row.itemType
-          ? formatLineItemDescription(
-              row.itemType,
-              row.serviceType,
-              Number(row.quantity ?? 1),
-              Number(row.unitPriceUsdCents ?? 0),
-              row.creditMonth,
-              row.lineItemDescription ?? null
-            )
+          ? formatLineItemDescription({
+              service: row.serviceType ?? null,
+              itemType: row.itemType,
+              quantity: Number(row.quantity ?? 1),
+              unitPriceUsd,
+              creditMonth: row.creditMonth ?? undefined,
+              description: row.lineItemDescription ?? undefined,
+            })
           : null;
 
         const existing = invoiceMap.get(row.id);

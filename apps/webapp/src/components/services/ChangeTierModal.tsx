@@ -368,7 +368,7 @@ export function ChangeTierModal({
                               {option.isUpgrade && (
                                 <span className="text-green-700 dark:text-green-400">
                                   {option.upgradeChargeCents !== undefined && option.upgradeChargeCents > 0
-                                    ? `Immediate: ${formatPrice(option.upgradeChargeCents)} pro-rated charge`
+                                    ? `Immediate: ${formatPrice(option.upgradeChargeCents)} adjustment charge`
                                     : 'Upgrade will take effect immediately'}
                                 </span>
                               )}
@@ -450,7 +450,7 @@ export function ChangeTierModal({
                       return (
                         <p className="mt-2">
                           You will be charged <strong>{formatPrice(option.upgradeChargeCents)}</strong> now
-                          (pro-rated for the remaining days in the billing period).
+                          (adjusted for the remaining days in the billing period).
                         </p>
                       );
                     }
