@@ -29,8 +29,23 @@ import {
   getTierChangeOptions,
 } from '@suiftly/database/billing';
 import { dbClock } from '@suiftly/shared/db-clock';
-import { triggerVaultSync, markConfigChanged } from '../lib/gm-sync';
+import { triggerVaultSync, markConfigChanged, getVaultType } from '../lib/gm-sync';
 import { retryPendingInvoice, assertPlatformSubscription } from '../lib/payment-gates';
+
+/**
+ * Get the correct configChangeVaultSeq column update for a service type.
+ * Maps service type to the appropriate column in service_instances.
+ */
+function getServiceChangeSeqColumn(serviceType: ServiceType, expectedVaultSeq: number): Record<string, number> {
+  switch (serviceType) {
+    case SERVICE_TYPE.GRPC:
+      return { rmaConfigChangeVaultSeq: expectedVaultSeq };
+    case SERVICE_TYPE.SEAL:
+      return { smaConfigChangeVaultSeq: expectedVaultSeq };
+    default:
+      throw new Error(`No configChangeVaultSeq column for service type: ${serviceType}`);
+  }
+}
 
 // Zod schemas for input validation
 const serviceTypeSchema = z.enum([SERVICE_TYPE.SEAL, SERVICE_TYPE.GRPC, SERVICE_TYPE.GRAPHQL, SERVICE_TYPE.PLATFORM]);
@@ -457,36 +472,28 @@ export const servicesRouter = router({
 
           const now = dbClock.now();
 
-          // Read nextVaultSeq - the seq to use for pending changes
-          // GM bumps this to currentSeq+2 when processing, preventing collisions
-          const [control] = await tx
-            .select({ smaNextVaultSeq: systemControl.smaNextVaultSeq })
-            .from(systemControl)
-            .where(eq(systemControl.id, 1))
-            .limit(1);
-          const expectedVaultSeq = control?.smaNextVaultSeq ?? 1;
+          // Mark config changed for the correct vault type (sma for seal, rma for grpc, etc.)
+          const expectedVaultSeq = await markConfigChanged(tx, input.serviceType, 'mainnet');
 
-          // Atomically update global max configChangeSeq (for GM's O(1) pending check)
-          await tx
-            .update(systemControl)
-            .set({
-              smaMaxConfigChangeSeq: sql`GREATEST(${systemControl.smaMaxConfigChangeSeq}, ${expectedVaultSeq})`,
-            })
-            .where(eq(systemControl.id, 1));
+          // Determine which configChangeVaultSeq column to set based on service type
+          const configChangeSeqUpdate = getServiceChangeSeqColumn(input.serviceType, expectedVaultSeq);
 
-          // For Seal service: check if cpEnabled should be set
-          // cpEnabled becomes true when: isUserEnabled=true AND has seal key with package
+          // Check if cpEnabled should be set
           let shouldSetCpEnabled = false;
-          if (input.enabled && input.serviceType === SERVICE_TYPE.SEAL && !service.cpEnabled) {
-            // Check if there's any seal key with at least one package
-            const keysWithPackages = await tx
-              .select({ sealKeyId: sealKeys.sealKeyId })
-              .from(sealKeys)
-              .innerJoin(sealPackages, eq(sealPackages.sealKeyId, sealKeys.sealKeyId))
-              .where(eq(sealKeys.instanceId, service.instanceId))
-              .limit(1);
-
-            shouldSetCpEnabled = keysWithPackages.length > 0;
+          if (input.enabled && !service.cpEnabled) {
+            if (input.serviceType === SERVICE_TYPE.SEAL) {
+              // Seal: cpEnabled requires isUserEnabled=true AND has seal key with package
+              const keysWithPackages = await tx
+                .select({ sealKeyId: sealKeys.sealKeyId })
+                .from(sealKeys)
+                .innerJoin(sealPackages, eq(sealPackages.sealKeyId, sealKeys.sealKeyId))
+                .where(eq(sealKeys.instanceId, service.instanceId))
+                .limit(1);
+              shouldSetCpEnabled = keysWithPackages.length > 0;
+            } else if (input.serviceType === SERVICE_TYPE.GRPC) {
+              // gRPC: cpEnabled when user enables (no seal key requirement)
+              shouldSetCpEnabled = true;
+            }
           }
 
           const [updatedService] = await tx
@@ -496,7 +503,7 @@ export const servicesRouter = router({
               state: input.enabled ? SERVICE_STATE.ENABLED : SERVICE_STATE.DISABLED,
               enabledAt: input.enabled ? now : service.enabledAt,
               disabledAt: !input.enabled ? now : service.disabledAt,
-              smaConfigChangeVaultSeq: expectedVaultSeq,
+              ...configChangeSeqUpdate,
               ...(shouldSetCpEnabled ? { cpEnabled: true } : {}),
             })
             .where(eq(serviceInstances.instanceId, service.instanceId))
@@ -588,12 +595,13 @@ export const servicesRouter = router({
 
           // Mark config change for vault sync
           const expectedVaultSeq = await markConfigChanged(tx, input.serviceType, 'mainnet');
+          const configChangeSeqUpdate = getServiceChangeSeqColumn(input.serviceType, expectedVaultSeq);
 
           const [updated] = await tx
             .update(serviceInstances)
             .set({
               config: updatedConfig,
-              smaConfigChangeVaultSeq: expectedVaultSeq,
+              ...configChangeSeqUpdate,
             })
             .where(eq(serviceInstances.instanceId, service.instanceId))
             .returning();
@@ -1005,37 +1013,35 @@ export const servicesRouter = router({
       const freshnessThreshold = new Date(Date.now() - 30000);
 
       // Group by vault type and calculate min applied seq
+      // Single pass: build vault seq map + count reachable LMs
       const vaultSeqMap = new Map<string, number>();
-      for (const lm of lmStatuses) {
-        // Only consider recently reachable LMs with applied vaults
-        const isRecent = lm.lastSeenAt && lm.lastSeenAt > freshnessThreshold;
-        if (isRecent && !lm.lastError && lm.appliedSeq && lm.appliedSeq > 0 && lm.vaultType) {
-          const currentMin = vaultSeqMap.get(lm.vaultType);
-          if (currentMin === undefined || lm.appliedSeq < currentMin) {
-            vaultSeqMap.set(lm.vaultType, lm.appliedSeq);
-          }
-        }
-      }
-
-      // SMA vault determines customer API endpoint availability (HAProxy config)
-      // SMK/STK vaults are internal (keyserver config) and don't affect customer-facing status
-      const minAppliedSeq = vaultSeqMap.get('sma') ?? null;
-      // Count unique reachable LMs (multiple rows per LM since composite PK lmId+vaultType)
       const reachableLmIds = new Set<string>();
       for (const lm of lmStatuses) {
         const isRecent = lm.lastSeenAt && lm.lastSeenAt > freshnessThreshold;
         if (isRecent && !lm.lastError) {
           reachableLmIds.add(lm.lmId);
+          if (lm.appliedSeq && lm.appliedSeq > 0 && lm.vaultType) {
+            const currentMin = vaultSeqMap.get(lm.vaultType);
+            if (currentMin === undefined || lm.appliedSeq < currentMin) {
+              vaultSeqMap.set(lm.vaultType, lm.appliedSeq);
+            }
+          }
         }
       }
       const lmCount = reachableLmIds.size;
+
+      // Legacy: SMA for backward compat in lmStatus response
+      const minAppliedSeq = vaultSeqMap.get('sma') ?? null;
 
       // 5. Calculate status for each service
       const serviceStatuses = services.map(service => {
         const serviceType = service.serviceType;
         const state = service.state;
         const isUserEnabled = service.isUserEnabled ?? false;
-        const configChangeSeq = service.smaConfigChangeVaultSeq ?? 0;
+        // Read the correct configChangeVaultSeq column per service type
+        const configChangeSeq = serviceType === SERVICE_TYPE.GRPC
+          ? (service.rmaConfigChangeVaultSeq ?? 0)
+          : (service.smaConfigChangeVaultSeq ?? 0);
 
         // Active API keys for this service
         const hasActiveApiKey = (apiKeyCountMap.get(serviceType) ?? 0) > 0;
@@ -1062,18 +1068,22 @@ export const servicesRouter = router({
         }
 
         // Determine sync status (sequence-based)
-        // Service is synced when configChangeSeq <= minAppliedSeq across all relevant vaults
+        // Service is synced when configChangeSeq <= minAppliedSeq for the relevant vault type
         let syncStatus: 'synced' | 'pending' = 'synced';
         let syncReason: string | undefined;
 
         if (configChangeSeq > 0) {
+          // Use per-service vault type for sync check (e.g., seal→sma, grpc→rma)
+          const serviceVault = getVaultType(serviceType as ServiceType);
+          const serviceMinAppliedSeq = vaultSeqMap.get(serviceVault) ?? null;
+
           if (lmCount === 0) {
             syncStatus = 'pending';
             syncReason = 'no_lms_available';
-          } else if (minAppliedSeq === null) {
+          } else if (serviceMinAppliedSeq === null) {
             syncStatus = 'pending';
             syncReason = 'no_vaults_applied';
-          } else if (configChangeSeq > minAppliedSeq) {
+          } else if (configChangeSeq > serviceMinAppliedSeq) {
             syncStatus = 'pending';
             syncReason = 'vault_seq_behind';
           }

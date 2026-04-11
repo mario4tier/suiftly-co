@@ -38,6 +38,7 @@ import {
 } from "@/lib/config";
 import { SealKeysSection } from "./SealKeysSection";
 import { ApiKeysSection } from "./ApiKeysSection";
+import { IpAllowlistSection } from "./IpAllowlistSection";
 import { AddPackageModal } from "./AddPackageModal";
 import { trpc } from "@/lib/trpc";
 import { useSearch, useNavigate } from "@tanstack/react-router";
@@ -939,112 +940,20 @@ export function SealInteractiveForm({
             </div>
           </div>
 
-          {/* IP Allowlist */}
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Label htmlFor="ip-allowlist-toggle" className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                  IP Allowlist
-                </Label>
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <button className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">
-                      <Info className="h-4 w-4" />
-                    </button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-80">
-                    <p className="text-sm text-gray-600 dark:text-gray-300">
-                      Restrict API access to specific IPv4 addresses. When OFF, all IPs are allowed.
-                      <br /><br />
-                      <strong>Format:</strong> Separate with newlines, commas, or spaces.
-                      <br />
-                      <strong>Example:</strong> 192.168.1.1, 10.0.0.1
-                      <br /><br />
-                      <strong>Limit:</strong> Up to 2 IPv4 addresses for Pro tier
-                      <br /><br />
-                      <strong>Note:</strong> IPv6 and CIDR ranges (except /32) are not supported yet.
-                    </p>
-                  </PopoverContent>
-                </Popover>
-                {tier !== "starter" && (
-                  <span className="text-xs text-gray-500 dark:text-gray-400">
-                    {usageStats?.allowlist.used ?? 0} of {usageStats?.allowlist.total ?? 2} used
-                  </span>
-                )}
-              </div>
-              {tier === "starter" ? (
-                <span className="text-sm text-gray-500 dark:text-gray-400">Pro/Enterprise feature</span>
-              ) : (
-                <div className="flex items-center gap-3">
-                  <Switch
-                    id="ip-allowlist-toggle"
-                    checked={ipAllowlistEnabled}
-                    onCheckedChange={handleToggleIpAllowlist}
-                    disabled={isReadOnly}
-                  />
-                  <span className="text-sm font-medium text-gray-600 dark:text-gray-400 min-w-[32px]">
-                    {ipAllowlistEnabled ? "ON" : "OFF"}
-                  </span>
-                </div>
-              )}
-            </div>
-
-            {/* IP Allowlist Editor (Pro/Enterprise only) */}
-            {tier !== "starter" && (
-              <>
-                <Textarea
-                  id="ip-allowlist"
-                  value={editingIpText}
-                  onChange={(e) => handleIpTextChange(e.target.value)}
-                  disabled={isReadOnly}
-                  rows={2}
-                  className="resize-none font-mono text-sm"
-                />
-
-                {/* Validation Errors */}
-                {validationErrors.length > 0 && (
-                  <div className="rounded-md bg-red-50 dark:bg-red-900/20 p-3 border border-red-200 dark:border-red-900">
-                    <div className="flex gap-2">
-                      <AlertCircle className="h-5 w-5 text-red-600 dark:text-red-500 flex-shrink-0" />
-                      <div className="space-y-1">
-                        <p className="text-sm font-medium text-red-800 dark:text-red-200">
-                          Validation Errors:
-                        </p>
-                        <ul className="text-sm text-red-700 dark:text-red-300 space-y-1">
-                          {validationErrors.map((error, idx) => (
-                            <li key={idx} className="font-mono">
-                              • <span className="font-bold">{error.ip}</span>: {error.error}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Save/Cancel Buttons */}
-                {hasUnsavedIpChanges && (
-                  <div className="flex gap-2 pt-2">
-                    <Button
-                      onClick={handleSaveIpAllowlist}
-                      disabled={validationErrors.length > 0 || updateIpAllowlistMutation.isPending}
-                      size="sm"
-                    >
-                      {updateIpAllowlistMutation.isPending ? "Saving..." : "Save Changes"}
-                    </Button>
-                    <Button
-                      onClick={handleCancelIpChanges}
-                      disabled={updateIpAllowlistMutation.isPending}
-                      variant="outline"
-                      size="sm"
-                    >
-                      Cancel
-                    </Button>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
+          {/* IP Allowlist (shared component) */}
+          <IpAllowlistSection
+            tier={tier}
+            isGated={isReadOnly}
+            ipAllowlistEnabled={ipAllowlistEnabled}
+            ipAllowlist={savedIpList}
+            maxIpv4={usageStats?.allowlist.total ?? 2}
+            isPending={updateIpAllowlistMutation.isPending}
+            onToggle={handleToggleIpAllowlist}
+            onSave={async (enabled, entries) => {
+              const result = await updateIpAllowlistMutation.mutateAsync({ enabled, entries });
+              return { entries: result.entries };
+            }}
+          />
         </TabsContent>
       </Tabs>
 

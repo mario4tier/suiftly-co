@@ -28,15 +28,17 @@ function formatRelativeTime(date: Date): string {
 }
 
 function ApiKeysPage() {
-  // Fetch Seal services and API keys
+  // Fetch services and API keys for all service types
   const { data: services, isLoading: servicesLoading } = trpc.services.list.useQuery();
-  const { data: apiKeys, isLoading: apiKeysLoading } = trpc.seal.listApiKeys.useQuery();
+  const { data: sealApiKeys, isLoading: sealKeysLoading } = trpc.seal.listApiKeys.useQuery();
+  const { data: grpcApiKeys, isLoading: grpcKeysLoading } = trpc.grpc.listApiKeys.useQuery();
 
-  // Find first Seal service for Manage button
   const sealService = services?.find(s => s.serviceType === 'seal');
+  const grpcService = services?.find(s => s.serviceType === 'grpc');
 
-  const isLoading = servicesLoading || apiKeysLoading;
+  const isLoading = servicesLoading || sealKeysLoading || grpcKeysLoading;
   const isSealSubscribed = !!sealService;
+  const isGrpcSubscribed = !!grpcService;
 
   return (
     <DashboardLayout>
@@ -66,7 +68,7 @@ function ApiKeysPage() {
                 )}
               </CardHeader>
               <CardContent className="p-4 pt-0">
-                {apiKeys && apiKeys.length > 0 ? (
+                {sealApiKeys && sealApiKeys.length > 0 ? (
                   <div className="rounded-lg border">
                     <table className="w-full">
                       <thead className="bg-muted/50">
@@ -77,7 +79,7 @@ function ApiKeysPage() {
                         </tr>
                       </thead>
                       <tbody className="divide-y">
-                        {apiKeys.map((key) => (
+                        {sealApiKeys.map((key) => (
                           <tr key={key.apiKeyFp}>
                             <td className="px-3 py-2">
                               <code className="text-sm font-mono">{key.keyPreview}</code>
@@ -117,13 +119,61 @@ function ApiKeysPage() {
 
             {/* gRPC Section */}
             <Card>
-              <CardHeader className="p-4">
+              <CardHeader className="flex flex-row items-center gap-3 space-y-0 p-4">
                 <CardTitle className="text-lg font-semibold">gRPC</CardTitle>
+                {isGrpcSubscribed && (
+                  <LinkButton to="/services/grpc/overview" search={{ tab: 'x-api-key' }}>
+                    Manage
+                  </LinkButton>
+                )}
               </CardHeader>
               <CardContent className="p-4 pt-0">
-                <p className="text-sm text-muted-foreground">
-                  No API keys used yet.
-                </p>
+                {grpcApiKeys && grpcApiKeys.length > 0 ? (
+                  <div className="rounded-lg border">
+                    <table className="w-full">
+                      <thead className="bg-muted/50">
+                        <tr>
+                          <th className="px-3 py-2 text-left text-sm font-semibold">API Key</th>
+                          <th className="px-3 py-2 text-left text-sm font-semibold">Created</th>
+                          <th className="px-3 py-2 text-left text-sm font-semibold">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y">
+                        {grpcApiKeys.map((key) => (
+                          <tr key={key.apiKeyFp}>
+                            <td className="px-3 py-2">
+                              <code className="text-sm font-mono">{key.keyPreview}</code>
+                            </td>
+                            <td className="px-3 py-2 text-sm text-muted-foreground">
+                              {formatRelativeTime(new Date(key.createdAt))}
+                            </td>
+                            <td className="px-3 py-2">
+                              {key.isUserEnabled ? (
+                                <span className="inline-flex items-center rounded-full px-2 py-1 text-xs font-medium bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400">
+                                  Active
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center rounded-full px-2 py-1 text-xs font-medium bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-400">
+                                  Revoked
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : isGrpcSubscribed ? (
+                  <p className="text-sm text-muted-foreground">
+                    No API keys used yet.
+                  </p>
+                ) : (
+                  <div>
+                    <LinkButton to="/services/grpc/overview">
+                      Subscribe To gRPC Service
+                    </LinkButton>
+                  </div>
+                )}
               </CardContent>
             </Card>
 

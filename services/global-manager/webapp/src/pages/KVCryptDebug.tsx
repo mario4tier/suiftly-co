@@ -52,6 +52,9 @@ const VAULT_LONG_LABELS: Record<string, { abbr: string; name: string }> = {
   stk: { abbr: 'STK', name: 'Seal Testnet Keyserver' },
   sto: { abbr: 'STO', name: 'Seal Testnet Open' },
   skk: { abbr: 'SKK', name: 'Seal Test/Dev' },
+  rma: { abbr: 'RMA', name: 'gRPC Mainnet API' },
+  rta: { abbr: 'RTA', name: 'gRPC Testnet API' },
+  rkk: { abbr: 'RKK', name: 'gRPC Test/Dev' },
 };
 
 // Helper to format vault display name

@@ -10,6 +10,7 @@ import { testRouter } from './test';
 import { configRouter } from './config';
 import { servicesRouter } from './services';
 import { sealRouter } from './seal';
+import { grpcRouter } from './grpc';
 import { activityRouter } from './activity';
 import { billingRouter } from './billing';
 import { statsRouter } from './stats';
@@ -19,6 +20,7 @@ export const appRouter = router({
   config: configRouter,
   services: servicesRouter,
   seal: sealRouter,
+  grpc: grpcRouter,
   activity: activityRouter,
   billing: billingRouter,
   stats: statsRouter,

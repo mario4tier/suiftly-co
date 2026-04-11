@@ -9,6 +9,7 @@
 import { TRPCError } from '@trpc/server';
 import { billingRecords, customers } from '@suiftly/database/schema';
 import { eq } from 'drizzle-orm';
+import type { DatabaseOrTransaction } from '@suiftly/database';
 
 import { getSuiService } from '@suiftly/database/sui-mock';
 import { getStripeService } from '@suiftly/database/stripe-mock';
@@ -96,4 +97,20 @@ export async function assertPlatformSubscription(
       message: 'Active platform subscription required to enable services',
     });
   }
+}
+
+/**
+ * Get the customer's effective tier from their platform subscription.
+ * Returns 'starter' if no platform tier is set.
+ */
+export async function getCustomerPlatformTier(
+  dbInstance: DatabaseOrTransaction,
+  customerId: number
+): Promise<'starter' | 'pro'> {
+  const result = await dbInstance
+    .select({ platformTier: customers.platformTier })
+    .from(customers)
+    .where(eq(customers.customerId, customerId))
+    .limit(1);
+  return (result[0]?.platformTier as 'starter' | 'pro') ?? 'starter';
 }

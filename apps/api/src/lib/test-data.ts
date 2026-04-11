@@ -626,6 +626,78 @@ export async function setupSealWithCpEnabled(options: SetupSealOptions | string 
 }
 
 /**
+ * Setup gRPC service with cpEnabled=true for control plane sync tests.
+ *
+ * Simpler than Seal: no seal keys or packages needed.
+ * gRPC sets cpEnabled=true when isUserEnabled=true (no key requirement).
+ *
+ * Steps:
+ * 1. Ensure platform subscription
+ * 2. Create/enable gRPC service instance
+ * 3. Set cpEnabled=true
+ *
+ * @returns Success object with customerId and cpEnabled status
+ */
+export async function setupGrpcWithCpEnabled(walletAddress: string = MOCK_WALLET_ADDRESS) {
+  const customer = await db.query.customers.findFirst({
+    where: eq(customers.walletAddress, walletAddress),
+  });
+
+  if (!customer) {
+    return { success: false, error: `Customer not found with wallet: ${walletAddress}` };
+  }
+
+  const customerId = customer.customerId;
+
+  // Ensure platform subscription
+  if (!customer.platformTier) {
+    await db.update(customers)
+      .set({ platformTier: 'starter', paidOnce: true })
+      .where(eq(customers.customerId, customerId));
+  }
+
+  // Create or enable gRPC service instance
+  let service = await db.query.serviceInstances.findFirst({
+    where: and(
+      eq(serviceInstances.customerId, customerId),
+      eq(serviceInstances.serviceType, 'grpc')
+    ),
+  });
+
+  if (!service) {
+    const [newService] = await db.insert(serviceInstances).values({
+      customerId,
+      serviceType: 'grpc',
+      state: 'enabled',
+      isUserEnabled: true,
+      enabledAt: dbClock.now(),
+      cpEnabled: true,
+    }).returning();
+    service = newService;
+    console.log(`[TEST DATA] Created gRPC service instance for customer ${customerId}`);
+  } else if (!service.isUserEnabled || !service.cpEnabled) {
+    await db.update(serviceInstances)
+      .set({ isUserEnabled: true, state: 'enabled', enabledAt: dbClock.now(), cpEnabled: true })
+      .where(eq(serviceInstances.instanceId, service.instanceId));
+    console.log(`[TEST DATA] Enabled gRPC service for customer ${customerId}`);
+  }
+
+  const finalService = await db.query.serviceInstances.findFirst({
+    where: and(
+      eq(serviceInstances.customerId, customerId),
+      eq(serviceInstances.serviceType, 'grpc')
+    ),
+  });
+
+  return {
+    success: true,
+    customerId,
+    cpEnabled: finalService?.cpEnabled ?? false,
+    rmaConfigChangeVaultSeq: finalService?.rmaConfigChangeVaultSeq ?? 0,
+  };
+}
+
+/**
  * Create an API key for testing (returns plain key for E2E tests)
  *
  * This creates a real API key using the production code path,

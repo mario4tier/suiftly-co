@@ -138,6 +138,8 @@ const healthResponse = async () => {
       smaVaultSeq: systemControl.smaVaultSeq,
       smaMaxConfigChangeSeq: systemControl.smaMaxConfigChangeSeq,
       smkVaultSeq: systemControl.smkVaultSeq,
+      rmaVaultSeq: systemControl.rmaVaultSeq,
+      rmaMaxConfigChangeSeq: systemControl.rmaMaxConfigChangeSeq,
     })
     .from(systemControl)
     .where(eq(systemControl.id, 1))
@@ -145,6 +147,8 @@ const healthResponse = async () => {
 
   const smaVaultSeq = control?.smaVaultSeq ?? 0;
   const smaMaxConfigChangeSeq = control?.smaMaxConfigChangeSeq ?? 0;
+  const rmaVaultSeq = control?.rmaVaultSeq ?? 0;
+  const rmaMaxConfigChangeSeq = control?.rmaMaxConfigChangeSeq ?? 0;
 
   return {
     status: 'up',
@@ -160,6 +164,11 @@ const healthResponse = async () => {
       },
       smk: {
         vaultSeq: control?.smkVaultSeq ?? 0,
+      },
+      rma: {
+        vaultSeq: rmaVaultSeq,
+        maxConfigChangeSeq: rmaMaxConfigChangeSeq,
+        hasPending: rmaMaxConfigChangeSeq > rmaVaultSeq,
       },
     },
   };
@@ -717,6 +726,9 @@ server.get('/api/vault/status', async () => {
     stk: control?.stkVaultEntries ?? 0,
     sto: control?.stoVaultEntries ?? 0,
     skk: control?.skkVaultEntries ?? 0,
+    rma: control?.rmaVaultEntries ?? 0,
+    rta: control?.rtaVaultEntries ?? 0,
+    rkk: control?.rkkVaultEntries ?? 0,
   };
 
   // Get status for configured vault types (from server_configs.py data_tx field)
@@ -863,6 +875,74 @@ server.get('/api/lm/status', async () => {
 });
 
 // ============================================================================
+// Upgrades API (for Admin Dashboard)
+// ============================================================================
+
+// Service types that support rolling upgrades
+const UPGRADE_SERVICES = [
+  { service: 'seal', network: 'mainnet', label: 'Seal Mainnet' },
+  { service: 'seal', network: 'testnet', label: 'Seal Testnet' },
+  { service: 'sealo', network: 'mainnet', label: 'Seal Open Mainnet' },
+  { service: 'sealo', network: 'testnet', label: 'Seal Open Testnet' },
+  { service: 'grpc', network: 'mainnet', label: 'gRPC Mainnet' },
+  { service: 'grpc', network: 'testnet', label: 'gRPC Testnet' },
+];
+
+// GET /api/upgrades/status - Get upgrade status for all service types from LM (parallel)
+server.get('/api/upgrades/status', async () => {
+  const lmHost = 'http://localhost:22610';
+
+  const settled = await Promise.allSettled(
+    UPGRADE_SERVICES.map(async (svc) => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 3000);
+      try {
+        const res = await fetch(
+          `${lmHost}/api/upgrade/status?service=${svc.service}&network=${svc.network}`,
+          { signal: controller.signal }
+        );
+        clearTimeout(timeout);
+        if (res.ok) {
+          const data = await res.json() as any;
+          return { service: svc.service, network: svc.network, label: svc.label, servers: data.servers ?? {}, upgradeInProgress: data.upgradeInProgress ?? false };
+        }
+        return { service: svc.service, network: svc.network, label: svc.label, servers: {}, upgradeInProgress: false, error: `HTTP ${res.status}` };
+      } catch (err) {
+        clearTimeout(timeout);
+        return { service: svc.service, network: svc.network, label: svc.label, servers: {}, upgradeInProgress: false, error: err instanceof Error ? err.message : 'Unknown error' };
+      }
+    })
+  );
+
+  const services = settled.map(r => r.status === 'fulfilled' ? r.value : { service: '', network: '', label: '', servers: {}, upgradeInProgress: false, error: 'Internal error' });
+  return { services };
+});
+
+// POST /api/upgrades/restart - Trigger rolling upgrade for a service
+server.post('/api/upgrades/restart', async (request) => {
+  const body = request.body as { service: string; network: string };
+  if (!body.service || !body.network) {
+    return { success: false, error: 'service and network are required' };
+  }
+
+  const lmHost = 'http://localhost:22610';
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 120000);
+    const res = await fetch(
+      `${lmHost}/api/upgrade/start?service=${body.service}&network=${body.network}`,
+      { method: 'POST', signal: controller.signal }
+    );
+    clearTimeout(timeout);
+
+    const data = await res.json();
+    return data;
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Unknown error' };
+  }
+});
+
+// ============================================================================
 // Sync Overview API (for Admin Dashboard)
 // ============================================================================
 
@@ -888,6 +968,9 @@ server.get('/api/sync/overview', async () => {
     { code: 'stk', seq: control?.stkVaultSeq ?? 0, hash: control?.stkVaultContentHash ?? null },
     { code: 'sto', seq: control?.stoVaultSeq ?? 0, hash: control?.stoVaultContentHash ?? null },
     { code: 'skk', seq: control?.skkVaultSeq ?? 0, hash: control?.skkVaultContentHash ?? null },
+    { code: 'rma', seq: control?.rmaVaultSeq ?? 0, hash: control?.rmaVaultContentHash ?? null },
+    { code: 'rta', seq: control?.rtaVaultSeq ?? 0, hash: control?.rtaVaultContentHash ?? null },
+    { code: 'rkk', seq: control?.rkkVaultSeq ?? 0, hash: control?.rkkVaultContentHash ?? null },
   ];
 
   // Get LM statuses (now multiple rows per LM — one per vault type)

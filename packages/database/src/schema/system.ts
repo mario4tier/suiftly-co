@@ -40,6 +40,13 @@ export const systemControl = pgTable('system_control', {
   // Seal test/dev vault
   skkVaultSeq: integer('skk_vault_seq').default(0),  // Seal test/dev
 
+  // gRPC mainnet vaults
+  rmaVaultSeq: integer('rma_vault_seq').default(0),  // gRPC mainnet API (HAProxy config)
+  // gRPC testnet vaults
+  rtaVaultSeq: integer('rta_vault_seq').default(0),  // gRPC testnet API (HAProxy config)
+  // gRPC test/dev vault
+  rkkVaultSeq: integer('rkk_vault_seq').default(0),  // gRPC test/dev
+
   // Next vault seq (GM bumps to currentSeq+2 when processing, resets to newSeq+1 when done)
   // API reads this to get the seq for configChangeVaultSeq
   // This avoids expensive MAX queries and prevents race conditions
@@ -54,11 +61,20 @@ export const systemControl = pgTable('system_control', {
   // Seal test/dev vault
   skkNextVaultSeq: integer('skk_next_vault_seq').default(1),  // Seal test/dev
 
+  // gRPC mainnet vaults
+  rmaNextVaultSeq: integer('rma_next_vault_seq').default(1),  // gRPC mainnet API
+  // gRPC testnet vaults
+  rtaNextVaultSeq: integer('rta_next_vault_seq').default(1),  // gRPC testnet API
+  // gRPC test/dev vault
+  rkkNextVaultSeq: integer('rkk_next_vault_seq').default(1),  // gRPC test/dev
+
   // Global max configChangeVaultSeq per vault type
   // Updated atomically by API when setting service's configChangeVaultSeq
   // GM reads this for O(1) hasPendingChanges check instead of MAX query
   smaMaxConfigChangeSeq: integer('sma_max_config_change_seq').default(0),
   staMaxConfigChangeSeq: integer('sta_max_config_change_seq').default(0),
+  rmaMaxConfigChangeSeq: integer('rma_max_config_change_seq').default(0),
+  rtaMaxConfigChangeSeq: integer('rta_max_config_change_seq').default(0),
 
   // Content hashes for change detection (first 16 chars of SHA-256)
   smaVaultContentHash: varchar('sma_vault_content_hash', { length: 16 }),
@@ -68,6 +84,9 @@ export const systemControl = pgTable('system_control', {
   stkVaultContentHash: varchar('stk_vault_content_hash', { length: 16 }),
   stoVaultContentHash: varchar('sto_vault_content_hash', { length: 16 }),
   skkVaultContentHash: varchar('skk_vault_content_hash', { length: 16 }),
+  rmaVaultContentHash: varchar('rma_vault_content_hash', { length: 16 }),
+  rtaVaultContentHash: varchar('rta_vault_content_hash', { length: 16 }),
+  rkkVaultContentHash: varchar('rkk_vault_content_hash', { length: 16 }),
 
   // Entry counts (number of KV pairs in vault, for sanity checks)
   smaVaultEntries: integer('sma_vault_entries').default(0),
@@ -77,6 +96,9 @@ export const systemControl = pgTable('system_control', {
   stkVaultEntries: integer('stk_vault_entries').default(0),
   stoVaultEntries: integer('sto_vault_entries').default(0),
   skkVaultEntries: integer('skk_vault_entries').default(0),
+  rmaVaultEntries: integer('rma_vault_entries').default(0),
+  rtaVaultEntries: integer('rta_vault_entries').default(0),
+  rkkVaultEntries: integer('rkk_vault_entries').default(0),
 
   // Seal key derivation index counters (per process group)
   // Each PG has its own master seed, so derivation indices are independent namespaces.

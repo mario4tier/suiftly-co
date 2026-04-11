@@ -104,6 +104,7 @@ if (isTestFeaturesEnabled()) {
     getSealKeysTestData,
     getServiceInstanceTestData,
     setupSealWithCpEnabled,
+    setupGrpcWithCpEnabled,
     createApiKeyForTesting,
   } = await import('./lib/test-data.js');
 
@@ -263,6 +264,16 @@ if (isTestFeaturesEnabled()) {
     const body = request.body as any;
     const walletAddress = body.walletAddress || undefined;
     const result = await setupSealWithCpEnabled(walletAddress);
+    reply.send(result);
+  });
+
+  // Setup gRPC service with cpEnabled=true (for E2E tests)
+  server.post('/test/data/setup-grpc-cp-enabled', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    const body = request.body as any;
+    const walletAddress = body.walletAddress || undefined;
+    const result = await setupGrpcWithCpEnabled(walletAddress);
     reply.send(result);
   });
 

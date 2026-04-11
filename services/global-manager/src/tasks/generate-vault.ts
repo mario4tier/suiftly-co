@@ -70,24 +70,28 @@ const TIER_CONFIG: Record<string, { ilim: number; glim: number; blim: number; bq
 };
 
 // Type for vault type codes
-type VaultTypeCode = 'sma' | 'smk' | 'smo' | 'sta' | 'stk' | 'sto' | 'skk';
+type VaultTypeCode = 'sma' | 'smk' | 'smo' | 'sta' | 'stk' | 'sto' | 'skk' | 'rma' | 'rta' | 'rkk';
 
 // Column mapping for vault types in system_control
 type VaultSeqColumn = keyof Pick<typeof systemControl.$inferSelect,
   'smaVaultSeq' | 'smkVaultSeq' | 'smoVaultSeq' |
-  'staVaultSeq' | 'stkVaultSeq' | 'stoVaultSeq' | 'skkVaultSeq'
+  'staVaultSeq' | 'stkVaultSeq' | 'stoVaultSeq' | 'skkVaultSeq' |
+  'rmaVaultSeq' | 'rtaVaultSeq' | 'rkkVaultSeq'
 >;
 type VaultHashColumn = keyof Pick<typeof systemControl.$inferSelect,
   'smaVaultContentHash' | 'smkVaultContentHash' | 'smoVaultContentHash' |
-  'staVaultContentHash' | 'stkVaultContentHash' | 'stoVaultContentHash' | 'skkVaultContentHash'
+  'staVaultContentHash' | 'stkVaultContentHash' | 'stoVaultContentHash' | 'skkVaultContentHash' |
+  'rmaVaultContentHash' | 'rtaVaultContentHash' | 'rkkVaultContentHash'
 >;
 type VaultNextSeqColumn = keyof Pick<typeof systemControl.$inferSelect,
   'smaNextVaultSeq' | 'smkNextVaultSeq' | 'smoNextVaultSeq' |
-  'staNextVaultSeq' | 'stkNextVaultSeq' | 'stoNextVaultSeq' | 'skkNextVaultSeq'
+  'staNextVaultSeq' | 'stkNextVaultSeq' | 'stoNextVaultSeq' | 'skkNextVaultSeq' |
+  'rmaNextVaultSeq' | 'rtaNextVaultSeq' | 'rkkNextVaultSeq'
 >;
 type VaultEntriesColumn = keyof Pick<typeof systemControl.$inferSelect,
   'smaVaultEntries' | 'smkVaultEntries' | 'smoVaultEntries' |
-  'staVaultEntries' | 'stkVaultEntries' | 'stoVaultEntries' | 'skkVaultEntries'
+  'staVaultEntries' | 'stkVaultEntries' | 'stoVaultEntries' | 'skkVaultEntries' |
+  'rmaVaultEntries' | 'rtaVaultEntries' | 'rkkVaultEntries'
 >;
 
 const VAULT_COLUMNS: Record<VaultTypeCode, { seq: VaultSeqColumn; hash: VaultHashColumn; nextSeq: VaultNextSeqColumn; entries: VaultEntriesColumn }> = {
@@ -98,6 +102,10 @@ const VAULT_COLUMNS: Record<VaultTypeCode, { seq: VaultSeqColumn; hash: VaultHas
   stk: { seq: 'stkVaultSeq', hash: 'stkVaultContentHash', nextSeq: 'stkNextVaultSeq', entries: 'stkVaultEntries' },
   sto: { seq: 'stoVaultSeq', hash: 'stoVaultContentHash', nextSeq: 'stoNextVaultSeq', entries: 'stoVaultEntries' },
   skk: { seq: 'skkVaultSeq', hash: 'skkVaultContentHash', nextSeq: 'skkNextVaultSeq', entries: 'skkVaultEntries' },
+  // gRPC vaults
+  rma: { seq: 'rmaVaultSeq', hash: 'rmaVaultContentHash', nextSeq: 'rmaNextVaultSeq', entries: 'rmaVaultEntries' },
+  rta: { seq: 'rtaVaultSeq', hash: 'rtaVaultContentHash', nextSeq: 'rtaNextVaultSeq', entries: 'rtaVaultEntries' },
+  rkk: { seq: 'rkkVaultSeq', hash: 'rkkVaultContentHash', nextSeq: 'rkkNextVaultSeq', entries: 'rkkVaultEntries' },
 };
 
 // ============================================================================
@@ -136,12 +144,14 @@ async function getCachedVault(
 
 // Column mapping for global max configChangeSeq per vault type
 type VaultMaxConfigChangeColumn = keyof Pick<typeof systemControl.$inferSelect,
-  'smaMaxConfigChangeSeq' | 'staMaxConfigChangeSeq'
+  'smaMaxConfigChangeSeq' | 'staMaxConfigChangeSeq' | 'rmaMaxConfigChangeSeq' | 'rtaMaxConfigChangeSeq'
 >;
 
 const VAULT_MAX_CONFIG_COLUMNS: Partial<Record<VaultTypeCode, VaultMaxConfigChangeColumn>> = {
   sma: 'smaMaxConfigChangeSeq',
   sta: 'staMaxConfigChangeSeq',
+  rma: 'rmaMaxConfigChangeSeq',
+  rta: 'rtaMaxConfigChangeSeq',
 };
 
 /**
@@ -1168,9 +1178,8 @@ export async function generateAllVaults(storageDir?: string) {
   // Generate seal mainnet keyserver vault (keyserver configuration)
   results.smk = await generateVault('smk', storageDir);
 
-  // Future: Add other vaults
-  // results.rma = await generateVault('rma', storageDir);
-  // results.gma = await generateVault('gma', storageDir);
+  // Generate gRPC mainnet api vault (HAProxy configuration)
+  results.rma = await generateVault('rma', storageDir);
 
   return results;
 }

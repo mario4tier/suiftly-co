@@ -3,7 +3,7 @@
  * Cloudflare-style navigation
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link, useNavigate, useRouterState } from '@tanstack/react-router';
 import {
   Shield,
@@ -63,10 +63,27 @@ export function Sidebar() {
   const routerState = useRouterState();
   const currentPath = routerState.location.pathname;
 
+  // Derive which section should be open from the current URL path
+  // e.g., /services/seal/overview → 'seal', /services/grpc/stats → 'grpc'
+  const getActiveSectionFromPath = (path: string): string | null => {
+    const match = path.match(/^\/services\/(\w+)/);
+    return match ? match[1] : null;
+  };
+
   // Track which collapsible sections are open
-  const [openSections, setOpenSections] = useState<Record<string, boolean>>({
-    seal: true, // Default open
+  // Initialize based on current path so the correct section is open on page load
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>(() => {
+    const active = getActiveSectionFromPath(currentPath);
+    return active ? { [active]: true } : {};
   });
+
+  // Keep the active section open when the URL changes (e.g., sidebar link click)
+  useEffect(() => {
+    const active = getActiveSectionFromPath(currentPath);
+    if (active) {
+      setOpenSections((prev) => prev[active] ? prev : { ...prev, [active]: true });
+    }
+  }, [currentPath]);
 
   const toggleSection = (key: string) => {
     setOpenSections((prev) => ({
@@ -94,7 +111,15 @@ export function Sidebar() {
         { path: '/services/seal/stats', label: 'Stats' },
       ],
     },
-    { path: '/services/grpc', label: 'gRPC', icon: Network },
+    {
+      path: '/services/grpc',
+      label: 'gRPC',
+      icon: Network,
+      children: [
+        { path: '/services/grpc/overview', label: 'Overview' },
+        { path: '/services/grpc/stats', label: 'Stats' },
+      ],
+    },
     { path: '/services/graphql', label: 'GraphQL', icon: Database },
   ];
 

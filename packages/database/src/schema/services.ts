@@ -25,8 +25,8 @@ export const serviceInstances = pgTable('service_instances', {
   // Vault sync tracking per vault type: records the vault seq that will contain this service's config
   // 0 = no pending changes (synced), >0 = waiting for LMs to reach this seq
   // Set to nextVaultSeq when config changes
-  // Currently only sma (seal mainnet api) vault is used
-  smaConfigChangeVaultSeq: integer('sma_config_change_vault_seq').default(0),
+  smaConfigChangeVaultSeq: integer('sma_config_change_vault_seq').default(0),  // Seal mainnet API
+  rmaConfigChangeVaultSeq: integer('rma_config_change_vault_seq').default(0),  // gRPC mainnet API
 
   // General-purpose update timestamp for cache invalidation and delta syncs
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

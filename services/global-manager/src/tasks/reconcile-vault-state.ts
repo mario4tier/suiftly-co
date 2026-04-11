@@ -19,7 +19,7 @@ import { eq } from 'drizzle-orm';
 import { getLatestValidVault, computeContentHash, createVaultReader } from '@mhaxbe/vault-codec';
 
 // Vault types to reconcile
-const VAULT_TYPES = ['sma', 'smk', 'smo', 'sta', 'stk', 'sto', 'skk'] as const;
+const VAULT_TYPES = ['sma', 'smk', 'smo', 'sta', 'stk', 'sto', 'skk', 'rma', 'rta', 'rkk'] as const;
 type VaultTypeCode = (typeof VAULT_TYPES)[number];
 
 // Column mapping for vault types in system_control
@@ -31,6 +31,10 @@ const VAULT_COLUMNS: Record<VaultTypeCode, { seq: string; hash: string; entries:
   stk: { seq: 'stkVaultSeq', hash: 'stkVaultContentHash', entries: 'stkVaultEntries' },
   sto: { seq: 'stoVaultSeq', hash: 'stoVaultContentHash', entries: 'stoVaultEntries' },
   skk: { seq: 'skkVaultSeq', hash: 'skkVaultContentHash', entries: 'skkVaultEntries' },
+  // gRPC vaults
+  rma: { seq: 'rmaVaultSeq', hash: 'rmaVaultContentHash', entries: 'rmaVaultEntries' },
+  rta: { seq: 'rtaVaultSeq', hash: 'rtaVaultContentHash', entries: 'rtaVaultEntries' },
+  rkk: { seq: 'rkkVaultSeq', hash: 'rkkVaultContentHash', entries: 'rkkVaultEntries' },
 };
 
 interface ReconcileResult {

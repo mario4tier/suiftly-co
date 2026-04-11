@@ -16,24 +16,8 @@ import { decryptSecret } from '../lib/encryption';
 import { generateSealKey } from '../lib/seal-key-generation';
 import { dbClock } from '@suiftly/shared/db-clock';
 import { triggerVaultSync, markConfigChanged } from '../lib/gm-sync';
-import { retryPendingInvoice, assertPlatformSubscription } from '../lib/payment-gates';
+import { retryPendingInvoice, assertPlatformSubscription, getCustomerPlatformTier } from '../lib/payment-gates';
 import { getSealProcessGroup, isProduction } from '@mhaxbe/system-config';
-
-/**
- * Get the customer's effective tier from their platform subscription.
- * All feature gating (burst, IP allowlist, rate limits) is derived from platform tier.
- */
-async function getCustomerPlatformTier(
-  dbInstance: DatabaseOrTransaction,
-  customerId: number
-): Promise<'starter' | 'pro'> {
-  const result = await dbInstance
-    .select({ platformTier: customers.platformTier })
-    .from(customers)
-    .where(eq(customers.customerId, customerId))
-    .limit(1);
-  return (result[0]?.platformTier as 'starter' | 'pro') ?? 'starter';
-}
 
 export const sealRouter = router({
   /**

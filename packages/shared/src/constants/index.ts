@@ -237,6 +237,27 @@ export const SEAL_PORT = {
   TEST_LOCAL: 23201,       // Simulates prod 20202/21202
 } as const;
 
+// HAProxy Frontend Ports for gRPC service
+// Pattern: 2NXXY where N=network (0=mainnet, 1=testnet), XX=access (00=public, 01=private, 02=local), Y=service (4=grpc)
+export const GRPC_PORT = {
+  // Mainnet (20XXX)
+  MAINNET_PUBLIC: 20004,   // Cloudflare tunnel, metered
+  MAINNET_PRIVATE: 20104,  // Private network, unmetered
+  MAINNET_LOCAL: 20204,    // Local access, unmetered (development)
+  // Testnet (21XXX)
+  TESTNET_PUBLIC: 21004,   // Cloudflare tunnel, metered
+  TESTNET_PRIVATE: 21104,  // Private network, unmetered
+  TESTNET_LOCAL: 21204,    // Local access, unmetered (development)
+} as const;
+
+// gRPC Backend Ports - for direct backend access (bypassing HAProxy)
+export const GRPC_BACKEND_PORT = {
+  MAINNET_1: 20601,        // mgrpc1 backend
+  MAINNET_2: 20602,        // mgrpc2 backend
+  TESTNET_1: 21601,        // tgrpc1 backend
+  TESTNET_2: 21602,        // tgrpc2 backend
+} as const;
+
 // Seal Backend Ports - for direct backend access (bypassing HAProxy)
 export const SEAL_BACKEND_PORT = {
   MAINNET_1: 20401,        // mseal1 backend

@@ -84,18 +84,28 @@ export function getVaultType(serviceType: ServiceType, network: NetworkType = 'm
  * This abstracts the column naming convention so callers don't need to know it.
  */
 function getVaultColumns(vaultType: VaultType): {
-  nextSeqColumn: 'smaNextVaultSeq' | 'staNextVaultSeq';
-  maxChangeSeqColumn: 'smaMaxConfigChangeSeq' | 'staMaxConfigChangeSeq';
-  serviceChangeSeqColumn: 'smaConfigChangeVaultSeq';  // Only sma exists in schema currently
+  nextSeqColumn: 'smaNextVaultSeq' | 'staNextVaultSeq' | 'rmaNextVaultSeq' | 'rtaNextVaultSeq';
+  maxChangeSeqColumn: 'smaMaxConfigChangeSeq' | 'staMaxConfigChangeSeq' | 'rmaMaxConfigChangeSeq' | 'rtaMaxConfigChangeSeq';
+  serviceChangeSeqColumn: 'smaConfigChangeVaultSeq' | 'rmaConfigChangeVaultSeq';
 } {
-  // Currently only sma and sta are implemented in the schema
-  // When new vault types are added, update the schema first, then add them here
   switch (vaultType) {
     case 'sta':
       return {
         nextSeqColumn: 'staNextVaultSeq',
         maxChangeSeqColumn: 'staMaxConfigChangeSeq',
         serviceChangeSeqColumn: 'smaConfigChangeVaultSeq',  // TODO: Add staConfigChangeVaultSeq to schema
+      };
+    case 'rma':
+      return {
+        nextSeqColumn: 'rmaNextVaultSeq',
+        maxChangeSeqColumn: 'rmaMaxConfigChangeSeq',
+        serviceChangeSeqColumn: 'rmaConfigChangeVaultSeq',
+      };
+    case 'rta':
+      return {
+        nextSeqColumn: 'rtaNextVaultSeq',
+        maxChangeSeqColumn: 'rtaMaxConfigChangeSeq',
+        serviceChangeSeqColumn: 'rmaConfigChangeVaultSeq',  // TODO: Add rtaConfigChangeVaultSeq to schema
       };
     case 'sma':
     default:
