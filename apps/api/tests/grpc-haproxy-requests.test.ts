@@ -415,4 +415,51 @@ describe('gRPC HAProxy Real Requests', () => {
       expect(response.status).toBe(200);
     });
   });
+
+  describe('Metered Port Auth (port 20004)', () => {
+    it('should reject requests without API key on metered port', async () => {
+      if (!haproxyAvailable) return;
+
+      const response = await grpcRequest({
+        port: GRPC_PORT.MAINNET_PUBLIC,
+        path: '/health',
+        clientIp: '127.0.0.1',
+        // No apiKey
+      });
+
+      // Metered port requires valid API key -- HAProxy returns 401
+      expect(response.status).toBe(401);
+    });
+
+    it('should accept requests with valid gRPC API key on metered port', { timeout: 30000 }, async () => {
+      if (!haproxyAvailable || !backendAvailable) return;
+
+      const response = await grpcRequestWithRetry(
+        {
+          apiKey: grpcApiKey,
+          port: GRPC_PORT.MAINNET_PUBLIC,
+          path: '/health',
+          clientIp: '127.0.0.1',
+        },
+        { maxAttempts: 5, delayMs: 2000, expectedStatus: 200 }
+      );
+
+      expect(response.ok).toBe(true);
+      expect(response.status).toBe(200);
+      expect(response.body).toContain('up');
+    });
+
+    it('should reject requests with invalid API key on metered port', async () => {
+      if (!haproxyAvailable) return;
+
+      const response = await grpcRequest({
+        apiKey: 'INVALID_KEY_THAT_DOES_NOT_EXIST_12345',
+        port: GRPC_PORT.MAINNET_PUBLIC,
+        path: '/health',
+        clientIp: '127.0.0.1',
+      });
+
+      expect(response.status).toBe(401);
+    });
+  });
 });
