@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useAdminPolling } from './hooks/useAdminPolling';
+import { GMStatusBadge } from './components/GMStatusBadge';
 
 interface HealthStatus {
   status: string;
@@ -150,8 +151,8 @@ function App() {
         {healthError ? (
           <p style={{ color: '#f87171' }}>Error: {healthError}</p>
         ) : health ? (
-          <div style={{ display: 'flex', gap: '2rem' }}>
-            <p><strong>Status:</strong> <span style={{ color: '#4ade80' }}>{health.status}</span></p>
+          <div style={{ display: 'flex', gap: '2rem', alignItems: 'center' }}>
+            <p><strong>Status:</strong> <GMStatusBadge showResumeButton /></p>
             <p><strong>Service:</strong> {health.service}</p>
             <p><strong>Last check:</strong> {new Date(health.timestamp).toLocaleString()}</p>
           </div>

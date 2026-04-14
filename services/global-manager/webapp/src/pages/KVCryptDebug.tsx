@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useAdminPollingContext } from '../contexts/AdminPollingContext';
 import { SyncIndicator, SyncState } from '../components/SyncIndicator';
+import { GMStatusBadge } from '../components/GMStatusBadge';
 
 interface VaultVersion {
   seq: number;
@@ -282,6 +283,7 @@ export function KVCryptDebug() {
           <h2 style={{ fontSize: '1rem', color: '#60a5fa', margin: 0 }}>
             Global Manager
           </h2>
+          <GMStatusBadge showResumeButton />
           <span style={{ fontSize: '0.75rem', color: '#64748b' }}>
             /opt/syncf/data_tx
           </span>

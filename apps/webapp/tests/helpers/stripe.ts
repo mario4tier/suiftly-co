@@ -79,14 +79,14 @@ export async function fillStripeCard(page: Page, {
   cvc = '123',
 } = {}) {
   // Step 1: Find the frame with payment method tabs and click "Card"
-  const tabFrame = await findStripeFrame(page, 'Card', 15000);
+  const tabFrame = await findStripeFrame(page, 'Card', 45000);
   await tabFrame.locator('text=Card').first().click();
 
   // Wait for card fields to appear (may be in same or different frame)
   await page.waitForTimeout(1500);
 
   // Step 2: Find the frame with card number input and fill fields
-  const cardFrame = await findStripeInputFrame(page, 'number', 10000);
+  const cardFrame = await findStripeInputFrame(page, 'number', 30000);
 
   await cardFrame.locator('input[name="number"]').fill(number);
   await cardFrame.locator('input[name="expiry"]').fill(expiry);

@@ -7,7 +7,7 @@
 import {
   customerSchema,
   walletAddressSchema,
-  sealConfigSchema,
+  serviceConfigSchema,
   apiKeyCreateSchema,
   walletConnectSchema,
   depositRequestSchema,
@@ -79,7 +79,7 @@ test('Invalid customer status rejected', () => {
 
 // Test 5: Valid seal config (tier is derived from platform, not stored in config)
 test('Valid seal config', () => {
-  sealConfigSchema.parse({
+  serviceConfigSchema.parse({
     burstEnabled: false,
     totalSealKeys: 1,
     packagesPerSealKey: 3,

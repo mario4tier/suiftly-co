@@ -213,49 +213,37 @@ export async function reconcileStuckInvoices(
           }
 
           // Void the Stripe invoice to prevent late 3DS completion.
-          // Fire-and-forget: if voidInvoice fails, the auto-refund in
-          // handleInvoicePaid is the safety net.
-          try {
-            // Extract Stripe invoice ID from the hosted URL or billing record context.
-            // The paymentActionUrl is a Stripe-hosted invoice URL containing the invoice ID.
-            const stripeService = getStripeService();
-            // The Stripe invoice ID was stored as the providerReferenceId on the
-            // requires_action charge, but since the charge didn't succeed, no
-            // invoice_payments row was created. We need to void by the URL's invoice.
-            // For now, void is best-effort via the stripeInvoiceId if available.
-            // The stripeInvoiceId is embedded in the hosted URL path.
-            const urlMatch = freshInvoice.paymentActionUrl.match(/\/i\/([^/?]+)/);
-            const stripeInvoiceId = urlMatch?.[1];
-            if (stripeInvoiceId) {
-              await stripeService.voidInvoice(stripeInvoiceId);
-            }
-          } catch (voidErr) {
-            // Non-fatal — auto-refund in webhook handler is the safety net.
-            // But notify ops so they can manually void the Stripe invoice
-            // before the user completes the stale 3DS link.
-            console.error(`[RECONCILIATION] Failed to void Stripe invoice for 3DS timeout on invoice ${invoice.id}:`, voidErr);
-            const stripeInvoiceId = freshInvoice.paymentActionUrl.match(/\/i\/([^/?]+)/)?.[1];
+          const stripeInvoiceId = freshInvoice.pendingStripeInvoiceId ?? null;
+          if (stripeInvoiceId) {
             try {
-              await logInternalError(tx, {
-                severity: 'warning',
-                category: 'billing',
-                code: 'THREEDS_VOID_FAILED',
-                message: `Failed to void Stripe invoice for 3DS timeout on billing record ${invoice.id} — stale 3DS link remains live`,
-                details: {
-                  stripeInvoiceId,
-                  paymentActionUrl: freshInvoice.paymentActionUrl,
-                  error: voidErr instanceof Error ? voidErr.message : String(voidErr),
-                },
-                customerId: invoice.customerId,
-                invoiceId: invoice.id,
-              });
-            } catch { /* don't let notification failure break reconciliation */ }
+              const stripeService = getStripeService();
+              await stripeService.voidInvoice(stripeInvoiceId);
+            } catch (voidErr) {
+              // Non-fatal — auto-refund in webhook handler is the safety net.
+              console.error(`[RECONCILIATION] Failed to void Stripe invoice for 3DS timeout on invoice ${invoice.id}:`, voidErr);
+              try {
+                await logInternalError(tx, {
+                  severity: 'warning',
+                  category: 'billing',
+                  code: 'THREEDS_VOID_FAILED',
+                  message: `Failed to void Stripe invoice for 3DS timeout on billing record ${invoice.id} — stale 3DS link remains live`,
+                  details: {
+                    stripeInvoiceId,
+                    paymentActionUrl: freshInvoice.paymentActionUrl,
+                    error: voidErr instanceof Error ? voidErr.message : String(voidErr),
+                  },
+                  customerId: invoice.customerId,
+                  invoiceId: invoice.id,
+                });
+              } catch { /* don't let notification failure break reconciliation */ }
+            }
           }
 
-          // Mark as failed so normal retry cycle picks it up with a fresh idempotency key
+          // Mark as failed and clear all 3DS metadata
           await tx.update(billingRecords).set({
             status: 'failed',
             paymentActionUrl: null,
+            pendingStripeInvoiceId: null,
             failureReason: `3DS verification timed out after ${THREEDS_TIMEOUT_HOURS} hours`,
           }).where(eq(billingRecords.id, invoice.id));
 

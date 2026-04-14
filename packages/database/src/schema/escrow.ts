@@ -78,6 +78,11 @@ export const billingRecords = pgTable('billing_records', {
   // Cleared on invoice.paid webhook, void, or card replacement.
   paymentActionUrl: varchar('payment_action_url', { length: 500 }),
 
+  // Stripe invoice ID from a requires_action (3DS) result. Persisted so a later
+  // payment attempt (e.g., escrow) can void this Stripe invoice to prevent
+  // the customer from completing 3DS and being double-charged.
+  pendingStripeInvoiceId: varchar('pending_stripe_invoice_id', { length: 100 }),
+
   // Tracks when DRAFT invoice was last checked/synced (usage sync, config changes)
   // Used to display "Updated X ago" in UI
   // Updated even if no changes were found (confirms data is fresh)

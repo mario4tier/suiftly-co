@@ -22,6 +22,14 @@ import type { DBClock } from '@suiftly/shared/db-clock';
 import type { IPaymentProvider } from '@suiftly/shared/payment-provider';
 
 /**
+ * Retry backoff schedule for failed invoices (seconds between attempts).
+ * Covers ~72 hours total — enough for transient outages (Sui down, Stripe down).
+ * The reactive path (deposit, add card) bypasses this and retries immediately.
+ */
+export const RETRY_BACKOFF_SECONDS = [5, 60, 300, 600, 3000, 7200, 21600, 43200, 86400];
+export const MAX_RETRY_ATTEMPTS = RETRY_BACKOFF_SECONDS.length;
+
+/**
  * Process payment for an invoice using credits + provider chain
  *
  * Payment order (per PAYMENT_DESIGN.md):
@@ -108,7 +116,7 @@ export async function processInvoicePayment(
     // partially-applied credits)
     await tx
       .update(billingRecords)
-      .set({ status: 'paid', failureReason: null, paymentActionUrl: null })
+      .set({ status: 'paid', failureReason: null, paymentActionUrl: null, pendingStripeInvoiceId: null })
       .where(eq(billingRecords.id, billingRecordId));
 
     // Issue a reconciliation credit for any overpayment
@@ -162,10 +170,20 @@ export async function processInvoicePayment(
     let hasActionUrl = false;
     // Track Stripe invoice ID from a requires_action result so we can void it
     // if a subsequent provider succeeds (prevents double charge on late 3DS).
-    let pendingStripeInvoiceId: string | undefined;
+    // Initialize from the persisted value (survives across separate payment attempts).
+    let pendingStripeInvoiceId: string | undefined = invoice.pendingStripeInvoiceId ?? undefined;
 
     for (const provider of providers) {
       if (!await provider.canPay(customerId, creditResult.remainingInvoiceAmountCents)) {
+        // Record why this provider was skipped (e.g., "Insufficient escrow balance")
+        // so the final error message is specific, not generic "No payment method available"
+        lastError = {
+          type: 'payment_failed',
+          message: `${provider.type}: insufficient funds`,
+          customerId,
+          invoiceId: billingRecordId,
+          retryable: true,
+        };
         continue;
       }
 
@@ -215,6 +233,7 @@ export async function processInvoicePayment(
             status: 'paid',
             txDigest: chargeResult.txDigest ?? null, // Only escrow sets this
             paymentActionUrl: null,
+            pendingStripeInvoiceId: null,
             failureReason: null,
           })
           .where(eq(billingRecords.id, billingRecordId));
@@ -245,11 +264,14 @@ export async function processInvoicePayment(
         break;
       }
 
-      // Persist paymentActionUrl if provider returned a hosted invoice URL (3DS)
+      // Persist paymentActionUrl and Stripe invoice ID for 3DS flow
       if (chargeResult.hostedInvoiceUrl) {
         await tx
           .update(billingRecords)
-          .set({ paymentActionUrl: chargeResult.hostedInvoiceUrl })
+          .set({
+            paymentActionUrl: chargeResult.hostedInvoiceUrl,
+            pendingStripeInvoiceId: chargeResult.stripeInvoiceId ?? null,
+          })
           .where(eq(billingRecords.id, billingRecordId));
         hasActionUrl = true;
         // Track the Stripe invoice ID for potential voiding if a later provider succeeds
@@ -282,6 +304,7 @@ export async function processInvoicePayment(
         // 3DS challenge pending with a hosted URL the customer can visit.
         // Keep invoice as 'pending' so the customer can complete verification.
         // The invoice.paid webhook will reconcile when the customer completes 3DS.
+        result.requiresAction = true;
         //
         // Increment retryCount to ensure a fresh Stripe idempotency key if the
         // customer adds a new card and triggers a reactive retry. Without this,
@@ -315,7 +338,7 @@ export async function processInvoicePayment(
     result.fullyPaid = true;
     await tx
       .update(billingRecords)
-      .set({ status: 'paid', failureReason: null, paymentActionUrl: null })
+      .set({ status: 'paid', failureReason: null, paymentActionUrl: null, pendingStripeInvoiceId: null })
       .where(eq(billingRecords.id, billingRecordId));
   }
 
@@ -368,6 +391,9 @@ export async function finalizeSuccessfulPayment(
   // 4. Issue reconciliation credit for partial month (deferred subscription payment).
   //    Only for invoices linked to a pending customer invoice — avoids minting credits for
   //    non-subscription invoices (usage, add-on) that have no linked pending invoice.
+  // TODO: When Stripe 3DS tier upgrades are implemented, add deferred tier upgrade
+  // finalization here. Use invoice metadata or a dedicated column to identify the
+  // target tier — do NOT parse line item descriptions. See tier-changes.ts TODO.
   if (hasPendingInvoice) {
     const [invoice] = await tx
       .select()
@@ -467,34 +493,42 @@ export async function retryUnpaidInvoices(
   let unpaidInvoices;
 
   if (limits) {
-    // Periodic: only failed invoices within retry limits OR cleared for retry.
-    // When a user adds a new payment method, the webhook clears failureReason
-    // (and lastRetryAt) to signal "retry me". If the reactive GM retry fails
-    // (timeout/GM down), the periodic job must still pick these up — even if
-    // retryCount >= maxRetries. The cleared failureReason is the signal.
-    const retryThreshold = new Date(limits.clock.now().getTime() - limits.cooldownHours * 60 * 60 * 1000);
-    unpaidInvoices = await tx
+    // Periodic: retry only 'failed' invoices with escalating backoff.
+    //
+    // 'pending' invoices are NOT retried periodically — they represent
+    // "waiting for customer action" (deposit funds, add card). The reactive
+    // path (deposit endpoint, add-payment-method webhook) handles those
+    // with immediate retry (no limits). This prevents burning retry attempts
+    // against an empty escrow account.
+    //
+    // Backoff schedule: 5s, 1m, 5m, 10m, 50m, 2h, 6h, 12h, 24h (then stop).
+    // Covers ~72 hours — enough for transient outages (Sui down, Stripe down).
+    const now = limits.clock.now();
+    const candidates = await tx
       .select()
       .from(billingRecords)
       .where(
         and(
           eq(billingRecords.customerId, customerId),
           eq(billingRecords.status, 'failed'),
-          or(
-            // Normal periodic retry: within retry limits and cooldown
-            and(
-              sql`COALESCE(${billingRecords.retryCount}, 0) < ${limits.maxRetries}`,
-              sql`(${billingRecords.lastRetryAt} IS NULL OR ${billingRecords.lastRetryAt} < ${retryThreshold})`,
-            ),
-            // Cleared for retry: failureReason was nulled by new-payment-method webhook.
-            // This is inherently single-shot: if the retry fails, failureReason is set
-            // back to the error message (line ~261), so the invoice won't match this
-            // branch again until the next payment-method-update event clears it.
-            sql`${billingRecords.failureReason} IS NULL`,
-          ),
         )
       )
       .orderBy(asc(billingRecords.id));
+
+    unpaidInvoices = candidates.filter(inv => {
+      // Cleared for retry (new payment method added)
+      if (!inv.failureReason) return true;
+
+      const retryCount = inv.retryCount ?? 0;
+      if (retryCount >= RETRY_BACKOFF_SECONDS.length) return false;
+
+      const cooldownMs = RETRY_BACKOFF_SECONDS[retryCount] * 1000;
+      if (inv.lastRetryAt && (now.getTime() - inv.lastRetryAt.getTime()) < cooldownMs) {
+        return false;
+      }
+
+      return true;
+    });
   } else {
     // Reactive: all unpaid invoices
     unpaidInvoices = await tx

@@ -23,6 +23,7 @@ import {
   generateMonthlyBillingKey,
   retryUnpaidInvoices,
   reconcileStuckInvoices,
+  MAX_RETRY_ATTEMPTS,
 } from './index';
 import { unsafeAsLockedTransaction, toPaymentServices, toEscrowProviders, ensureEscrowPaymentMethod, cleanupCustomerData, resetTestState, suspendGMProcessing } from './test-helpers';
 import type { BillingProcessorConfig } from './types';
@@ -107,7 +108,7 @@ describe('Billing Processor (Phase 1B)', () => {
     clock,
     usageChargeThresholdCents: 500, // $5.00
     gracePeriodDays: 14,
-    maxRetryAttempts: 3,
+    maxRetryAttempts: MAX_RETRY_ATTEMPTS,
     retryIntervalHours: 24,
   };
 
@@ -363,7 +364,7 @@ describe('Billing Processor (Phase 1B)', () => {
 
       expect(updatedInvoice?.status).toBe('failed');
       expect(Number(updatedInvoice?.amountPaidUsdCents)).toBe(1500);
-      expect(updatedInvoice?.failureReason).toContain('No payment method available');
+      expect(updatedInvoice?.failureReason).toContain('insufficient funds');
     });
   });
 
@@ -614,7 +615,7 @@ describe('Billing Processor (Phase 1B)', () => {
         amountUsdCents: PRO_PRICE,
         type: 'charge',
         status: 'failed',
-        retryCount: 3, // Max retries reached
+        retryCount: MAX_RETRY_ATTEMPTS, // Max retries reached
         failureReason: 'Card declined', // Must be non-null to match production behavior
         lastRetryAt: clock.now(),
         createdAt: clock.now(),
@@ -634,6 +635,57 @@ describe('Billing Processor (Phase 1B)', () => {
       // Should NOT attempt retry
       const myResult = results.find(r => r.customerId === testCustomerId);
       // If customer has no results (skipped), that's also correct behavior
+      if (myResult) {
+        expect(myResult.operations.some(op => op.type === 'payment_retry')).toBe(false);
+      }
+    });
+  });
+
+  describe('Pending Invoice Retry', () => {
+    it('should NOT retry pending invoices in periodic billing (waits for customer action)', async () => {
+      // Pending invoices represent "waiting for customer to deposit/add card".
+      // The reactive path (deposit, add-payment-method) handles them.
+      // Periodic retry would burn attempts against an empty escrow.
+      const [invoice] = await db.insert(billingRecords).values({
+        customerId: testCustomerId,
+        billingPeriodStart: clock.now(),
+        billingPeriodEnd: clock.addDays(30),
+        amountUsdCents: STARTER_PRICE,
+        type: 'charge',
+        status: 'pending',
+        retryCount: 0,
+        createdAt: clock.now(),
+      }).returning();
+
+      // Run periodic billing processor — should NOT touch the pending invoice
+      const results = await processBilling(db, config, paymentServices);
+
+      // Invoice should remain pending with retryCount=0
+      const updatedInvoice = await db.query.billingRecords.findFirst({
+        where: eq(billingRecords.id, invoice.id),
+      });
+      expect(updatedInvoice?.status).toBe('pending');
+      expect(updatedInvoice?.retryCount).toBe(0);
+    });
+
+    it('should NOT retry pending invoices awaiting 3DS verification', async () => {
+      // Create a pending invoice with paymentActionUrl (3DS in progress)
+      await db.insert(billingRecords).values({
+        customerId: testCustomerId,
+        billingPeriodStart: clock.now(),
+        billingPeriodEnd: clock.addDays(30),
+        amountUsdCents: STARTER_PRICE,
+        type: 'charge',
+        status: 'pending',
+        paymentActionUrl: 'https://stripe.com/3ds-verify/test',
+        retryCount: 1,
+        createdAt: clock.now(),
+      });
+
+      // Run periodic billing — should NOT retry this invoice
+      const results = await processBilling(db, config, paymentServices);
+
+      const myResult = results.find(r => r.customerId === testCustomerId);
       if (myResult) {
         expect(myResult.operations.some(op => op.type === 'payment_retry')).toBe(false);
       }

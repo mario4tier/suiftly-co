@@ -71,6 +71,7 @@ export function IpAllowlistSection({
       setEditingIpText(formatIpAddressListForDisplay(ipAllowlist));
       ipTextInitializedRef.current = true;
     }
+    return () => { ipTextInitializedRef.current = false; };
   }, [ipAllowlist]);
 
   const handleIpTextChange = (value: string) => {

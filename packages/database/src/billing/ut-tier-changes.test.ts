@@ -41,7 +41,7 @@ import {
 import { unsafeAsLockedTransaction, toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData, resetTestState, suspendGMProcessing } from './test-helpers';
 import { processCancellationCleanup } from './cancellation-cleanup';
 import { processCustomerBilling } from './processor';
-import { processInvoicePayment } from './payments';
+import { processInvoicePayment, MAX_RETRY_ATTEMPTS } from './payments';
 import { issueCredit } from './credits';
 import { getCustomerProviders } from './providers';
 import type { BillingProcessorConfig } from './types';
@@ -1027,7 +1027,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       const billingConfig: BillingProcessorConfig = {
         clock,
         gracePeriodDays: 14,
-        maxRetryAttempts: 3,
+        maxRetryAttempts: MAX_RETRY_ATTEMPTS,
         retryIntervalHours: 24,
         usageChargeThresholdCents: 100,
       };
@@ -1971,7 +1971,7 @@ describe('Tier Change and Cancellation (Phase 1C)', () => {
       const billingConfig: BillingProcessorConfig = {
         clock,
         gracePeriodDays: 14,
-        maxRetryAttempts: 3,
+        maxRetryAttempts: MAX_RETRY_ATTEMPTS,
         retryIntervalHours: 24,
         usageChargeThresholdCents: 100,
       };

@@ -505,8 +505,8 @@ describe('API: Subscription Without Funds', () => {
     expect(proCharge).toBeDefined();
     expect(proCharge?.status).toBe('paid');
 
-    // Description should show "Platform Pro tier subscription" for the correct tier
-    expect(proCharge?.description).toBe('Platform Pro tier subscription');
+    // Description should show the Pro plan label
+    expect(proCharge?.description).toBe('Platform Pro plan');
     console.log(`[TEST] Billing history description: ${proCharge?.description}`);
 
     await expectNoNotifications(customerId);

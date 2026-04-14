@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { useAdminPollingContext } from '../contexts/AdminPollingContext';
 import { SyncIndicator, SyncState } from '../components/SyncIndicator';
+import { GMStatusBadge } from '../components/GMStatusBadge';
 
 interface HealthStatus {
   service: string;
@@ -45,27 +46,12 @@ const CATEGORY_PAGES: Record<string, string> = {
 };
 
 export function Dashboard() {
-  const [health, setHealth] = useState<HealthStatus | null>(null);
-  const [healthError, setHealthError] = useState<string | null>(null);
   const [lmStatus, setLmStatus] = useState<LMStatusResponse | null>(null);
   const [lmError, setLmError] = useState<string | null>(null);
   const [alarmCounts, setAlarmCounts] = useState<AlarmCounts | null>(null);
   const [notifCounts, setNotifCounts] = useState<NotificationCounts | null>(null);
 
-  const { pollingInterval, markUpdated } = useAdminPollingContext();
-
-  const fetchHealth = useCallback(async () => {
-    try {
-      const res = await fetch('/api/health');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      setHealth(data);
-      setHealthError(null);
-    } catch (e) {
-      setHealthError(e instanceof Error ? e.message : 'Unknown error');
-      setHealth(null);
-    }
-  }, []);
+  const { pollingInterval, markUpdated, gmHealth: health, gmHealthError: healthError } = useAdminPollingContext();
 
   const fetchLMStatus = useCallback(async () => {
     try {
@@ -104,13 +90,13 @@ export function Dashboard() {
 
   useEffect(() => {
     const fetchAll = async () => {
-      await Promise.all([fetchHealth(), fetchLMStatus(), fetchAlarmCounts(), fetchNotifCounts()]);
+      await Promise.all([fetchLMStatus(), fetchAlarmCounts(), fetchNotifCounts()]);
       markUpdated();
     };
     fetchAll();
     const interval = setInterval(fetchAll, pollingInterval);
     return () => clearInterval(interval);
-  }, [fetchHealth, fetchLMStatus, fetchAlarmCounts, fetchNotifCounts, pollingInterval, markUpdated]);
+  }, [fetchLMStatus, fetchAlarmCounts, fetchNotifCounts, pollingInterval, markUpdated]);
 
   // Calculate LM sync state from status
   const getLMState = (lm: LMStatus): SyncState => {
@@ -170,7 +156,7 @@ export function Dashboard() {
           <p style={{ color: '#f87171' }}>Error: {healthError}</p>
         ) : health ? (
           <div style={{ display: 'flex', gap: '2rem', alignItems: 'center' }}>
-            <SyncIndicator state={SyncState.Sync} label="Up" />
+            <GMStatusBadge showResumeButton />
             <span style={{ color: '#94a3b8', fontSize: '0.875rem' }}>
               Last check: {new Date(health.timestamp).toLocaleTimeString()}
             </span>

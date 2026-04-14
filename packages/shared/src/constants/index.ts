@@ -146,7 +146,8 @@ export const INVOICE_LINE_ITEM_TYPE = {
   TIER_UPGRADE: 'tier_upgrade',
 
   // Usage-based charges
-  REQUESTS: 'requests',                     // Burst traffic charges (quantity = request count)
+  REQUESTS: 'requests',                     // Request-based charges (quantity = request count)
+  BANDWIDTH: 'bandwidth',                   // Bandwidth charges (quantity = bytes transferred)
 
   // Add-ons (quantity = extra count beyond included)
   EXTRA_API_KEYS: 'extra_api_keys',
@@ -207,6 +208,15 @@ export const USAGE_PRICING_CENTS_PER_1000 = {
   [SERVICE_TYPE.GRPC]: 10,      // Same pricing
   [SERVICE_TYPE.GRAPHQL]: 10,   // Same pricing
   [SERVICE_TYPE.PLATFORM]: 0,   // Platform is subscription-only, no usage charges
+} as const satisfies Record<ServiceType, number>;
+
+// Bandwidth Pricing (cents per GB transferred)
+// Per-service pricing: gRPC charges for bandwidth, Seal does not
+export const BANDWIDTH_PRICING_CENTS_PER_GB = {
+  [SERVICE_TYPE.SEAL]: 0,       // No bandwidth charge for Seal
+  [SERVICE_TYPE.GRPC]: 6,       // 6 cents per GB ($0.06/GB)
+  [SERVICE_TYPE.GRAPHQL]: 6,    // 6 cents per GB (same as gRPC)
+  [SERVICE_TYPE.PLATFORM]: 0,   // Platform is subscription-only
 } as const satisfies Record<ServiceType, number>;
 
 // Port Allocations - Single source of truth: ~/mhaxbe/PORT_MAP.md

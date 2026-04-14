@@ -523,12 +523,12 @@ export async function insertMockStats(
        guaranteed_success_count, burst_success_count, dropped_count,
        client_error_count, server_error_count, success_count,
        avg_response_time_ms, min_response_time_ms, max_response_time_ms,
-       total_bytes)
+       total_bytes, billable_bytes)
     VALUES
       (${bucket}, ${customerId}, ${options.serviceType}, ${options.network},
        ${options.billableRequests},
        ${options.billableRequests}, 0, 0, 0, 0, ${options.billableRequests},
-       50.0, 10, 200, ${options.billableRequests * 1024})
+       50.0, 10, 200, ${options.billableRequests * 1024}, ${options.billableRequests * 1024})
   `);
 }
 

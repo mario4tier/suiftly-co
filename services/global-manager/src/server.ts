@@ -154,8 +154,7 @@ const healthResponse = async () => {
     status: 'up',
     service: 'global-manager',
     timestamp: new Date().toISOString(),
-    // Vault sync state - used by tests to wait for correct seq
-    // hasPending: true means API has marked changes that GM hasn't yet processed into a vault
+    processingSuspended: isProcessingSuspended(),
     vaults: {
       sma: {
         vaultSeq: smaVaultSeq,

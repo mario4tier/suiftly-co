@@ -15,6 +15,7 @@ import {
   getUsageStats,
   getResponseTimeStats,
   getTrafficStats,
+  getBandwidthStats,
   insertMockHAProxyLogs,
   insertMockMixedLogs,
   refreshStatsAggregate,
@@ -146,6 +147,34 @@ export const statsRouter = router({
     }),
 
   /**
+   * Get bandwidth stats over time for stats page charts.
+   * Returns bytes per time bucket.
+   */
+  getBandwidth: protectedProcedure
+    .input(z.object({
+      serviceType: serviceTypeSchema,
+      range: timeRangeSchema.default('24h'),
+    }))
+    .query(async ({ ctx, input }) => {
+      const clock = dbClockProvider.getClock();
+      const serviceTypeNum = SERVICE_TYPE_NUMBER[input.serviceType as ServiceType];
+      const intervalMap: Record<string, string> = { '24h': '24 hours', '7d': '7 days', '30d': '30 days' };
+
+      const stats = await getBandwidthStats(
+        db,
+        ctx.user.customerId,
+        serviceTypeNum,
+        intervalMap[input.range] ?? '24 hours',
+        clock
+      );
+
+      return stats.map(point => ({
+        bucket: point.bucket.toISOString(),
+        bytes: point.bytes,
+      }));
+    }),
+
+  /**
    * Get preview of pending usage charges
    *
    * Shows what usage charges would be added at next billing.
@@ -191,7 +220,6 @@ export const statsRouter = router({
       const clock = dbClockProvider.getClock();
       const serviceTypeNum = SERVICE_TYPE_NUMBER[input.serviceType as ServiceType];
 
-      // Calculate timestamp: start from now and go back
       const now = clock.now();
       const startTime = new Date(now.getTime() - (input.hoursOfData * 60 * 60 * 1000));
 
@@ -209,6 +237,7 @@ export const statsRouter = router({
           count: totalCount,
           timestamp: startTime,
           responseTimeMs: 50 + Math.floor(Math.random() * 100), // 50-150ms
+          bytesSent: 2048 + Math.floor(Math.random() * 8192), // 2-10 KB per request
           spreadAcrossHours: input.hoursOfData,
         }
       );
@@ -289,6 +318,7 @@ export const statsRouter = router({
       const baseOptions = {
         serviceType: serviceTypeNum,
         network: 1 as const,
+        bytesSent: 4096, // 4 KB per request for realistic bandwidth demo
       };
 
       // Demo pattern for 24 hours - Pro tier with 45 req/s guaranteed limit

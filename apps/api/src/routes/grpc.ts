@@ -37,7 +37,7 @@ export const grpcRouter = router({
       throw new TRPCError({ code: 'NOT_FOUND', message: 'gRPC service not found' });
     }
 
-    const config = service.config as any || {};
+    const config = service.config || {};
 
     // Get configuration from configGlobal
     const globalConfigRows = await db.select().from(configGlobal);
@@ -113,7 +113,7 @@ export const grpcRouter = router({
             throw new TRPCError({ code: 'NOT_FOUND', message: 'gRPC service not found' });
           }
 
-          const config = service.config as any || {};
+          const config = service.config || {};
           const maxApiKeys = config.totalApiKeys || 2;
 
           // Check current count (includes both active and revoked keys, excludes deleted)
@@ -366,7 +366,7 @@ export const grpcRouter = router({
             throw new TRPCError({ code: 'BAD_REQUEST', message: 'Burst is only available for Pro tier' });
           }
 
-          const config = service.config as any || {};
+          const config = service.config || {};
           config.burstEnabled = input.enabled;
 
           const expectedVaultSeq = await markConfigChanged(tx, SERVICE_TYPE.GRPC, 'mainnet');
@@ -415,7 +415,7 @@ export const grpcRouter = router({
             throw new TRPCError({ code: 'BAD_REQUEST', message: 'IP Allowlist is only available for Pro tier' });
           }
 
-          const config = { ...(service.config as any || {}) };
+          const config = { ...(service.config || {}) };
 
           if (input.entries !== undefined) {
             const { ips, errors } = parseIpAddressList(input.entries);
@@ -484,7 +484,7 @@ export const grpcRouter = router({
       throw new TRPCError({ code: 'NOT_FOUND', message: 'gRPC service not found' });
     }
 
-    const config = service.config as any || {};
+    const config = service.config || {};
     const platformTier = await getCustomerPlatformTier(db, ctx.user.customerId);
 
     return {

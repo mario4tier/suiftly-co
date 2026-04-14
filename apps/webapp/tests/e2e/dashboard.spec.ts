@@ -34,9 +34,9 @@ test.describe('Dashboard Navigation', () => {
     await expect(page.locator('aside')).toBeVisible();
 
     // Should see service navigation items
-    // Note: Seal is a collapsible section, so it's not a link itself
+    // Note: Seal and gRPC are collapsible sections, so they're not links themselves
     await expect(page.locator('aside:has-text("Seal")')).toBeVisible();
-    await expect(page.locator('aside a:has-text("gRPC")')).toBeVisible();
+    await expect(page.locator('aside:has-text("gRPC")')).toBeVisible();
     await expect(page.locator('aside a:has-text("GraphQL")')).toBeVisible();
 
     // Should see account navigation items
@@ -45,17 +45,18 @@ test.describe('Dashboard Navigation', () => {
   });
 
   test('can navigate between dashboard pages', async ({ page }) => {
-    // Navigate to gRPC
+    // Navigate to gRPC (collapsible menu — click to expand, then click Overview by href)
     await page.click('text=gRPC');
-    await page.waitForURL('/services/grpc');
-    await expect(page.locator('h2:has-text("gRPC")')).toBeVisible();
+    await page.locator('aside a[href="/services/grpc/overview"]').click();
+    await page.waitForURL('/services/grpc/overview');
+    await expect(page.locator('h1:has-text("gRPC")')).toBeVisible();
 
     // Navigate to Billing
     await page.click('text=Billing');
     await page.waitForURL('/billing');
     await expect(page.getByRole('heading', { name: 'Billing', exact: true })).toBeVisible();
 
-    // Navigate back to Seal (clicking Seal navigates to first child: /services/seal/overview)
+    // Navigate back to Seal (clicking Seal expands, then clicking Overview navigates)
     await page.click('text=Seal');
     await page.waitForURL('/services/seal/overview');
     // Page shows "Configure Seal Service" for new users or "Seal" for existing services
@@ -83,16 +84,18 @@ test.describe('Dashboard Navigation', () => {
     await page.click('text=Seal');
     await page.waitForURL('/services/seal/overview');
 
-    // On /services/seal/overview, the Overview child link should be highlighted
-    const overviewLink = page.locator('aside a:has-text("Overview")').first();
-    await expect(overviewLink).toHaveClass(/bg-\[#dbeafe\]/);
+    // On /services/seal/overview, the Seal Overview link should be highlighted
+    const sealOverviewLink = page.locator('aside a[href="/services/seal/overview"]');
+    await expect(sealOverviewLink).toHaveClass(/bg-\[#dbeafe\]/);
 
-    // Navigate to gRPC
+    // Navigate to gRPC (collapsible — expand then click Overview)
+    // Use href to avoid ambiguity with Seal's Overview link
     await page.click('text=gRPC');
-    await page.waitForURL('/services/grpc');
+    await page.locator('aside a[href="/services/grpc/overview"]').click();
+    await page.waitForURL('/services/grpc/overview');
 
-    // gRPC should now be highlighted with the active class
-    const grpcLink = page.locator('aside a:has-text("gRPC")');
-    await expect(grpcLink).toHaveClass(/bg-\[#dbeafe\]/);
+    // gRPC Overview link should be highlighted
+    const grpcOverviewLink = page.locator('aside a[href="/services/grpc/overview"]');
+    await expect(grpcOverviewLink).toHaveClass(/bg-\[#dbeafe\]/);
   });
 });

@@ -15,8 +15,8 @@
  * IMPORTANT: All operations use customer-level locking to prevent race conditions.
  */
 
-import { eq, and, sql, inArray, desc, gt, lte } from 'drizzle-orm';
-import { billingRecords, customers, serviceInstances, invoicePayments, customerCredits } from '../schema';
+import { eq, and, or, sql, inArray, desc, gt, lte } from 'drizzle-orm';
+import { billingRecords, customers, serviceInstances, invoicePayments, customerCredits, customerPaymentMethods } from '../schema';
 import type { Database } from '../db';
 import { withCustomerLock, type LockedTransaction } from './locking';
 import { processInvoicePayment, finalizeSuccessfulPayment, retryUnpaidInvoices } from './payments';
@@ -173,6 +173,16 @@ export async function processCustomerBilling(
     );
     result.operations.push(...retryResult.operations);
     result.errors.push(...retryResult.errors);
+
+    // Check escrow balance for pending invoices (catches external deposits)
+    const escrowResult = await checkPendingEscrowBalance(
+      tx,
+      customerId,
+      config,
+      services
+    );
+    result.operations.push(...escrowResult.operations);
+    result.errors.push(...escrowResult.errors);
 
     // Check grace period expiration
     const gracePeriodResult = await checkGracePeriodExpiration(
@@ -901,6 +911,127 @@ async function retryFailedPayments(
  * @param config Billing processor configuration
  * @returns Billing result
  */
+/**
+ * Check escrow balance for customers with pending invoices.
+ *
+ * When a pending invoice exists and the customer has an escrow provider,
+ * query the on-chain escrow balance. If sufficient funds are available,
+ * attempt payment via the reactive path (no retry limits).
+ *
+ * This catches deposits made outside our UI (e.g., direct wallet transfer).
+ */
+async function checkPendingEscrowBalance(
+  tx: LockedTransaction,
+  customerId: number,
+  config: BillingProcessorConfig,
+  services: PaymentServices
+): Promise<CustomerBillingResult> {
+  const result: CustomerBillingResult = {
+    customerId,
+    success: true,
+    operations: [],
+    errors: [],
+  };
+
+  // Check if customer has a pending invoice
+  const customer = await tx.query.customers.findFirst({
+    where: eq(customers.customerId, customerId),
+    columns: { pendingInvoiceId: true, walletAddress: true },
+  });
+
+  if (!customer?.pendingInvoiceId || !customer.walletAddress) {
+    return result;
+  }
+
+  // Only check balance if escrow is registered — avoids Sui RPC calls for
+  // customers without escrow. The deposit endpoint auto-registers escrow,
+  // so this gate only skips the rare case of external deposits without
+  // ever using our UI (acceptable — the "Check Payment Status" button covers it).
+  const escrowMethod = await tx.query.customerPaymentMethods.findFirst({
+    where: and(
+      eq(customerPaymentMethods.customerId, customerId),
+      eq(customerPaymentMethods.providerType, 'escrow'),
+      eq(customerPaymentMethods.status, 'active'),
+    ),
+  });
+  if (!escrowMethod) {
+    return result;
+  }
+
+  // Get the invoice linked to pendingInvoiceId — may be 'pending' or 'failed'.
+  // Skip if it has a paymentActionUrl (3DS in progress).
+  const pendingInvoice = await tx.query.billingRecords.findFirst({
+    where: and(
+      eq(billingRecords.id, customer.pendingInvoiceId),
+      or(
+        eq(billingRecords.status, 'pending'),
+        eq(billingRecords.status, 'failed'),
+      ),
+    ),
+  });
+
+  if (!pendingInvoice || pendingInvoice.paymentActionUrl) {
+    return result;
+  }
+
+  const amountDueCents = Number(pendingInvoice.amountUsdCents) - Number(pendingInvoice.amountPaidUsdCents ?? 0);
+  if (amountDueCents <= 0) {
+    return result;
+  }
+
+  // Query on-chain escrow balance
+  const account = await services.suiService.getAccount(customer.walletAddress);
+  if (!account || account.balanceUsdCents < amountDueCents) {
+    return result; // Not enough funds yet — stay pending
+  }
+
+  // Sync DB-cached balance from on-chain before attempting payment.
+  // The escrow provider's canPay() checks customers.currentBalanceUsdCents,
+  // which may be stale if the deposit happened outside our UI.
+  await tx.update(customers)
+    .set({ currentBalanceUsdCents: account.balanceUsdCents })
+    .where(eq(customers.customerId, customerId));
+
+  // Attempt payment on ONLY the pending invoice (not older failed invoices)
+  const providers = await getCustomerProviders(customerId, services, tx, config.clock);
+  if (providers.length === 0) {
+    return result;
+  }
+
+  const paymentResult = await processInvoicePayment(tx, pendingInvoice.id, providers, config.clock);
+
+  if (paymentResult.fullyPaid) {
+    await finalizeSuccessfulPayment(tx, customerId, pendingInvoice.id, config.clock);
+    result.operations.push({
+      type: 'payment_retry',
+      timestamp: config.clock.now(),
+      amountUsdCents: paymentResult.amountPaidCents,
+      description: `Escrow balance check: paid invoice #${pendingInvoice.id}`,
+      success: true,
+    });
+  } else {
+    result.operations.push({
+      type: 'payment_retry',
+      timestamp: config.clock.now(),
+      amountUsdCents: amountDueCents,
+      description: `Escrow balance check: failed invoice #${pendingInvoice.id}`,
+      success: false,
+    });
+
+    await logInternalErrorOnce(tx, {
+      severity: 'warning',
+      category: 'billing',
+      code: 'ESCROW_BALANCE_CHECK_PAYMENT_FAILED',
+      message: `Payment failed for invoice ${pendingInvoice.id} despite sufficient escrow balance: ${paymentResult.error?.message}`,
+      details: { amountDueCents, escrowBalanceCents: account.balanceUsdCents },
+      customerId,
+      invoiceId: pendingInvoice.id,
+    });
+  }
+
+  return result;
+}
+
 async function checkGracePeriodExpiration(
   tx: LockedTransaction,
   customerId: number,

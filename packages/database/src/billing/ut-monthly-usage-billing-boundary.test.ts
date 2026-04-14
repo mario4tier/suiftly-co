@@ -17,6 +17,7 @@ import { MockDBClock } from '@suiftly/shared/db-clock';
 import { insertMockStats, clearMockStats } from '../stats/test-helpers';
 import { runPeriodicJobForCustomer } from './periodic-job';
 import type { BillingProcessorConfig } from './types';
+import { MAX_RETRY_ATTEMPTS } from './payments';
 import type { ISuiService, ChargeParams, TransactionResult } from '@suiftly/shared/sui-service';
 import { toPaymentServices, ensureEscrowPaymentMethod, cleanupCustomerData, resetTestState, suspendGMProcessing } from './test-helpers';
 import { PLATFORM_TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
@@ -123,7 +124,7 @@ describe('Monthly Usage Billing - Month Boundary', () => {
     clock,
     usageChargeThresholdCents: 500,
     gracePeriodDays: 14,
-    maxRetryAttempts: 3,
+    maxRetryAttempts: MAX_RETRY_ATTEMPTS,
     retryIntervalHours: 24,
   };
 

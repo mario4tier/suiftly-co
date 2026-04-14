@@ -695,10 +695,17 @@ function GrpcStatsPage() {
     range: timeRange,
   });
 
+  // Fetch bandwidth over time
+  const { data: bwData, isLoading: bwLoading } = trpc.stats.getBandwidth.useQuery({
+    serviceType: 'grpc',
+    range: timeRange,
+  });
+
   const invalidateAll = () => {
     utils.stats.getSummary.invalidate();
     utils.stats.getTraffic.invalidate();
     utils.stats.getResponseTime.invalidate();
+    utils.stats.getBandwidth.invalidate();
   };
 
   // Inject test data mutation (random distribution)
@@ -948,6 +955,58 @@ function GrpcStatsPage() {
                   formatValue={formatMs}
                   emptyMessage="Stats may take up to 1 hour to appear"
                 />
+              )}
+            </Card>
+
+            {/* Bandwidth Over Time */}
+            <Card className="p-6">
+              <div className="flex items-center gap-2 mb-4">
+                <BarChart3 className="h-5 w-5 text-emerald-500" />
+                <h2 className="text-lg font-medium text-gray-900 dark:text-gray-50">
+                  Bandwidth (per {TIME_RANGE_CONFIG[timeRange].bucketLabel.toLowerCase()})
+                </h2>
+              </div>
+              {bwLoading ? (
+                <div className="flex items-center justify-center h-48">
+                  <Loader2 className="h-6 w-6 animate-spin text-gray-400" />
+                </div>
+              ) : !bwData || bwData.length === 0 ? (
+                <div className="flex items-center justify-center h-48 text-gray-400">
+                  No bandwidth data yet
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height={200}>
+                  <ComposedChart data={bwData} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
+                    <XAxis
+                      dataKey="bucket"
+                      tick={{ fontSize: 11, fill: '#9ca3af' }}
+                      tickFormatter={(v) => formatTickLabel(v, timeRange)}
+                      interval="preserveStartEnd"
+                    />
+                    <YAxis
+                      tick={{ fontSize: 11, fill: '#9ca3af' }}
+                      tickFormatter={(v) => {
+                        if (v >= 1073741824) return `${(v / 1073741824).toFixed(1)} GB`;
+                        if (v >= 1048576) return `${(v / 1048576).toFixed(1)} MB`;
+                        if (v >= 1024) return `${(v / 1024).toFixed(1)} KB`;
+                        return `${v} B`;
+                      }}
+                      width={60}
+                    />
+                    <Tooltip
+                      contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '8px' }}
+                      labelStyle={{ color: '#94a3b8' }}
+                      labelFormatter={(v) => formatBucketLabel(v, timeRange)}
+                      formatter={(value: number) => {
+                        if (value >= 1073741824) return [`${(value / 1073741824).toFixed(3)} GB`, 'Bandwidth'];
+                        if (value >= 1048576) return [`${(value / 1048576).toFixed(2)} MB`, 'Bandwidth'];
+                        if (value >= 1024) return [`${(value / 1024).toFixed(1)} KB`, 'Bandwidth'];
+                        return [`${value} bytes`, 'Bandwidth'];
+                      }}
+                    />
+                    <Bar dataKey="bytes" fill="#10b981" radius={[2, 2, 0, 0]} />
+                  </ComposedChart>
+                </ResponsiveContainer>
               )}
             </Card>
           </div>

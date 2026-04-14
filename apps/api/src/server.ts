@@ -1047,7 +1047,7 @@ if (isTestFeaturesEnabled()) {
 
     try {
       const { db } = await import('@suiftly/database');
-      const { runPeriodicBillingJob, runPeriodicJobForCustomer } = await import('@suiftly/database/billing');
+      const { runPeriodicBillingJob, runPeriodicJobForCustomer, MAX_RETRY_ATTEMPTS } = await import('@suiftly/database/billing');
       const { getSuiService } = await import('@suiftly/database/sui-mock');
       const { getStripeService } = await import('@suiftly/database/stripe-mock');
 
@@ -1060,7 +1060,7 @@ if (isTestFeaturesEnabled()) {
       const billingConfig = {
         clock,
         gracePeriodDays: 14,
-        maxRetryAttempts: 3,
+        maxRetryAttempts: MAX_RETRY_ATTEMPTS,
         retryIntervalHours: 24,
         usageChargeThresholdCents: 500,
       };

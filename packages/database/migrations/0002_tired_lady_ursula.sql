@@ -1,0 +1,1 @@
+ALTER TYPE "public"."invoice_line_item_type" ADD VALUE 'bandwidth' BEFORE 'extra_api_keys';

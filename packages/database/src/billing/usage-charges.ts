@@ -15,11 +15,12 @@ import { eq, sql } from 'drizzle-orm';
 import type { Database } from '../db';
 import type { LockedTransaction } from './locking';
 import { billingRecords, invoiceLineItems, serviceInstances, customers } from '../schema';
-import { getBillableRequestCount } from '../stats/queries';
+import { getBillableRequestCount, getBillableBandwidth } from '../stats/queries';
 import type { DBClock } from '@suiftly/shared/db-clock';
 import {
   SERVICE_TYPE_NUMBER,
   USAGE_PRICING_CENTS_PER_1000,
+  BANDWIDTH_PRICING_CENTS_PER_GB,
   INVOICE_LINE_ITEM_TYPE,
   type ServiceType,
 } from '@suiftly/shared';
@@ -45,6 +46,40 @@ export interface UsageChargeResult {
   };
   /** Error message if failed */
   error?: string;
+}
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+/**
+ * Compute a bandwidth charge line item for a service.
+ * Returns null if the service has no bandwidth pricing or zero usage.
+ */
+async function computeBandwidthLineItem(
+  tx: Database | LockedTransaction,
+  customerId: number,
+  serviceTypeNum: number,
+  serviceTypeName: ServiceType,
+  periodStart: Date,
+  periodEnd: Date,
+): Promise<{ itemType: typeof INVOICE_LINE_ITEM_TYPE.BANDWIDTH; serviceType: ServiceType; quantity: number; unitPriceUsdCents: number; amountUsdCents: number } | null> {
+  const pricePerGb = BANDWIDTH_PRICING_CENTS_PER_GB[serviceTypeName];
+  if (pricePerGb <= 0) return null;
+
+  const totalBytes = await getBillableBandwidth(tx, customerId, serviceTypeNum, periodStart, periodEnd);
+  if (totalBytes <= 0) return null;
+
+  const chargeCents = Math.floor((totalBytes / (1024 * 1024 * 1024)) * pricePerGb);
+  if (chargeCents <= 0) return null;
+
+  return {
+    itemType: INVOICE_LINE_ITEM_TYPE.BANDWIDTH,
+    serviceType: serviceTypeName,
+    quantity: totalBytes,
+    unitPriceUsdCents: pricePerGb,
+    amountUsdCents: chargeCents,
+  };
 }
 
 // ============================================================================
@@ -106,12 +141,12 @@ export async function updateUsageChargesToDraft(
   }
 
   // 2. Get the current usage total (to calculate delta)
-  // Usage line items have item_type = 'requests'
+  // Must include both requests AND bandwidth to match the DELETE scope below
   const existingUsageResult = await tx.execute(sql`
     SELECT COALESCE(SUM(amount_usd_cents), 0) as total
     FROM invoice_line_items
     WHERE billing_record_id = ${invoiceId}
-      AND item_type = ${INVOICE_LINE_ITEM_TYPE.REQUESTS}
+      AND item_type IN (${INVOICE_LINE_ITEM_TYPE.REQUESTS}, ${INVOICE_LINE_ITEM_TYPE.BANDWIDTH})
   `);
   const existingUsageTotal = Number(existingUsageResult.rows[0]?.total ?? 0);
 
@@ -120,7 +155,7 @@ export async function updateUsageChargesToDraft(
   await tx.execute(sql`
     DELETE FROM invoice_line_items
     WHERE billing_record_id = ${invoiceId}
-      AND item_type = ${INVOICE_LINE_ITEM_TYPE.REQUESTS}
+      AND item_type IN (${INVOICE_LINE_ITEM_TYPE.REQUESTS}, ${INVOICE_LINE_ITEM_TYPE.BANDWIDTH})
   `);
 
   // 4. Get all service instances for this customer
@@ -172,29 +207,34 @@ export async function updateUsageChargesToDraft(
 
     requestCounts[serviceTypeName] = requestCount;
 
-    // 8. Calculate charge (conservative: round down to avoid overcharging)
+    // 8. Calculate request charge (conservative: round down to avoid overcharging)
     const pricePer1000 = USAGE_PRICING_CENTS_PER_1000[serviceTypeName];
     const chargeCents = Math.floor((requestCount * pricePer1000) / 1000);
 
-    if (chargeCents === 0) {
-      continue;
+    // 9. Add request line item (only if charge > 0)
+    if (chargeCents > 0) {
+      await tx.insert(invoiceLineItems).values({
+        billingRecordId: invoiceId,
+        itemType: INVOICE_LINE_ITEM_TYPE.REQUESTS,
+        serviceType: serviceTypeName,
+        quantity: requestCount,
+        unitPriceUsdCents: pricePer1000,
+        amountUsdCents: chargeCents,
+      });
+
+      totalUsageChargesCents += chargeCents;
+      lineItemsAdded++;
     }
 
-    // 9. Add line item with semantic data
-    // Unit price: cents per 1000 requests (e.g., 10 = $0.10 per 1000 = $0.0001 per request)
-    const unitPriceCents = pricePer1000; // Store as cents per 1000 for precision
-
-    await tx.insert(invoiceLineItems).values({
-      billingRecordId: invoiceId,
-      itemType: INVOICE_LINE_ITEM_TYPE.REQUESTS,
-      serviceType: serviceTypeName,
-      quantity: requestCount,
-      unitPriceUsdCents: unitPriceCents,
-      amountUsdCents: chargeCents,
-    });
-
-    totalUsageChargesCents += chargeCents;
-    lineItemsAdded++;
+    // 9b. Add bandwidth line item (independent of request charges)
+    const bwItem = await computeBandwidthLineItem(
+      tx, customerId, serviceTypeNum, serviceTypeName, billingPeriodStart, billingPeriodEnd
+    );
+    if (bwItem) {
+      await tx.insert(invoiceLineItems).values({ billingRecordId: invoiceId, ...bwItem });
+      totalUsageChargesCents += bwItem.amountUsdCents;
+      lineItemsAdded++;
+    }
   }
 
   // 10. Update invoice total with usage delta (new usage - old usage)
@@ -375,7 +415,7 @@ export async function finalizeUsageChargesForBilling(
     SELECT COALESCE(SUM(amount_usd_cents), 0) as total
     FROM invoice_line_items
     WHERE billing_record_id = ${invoiceId}
-      AND item_type = ${INVOICE_LINE_ITEM_TYPE.REQUESTS}
+      AND item_type IN (${INVOICE_LINE_ITEM_TYPE.REQUESTS}, ${INVOICE_LINE_ITEM_TYPE.BANDWIDTH})
   `);
   const existingUsageTotal = Number(existingUsageResult.rows[0]?.total ?? 0);
 
@@ -383,7 +423,7 @@ export async function finalizeUsageChargesForBilling(
   await tx.execute(sql`
     DELETE FROM invoice_line_items
     WHERE billing_record_id = ${invoiceId}
-      AND item_type = ${INVOICE_LINE_ITEM_TYPE.REQUESTS}
+      AND item_type IN (${INVOICE_LINE_ITEM_TYPE.REQUESTS}, ${INVOICE_LINE_ITEM_TYPE.BANDWIDTH})
   `);
 
   // 4. Get all service instances for this customer
@@ -462,28 +502,34 @@ export async function finalizeUsageChargesForBilling(
 
     requestCounts[serviceTypeName] = requestCount;
 
-    // 8. Calculate charge (conservative: round down to avoid overcharging)
+    // 8. Calculate request charge (conservative: round down to avoid overcharging)
     const pricePer1000 = USAGE_PRICING_CENTS_PER_1000[serviceTypeName];
     const chargeCents = Math.floor((requestCount * pricePer1000) / 1000);
 
-    if (chargeCents === 0) {
-      continue;
+    // 9. Add request line item (only if charge > 0)
+    if (chargeCents > 0) {
+      await tx.insert(invoiceLineItems).values({
+        billingRecordId: invoiceId,
+        itemType: INVOICE_LINE_ITEM_TYPE.REQUESTS,
+        serviceType: serviceTypeName,
+        quantity: requestCount,
+        unitPriceUsdCents: pricePer1000,
+        amountUsdCents: chargeCents,
+      });
+
+      totalUsageChargesCents += chargeCents;
+      lineItemsAdded++;
     }
 
-    // 9. Add line item with semantic data
-    const unitPriceCents = pricePer1000;
-
-    await tx.insert(invoiceLineItems).values({
-      billingRecordId: invoiceId,
-      itemType: INVOICE_LINE_ITEM_TYPE.REQUESTS,
-      serviceType: serviceTypeName,
-      quantity: requestCount,
-      unitPriceUsdCents: unitPriceCents,
-      amountUsdCents: chargeCents,
-    });
-
-    totalUsageChargesCents += chargeCents;
-    lineItemsAdded++;
+    // 9b. Add bandwidth line item (independent of request charges)
+    const bwItem = await computeBandwidthLineItem(
+      tx, customerId, serviceTypeNum, serviceTypeName, usagePeriodStart, usagePeriodEnd
+    );
+    if (bwItem) {
+      await tx.insert(invoiceLineItems).values({ billingRecordId: invoiceId, ...bwItem });
+      totalUsageChargesCents += bwItem.amountUsdCents;
+      lineItemsAdded++;
+    }
   }
 
   // 10. Update invoice total with usage delta (new usage - old usage)
@@ -523,9 +569,9 @@ export interface UsageSyncResult {
  * This function is called periodically (hourly) to keep the DRAFT invoice
  * updated with current usage. Unlike updateUsageChargesToDraft() which is
  * for final billing, this function:
- * - Always creates line items even for 0 requests (for pricing transparency)
+ * - Skips services with zero requests (no $0 line items)
  * - Updates lastUpdatedAt timestamp
- * - Uses the invoice's billing period for consistency
+ * - Uses current month start to now as the billing window
  *
  * IMPORTANT: This function performs multiple writes that must be atomic.
  * The caller MUST wrap this in a transaction.
@@ -568,12 +614,12 @@ export async function syncUsageToDraft(
   }
 
   // 2. Get the current usage total (to calculate delta)
-  // Usage line items have item_type = 'requests'
+  // Must include both requests AND bandwidth to match the DELETE scope below
   const existingUsageResult = await tx.execute(sql`
     SELECT COALESCE(SUM(amount_usd_cents), 0) as total
     FROM invoice_line_items
     WHERE billing_record_id = ${invoiceId}
-      AND item_type = ${INVOICE_LINE_ITEM_TYPE.REQUESTS}
+      AND item_type IN (${INVOICE_LINE_ITEM_TYPE.REQUESTS}, ${INVOICE_LINE_ITEM_TYPE.BANDWIDTH})
   `);
   const existingUsageTotal = Number(existingUsageResult.rows[0]?.total ?? 0);
 
@@ -582,7 +628,7 @@ export async function syncUsageToDraft(
   await tx.execute(sql`
     DELETE FROM invoice_line_items
     WHERE billing_record_id = ${invoiceId}
-      AND item_type = ${INVOICE_LINE_ITEM_TYPE.REQUESTS}
+      AND item_type IN (${INVOICE_LINE_ITEM_TYPE.REQUESTS}, ${INVOICE_LINE_ITEM_TYPE.BANDWIDTH})
   `);
 
   // 4. Check if customer has a pending subscription charge (not yet paid initial charge)
@@ -676,6 +722,15 @@ export async function syncUsageToDraft(
     });
 
     totalUsageChargesCents += chargeCents;
+
+    // Bandwidth line item (per-service pricing)
+    const bwItem = await computeBandwidthLineItem(
+      tx, customerId, serviceTypeNum, serviceTypeName, currentMonthStart, now
+    );
+    if (bwItem) {
+      lineItemValues.push({ billingRecordId: invoiceId, ...bwItem });
+      totalUsageChargesCents += bwItem.amountUsdCents;
+    }
   }
 
   // Bulk insert all line items in one query

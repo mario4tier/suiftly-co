@@ -1,0 +1,1 @@
+ALTER TABLE "billing_records" ADD COLUMN "pending_stripe_invoice_id" varchar(100);

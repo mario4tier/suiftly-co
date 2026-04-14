@@ -260,7 +260,6 @@ describe('Service Billing Integration (Phase 2)', () => {
         serviceType: 'seal',
         isUserEnabled: true,
         config: {
-          tier: 'pro',
           purchasedSealKeys: 2, // 2 extra keys @ $5 each
           purchasedPackages: 5, // 5 extra packages @ $2 each
           purchasedApiKeys: 0,

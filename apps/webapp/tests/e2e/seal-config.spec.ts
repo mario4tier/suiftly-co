@@ -142,3 +142,65 @@ test.describe('Seal Service Management UI', () => {
     console.log('✅ Service state persists across page refresh');
   });
 });
+
+test.describe('Seal Burst Setting - Overview reflects More Settings', () => {
+  test.beforeEach(async ({ page, request }) => {
+    await resetCustomer(request);
+    await ensureTestBalance(request, 50);
+
+    await page.goto('/');
+    await page.click('button:has-text("Mock Wallet 0")');
+    await page.waitForURL('/dashboard', { timeout: 10000 });
+    await page.waitForLoadState('networkidle');
+
+    // Subscribe to PRO tier (burst requires Pro)
+    await subscribePlatformService(page, 'PRO');
+    await waitForToastsToDisappear(page);
+
+    await page.goto('/services/seal/overview');
+    await page.waitForLoadState('networkidle');
+  });
+
+  test('overview shows burst enabled by default for Pro tier', async ({ page }) => {
+    const burstRow = page.locator('tr', { has: page.locator('td:has-text("Burst")') });
+    await expect(burstRow).toBeVisible({ timeout: 5000 });
+    await expect(burstRow.locator('td').nth(1)).toHaveText('Enabled');
+  });
+
+  test('disabling burst in More Settings updates overview', async ({ page }) => {
+    // Verify overview shows Enabled initially (Pro default)
+    const burstRow = page.locator('tr', { has: page.locator('td:has-text("Burst")') });
+    await expect(burstRow.locator('td').nth(1)).toHaveText('Enabled', { timeout: 5000 });
+
+    // Go to More Settings and disable burst
+    await page.click('button[role="tab"]:has-text("More Settings")');
+    await expect(page.locator('#burst-toggle')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('#burst-toggle')).toHaveAttribute('aria-checked', 'true');
+    await page.locator('#burst-toggle').click();
+    await waitAfterMutation(page);
+    await expect(page.locator('#burst-toggle')).toHaveAttribute('aria-checked', 'false', { timeout: 5000 });
+
+    // Go back to Overview — burst should now show Disabled
+    await page.click('button[role="tab"]:has-text("Overview")');
+    await expect(burstRow.locator('td').nth(1)).toHaveText('Disabled', { timeout: 5000 });
+  });
+
+  test('enabling burst in More Settings updates overview', async ({ page }) => {
+    // First disable burst
+    await page.click('button[role="tab"]:has-text("More Settings")');
+    await expect(page.locator('#burst-toggle')).toBeVisible({ timeout: 5000 });
+    await page.locator('#burst-toggle').click();
+    await waitAfterMutation(page);
+    await expect(page.locator('#burst-toggle')).toHaveAttribute('aria-checked', 'false', { timeout: 5000 });
+
+    // Re-enable burst
+    await page.locator('#burst-toggle').click();
+    await waitAfterMutation(page);
+    await expect(page.locator('#burst-toggle')).toHaveAttribute('aria-checked', 'true', { timeout: 5000 });
+
+    // Go back to Overview — burst should show Enabled
+    await page.click('button[role="tab"]:has-text("Overview")');
+    const burstRow = page.locator('tr', { has: page.locator('td:has-text("Burst")') });
+    await expect(burstRow.locator('td').nth(1)).toHaveText('Enabled', { timeout: 5000 });
+  });
+});

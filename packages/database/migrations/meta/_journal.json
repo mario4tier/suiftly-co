@@ -15,6 +15,20 @@
       "when": 1775932035791,
       "tag": "0001_wise_jubilee",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1775961286006,
+      "tag": "0002_tired_lady_ursula",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1776120045902,
+      "tag": "0003_lonely_trish_tilby",
+      "breakpoints": true
     }
   ]
 }

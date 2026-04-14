@@ -465,4 +465,60 @@ describe('Usage Charges', () => {
       expect(result.error).toContain('not in draft');
     });
   });
+
+  describe('Bandwidth billing idempotency', () => {
+    it('should not double-count bandwidth on idempotent re-runs', async () => {
+      // Create gRPC service instance (bandwidth pricing = 6 cents/GB)
+      await db.execute(sql`
+        INSERT INTO service_instances (customer_id, service_type, state)
+        VALUES (${TEST_CUSTOMER_ID}, 'grpc', 'enabled')
+        ON CONFLICT (customer_id, service_type) DO NOTHING
+      `);
+
+      // Insert gRPC traffic with large bytesSent to produce non-zero bandwidth charge
+      // 100 entries × 200 MB each = ~20 GB → floor(20 × 6) = 120 cents
+      const mb200 = 200 * 1024 * 1024;
+      await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+        serviceType: 2, // gRPC
+        network: 1,
+        count: 100,
+        timestamp: new Date('2024-01-15T12:00:00Z'),
+        trafficType: 1,
+        bytesSent: mb200,
+      });
+      await refreshStatsAggregate(db);
+
+      // Run twice inside one lock
+      const { result1, result2, invoiceAfter } = await withCleanDraft(async (tx) => {
+        const r1 = await updateUsageChargesToDraft(tx, TEST_CUSTOMER_ID, testInvoiceId);
+        const r2 = await updateUsageChargesToDraft(tx, TEST_CUSTOMER_ID, testInvoiceId);
+        const inv = await tx.query.billingRecords.findFirst({
+          where: eq(billingRecords.id, testInvoiceId),
+        });
+        return { result1: r1, result2: r2, invoiceAfter: inv };
+      });
+
+      // Both runs should produce the same totals
+      expect(result1.success).toBe(true);
+      expect(result2.success).toBe(true);
+      expect(result1.totalUsageChargesCents).toBe(result2.totalUsageChargesCents);
+
+      // Invoice total should match the LAST run's total (not accumulated)
+      expect(Number(invoiceAfter?.amountUsdCents)).toBe(result2.totalUsageChargesCents);
+
+      // Verify bandwidth line item exists
+      const lineItems = await db.query.invoiceLineItems.findMany({
+        where: eq(invoiceLineItems.billingRecordId, testInvoiceId),
+      });
+      const bwItems = lineItems.filter(li => li.itemType === 'bandwidth');
+      expect(bwItems.length).toBe(1);
+      expect(Number(bwItems[0].amountUsdCents)).toBeGreaterThan(0);
+
+      // Cleanup gRPC service
+      await db.execute(sql`
+        DELETE FROM service_instances
+        WHERE customer_id = ${TEST_CUSTOMER_ID} AND service_type = 'grpc'
+      `);
+    });
+  });
 });

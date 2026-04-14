@@ -15,6 +15,7 @@ import {
   ensureTestBalance,
   setupPaymentProvider,
   subscribePlatformService,
+  addCreditCardPayment,
 } from '../helpers/db';
 import { waitAfterMutation } from '../helpers/wait-utils';
 import { waitForToastsToDisappear } from '../helpers/locators';
@@ -170,6 +171,89 @@ test.describe('Platform Subscription', () => {
       // Should show Pro as upgrade option (currently on Starter)
       await expect(dialog.locator('h4:has-text("PRO")')).toBeVisible();
     });
+
+    test('should show insufficient funds error when upgrading with low escrow balance', async ({ page }) => {
+      await page.click('text=Billing');
+      await page.waitForURL('/billing', { timeout: 5000 });
+
+      // Withdraw nearly all funds — leave only $0.01 (upgrade costs $22+ pro-rated)
+      await page.locator('button:has-text("Withdraw")').click();
+      const withdrawDialog = page.locator('[role="dialog"]');
+      await expect(withdrawDialog).toBeVisible({ timeout: 5000 });
+      await page.fill('input#withdrawAmount', '97.99');
+      await withdrawDialog.getByRole('button', { name: 'Withdraw' }).click();
+      await waitAfterMutation(page);
+      await waitForToastsToDisappear(page);
+
+      // Open Change Plan modal and upgrade to Pro
+      await page.locator('text=Change Plan').click();
+      const dialog = page.locator('[role="dialog"]');
+      await expect(dialog).toBeVisible({ timeout: 5000 });
+
+      // Skip if pro-rated charge is too small (last day of month edge case)
+      const adjustmentText = await dialog.locator('text=/adjustment charge/i').textContent();
+      const match = adjustmentText?.match(/\$(\d+\.?\d*)/);
+      if (match && parseFloat(match[1]) <= 0.01) {
+        test.skip(true, 'Pro-rated charge too small to test insufficient funds');
+      }
+
+      // Click the Pro tier card to select it
+      await dialog.locator('text=PRO').first().click();
+
+      // Confirm the upgrade in the confirmation dialog
+      const confirmButton = page.locator('button:has-text("Confirm Upgrade")');
+      await expect(confirmButton).toBeVisible({ timeout: 5000 });
+      await confirmButton.click();
+      await waitAfterMutation(page);
+
+      // Should show an error about insufficient funds, NOT "no payment method"
+      const toast = page.locator('[data-sonner-toast]').first();
+      await expect(toast).toBeVisible({ timeout: 5000 });
+      await expect(toast).toContainText(/insufficient funds/i, { timeout: 5000 });
+    });
+
+    test('should upgrade via Stripe fallback when escrow has insufficient funds', async ({ page, request }) => {
+      test.setTimeout(90000);
+
+      await page.click('text=Billing');
+      await page.waitForURL('/billing', { timeout: 5000 });
+
+      // Add Stripe card — uses mock or sandbox depending on server config
+      await addCreditCardPayment(page);
+      await waitForToastsToDisappear(page);
+
+      // Withdraw nearly all escrow funds
+      await page.locator('button:has-text("Withdraw")').click();
+      const withdrawDialog = page.locator('[role="dialog"]');
+      await expect(withdrawDialog).toBeVisible({ timeout: 5000 });
+      await page.fill('input#withdrawAmount', '97.99');
+      await withdrawDialog.getByRole('button', { name: 'Withdraw' }).click();
+      await waitAfterMutation(page);
+      await waitForToastsToDisappear(page);
+
+      // Upgrade to Pro — escrow can't pay, should fall back to Stripe
+      await page.locator('text=Change Plan').click();
+      const dialog = page.locator('[role="dialog"]');
+      await expect(dialog).toBeVisible({ timeout: 5000 });
+
+      // Skip if pro-rated charge is too small
+      const adjustmentText = await dialog.locator('text=/adjustment charge/i').textContent();
+      const match = adjustmentText?.match(/\$(\d+\.?\d*)/);
+      if (match && parseFloat(match[1]) <= 0.01) {
+        test.skip(true, 'Pro-rated charge too small to test fallback');
+      }
+
+      await dialog.locator('text=PRO').first().click();
+      const confirmButton = page.locator('button:has-text("Confirm Upgrade")');
+      await expect(confirmButton).toBeVisible({ timeout: 5000 });
+      await confirmButton.click();
+      await waitAfterMutation(page);
+      await waitForToastsToDisappear(page);
+
+      // Upgrade should succeed (Stripe fallback worked)
+      // Verify we're now on Pro tier
+      await expect(page.locator('text=Platform Pro Plan')).toBeVisible({ timeout: 10000 });
+    });
   });
 
   // =========================================================================
@@ -214,6 +298,37 @@ test.describe('Platform Subscription', () => {
       ).toBeVisible({ timeout: 15000 });
 
       await waitAfterMutation(page);
+    });
+
+    test('should auto-register escrow payment method on deposit and resolve pending', async ({ page }) => {
+      // Subscribe without funds → pending
+      await page.click('text=Billing');
+      await page.waitForURL('/billing', { timeout: 5000 });
+
+      await page.locator('#platform-tos').click();
+      await waitAfterMutation(page);
+      await page.locator('button:has-text("Subscribe to Starter Plan")').click();
+      await waitAfterMutation(page);
+      await waitForToastsToDisappear(page);
+
+      // Verify pending state
+      await expect(page.locator('text=Subscription payment pending')).toBeVisible({ timeout: 5000 });
+
+      // Add escrow payment method and deposit
+      await page.locator('[data-testid="add-crypto-payment"]').click();
+      await waitAfterMutation(page);
+
+      await page.locator('button:has-text("Deposit")').first().click();
+      const dialog = page.locator('[role="dialog"]');
+      await expect(dialog).toBeVisible({ timeout: 5000 });
+      await page.fill('input#depositAmount', '10');
+      await dialog.getByRole('button', { name: 'Deposit' }).click();
+
+      // Pending should resolve — deposit ensures escrow is registered and retries payment
+      await expect(page.locator('text=Change Plan')).toBeVisible({ timeout: 15000 });
+
+      // Verify escrow row is visible in payment methods
+      await expect(page.locator('[data-testid="payment-method-row"]').filter({ hasText: 'Suiftly Escrow' })).toBeVisible();
     });
 
     test('should maintain pending state after page refresh', async ({ page }) => {

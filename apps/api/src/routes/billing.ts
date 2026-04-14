@@ -26,6 +26,38 @@ function hexToBuffer(hex: string): Buffer {
   return Buffer.from(cleanHex, 'hex');
 }
 
+/**
+ * Ensure escrow is registered as a payment method for the customer.
+ * Idempotent — no-op if already registered. Inserts at priority 1
+ * and bumps existing methods down.
+ */
+async function ensureEscrowRegistered(customerId: number, escrowContractId: string | null): Promise<void> {
+  const existing = await db.query.customerPaymentMethods.findFirst({
+    where: and(
+      eq(customerPaymentMethods.customerId, customerId),
+      eq(customerPaymentMethods.providerType, 'escrow'),
+      eq(customerPaymentMethods.status, 'active'),
+    ),
+  });
+  if (existing) return;
+
+  // Bump existing methods' priority
+  await db.update(customerPaymentMethods)
+    .set({ priority: sql`${customerPaymentMethods.priority} + 1`, updatedAt: new Date() })
+    .where(and(
+      eq(customerPaymentMethods.customerId, customerId),
+      eq(customerPaymentMethods.status, 'active'),
+    ));
+
+  await db.insert(customerPaymentMethods).values({
+    customerId,
+    providerType: 'escrow',
+    status: 'active',
+    priority: 1,
+    providerRef: escrowContractId ?? null,
+  }).onConflictDoNothing();
+}
+
 export const billingRouter = router({
   /**
    * Get current balance and spending info
@@ -523,11 +555,16 @@ export const billingRouter = router({
         message: `Deposited $${input.amountUsd.toFixed(2)} to escrow account`,
       });
 
+      // Auto-register escrow as a payment method if not already registered.
+      // This ensures GM can retry pending invoices after deposit, even if the
+      // user didn't explicitly click "Add Crypto Payment" first.
+      await ensureEscrowRegistered(customer.customerId, customer.escrowContractId ?? null);
+
       // Sync with Global Manager to reconcile pending subscription charges
       // This waits for completion so the response reflects the updated state
       // (better UX - user sees subscription activated immediately after deposit)
       // Timeout after 5s to avoid blocking the deposit if GM is slow
-      const gmUrl = config.GM_URL || 'http://localhost:22600';
+      const gmUrl = config.GM_URL;
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 5000);
@@ -556,6 +593,50 @@ export const billingRouter = router({
         accountCreated: result.accountCreated || false,
         txDigest: result.digest,
       };
+    }),
+
+  /**
+   * Manually trigger a payment retry for pending invoices.
+   * Called by the "Check Payment Status" button on the billing page.
+   * Delegates to GM sync-customer (reactive path, no retry limits).
+   */
+  retryPendingPayment: protectedProcedure
+    .mutation(async ({ ctx }) => {
+      if (!ctx.user) {
+        throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Not authenticated' });
+      }
+
+      const customer = await db.query.customers.findFirst({
+        where: eq(customers.walletAddress, ctx.user.walletAddress),
+      });
+
+      if (!customer?.pendingInvoiceId) {
+        return { success: true, message: 'No pending invoice' };
+      }
+
+      // Auto-register escrow if balance > 0
+      const suiService = getSuiService();
+      const account = await suiService.getAccount(ctx.user.walletAddress);
+      if (account && account.balanceUsdCents > 0) {
+        await ensureEscrowRegistered(customer.customerId, customer.escrowContractId ?? null);
+      }
+
+      // Trigger GM sync-customer
+      const gmUrl = config.GM_URL;
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
+        await fetch(`${gmUrl}/api/queue/sync-customer/${customer.customerId}?source=api`, {
+          method: 'POST',
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+      } catch (err: any) {
+        const isTimeout = err.name === 'AbortError';
+        console.error(`[RETRY] Failed to sync with GM:`, isTimeout ? 'timeout after 5s' : err.message);
+      }
+
+      return { success: true };
     }),
 
   /**

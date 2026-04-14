@@ -8,24 +8,20 @@ import { DashboardLayout } from '../../components/layout/DashboardLayout';
 import { Switch } from '../../components/ui/switch';
 import { TextRoute } from '../../components/ui/text-route';
 import { ApiKeysSection } from '../../components/services/ApiKeysSection';
+import { BurstSetting } from '../../components/services/BurstSetting';
 import { IpAllowlistSection } from '../../components/services/IpAllowlistSection';
 import { SettingsLink } from '../../components/ui/settings-link';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../../components/ui/tabs';
 import { Button } from '../../components/ui/button';
-import { Label } from '../../components/ui/label';
 import {
-  AlertCircle, PauseCircle, AlertTriangle, Loader2, Clock, Lock, Info,
+  AlertCircle, PauseCircle, AlertTriangle, Loader2, Clock, Lock,
 } from 'lucide-react';
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from '../../components/ui/popover';
-import { type ServiceState, type ServiceTier, USAGE_PRICING_CENTS_PER_1000 } from '@suiftly/shared/constants';
+import { type ServiceState, type ServiceTier, USAGE_PRICING_CENTS_PER_1000, BANDWIDTH_PRICING_CENTS_PER_GB, SERVICE_TYPE } from '@suiftly/shared/constants';
 import { trpc } from '../../lib/trpc';
 import { toast } from 'sonner';
 import { useServicesStatus } from '../../hooks/useServicesStatus';
 import { ServiceStatusIndicator } from '../../components/ui/service-status-indicator';
+import { UsageThisMonth } from '../../components/services/UsageThisMonth';
 import type { InvoiceLineItem } from '@suiftly/shared/types';
 
 export const Route = createLazyFileRoute('/services/grpc/overview')({
@@ -323,6 +319,13 @@ function GrpcInteractiveForm({ serviceState, tier, isEnabled, isGated = false }:
     );
   }, [nextPayment]);
 
+  const grpcBandwidthItem = useMemo(() => {
+    if (!nextPayment?.lineItems) return null;
+    return (nextPayment.lineItems as InvoiceLineItem[]).find(
+      item => item.service === 'grpc' && item.itemType === 'bandwidth'
+    );
+  }, [nextPayment]);
+
   return (
     <Tabs value={currentTab} onValueChange={handleTabChange} className="mt-4">
       <TabsList>
@@ -336,7 +339,6 @@ function GrpcInteractiveForm({ serviceState, tier, isEnabled, isGated = false }:
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {/* Service Overview */}
           <div className="rounded-lg border p-4 dark:border-gray-800">
-            <h3 className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-3">Service Overview</h3>
             <table className="w-full text-sm">
               <tbody>
                 {/* API Keys */}
@@ -384,29 +386,12 @@ function GrpcInteractiveForm({ serviceState, tier, isEnabled, isGated = false }:
           </div>
 
           {/* Usage This Month */}
-          <div className="rounded-lg border p-4 dark:border-gray-800">
-            <h3 className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-3">Usage This Month</h3>
-            <div className="space-y-2 text-sm">
-              <div className="flex justify-between">
-                <span className="text-gray-500 dark:text-gray-400">Requests</span>
-                <span className="text-gray-900 dark:text-gray-100">
-                  {grpcUsageItem ? grpcUsageItem.quantity.toLocaleString() : '0'}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500 dark:text-gray-400">Price per request</span>
-                <span className="text-gray-900 dark:text-gray-100">
-                  ${(USAGE_PRICING_CENTS_PER_1000.grpc / 100000).toFixed(4)}
-                </span>
-              </div>
-              <div className="flex justify-between font-medium border-t pt-2 dark:border-gray-700">
-                <span className="text-gray-500 dark:text-gray-400">Total</span>
-                <span className="text-gray-900 dark:text-gray-100">
-                  ${grpcUsageItem ? (grpcUsageItem.amountCents / 100).toFixed(2) : '0.00'}
-                </span>
-              </div>
-            </div>
-          </div>
+          <UsageThisMonth items={[
+            grpcUsageItem ?? { service: SERVICE_TYPE.GRPC, itemType: 'requests', quantity: 0, unitPriceUsd: USAGE_PRICING_CENTS_PER_1000.grpc / 100 / 1000, amountUsd: 0 },
+            ...(BANDWIDTH_PRICING_CENTS_PER_GB.grpc > 0 ? [
+              grpcBandwidthItem ?? { service: SERVICE_TYPE.GRPC, itemType: 'bandwidth' as const, quantity: 0, unitPriceUsd: BANDWIDTH_PRICING_CENTS_PER_GB.grpc / 100, amountUsd: 0 },
+            ] : []),
+          ]} />
         </div>
       </TabsContent>
 
@@ -427,32 +412,12 @@ function GrpcInteractiveForm({ serviceState, tier, isEnabled, isGated = false }:
       <TabsContent value="settings" className="mt-4">
         <div className="space-y-6">
           {/* Burst Setting */}
-          <div className="rounded-lg border p-4 dark:border-gray-800">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Label htmlFor="burst-toggle" className="text-sm font-medium">
-                  Burst Allowed
-                </Label>
-                <Popover>
-                  <PopoverTrigger>
-                    <Info className="h-4 w-4 text-gray-400" />
-                  </PopoverTrigger>
-                  <PopoverContent className="text-sm max-w-xs">
-                    When enabled, allows temporary traffic bursts beyond guaranteed bandwidth. Burst traffic is billed per-request.
-                  </PopoverContent>
-                </Popover>
-              </div>
-              <Switch
-                id="burst-toggle"
-                checked={moreSettings?.burstEnabled ?? false}
-                onCheckedChange={(checked) => updateBurstMutation.mutate({ enabled: checked })}
-                disabled={isGated || tier === 'starter'}
-              />
-            </div>
-            {tier === 'starter' && (
-              <p className="text-xs text-gray-500 mt-2">Available on Pro tier only</p>
-            )}
-          </div>
+          <BurstSetting
+            checked={moreSettings?.burstEnabled ?? false}
+            onCheckedChange={(checked) => updateBurstMutation.mutate({ enabled: checked })}
+            disabled={isGated}
+            tier={tier}
+          />
 
           {/* IP Allowlist (shared component) */}
           <IpAllowlistSection

@@ -486,6 +486,7 @@ async function handleInvoicePaid(invoice: Record<string, unknown>) {
         status: 'paid',
         amountPaidUsdCents: existingPaidCents + invoiceAmount,
         paymentActionUrl: null,
+        pendingStripeInvoiceId: null,
         failureReason: null,
         lastRetryAt: null,
       })

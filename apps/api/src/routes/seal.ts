@@ -892,7 +892,7 @@ export const sealRouter = router({
           }
 
           // Get configuration limits
-          const config = service.config as any || {};
+          const config = service.config || {};
           const maxSealKeys = config.totalSealKeys || 1;
 
           // ====================================================================
@@ -1131,7 +1131,7 @@ export const sealRouter = router({
       });
     }
 
-    const config = service.config as any || {};
+    const config = service.config || {};
 
     // Get configuration from configGlobal
     const globalConfigRows = await db
@@ -1259,7 +1259,7 @@ export const sealRouter = router({
             });
           }
 
-          const config = service.config as any || {};
+          const config = service.config || {};
           const maxApiKeys = config.totalApiKeys || 2;
 
           // Check current count (includes both active and revoked keys, excludes deleted)
@@ -1601,7 +1601,7 @@ export const sealRouter = router({
           }
 
           // Update config
-          const config = service.config as any || {};
+          const config = service.config || {};
           config.burstEnabled = input.enabled;
 
           // Mark config change for vault sync
@@ -1673,7 +1673,7 @@ export const sealRouter = router({
           }
 
           // Create a new config object so Drizzle detects changes
-          const config = { ...(service.config as any || {}) };
+          const config = { ...(service.config || {}) };
 
           // If entries are provided, validate and update the IP list
           if (input.entries !== undefined) {
@@ -1764,7 +1764,7 @@ export const sealRouter = router({
       });
     }
 
-    const config = service.config as any || {};
+    const config = service.config || {};
     const platformTier = await getCustomerPlatformTier(db, ctx.user.customerId);
 
     return {

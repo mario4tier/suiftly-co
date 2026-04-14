@@ -4,7 +4,7 @@
  */
 
 import { createLazyFileRoute } from '@tanstack/react-router';
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { trpc } from '../lib/trpc';
 import { DashboardLayout } from '../components/layout/DashboardLayout';
 import { Card } from '../components/ui/card';
@@ -15,7 +15,7 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/dialog';
-import { ChevronRight, ChevronDown, User, ArrowUpDown, ArrowDownUp, Shield, Building2, AlertCircle, CreditCard, Trash2, ArrowUp, ArrowDown, Wallet, Loader2 } from 'lucide-react';
+import { ChevronRight, ChevronDown, User, ArrowUpDown, ArrowDownUp, Shield, Building2, AlertCircle, CreditCard, Trash2, ArrowUp, ArrowDown, Wallet, Loader2, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import { getTierPriceUsdCents } from '@suiftly/shared/pricing';
 import { SPENDING_LIMIT } from '@suiftly/shared/constants';
@@ -84,6 +84,17 @@ function BillingPage() {
   const depositMutation = trpc.billing.deposit.useMutation();
   const withdrawMutation = trpc.billing.withdraw.useMutation();
   const updateSpendingLimitMutation = trpc.billing.updateSpendingLimit.useMutation();
+  const autoRetryTriggeredRef = useRef(false);
+  const retryPendingMutation = trpc.billing.retryPendingPayment.useMutation({
+    onSuccess: () => {
+      refetchBalance();
+      refetchPaymentMethods();
+    },
+    onError: () => {
+      // Reset auto-retry guard so transient failures don't permanently suppress retries
+      autoRetryTriggeredRef.current = false;
+    },
+  });
 
   // Handle deposit
   const handleDeposit = async () => {
@@ -282,6 +293,31 @@ function BillingPage() {
     }
   };
 
+  // Auto-trigger payment retry when polling detects sufficient escrow funds.
+  // Only when escrow is the sole provider — if Stripe/PayPal is configured,
+  // a 3DS flow may be in progress and auto-retry could conflict with it.
+  // The manual "Check Payment Status" button handles the multi-provider case.
+  const hasPendingInvoice = balanceData?.pendingInvoiceId != null;
+  const pendingTierPrice = hasPendingInvoice && balanceData?.platformTier
+    ? getTierPriceUsdCents(balanceData.platformTier) / 100
+    : 0;
+  const activeMethods = paymentMethodsData?.methods ?? [];
+  const hasEscrowMethod = activeMethods.some((m: any) => m.providerType === 'escrow');
+  const hasStripeMethod = activeMethods.some((m: any) => m.providerType === 'stripe');
+  const hasPaypalMethod = activeMethods.some((m: any) => m.providerType === 'paypal');
+  const hasNonEscrowMethod = hasStripeMethod || hasPaypalMethod;
+  useEffect(() => {
+    const balance = balanceData?.balanceUsd ?? 0;
+    const escrowOnly = hasEscrowMethod && !hasNonEscrowMethod;
+    if (hasPendingInvoice && escrowOnly && balance >= pendingTierPrice && pendingTierPrice > 0 && !autoRetryTriggeredRef.current) {
+      autoRetryTriggeredRef.current = true;
+      retryPendingMutation.mutate();
+    }
+    if (!hasPendingInvoice) {
+      autoRetryTriggeredRef.current = false;
+    }
+  }, [hasPendingInvoice, balanceData?.balanceUsd, pendingTierPrice, hasEscrowMethod, hasNonEscrowMethod]);
+
   if (balanceLoading) {
     return (
       <DashboardLayout>
@@ -301,20 +337,10 @@ function BillingPage() {
   const balance = balanceData?.balanceUsd ?? 0;
   const spendingLimit = balanceData?.spendingLimitUsd; // null = unlimited, number = limit
   const found = balanceData?.found ?? false;
-
-  // Calculate pending subscription charges (platform pending invoice is on balanceData)
-  const hasPendingInvoice = balanceData?.pendingInvoiceId != null;
-  const totalPendingUsd = hasPendingInvoice && balanceData?.platformTier
-    ? getTierPriceUsdCents(balanceData.platformTier) / 100
-    : 0;
+  const totalPendingUsd = pendingTierPrice;
   const shortfallUsd = Math.max(0, totalPendingUsd - balance);
 
-  // Determine which payment methods are already active
-  const activeMethods = paymentMethodsData?.methods ?? [];
-  const hasEscrowMethod = activeMethods.some((m: any) => m.providerType === 'escrow');
-  const hasStripeMethod = activeMethods.some((m: any) => m.providerType === 'stripe');
-  const hasPaypalMethod = activeMethods.some((m: any) => m.providerType === 'paypal');
-  const hasNonEscrowMethod = hasStripeMethod || hasPaypalMethod;
+  // Payment method flags computed above the loading guard (for auto-retry effect)
 
   // Platform subscription status from balanceData (customer-level fields)
   const needsPlatformOnboarding = !balanceData?.platformTier;
@@ -367,6 +393,22 @@ function BillingPage() {
                   )}
                 </p>
               </div>
+              {hasEscrowMethod && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => retryPendingMutation.mutate()}
+                  disabled={retryPendingMutation.isPending}
+                  className="mt-2 text-orange-700 border-orange-300 hover:bg-orange-100 dark:text-orange-300 dark:border-orange-700 dark:hover:bg-orange-900/40"
+                >
+                  {retryPendingMutation.isPending ? (
+                    <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
+                  )}
+                  Check Payment Status
+                </Button>
+              )}
             </div>
           </div>
         )}

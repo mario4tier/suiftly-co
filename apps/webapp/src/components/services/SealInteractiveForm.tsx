@@ -9,17 +9,10 @@
  */
 
 import { useState, useEffect, useMemo, useRef } from "react";
-import { Info, AlertCircle } from "lucide-react";
+import { AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Switch } from "@/components/ui/switch";
-import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -31,6 +24,9 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { type ServiceState, type ServiceTier, SERVICE_TYPE, SERVICE_STATE, INVOICE_LINE_ITEM_TYPE, USAGE_PRICING_CENTS_PER_1000 } from "@suiftly/shared/constants";
+import { SettingsLink } from "@/components/ui/settings-link";
+import { BurstSetting } from "@/components/services/BurstSetting";
+import { UsageThisMonth } from "@/components/services/UsageThisMonth";
 import type { InvoiceLineItem } from "@suiftly/shared/types";
 import {
   fskey_incl,
@@ -42,7 +38,6 @@ import { IpAllowlistSection } from "./IpAllowlistSection";
 import { AddPackageModal } from "./AddPackageModal";
 import { trpc } from "@/lib/trpc";
 import { useSearch, useNavigate } from "@tanstack/react-router";
-import { LinkButton } from "@/components/ui/link-button";
 import { TextRoute } from "@/components/ui/text-route";
 import { toast } from "sonner";
 import {
@@ -69,14 +64,13 @@ export function SealInteractiveForm({
   onToggleService,
   isGated = false,
 }: SealInteractiveFormProps) {
-  const [burstEnabled, setBurstEnabled] = useState(tier !== "starter");
+  // burstEnabled is read directly from moreSettings query (no local state needed)
   const [ipAllowlistEnabled, setIpAllowlistEnabled] = useState(false);
 
   // IP Allowlist state management
   const [savedIpList, setSavedIpList] = useState<string[]>([]); // Server state
   const [editingIpText, setEditingIpText] = useState("");      // User input
   const [validationErrors, setValidationErrors] = useState<Array<{ ip: string; error: string }>>([]);
-  const ipTextInitializedRef = useRef(false);
 
   // Package modal state (add only - editing is done inline)
   const [packageModalOpen, setPackageModalOpen] = useState(false);
@@ -363,14 +357,12 @@ export function SealInteractiveForm({
   // Burst mutation
   const updateBurstMutation = trpc.seal.updateBurstSetting.useMutation({
     onSuccess: (data) => {
-      // Trigger immediate status refetch - config change triggers vault sync
-      utils.services.getServicesStatus.invalidate();
       toast.success(`Burst ${data.burstEnabled ? 'enabled' : 'disabled'}`);
+      utils.seal.getMoreSettings.invalidate();
+      utils.services.getServicesStatus.invalidate();
     },
     onError: (error) => {
       toast.error(error.message || 'Failed to update burst setting');
-      // Revert UI state on error
-      setBurstEnabled(!burstEnabled);
     },
   });
 
@@ -401,9 +393,10 @@ export function SealInteractiveForm({
   // IP text only syncs on first load to avoid overwriting user edits
   // when getMoreSettings refetches (e.g. after toggle mutation invalidation).
   // Subsequent updates come through mutation onSuccess handlers.
+  const ipTextInitializedRef = useRef(false);
+
   useEffect(() => {
     if (moreSettings) {
-      setBurstEnabled(moreSettings.burstEnabled);
       setIpAllowlistEnabled(moreSettings.ipAllowlistEnabled);
 
       const ipList = moreSettings.ipAllowlist || [];
@@ -414,6 +407,7 @@ export function SealInteractiveForm({
         setEditingIpText(formatIpAddressListForDisplay(ipList));
       }
     }
+    return () => { ipTextInitializedRef.current = false; };
   }, [moreSettings]);
 
   // Determine if service is cancelled or suspended
@@ -440,10 +434,6 @@ export function SealInteractiveForm({
     onToggleService?.(checked);
   };
 
-  const handleToggleBurst = (checked: boolean) => {
-    setBurstEnabled(checked);
-    updateBurstMutation.mutate({ enabled: checked });
-  };
 
   // IP Allowlist handlers
   const handleToggleIpAllowlist = async (checked: boolean) => {
@@ -721,122 +711,82 @@ export function SealInteractiveForm({
         </TabsList>
 
         {/* Overview Tab */}
-        <TabsContent value="overview" className="space-y-6">
-          {/* Monthly Charges Section */}
-          <div className="space-y-4">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-              Service Overview
-            </h3>
-
-            {/* Service Resources Table */}
-            <div className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
-              <table className="w-full">
-                <thead className="bg-gray-50 dark:bg-gray-800/50">
-                  <tr>
-                    <th className="px-4 py-1.5 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
-                      Resource
-                    </th>
-                    <th className="px-4 py-1.5 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
-                      Included
-                    </th>
-                    <th className="px-4 py-1.5"></th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+        <TabsContent value="overview" className="mt-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Service Overview */}
+            <div className="rounded-lg border p-4 dark:border-gray-800">
+              <table className="w-full text-sm">
+                <tbody>
                   {/* API Keys */}
                   <tr>
-                    <td className="px-4 py-1.5">
-                      <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                        API Keys
-                      </div>
-                    </td>
-                    <td className="px-4 py-1.5 text-sm text-gray-600 dark:text-gray-400">
+                    <td className="py-1.5 text-gray-500 dark:text-gray-400">API Keys</td>
+                    <td className="py-1.5 text-gray-900 dark:text-gray-100 text-right">
                       {usageStats?.apiKeys.used ?? 0} of {usageStats?.apiKeys.total ?? 2}
                     </td>
-                    <td className="px-4 py-1.5">
-                      <LinkButton
-                        to="/services/seal/overview"
-                        search={{ tab: "x-api-key" }}
-                      >
-                        Manage
-                      </LinkButton>
+                    <td className="py-1.5 pl-2 w-6">
+                      <SettingsLink to="/services/seal/overview" search={{ tab: 'x-api-key' }} />
                     </td>
                   </tr>
-
                   {/* Seal Keys */}
                   <tr>
-                    <td className="px-4 py-1.5">
-                      <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                        Seal Keys
-                      </div>
-                    </td>
-                    <td className="px-4 py-1.5 text-sm text-gray-600 dark:text-gray-400">
+                    <td className="py-1.5 text-gray-500 dark:text-gray-400">Seal Keys</td>
+                    <td className="py-1.5 text-gray-900 dark:text-gray-100 text-right">
                       {usageStats?.sealKeys.used ?? 0} of {usageStats?.sealKeys.total ?? fskey_incl}
                     </td>
-                    <td className="px-4 py-1.5">
-                      <LinkButton
-                        to="/services/seal/overview"
-                        search={{ tab: "seal-keys" }}
-                      >
-                        Manage
-                      </LinkButton>
+                    <td className="py-1.5 pl-2 w-6">
+                      <SettingsLink to="/services/seal/overview" search={{ tab: 'seal-keys' }} />
                     </td>
                   </tr>
-
                   {/* Packages per Key */}
                   <tr>
-                    <td className="px-4 py-1.5">
-                      <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                        Packages
-                      </div>
-                    </td>
-                    <td className="px-4 py-1.5 text-sm text-gray-600 dark:text-gray-400">
+                    <td className="py-1.5 text-gray-500 dark:text-gray-400">Packages</td>
+                    <td className="py-1.5 text-gray-900 dark:text-gray-100 text-right">
                       {usageStats?.packagesPerKey?.max ?? fskey_pkg_incl} per key
                     </td>
-                    <td className="px-4 py-1.5"></td>
+                    <td className="py-1.5 pl-2 w-6" />
                   </tr>
-
+                  {/* Burst */}
+                  <tr>
+                    <td className="py-1.5 text-gray-500 dark:text-gray-400">Burst</td>
+                    <td className="py-1.5 text-gray-900 dark:text-gray-100 text-right">
+                      {tier === 'starter'
+                        ? <span className="text-gray-400 dark:text-gray-500">Pro only</span>
+                        : (moreSettings?.burstEnabled ? 'Enabled' : 'Disabled')}
+                    </td>
+                    <td className="py-1.5 pl-2 w-6">
+                      {tier !== 'starter' && (
+                        <SettingsLink to="/services/seal/overview" search={{ tab: 'more-settings' }} />
+                      )}
+                    </td>
+                  </tr>
                   {/* IPv4 Allowlist */}
-                  {tier !== "starter" && (
+                  {tier !== 'starter' && (
                     <tr>
-                      <td className="px-4 py-1.5">
-                        <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                          IPv4 Allowlist
-                        </div>
+                      <td className="py-1.5 text-gray-500 dark:text-gray-400">IPv4 Allowlist</td>
+                      <td className="py-1.5 text-gray-900 dark:text-gray-100 text-right">
+                        {moreSettings?.ipAllowlistEnabled
+                          ? `${usageStats?.allowlist.used ?? 0} / ${usageStats?.allowlist.total ?? 2}`
+                          : 'Disabled'}
                       </td>
-                      <td className="px-4 py-1.5 text-sm text-gray-600 dark:text-gray-400">
-                        {usageStats?.allowlist.used ?? 0} of {usageStats?.allowlist.total ?? 2}
-                      </td>
-                      <td className="px-4 py-1.5">
-                        <LinkButton
-                          to="/services/seal/overview"
-                          search={{ tab: "more-settings" }}
-                        >
-                          Manage
-                        </LinkButton>
+                      <td className="py-1.5 pl-2 w-6">
+                        <SettingsLink to="/services/seal/overview" search={{ tab: 'more-settings' }} />
                       </td>
                     </tr>
                   )}
-
                 </tbody>
               </table>
             </div>
 
             {/* Usage This Month */}
-            <div className="rounded-lg border border-gray-200 dark:border-gray-700 px-4 py-3 flex items-center justify-between">
-              <div>
-                <div className="text-sm font-semibold text-gray-900 dark:text-gray-100">
-                  Usage This Month
-                </div>
-                <div className="text-xs text-gray-500 dark:text-gray-400">
-                  {pendingSealUsage.quantity.toLocaleString()} requests @ ${(pendingSealUsage.unitPriceUsd || USAGE_PRICING_CENTS_PER_1000[SERVICE_TYPE.SEAL] / 100 / 1000).toFixed(4)}/req
-                </div>
-              </div>
-              <div className="text-sm font-bold text-gray-900 dark:text-gray-100">
-                ${pendingSealUsage.amountUsd.toFixed(2)}
-              </div>
-            </div>
-
+            <UsageThisMonth items={[
+              {
+                service: SERVICE_TYPE.SEAL,
+                itemType: INVOICE_LINE_ITEM_TYPE.REQUESTS,
+                quantity: pendingSealUsage.quantity,
+                unitPriceUsd: pendingSealUsage.unitPriceUsd || USAGE_PRICING_CENTS_PER_1000[SERVICE_TYPE.SEAL] / 100 / 1000,
+                amountUsd: pendingSealUsage.amountUsd,
+              },
+            ]} />
           </div>
         </TabsContent>
 
@@ -901,44 +851,14 @@ export function SealInteractiveForm({
         </TabsContent>
 
         {/* More Settings Tab */}
-        <TabsContent value="more-settings" className="space-y-6">
+        <TabsContent value="more-settings" className="mt-4 space-y-6">
           {/* Burst Allowed */}
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Label htmlFor="burst-toggle" className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                  Burst Allowed
-                </Label>
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <button className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">
-                      <Info className="h-4 w-4" />
-                    </button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-80">
-                    <p className="text-sm text-gray-600 dark:text-gray-300">
-                      Allow temporary traffic bursts beyond guaranteed bandwidth. Billed per-request for burst traffic.
-                    </p>
-                  </PopoverContent>
-                </Popover>
-              </div>
-              {tier === "starter" ? (
-                <span className="text-sm text-gray-500 dark:text-gray-400">Pro/Enterprise feature</span>
-              ) : (
-                <div className="flex items-center gap-3">
-                  <Switch
-                    id="burst-toggle"
-                    checked={burstEnabled}
-                    onCheckedChange={handleToggleBurst}
-                    disabled={isReadOnly}
-                  />
-                  <span className="text-sm font-medium text-gray-600 dark:text-gray-400 min-w-[32px]">
-                    {burstEnabled ? "ON" : "OFF"}
-                  </span>
-                </div>
-              )}
-            </div>
-          </div>
+          <BurstSetting
+            checked={moreSettings?.burstEnabled ?? false}
+            onCheckedChange={(checked) => updateBurstMutation.mutate({ enabled: checked })}
+            disabled={isReadOnly}
+            tier={tier}
+          />
 
           {/* IP Allowlist (shared component) */}
           <IpAllowlistSection

@@ -27,6 +27,8 @@ export {
   finalizeSuccessfulPayment,
   getInvoicePaidAmount,
   retryUnpaidInvoices,
+  RETRY_BACKOFF_SECONDS,
+  MAX_RETRY_ATTEMPTS,
 } from './payments';
 
 export type {
@@ -137,6 +139,7 @@ export {
   canProvisionService,
   canPerformKeyOperation,
   getTierChangeOptions,
+  enableBurstOnUpgrade,
   applyScheduledTierChanges,
   processScheduledCancellations,
 } from './tier-changes';

@@ -369,6 +369,57 @@ export async function getTrafficStats(
 }
 
 /**
+ * Get bandwidth (bytes) over time for charts.
+ * Returns total_bytes per time bucket from stats_per_hour.
+ */
+export async function getBandwidthStats(
+  db: DatabaseOrTransaction,
+  customerId: number,
+  serviceType: number,
+  interval: string = '24 hours',
+  clock?: DBClock
+): Promise<Array<{ bucket: Date; bytes: number }>> {
+  const now = clock?.now() ?? new Date();
+
+  if (interval === '7 days' || interval === '30 days') {
+    const result = await db.execute(sql`
+      SELECT
+        date_trunc('day', bucket) AS bucket,
+        COALESCE(SUM(total_bytes), 0)::bigint AS bytes
+      FROM stats_per_hour
+      WHERE customer_id = ${customerId}
+        AND service_type = ${serviceType}
+        AND bucket >= ${new Date(now.getTime() - parseInterval(interval))}
+        AND bucket < ${now}
+      GROUP BY date_trunc('day', bucket)
+      ORDER BY bucket ASC
+    `);
+
+    return result.rows.map((row: any) => ({
+      bucket: new Date(row.bucket),
+      bytes: Number(row.bytes ?? 0),
+    }));
+  }
+
+  const result = await db.execute(sql`
+    SELECT
+      bucket,
+      COALESCE(total_bytes, 0)::bigint AS bytes
+    FROM stats_per_hour
+    WHERE customer_id = ${customerId}
+      AND service_type = ${serviceType}
+      AND bucket >= ${new Date(now.getTime() - parseInterval(interval))}
+      AND bucket < ${now}
+    ORDER BY bucket ASC
+  `);
+
+  return result.rows.map((row: any) => ({
+    bucket: new Date(row.bucket),
+    bytes: Number(row.bytes ?? 0),
+  }));
+}
+
+/**
  * Get total billable requests for a customer in a time range
  *
  * Used by billing to calculate usage charges.
@@ -389,6 +440,31 @@ export async function getBillableRequestCount(
 ): Promise<number> {
   const result = await db.execute(sql`
     SELECT COALESCE(SUM(billable_requests), 0)::bigint AS total
+    FROM stats_per_hour
+    WHERE customer_id = ${customerId}
+      AND service_type = ${serviceType}
+      AND bucket >= ${startTime}
+      AND bucket < ${endTime}
+  `);
+
+  return Number((result.rows[0] as any)?.total ?? 0);
+}
+
+/**
+ * Get total bandwidth (bytes) for a customer in a time range.
+ * Used by billing to calculate bandwidth charges.
+ */
+export async function getBillableBandwidth(
+  db: DatabaseOrTransaction,
+  customerId: number,
+  serviceType: number,
+  startTime: Date,
+  endTime: Date
+): Promise<number> {
+  // Use billable_bytes from the stats_per_hour aggregate — only counts
+  // traffic_type IN (1, 2) to match the billing boundary of billable_requests.
+  const result = await db.execute(sql`
+    SELECT COALESCE(SUM(billable_bytes), 0)::bigint AS total
     FROM stats_per_hour
     WHERE customer_id = ${customerId}
       AND service_type = ${serviceType}

@@ -1,6 +1,7 @@
 import { pgTable, serial, integer, boolean, jsonb, timestamp, unique, index } from 'drizzle-orm/pg-core';
 import { customers } from './customers';
 import { serviceTypeEnum, serviceStateEnum } from './enums';
+import type { ServiceConfig } from '@suiftly/shared/schemas';
 
 /**
  * Service Instances Table
@@ -15,7 +16,7 @@ export const serviceInstances = pgTable('service_instances', {
   serviceType: serviceTypeEnum('service_type').notNull(),
   state: serviceStateEnum('state').notNull().default('not_provisioned'),
   isUserEnabled: boolean('is_user_enabled').notNull().default(true),
-  config: jsonb('config'),
+  config: jsonb('config').$type<Partial<ServiceConfig>>(),
   enabledAt: timestamp('enabled_at', { withTimezone: true }),
   disabledAt: timestamp('disabled_at', { withTimezone: true }),
 

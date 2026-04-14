@@ -270,6 +270,8 @@ export async function voidInvoice(
     .set({
       status: 'voided',
       failureReason: reason,
+      paymentActionUrl: null,
+      pendingStripeInvoiceId: null,
     })
     .where(eq(billingRecords.id, invoiceId));
 }
@@ -385,6 +387,7 @@ export async function markInvoicePaid(
       amountPaidUsdCents: amountPaidCents,
       failureReason: null,
       paymentActionUrl: null,
+      pendingStripeInvoiceId: null,
     })
     .where(eq(billingRecords.id, invoiceId));
 }

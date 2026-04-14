@@ -55,8 +55,8 @@ export interface BillingProcessorConfig {
   gracePeriodDays: number; // Default: 14 days
 
   // Retry settings
-  maxRetryAttempts: number; // Default: 3
-  retryIntervalHours: number; // Default: 24 hours
+  maxRetryAttempts: number; // Use MAX_RETRY_ATTEMPTS (= RETRY_BACKOFF_SECONDS.length)
+  retryIntervalHours: number; // Max backoff cap (used as fallback in legacy paths)
 }
 
 /**
@@ -86,6 +86,11 @@ export interface InvoicePaymentResult {
     referenceId: string; // credit_id, escrow_transaction_id, Stripe PI ID, or PayPal order ID
   }>;
   error?: BillingError;
+  /** True when Stripe returned requires_action (3DS). Invoice stays pending
+   *  with paymentActionUrl. For subscriptions, the billing page shows a 3DS prompt.
+   *  For tier upgrades, 3DS is currently unsupported — the upgrade path voids the
+   *  invoice (see TODO in tier-changes.ts). */
+  requiresAction?: boolean;
 }
 
 /**

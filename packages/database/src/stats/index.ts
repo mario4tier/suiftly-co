@@ -25,6 +25,8 @@ export {
   getResponseTimeStats,
   getTrafficStats,
   getBillableRequestCount,
+  getBillableBandwidth,
+  getBandwidthStats,
   type StatsSummary,
   type UsageDataPoint,
   type ResponseTimeDataPoint,

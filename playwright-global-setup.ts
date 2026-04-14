@@ -98,6 +98,31 @@ async function ensureDevServersReady(): Promise<void> {
   }
 }
 
+/**
+ * Configure the Stripe webhook secret on the API server.
+ * Reads the secret from /tmp/suiftly-stripe-webhook-secret (written by start-dev.sh)
+ * and pushes it to the API via /test/stripe/webhook-secret override endpoint.
+ * This ensures the API can verify Stripe CLI webhook signatures even after restart.
+ */
+async function configureStripeWebhookSecret(): Promise<void> {
+  const secretPath = '/tmp/suiftly-stripe-webhook-secret';
+  try {
+    const secret = readFileSync(secretPath, 'utf8').trim();
+    if (!secret) return;
+    const resp = await fetch('http://localhost:22700/test/stripe/webhook-secret', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ secret }),
+      signal: AbortSignal.timeout(2000),
+    });
+    if (resp.ok) {
+      console.log(`✅ Stripe webhook secret configured (${secret.slice(0, 12)}...)`);
+    }
+  } catch {
+    // No Stripe CLI running or secret file missing — Stripe tests will be skipped
+  }
+}
+
 async function globalSetup(_config: FullConfig) {
   // CRITICAL: Check that we're not in a production environment
   // This must run FIRST before any other operations
@@ -142,6 +167,9 @@ async function globalSetup(_config: FullConfig) {
 
   // Ensure servers are running with correct config (shared for all projects)
   await ensureDevServersReady();
+
+  // Configure Stripe webhook secret (from Stripe CLI) on the running API
+  await configureStripeWebhookSecret();
   console.log('✅ Dev servers ready');
 }
 

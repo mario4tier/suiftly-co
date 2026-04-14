@@ -190,7 +190,8 @@ export async function setupTimescaleDB() {
       SUM(time_total::bigint * repeat) FILTER (WHERE traffic_type IN (1, 2))::double precision / NULLIF(SUM(repeat) FILTER (WHERE traffic_type IN (1, 2)), 0) AS avg_response_time_ms,
       MIN(time_total) FILTER (WHERE traffic_type IN (1, 2)) AS min_response_time_ms,
       MAX(time_total) FILTER (WHERE traffic_type IN (1, 2)) AS max_response_time_ms,
-      SUM(bytes_sent * repeat) AS total_bytes
+      SUM(bytes_sent * repeat) AS total_bytes,
+      SUM(bytes_sent * repeat) FILTER (WHERE traffic_type IN (1, 2)) AS billable_bytes
     FROM haproxy_raw_logs
     WHERE customer_id IS NOT NULL
     GROUP BY bucket, customer_id, service_type, network;

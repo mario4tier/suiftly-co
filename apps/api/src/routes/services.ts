@@ -11,7 +11,7 @@ import { customers, serviceInstances, systemControl, lmStatus, apiKeys, sealKeys
 import { eq, and, sql, min, ne, isNull, count } from 'drizzle-orm';
 import { SERVICE_TYPE, SERVICE_TIER, SERVICE_STATE, API_KEY_ORIGIN } from '@suiftly/shared/constants';
 import type { ServiceType } from '@suiftly/shared/constants';
-import { DEFAULT_SERVICE_CONFIG } from '@suiftly/shared/schemas';
+import { DEFAULT_SERVICE_CONFIG, buildProvisionConfig } from '@suiftly/shared/schemas';
 import { testDelayManager } from '../lib/test-delays';
 import { getTierPriceUsdCents } from '../lib/config-cache';
 import { getSuiService } from '@suiftly/database/sui-mock';
@@ -21,6 +21,7 @@ import {
   handleSubscriptionBilling,
   handleSubscriptionBillingLocked,
   handleTierUpgradeLocked,
+  enableBurstOnUpgrade,
   scheduleTierDowngradeLocked,
   cancelScheduledTierChangeLocked,
   scheduleCancellationLocked,
@@ -286,6 +287,7 @@ export const servicesRouter = router({
         // 7. Auto-provision non-platform services now that platform payment succeeded.
         // Idempotent (onConflictDoNothing + key existence check) so safe to re-run.
         const nonPlatformServices = [SERVICE_TYPE.SEAL, SERVICE_TYPE.GRPC, SERVICE_TYPE.GRAPHQL] as const;
+        const provisionConfig = buildProvisionConfig(input.tier!);
         for (const serviceType of nonPlatformServices) {
           await tx
             .insert(serviceInstances)
@@ -293,7 +295,7 @@ export const servicesRouter = router({
               customerId: ctx.user!.customerId,
               serviceType,
               state: SERVICE_STATE.DISABLED,
-              config: DEFAULT_SERVICE_CONFIG,
+              config: provisionConfig,
               isUserEnabled: false,
             })
             .onConflictDoNothing();
@@ -333,6 +335,9 @@ export const servicesRouter = router({
             }
           }
         }
+
+        // 8. Enable burst on pre-created services for Pro tier
+        await enableBurstOnUpgrade(tx, ctx.user!.customerId, input.tier!);
 
         return {
           instanceId: 0,
@@ -560,7 +565,7 @@ export const servicesRouter = router({
           }
 
           // Get current config or create new one
-          const currentConfig = service.config as any || DEFAULT_SERVICE_CONFIG;
+          const currentConfig = service.config || DEFAULT_SERVICE_CONFIG;
 
           // Update only the fields that were provided
           const updatedConfig = {
@@ -586,7 +591,7 @@ export const servicesRouter = router({
           }
 
           // Validate IP allowlist is only for Pro tier
-          if (updatedConfig.ipAllowlist?.length > 0 && effectiveTier === SERVICE_TIER.STARTER) {
+          if ((updatedConfig.ipAllowlist?.length ?? 0) > 0 && effectiveTier === SERVICE_TIER.STARTER) {
             throw new TRPCError({
               code: 'BAD_REQUEST',
               message: 'IP allowlist is only available for Pro tier',

@@ -129,6 +129,7 @@ export const invoiceLineItemTypeEnum = pgEnum('invoice_line_item_type', [
   'tier_upgrade',
   // Usage-based charges
   'requests',
+  'bandwidth',
   // Add-ons (quantity = extra count beyond included)
   'extra_api_keys',
   'extra_seal_keys',

@@ -13,8 +13,8 @@
 
 import { randomBytes, createCipheriv, createDecipheriv, createHmac, createHash } from 'crypto';
 import { db } from '@suiftly/database';
-import { apiKeys, serviceInstances } from '@suiftly/database/schema';
-import { DEFAULT_SERVICE_CONFIG } from '@suiftly/shared/schemas';
+import { apiKeys, customers, serviceInstances } from '@suiftly/database/schema';
+import { buildProvisionConfig } from '@suiftly/shared/schemas';
 import { eq, and, isNull } from 'drizzle-orm';
 import { encryptSecret, decryptSecret } from './encryption';
 import { dbClock } from '@suiftly/shared/db-clock';
@@ -535,6 +535,13 @@ export async function storeApiKey(options: {
  * creation if a key already exists for the customer+serviceType.
  */
 export async function ensureServiceInstancesProvisioned(customerId: number): Promise<void> {
+  // Determine burst default based on customer's platform tier
+  const customer = await db.query.customers.findFirst({
+    where: eq(customers.customerId, customerId),
+    columns: { platformTier: true },
+  });
+  const provisionConfig = buildProvisionConfig(customer?.platformTier ?? null);
+
   const nonPlatformServices = ['seal', 'grpc', 'graphql'] as const;
   for (const serviceType of nonPlatformServices) {
     // Create service instance (idempotent via unique constraint)
@@ -542,7 +549,7 @@ export async function ensureServiceInstancesProvisioned(customerId: number): Pro
       customerId,
       serviceType,
       state: 'disabled',
-      config: DEFAULT_SERVICE_CONFIG,
+      config: provisionConfig,
       isUserEnabled: false,
     }).onConflictDoNothing();
 

@@ -137,6 +137,9 @@ else
   else
     echo "  Stripe webhook listener started (PID: $STRIPE_PID)"
     echo "  Webhook secret: ${STRIPE_WEBHOOK_SECRET:0:12}..."
+    # Persist for tests and subsequent API restarts
+    echo "$STRIPE_WEBHOOK_SECRET" > /tmp/suiftly-stripe-webhook-secret
+    chmod 600 /tmp/suiftly-stripe-webhook-secret
   fi
 fi
 
@@ -431,6 +434,16 @@ if ! kill -0 $WEBAPP_PID 2>/dev/null; then
   exit 1
 fi
 echo "  Webapp started (PID: $WEBAPP_PID)"
+
+# ============================================================================
+# Start sui-proxy dev services (gRPC aggregators)
+# ============================================================================
+SUI_PROXY_START="$HOME/sui-proxy/scripts/dev/start-dev.sh"
+if [ -x "$SUI_PROXY_START" ]; then
+  "$SUI_PROXY_START" || echo "WARNING: sui-proxy start-dev failed — gRPC aggregators may not be running"
+else
+  echo "WARNING: $SUI_PROXY_START not found or not executable — skipping sui-proxy"
+fi
 
 # ============================================================================
 # Summary

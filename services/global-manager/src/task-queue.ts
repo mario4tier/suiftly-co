@@ -25,7 +25,7 @@
  */
 
 import { db, adminNotifications } from '@suiftly/database';
-import { runPeriodicBillingJob, withCustomerLock, getCustomerProviders, retryUnpaidInvoices } from '@suiftly/database/billing';
+import { runPeriodicBillingJob, withCustomerLock, getCustomerProviders, retryUnpaidInvoices, MAX_RETRY_ATTEMPTS } from '@suiftly/database/billing';
 import { getSuiService } from '@suiftly/database/sui-mock';
 import { getStripeService } from '@suiftly/database/stripe-mock';
 import { getMockClockState, setMockClockState } from '@suiftly/database/test-kv';
@@ -583,7 +583,7 @@ async function executeSyncAll(): Promise<void> {
   const billingConfig = {
     clock,
     gracePeriodDays: 14,
-    maxRetryAttempts: 3,
+    maxRetryAttempts: MAX_RETRY_ATTEMPTS,
     retryIntervalHours: 24,
     usageChargeThresholdCents: 500, // $5 threshold
   };

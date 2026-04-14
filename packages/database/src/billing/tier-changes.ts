@@ -12,7 +12,7 @@
 
 import { eq, and, lte, gt, isNotNull, sql, inArray } from 'drizzle-orm';
 import type { Database } from '../db';
-import { customers, serviceCancellationHistory, billingRecords, invoiceLineItems } from '../schema';
+import { customers, serviceInstances, serviceCancellationHistory, billingRecords, invoiceLineItems } from '../schema';
 import { withCustomerLock, type LockedTransaction } from './locking';
 import {
   createAndChargeImmediately,
@@ -23,7 +23,7 @@ import {
 import { processInvoicePayment } from './payments';
 import { recalculateDraftInvoice, calculateProRatedUpgradeCharge } from './draft-invoice';
 import { getTierPriceUsdCents, getAvailableTiers } from '@suiftly/shared/pricing';
-import { INVOICE_LINE_ITEM_TYPE, TIER_TO_SUBSCRIPTION_ITEM } from '@suiftly/shared/constants';
+import { INVOICE_LINE_ITEM_TYPE, TIER_TO_SUBSCRIPTION_ITEM, SERVICE_TIER } from '@suiftly/shared/constants';
 import type { DBClock } from '@suiftly/shared/db-clock';
 import type { PaymentServices } from './providers';
 import { getCustomerProviders } from './providers';
@@ -118,6 +118,33 @@ export interface TierChangeOptions {
  * @param clock DBClock for timestamps
  * @returns Upgrade result
  */
+/**
+ * Enable burst on all service instances when upgrading to Pro.
+ * Flips all services with burstEnabled=false to true.
+ * No-op for services where burst is already enabled.
+ */
+export async function enableBurstOnUpgrade(
+  tx: LockedTransaction,
+  customerId: number,
+  newTier: ServiceTier,
+): Promise<void> {
+  if (newTier === SERVICE_TIER.STARTER) return;
+
+  const services = await tx.query.serviceInstances.findMany({
+    where: eq(serviceInstances.customerId, customerId),
+  });
+
+  for (const service of services) {
+    const config = service.config || {};
+    if (!config.burstEnabled) {
+      await tx
+        .update(serviceInstances)
+        .set({ config: { ...config, burstEnabled: true } })
+        .where(eq(serviceInstances.instanceId, service.instanceId));
+    }
+  }
+}
+
 export async function handleTierUpgradeLocked(
   tx: LockedTransaction,
   customerId: number,
@@ -204,6 +231,7 @@ export async function handleTierUpgradeLocked(
         .where(eq(invoiceLineItems.billingRecordId, customer.pendingInvoiceId));
     }
 
+    await enableBurstOnUpgrade(tx, customerId, newTier);
     await recalculateDraftInvoice(tx, customerId, clock);
 
     return {
@@ -232,6 +260,7 @@ export async function handleTierUpgradeLocked(
       })
       .where(eq(customers.customerId, customerId));
 
+    await enableBurstOnUpgrade(tx, customerId, newTier);
     await recalculateDraftInvoice(tx, customerId, clock);
 
     return {
@@ -275,6 +304,16 @@ export async function handleTierUpgradeLocked(
   );
 
   if (!paymentResult.fullyPaid) {
+    // TODO: Stripe 3DS tier upgrades are not yet supported. When Stripe returns
+    // requires_action (3DS), the upgrade is treated as a hard failure and the
+    // invoice is voided. Implementing proper 3DS upgrade flow requires:
+    // 1. Add 'awaiting_verification' invoice status (explicit state vs pending+paymentActionUrl)
+    // 2. Return paymentActionUrl to the frontend (not as an error)
+    // 3. Frontend shows 3DS prompt in the upgrade modal instead of error toast
+    // 4. Webhook handler (invoice.paid) detects tier upgrade invoices and applies the upgrade
+    //    (use invoice metadata or a dedicated column, not description parsing)
+    // 5. Guard against duplicate upgrade invoices while 3DS is pending
+    // 6. Prevent reconciliation credits from being issued against upgrade invoices
     await voidInvoice(tx, invoiceId, 'Tier upgrade payment failed');
 
     return {
@@ -297,7 +336,10 @@ export async function handleTierUpgradeLocked(
     })
     .where(eq(customers.customerId, customerId));
 
-  // 8. Recalculate DRAFT invoice for next billing cycle
+  // 8. Enable burst on all services
+  await enableBurstOnUpgrade(tx, customerId, newTier);
+
+  // 9. Recalculate DRAFT invoice for next billing cycle
   await recalculateDraftInvoice(tx, customerId, clock);
 
   return {
@@ -579,6 +621,9 @@ export async function executeTierUpgradePhase2Locked(
       platformCancellationScheduledFor: null,
     })
     .where(eq(customers.customerId, customerId));
+
+  // Enable burst on all services for Pro tier
+  await enableBurstOnUpgrade(tx, customerId, newTier);
 
   // Recalculate DRAFT invoice for next billing cycle
   await recalculateDraftInvoice(tx, customerId, clock);
