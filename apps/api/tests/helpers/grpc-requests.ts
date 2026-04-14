@@ -143,6 +143,125 @@ export async function triggerGrpcVaultSync(timeoutMs = 20000): Promise<void> {
 }
 
 /**
+ * Result from a streaming gRPC subscription.
+ */
+export interface StreamingResult {
+  /** Total bytes received in HTTP/2 DATA frames (raw wire bytes). */
+  totalBytes: number;
+  /** Number of gRPC messages (length-prefixed frames) received. */
+  messageCount: number;
+  /** HTTP/2 response status. */
+  status: number;
+  /** Elapsed time in milliseconds. */
+  elapsedMs: number;
+  /** Error message if something went wrong. */
+  error?: string;
+}
+
+/**
+ * Subscribe to checkpoints via gRPC streaming through HAProxy.
+ *
+ * Opens an HTTP/2 POST to SubscribeCheckpoints, collects data for `durationMs`,
+ * then closes the stream. Returns total bytes and message count for metering
+ * verification against HAProxy logs.
+ *
+ * The gRPC wire format: each message is [1-byte flag][4-byte length][payload].
+ * We parse length-prefixed frames from the DATA stream to count messages.
+ */
+export function grpcSubscribeCheckpoints(options: {
+  port?: number;
+  apiKey?: string;
+  clientIp?: string;
+  durationMs?: number;
+  timeout?: number;
+}): Promise<StreamingResult> {
+  const port = options.port ?? DEFAULT_GRPC_PORT;
+  const durationMs = options.durationMs ?? 2000;
+  const timeout = options.timeout ?? durationMs + 5000;
+
+  return new Promise((resolve) => {
+    const client = http2.connect(`http://localhost:${port}`);
+    const start = Date.now();
+
+    const headers: http2.OutgoingHttpHeaders = {
+      ':method': 'POST',
+      ':path': '/sui.rpc.v2.SubscriptionService/SubscribeCheckpoints',
+      'content-type': 'application/grpc',
+      'te': 'trailers',
+    };
+    if (options.apiKey) headers['x-api-key'] = options.apiKey;
+    if (options.clientIp) headers['cf-connecting-ip'] = options.clientIp;
+
+    const timeoutId = setTimeout(() => {
+      client.close();
+      resolve({ totalBytes: 0, messageCount: 0, status: 0, elapsedMs: Date.now() - start, error: 'timeout' });
+    }, timeout);
+
+    client.on('error', (err) => {
+      clearTimeout(timeoutId);
+      client.close();
+      resolve({ totalBytes: 0, messageCount: 0, status: 0, elapsedMs: Date.now() - start, error: err.message });
+    });
+
+    const req = client.request(headers);
+
+    // Send empty gRPC frame: [0x00 (not compressed), 0x00 0x00 0x00 0x00 (zero-length message)]
+    const emptyGrpcFrame = Buffer.from([0x00, 0x00, 0x00, 0x00, 0x00]);
+    req.write(emptyGrpcFrame);
+    // Signal end of request body (half-close). The server stream continues.
+    req.end();
+
+    let status = 0;
+    let totalBytes = 0;
+    let messageCount = 0;
+    // Buffer for parsing gRPC length-prefixed frames across DATA chunks.
+    let frameBuf = Buffer.alloc(0);
+
+    req.on('response', (h) => {
+      status = (h[':status'] as number) ?? 0;
+    });
+
+    req.on('data', (chunk: Buffer) => {
+      totalBytes += chunk.length;
+      // Parse gRPC length-prefixed frames to count messages.
+      frameBuf = Buffer.concat([frameBuf, chunk]);
+      while (frameBuf.length >= 5) {
+        const msgLen = frameBuf.readUInt32BE(1);
+        const frameLen = 5 + msgLen;
+        if (frameBuf.length < frameLen) break; // incomplete frame
+        messageCount++;
+        frameBuf = frameBuf.subarray(frameLen);
+      }
+    });
+
+    // After durationMs, close the stream to trigger HAProxy log entry.
+    const durationTimer = setTimeout(() => {
+      req.close();
+      // Give HAProxy a moment to finalize the stream before closing connection.
+      setTimeout(() => {
+        clearTimeout(timeoutId);
+        client.close();
+        resolve({ totalBytes, messageCount, status, elapsedMs: Date.now() - start });
+      }, 200);
+    }, durationMs);
+
+    req.on('end', () => {
+      clearTimeout(timeoutId);
+      clearTimeout(durationTimer);
+      client.close();
+      resolve({ totalBytes, messageCount, status, elapsedMs: Date.now() - start });
+    });
+
+    req.on('error', (err) => {
+      clearTimeout(timeoutId);
+      clearTimeout(durationTimer);
+      client.close();
+      resolve({ totalBytes, messageCount, status, elapsedMs: Date.now() - start, error: err.message });
+    });
+  });
+}
+
+/**
  * Read a file via sudob API.
  */
 export async function readFileViaSudob(path: string): Promise<string | null> {

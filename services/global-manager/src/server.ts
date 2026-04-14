@@ -13,6 +13,8 @@ import { db, adminNotifications, systemControl, billingRecords, customers, custo
 import { getMockClockState, setMockClockState } from '@suiftly/database/test-kv';
 import { desc, eq, and, sql, gte, lte, lt, isNotNull, isNull } from 'drizzle-orm';
 import { dbClock } from '@suiftly/shared/db-clock';
+import { GRPC_METRICS_PORT } from '@suiftly/shared/constants';
+import { hostname } from 'node:os';
 import { isTestDeployment } from './config/lm-config.js';
 import {
   queueSyncCustomer,
@@ -1554,6 +1556,90 @@ server.get('/api/infra/errors', async (request, reply) => {
   }
 
   return { services };
+});
+
+// ============================================================================
+// Checkpoint Streaming Stats API (for Admin Dashboard CheckpointStats page)
+// ============================================================================
+
+// Mainnet gRPC metrics ports (sui-proxy /checkpoint-stats endpoint)
+const CHECKPOINT_STATS_INSTANCES = [
+  { process: 1, port: GRPC_METRICS_PORT.MAINNET_1, label: 'mgrpc1' },
+  { process: 2, port: GRPC_METRICS_PORT.MAINNET_2, label: 'mgrpc2' },
+];
+
+interface CheckpointStatsRow {
+  location: string;
+  process: number;
+  upstream: string | null;
+  latestDelayMs: number;
+  avg1mMs: number;
+  min1mMs: number;
+  max1mMs: number;
+  latestCursor: number;
+  totalCheckpoints: number;
+  firstCount: number;
+  droppedCount: number;
+  deltaBestMs: number;
+}
+
+
+server.get('/api/checkpoint-stats', async () => {
+  const location = hostname();
+  const rows: CheckpointStatsRow[] = [];
+
+  // Scrape all local mainnet sui-proxy instances in parallel.
+  const results = await Promise.all(
+    CHECKPOINT_STATS_INSTANCES.map(async (inst) => {
+      try {
+        const res = await fetch(`http://127.0.0.1:${inst.port}/checkpoint-stats`, {
+          signal: AbortSignal.timeout(3000),
+        });
+        if (!res.ok) return { inst, entries: null };
+        const data = await res.json() as { entries: any[] };
+        return { inst, entries: data.entries ?? null };
+      } catch {
+        return { inst, entries: null };
+      }
+    })
+  );
+
+  for (const { inst, entries } of results) {
+    if (!entries) continue;
+    for (const entry of entries) {
+      const isOutput = entry.name === 'output';
+      rows.push({
+        location: isOutput
+          ? `${location}:${inst.process}`
+          : `${location}:${inst.process}:${entry.name}`,
+        process: inst.process,
+        upstream: isOutput ? null : entry.name,
+        latestDelayMs: entry.latest_delay_ms ?? 0,
+        avg1mMs: entry.window_1m?.avg_ms ?? 0,
+        min1mMs: entry.window_1m?.min_ms ?? 0,
+        max1mMs: entry.window_1m?.max_ms ?? 0,
+        latestCursor: entry.latest_cursor ?? 0,
+        totalCheckpoints: entry.total_checkpoints ?? 0,
+        firstCount: entry.first_count ?? 0,
+        droppedCount: entry.dropped_count ?? 0,
+        deltaBestMs: 0,
+      });
+    }
+  }
+
+  // Compute delta from best: highest avg = earliest delivery (best upstream).
+  const outputRows = rows.filter((r) => r.upstream === null && r.avg1mMs !== 0);
+  const bestAvg = outputRows.length > 0
+    ? Math.max(...outputRows.map((r) => r.avg1mMs))
+    : 0;
+  for (const row of rows) {
+    if (row.avg1mMs !== 0) {
+      // Positive delta = this row is further behind than the best.
+      row.deltaBestMs = bestAvg - row.avg1mMs;
+    }
+  }
+
+  return { rows };
 });
 
 // ============================================================================

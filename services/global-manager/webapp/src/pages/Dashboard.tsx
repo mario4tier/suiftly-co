@@ -4,11 +4,6 @@ import { useAdminPollingContext } from '../contexts/AdminPollingContext';
 import { SyncIndicator, SyncState } from '../components/SyncIndicator';
 import { GMStatusBadge } from '../components/GMStatusBadge';
 
-interface HealthStatus {
-  service: string;
-  timestamp: string;
-}
-
 interface LMStatus {
   name: string;
   host: string;

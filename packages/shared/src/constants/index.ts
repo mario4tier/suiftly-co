@@ -268,6 +268,14 @@ export const GRPC_BACKEND_PORT = {
   TESTNET_2: 21602,        // tgrpc2 backend
 } as const;
 
+// gRPC Metrics Ports - sui-proxy Prometheus + /checkpoint-stats endpoints
+export const GRPC_METRICS_PORT = {
+  MAINNET_1: 20621,        // mgrpc1 metrics
+  MAINNET_2: 20622,        // mgrpc2 metrics
+  TESTNET_1: 21621,        // tgrpc1 metrics
+  TESTNET_2: 21622,        // tgrpc2 metrics
+} as const;
+
 // Seal Backend Ports - for direct backend access (bypassing HAProxy)
 export const SEAL_BACKEND_PORT = {
   MAINNET_1: 20401,        // mseal1 backend

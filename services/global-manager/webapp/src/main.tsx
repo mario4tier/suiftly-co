@@ -10,6 +10,7 @@ import { BillingMonitor } from './pages/BillingMonitor';
 import { CustomerDetail } from './pages/CustomerDetail';
 import { InvoiceDetail } from './pages/InvoiceDetail';
 import { Upgrades } from './pages/Upgrades';
+import { CheckpointStats } from './pages/CheckpointStats';
 
 function App() {
   return (
@@ -29,6 +30,7 @@ function App() {
                 <Route path="/infra" element={<InfraStats />} />
                 <Route path="/kvcrypt" element={<KVCryptDebug />} />
                 <Route path="/upgrades" element={<Upgrades />} />
+                <Route path="/checkpoints" element={<CheckpointStats />} />
               </Routes>
             </Layout>
           </AdminPollingProvider>
