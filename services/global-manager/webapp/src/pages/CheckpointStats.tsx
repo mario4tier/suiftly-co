@@ -25,6 +25,8 @@ export function CheckpointStats() {
   const [error, setError] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>('location');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
+  const [serviceStatus, setServiceStatus] = useState<Record<number, boolean>>({});
+  const [serviceLoading, setServiceLoading] = useState<number | null>(null);
   const { pollingInterval, markUpdated } = useAdminPollingContext();
 
   const fetchStats = useCallback(async () => {
@@ -42,11 +44,36 @@ export function CheckpointStats() {
     }
   }, [markUpdated]);
 
+  const fetchServiceStatus = useCallback(async () => {
+    try {
+      const res = await fetch('/api/checkpoint-stats/service-status');
+      if (res.ok) {
+        const data = await res.json();
+        setServiceStatus(data.services ?? {});
+      }
+    } catch { /* dev-only, ignore */ }
+  }, []);
+
+  const toggleService = useCallback(async (process: number) => {
+    const running = serviceStatus[process];
+    setServiceLoading(process);
+    try {
+      await fetch('/api/checkpoint-stats/service', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ process, action: running ? 'stop' : 'start' }),
+      });
+      await fetchServiceStatus();
+    } catch { /* ignore */ }
+    setServiceLoading(null);
+  }, [serviceStatus, fetchServiceStatus]);
+
   useEffect(() => {
     fetchStats();
-    const interval = setInterval(fetchStats, Math.max(pollingInterval, 6000));
+    fetchServiceStatus();
+    const interval = setInterval(() => { fetchStats(); fetchServiceStatus(); }, Math.max(pollingInterval, 6000));
     return () => clearInterval(interval);
-  }, [fetchStats, pollingInterval]);
+  }, [fetchStats, fetchServiceStatus, pollingInterval]);
 
   const toggleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -112,6 +139,43 @@ export function CheckpointStats() {
           Per sui-proxy checkpoint delivery delay. Mainnet only. Auto-refreshes every 6s.
         </p>
       </div>
+
+      {/* Service controls (dev only — stops sui-proxy to avoid abusing free endpoints) */}
+      {Object.keys(serviceStatus).length > 0 && (
+        <div style={{
+          display: 'flex',
+          gap: '0.75rem',
+          marginBottom: '1rem',
+          alignItems: 'center',
+        }}>
+          {[1, 2].map((proc) => {
+            const running = serviceStatus[proc];
+            const loading = serviceLoading === proc;
+            return (
+              <button
+                key={proc}
+                onClick={() => toggleService(proc)}
+                disabled={loading}
+                style={{
+                  padding: '0.375rem 0.75rem',
+                  borderRadius: '0.375rem',
+                  border: '1px solid #475569',
+                  background: running ? '#1e3a5f' : '#1e293b',
+                  color: running ? '#4ade80' : '#94a3b8',
+                  fontSize: '0.8125rem',
+                  cursor: loading ? 'wait' : 'pointer',
+                  opacity: loading ? 0.5 : 1,
+                }}
+              >
+                {loading ? '...' : running ? '\u25A0' : '\u25B6'} mgrpc{proc}
+              </button>
+            );
+          })}
+          <span style={{ fontSize: '0.7rem', color: '#475569' }}>
+            dev only — stop to conserve Mysten Labs free endpoints
+          </span>
+        </div>
+      )}
 
       {loading && <p style={{ color: '#94a3b8' }}>Loading...</p>}
       {error && <p style={{ color: '#f87171' }}>Error: {error}</p>}

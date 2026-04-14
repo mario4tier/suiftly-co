@@ -1642,6 +1642,65 @@ server.get('/api/checkpoint-stats', async () => {
   return { rows };
 });
 
+// POST /api/checkpoint-stats/service - Start/stop sui-proxy services (dev only)
+const SUDOB_URL = 'http://127.0.0.1:22800';
+const CHECKPOINT_SERVICE_NAMES: Record<number, string> = {
+  1: 'mgrpc1-node',
+  2: 'mgrpc2-node',
+};
+
+server.post('/api/checkpoint-stats/service', async (request, reply) => {
+  if (!isTestDeployment()) {
+    return reply.status(403).send({ error: 'Only available in development' });
+  }
+
+  const body = request.body as { process: number; action: 'start' | 'stop' };
+  const serviceName = CHECKPOINT_SERVICE_NAMES[body.process];
+  if (!serviceName) {
+    return reply.status(400).send({ error: `Unknown process: ${body.process}` });
+  }
+  if (body.action !== 'start' && body.action !== 'stop') {
+    return reply.status(400).send({ error: `Invalid action: ${body.action}` });
+  }
+
+  try {
+    const res = await fetch(`${SUDOB_URL}/api/service/${body.action}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ service: serviceName }),
+      signal: AbortSignal.timeout(5000),
+    });
+    const data = await res.json() as { ok?: boolean; message?: string; error?: string };
+    if (!data.ok) {
+      return reply.status(500).send({ error: data.error || 'sudob error' });
+    }
+    return { ok: true, service: serviceName, action: body.action };
+  } catch (e) {
+    return reply.status(500).send({ error: e instanceof Error ? e.message : 'unknown' });
+  }
+});
+
+// GET /api/checkpoint-stats/service-status - Check which services are running (dev only)
+server.get('/api/checkpoint-stats/service-status', async (request, reply) => {
+  if (!isTestDeployment()) {
+    return reply.status(403).send({ error: 'Only available in development' });
+  }
+
+  const statuses: Record<number, boolean> = {};
+  for (const [proc, name] of Object.entries(CHECKPOINT_SERVICE_NAMES)) {
+    try {
+      const res = await fetch(`${SUDOB_URL}/api/service/status?service=${name}`, {
+        signal: AbortSignal.timeout(2000),
+      });
+      const data = await res.json() as { active?: boolean };
+      statuses[Number(proc)] = data.active === true;
+    } catch {
+      statuses[Number(proc)] = false;
+    }
+  }
+  return { services: statuses };
+});
+
 // ============================================================================
 // Billing Monitor API (for Admin Dashboard BillingMonitor page)
 // ============================================================================
