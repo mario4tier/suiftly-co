@@ -59,7 +59,7 @@ describe('gRPC Request Metering', () => {
       SELECT customer_id, service_type, bytes_sent, status_code
       FROM haproxy_raw_logs
       WHERE timestamp >= ${timestampBefore}
-        AND service_type = 4
+        AND service_type = 2
       ORDER BY timestamp DESC
       LIMIT 10
     `);
@@ -67,7 +67,7 @@ describe('gRPC Request Metering', () => {
     // Should have logged requests with bytes_sent > 0
     expect(logs.rows.length).toBeGreaterThan(0);
     const firstLog = logs.rows[0] as any;
-    expect(firstLog.service_type).toBe(4); // gRPC service_type_code
+    expect(firstLog.service_type).toBe(2); // gRPC — SERVICE_TYPE_NUMBER.grpc
     expect(Number(firstLog.bytes_sent)).toBeGreaterThan(0);
   });
 });

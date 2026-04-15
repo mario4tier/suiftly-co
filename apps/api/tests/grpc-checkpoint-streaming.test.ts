@@ -185,7 +185,7 @@ describe('Checkpoint Streaming Metering', () => {
     );
   });
 
-  it('should log bytes_sent in haproxy_raw_logs matching client bytes', { timeout: 30000 }, async () => {
+  it('should log bytes_sent in haproxy_raw_logs matching client bytes', { timeout: 45000 }, async () => {
     if (!haproxyAvailable || !backendAvailable || !apiAvailable) return;
 
     const timestampBefore = new Date();
@@ -203,9 +203,9 @@ describe('Checkpoint Streaming Metering', () => {
     expect(result.totalBytes).toBeGreaterThan(0);
 
     // Wait for fluentd pipeline: HAProxy -> rsyslog -> fluentd-lm (1s aggregation) -> fluentd-gm -> PostgreSQL.
-    // Give it up to 10 seconds to propagate.
+    // Pipeline can take 15-20s on dev box (fluentd aggregation windows + DB flush).
     let loggedBytes = 0;
-    for (let attempt = 0; attempt < 10; attempt++) {
+    for (let attempt = 0; attempt < 25; attempt++) {
       await new Promise(resolve => setTimeout(resolve, 1000));
 
       const logs = await db
