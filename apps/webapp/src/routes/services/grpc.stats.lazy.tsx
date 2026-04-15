@@ -735,7 +735,16 @@ function GrpcStatsPage() {
     onError: () => toast.error('Failed to clear stats'),
   });
 
-  const isLoading = injectTestData.isPending || injectDemoData.isPending || clearStats.isPending;
+  // Real traffic: stream checkpoints through HAProxy metered port with real API key
+  const generateRealTraffic = trpc.grpc.generateRealTraffic.useMutation({
+    onSuccess: (data) => {
+      invalidateAll();
+      toast.success(`Real traffic: ${data.checkpoints} checkpoints, ${(data.bytes / 1024).toFixed(0)}KB`);
+    },
+    onError: (err) => toast.error(`Real traffic failed: ${err.message}`),
+  });
+
+  const isLoading = injectTestData.isPending || injectDemoData.isPending || clearStats.isPending || generateRealTraffic.isPending;
 
   const formatNumber = (n: number) => {
     if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
@@ -761,6 +770,14 @@ function GrpcStatsPage() {
       case 'injectDemo':
         // Full 24h demo with realistic patterns and whisker spread
         injectDemoData.mutate({ serviceType: 'grpc' });
+        break;
+      case 'realTraffic3s':
+        // Real streaming through HAProxy metered port (3 seconds)
+        generateRealTraffic.mutate({ durationSecs: 3 });
+        break;
+      case 'realTraffic10s':
+        // Real streaming through HAProxy metered port (10 seconds)
+        generateRealTraffic.mutate({ durationSecs: 10 });
         break;
     }
   };
@@ -806,6 +823,21 @@ function GrpcStatsPage() {
                         className="w-full text-left px-3 py-1.5 text-xs text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
                       >
                         Inject Demo (24H)
+                      </button>
+                      <div className="border-t border-gray-200 dark:border-gray-700 my-1" />
+                      <button
+                        type="button"
+                        onClick={() => handleTestAction('realTraffic3s')}
+                        className="w-full text-left px-3 py-1.5 text-xs text-blue-600 dark:text-blue-400 hover:bg-gray-100 dark:hover:bg-gray-700"
+                      >
+                        Real Traffic (3s)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleTestAction('realTraffic10s')}
+                        className="w-full text-left px-3 py-1.5 text-xs text-blue-600 dark:text-blue-400 hover:bg-gray-100 dark:hover:bg-gray-700"
+                      >
+                        Real Traffic (10s)
                       </button>
                       <div className="border-t border-gray-200 dark:border-gray-700 my-1" />
                       <button
