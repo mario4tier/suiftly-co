@@ -419,8 +419,13 @@ export async function refreshStatsAggregate(
   startTime?: Date,
   endTime?: Date
 ): Promise<void> {
-  // TimescaleDB requires explicit time range for refresh
-  // Use 5 years to ensure test data from any date is covered (tests often use 2024 dates)
+  // TimescaleDB requires explicit time range for refresh.
+  // Default: wide window ending after NOW so real-time injection paths
+  // (apps/api's injectTestData, injectDemoData, forceSyncStats) see data
+  // immediately. Test suites that repeatedly refresh can hit intermittent
+  // "materialization_ranges overlap" errors when the auto-refresh policy
+  // races manual refreshes — mitigate by passing explicit narrow ranges in
+  // those tests (see ut-preview.test.ts).
   const start = startTime
     ? `'${startTime.toISOString()}'::timestamptz`
     : `NOW() - INTERVAL '5 years'`;
@@ -430,6 +435,27 @@ export async function refreshStatsAggregate(
 
   await db.execute(
     sql.raw(`CALL refresh_continuous_aggregate('stats_per_hour', ${start}, ${end})`)
+  );
+}
+
+/**
+ * Refresh stats_per_min continuous aggregate (1-minute buckets).
+ * Use in tests to make recently inserted raw logs visible in minute-level queries.
+ */
+export async function refreshStatsPerMin(
+  db: Database,
+  startTime?: Date,
+  endTime?: Date
+): Promise<void> {
+  const start = startTime
+    ? `'${startTime.toISOString()}'::timestamptz`
+    : `NOW() - INTERVAL '5 years'`;
+  const end = endTime
+    ? `'${endTime.toISOString()}'::timestamptz`
+    : `NOW() + INTERVAL '1 hour'`;
+
+  await db.execute(
+    sql.raw(`CALL refresh_continuous_aggregate('stats_per_min', ${start}, ${end})`)
   );
 }
 
@@ -466,16 +492,40 @@ export async function clearAllLogs(db: Database): Promise<void> {
 }
 
 /**
- * Clear all stats data: raw logs AND materialized continuous aggregate.
+ * Resolve the internal materialization table name for a continuous aggregate.
+ * TimescaleDB assigns these IDs sequentially as `_materialized_hypertable_<N>`;
+ * the number isn't stable across recreate, so tests look them up at runtime.
+ */
+async function getMatTableName(
+  db: Database | DatabaseOrTransaction,
+  userViewName: string
+): Promise<string> {
+  const result = await db.execute(sql`
+    SELECT format('_timescaledb_internal._materialized_hypertable_%s', mat_hypertable_id) AS name
+    FROM _timescaledb_catalog.continuous_agg
+    WHERE user_view_name = ${userViewName}
+  `);
+  const row = result.rows[0] as { name?: string } | undefined;
+  if (!row?.name) {
+    throw new Error(`continuous aggregate not found: ${userViewName}`);
+  }
+  return row.name;
+}
+
+/**
+ * Clear all stats data: raw logs AND materialized continuous aggregates.
  * Use this in beforeEach for any test that reads from stats_per_hour.
  *
- * The materialized table must be cleared directly because
+ * The materialized tables must be cleared directly because
  * refresh_continuous_aggregate does NOT remove stale materialized rows
  * when the underlying raw data is deleted.
  */
 export async function clearAllStats(db: Database | DatabaseOrTransaction): Promise<void> {
   await db.execute(sql`TRUNCATE TABLE haproxy_raw_logs`);
-  await db.execute(sql`DELETE FROM _timescaledb_internal._materialized_hypertable_4`);
+  const perHour = sql.raw(await getMatTableName(db, 'stats_per_hour'));
+  const perMin = sql.raw(await getMatTableName(db, 'stats_per_min'));
+  await db.execute(sql`DELETE FROM ${perHour}`);
+  await db.execute(sql`DELETE FROM ${perMin}`);
 }
 
 /**
@@ -506,11 +556,13 @@ export async function insertMockStats(
     ts.getUTCFullYear(), ts.getUTCMonth(), ts.getUTCDate(), ts.getUTCHours()
   ));
 
+  const perHour = sql.raw(await getMatTableName(db, 'stats_per_hour'));
+
   // Use upsert to handle re-runs: if the same bucket+customer+service+network
   // already exists (from a prior failed run), update instead of failing.
   // The materialization table has no unique constraint, so we delete-then-insert.
   await db.execute(sql`
-    DELETE FROM _timescaledb_internal._materialized_hypertable_4
+    DELETE FROM ${perHour}
     WHERE bucket = ${bucket}
       AND customer_id = ${customerId}
       AND service_type = ${options.serviceType}
@@ -518,7 +570,7 @@ export async function insertMockStats(
   `);
 
   await db.execute(sql`
-    INSERT INTO _timescaledb_internal._materialized_hypertable_4
+    INSERT INTO ${perHour}
       (bucket, customer_id, service_type, network, billable_requests,
        guaranteed_success_count, burst_success_count, dropped_count,
        client_error_count, server_error_count, success_count,
@@ -539,8 +591,9 @@ export async function clearMockStats(
   db: Database,
   customerId: number
 ): Promise<void> {
+  const perHour = sql.raw(await getMatTableName(db, 'stats_per_hour'));
   await db.execute(sql`
-    DELETE FROM _timescaledb_internal._materialized_hypertable_4
+    DELETE FROM ${perHour}
     WHERE customer_id = ${customerId}
   `);
 }

@@ -11,14 +11,11 @@ import { serviceInstances, apiKeys, configGlobal, customers } from '@suiftly/dat
 import { eq, and, sql, isNull } from 'drizzle-orm';
 import { SERVICE_TYPE, GRPC_PORT } from '@suiftly/shared/constants';
 import { isTestFeaturesEnabled } from '@mhaxbe/system-config';
-import { forceSyncUsageToDraft } from '@suiftly/database/billing';
-import { refreshStatsAggregate } from '@suiftly/database/stats';
 import { dbClock } from '@suiftly/shared/db-clock';
 import * as http2 from 'node:http2';
 import { storeApiKey, getApiKeys } from '../lib/api-keys';
 import { parseIpAddressList, ipAllowlistUpdateSchema } from '@suiftly/shared/schemas';
 import { decryptSecret } from '../lib/encryption';
-import { dbClock } from '@suiftly/shared/db-clock';
 import { triggerVaultSync, markConfigChanged } from '../lib/gm-sync';
 import { assertPlatformSubscription, getCustomerPlatformTier } from '../lib/payment-gates';
 
@@ -501,14 +498,30 @@ export const grpcRouter = router({
 
   /**
    * Generate real gRPC traffic through HAProxy metered port.
-   * Makes actual streaming requests with the customer's API key so the full
-   * metering pipeline is exercised (HAProxy → rsyslog → fluentd → DB).
+   *
+   * Two modes:
+   * - 'requests': inject `count` individual gRPC requests (each a separate
+   *   HAProxy log entry, showing up as distinct requests in traffic stats).
+   * - 'stream': open one streaming checkpoint subscription for `durationSecs`
+   *   seconds (one long-lived connection, bandwidth reflected in stats).
+   *
+   * Traffic flows through the full production pipeline:
+   *   HAProxy → rsyslog → fluentd → PostgreSQL (haproxy_raw_logs)
+   * No forced stats refresh — stats reflect changes on their natural timescale.
+   *
    * Dev/test only.
    */
   generateRealTraffic: protectedProcedure
-    .input(z.object({
-      durationSecs: z.number().min(1).max(10).default(3),
-    }))
+    .input(z.discriminatedUnion('mode', [
+      z.object({
+        mode: z.literal('requests'),
+        count: z.number().int().min(1).max(200),
+      }),
+      z.object({
+        mode: z.literal('stream'),
+        durationSecs: z.number().min(1).max(60),
+      }),
+    ]))
     .mutation(async ({ ctx, input }) => {
       if (!isTestFeaturesEnabled()) {
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Only available in dev/test' });
@@ -535,106 +548,186 @@ export const grpcRouter = router({
         });
       }
 
-      // Decrypt the API key ID to get the plaintext for the request
       const plaintextKey = decryptSecret(key.apiKeyId);
-
-      // Make a real streaming request through HAProxy metered port
       const port = GRPC_PORT.MAINNET_PUBLIC;
-      const durationMs = input.durationSecs * 1000;
 
-      const result = await new Promise<{ totalBytes: number; messageCount: number; status: number; error?: string }>((resolve) => {
-        const client = http2.connect(`http://localhost:${port}`);
-        const start = Date.now();
-
-        const headers: http2.OutgoingHttpHeaders = {
-          ':method': 'POST',
-          ':path': '/sui.rpc.v2.SubscriptionService/SubscribeCheckpoints',
-          'content-type': 'application/grpc',
-          'te': 'trailers',
-          'x-api-key': plaintextKey,
-          'cf-connecting-ip': '127.0.0.1',
-        };
-
-        const timeoutId = setTimeout(() => {
-          client.close();
-          resolve({ totalBytes: 0, messageCount: 0, status: 0, error: 'timeout' });
-        }, durationMs + 5000);
-
-        client.on('error', (err) => {
-          clearTimeout(timeoutId);
-          client.close();
-          resolve({ totalBytes: 0, messageCount: 0, status: 0, error: err.message });
-        });
-
-        const req = client.request(headers);
-        // Empty gRPC frame (SubscribeCheckpointsRequest with no read_mask)
-        req.write(Buffer.from([0x00, 0x00, 0x00, 0x00, 0x00]));
-        req.end();
-
-        let status = 0;
-        let totalBytes = 0;
-        let messageCount = 0;
-        let frameBuf = Buffer.alloc(0);
-
-        req.on('response', (h) => { status = (h[':status'] as number) ?? 0; });
-        req.on('data', (chunk: Buffer) => {
-          totalBytes += chunk.length;
-          frameBuf = Buffer.concat([frameBuf, chunk]);
-          while (frameBuf.length >= 5) {
-            const msgLen = frameBuf.readUInt32BE(1);
-            const frameLen = 5 + msgLen;
-            if (frameBuf.length < frameLen) break;
-            messageCount++;
-            frameBuf = frameBuf.subarray(frameLen);
-          }
-        });
-
-        const durationTimer = setTimeout(() => {
-          req.close();
-          setTimeout(() => {
-            clearTimeout(timeoutId);
-            client.close();
-            resolve({ totalBytes, messageCount, status });
-          }, 200);
-        }, durationMs);
-
-        req.on('end', () => {
-          clearTimeout(timeoutId);
-          clearTimeout(durationTimer);
-          client.close();
-          resolve({ totalBytes, messageCount, status });
-        });
-
-        req.on('error', () => {
-          clearTimeout(timeoutId);
-          clearTimeout(durationTimer);
-          client.close();
-          resolve({ totalBytes, messageCount, status, error: 'stream error' });
-        });
-      });
-
-      if (result.error) {
-        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: result.error });
+      if (input.mode === 'requests') {
+        return await injectRequests(port, plaintextKey, input.count);
       }
-
-      // Background: wait for fluentd pipeline, then refresh stats and sync usage.
-      // Don't block the response — the UI can poll for updates.
-      const customerId = ctx.user.customerId;
-      setTimeout(async () => {
-        try {
-          await new Promise(resolve => setTimeout(resolve, 15000));
-          await refreshStatsAggregate(db);
-          await forceSyncUsageToDraft(db, customerId, dbClock);
-        } catch (e) {
-          console.error('Background usage sync failed:', e);
-        }
-      }, 0);
-
-      return {
-        checkpoints: result.messageCount,
-        bytes: result.totalBytes,
-        durationMs: input.durationSecs * 1000,
-        status: result.status,
-      };
+      return await injectStream(port, plaintextKey, input.durationSecs);
     }),
 });
+
+// ---------------------------------------------------------------------------
+// Traffic injection helpers — real gRPC through HAProxy, no mock data
+// ---------------------------------------------------------------------------
+
+const GRPC_HEADERS = (apiKey: string): http2.OutgoingHttpHeaders => ({
+  ':method': 'POST',
+  ':path': '/sui.rpc.v2.SubscriptionService/SubscribeCheckpoints',
+  'content-type': 'application/grpc',
+  'te': 'trailers',
+  'x-api-key': apiKey,
+  'cf-connecting-ip': '127.0.0.1',
+});
+
+// Empty gRPC frame: [0x00 (not compressed), 0x00000000 (zero-length message)]
+const EMPTY_GRPC_FRAME = Buffer.from([0x00, 0x00, 0x00, 0x00, 0x00]);
+
+/**
+ * Make a single short-lived gRPC streaming request: connect, receive one
+ * checkpoint message, close. Each call generates one HAProxy log entry.
+ */
+function makeOneRequest(
+  port: number,
+  apiKey: string,
+): Promise<{ bytes: number; ok: boolean }> {
+  return new Promise((resolve) => {
+    const client = http2.connect(`http://localhost:${port}`);
+    const timeoutId = setTimeout(() => {
+      client.close();
+      resolve({ bytes: 0, ok: false });
+    }, 10_000);
+
+    client.on('error', () => {
+      clearTimeout(timeoutId);
+      client.close();
+      resolve({ bytes: 0, ok: false });
+    });
+
+    const req = client.request(GRPC_HEADERS(apiKey));
+    req.write(EMPTY_GRPC_FRAME);
+    req.end();
+
+    let bytes = 0;
+    let gotMessage = false;
+    let frameBuf = Buffer.alloc(0);
+
+    req.on('data', (chunk: Buffer) => {
+      bytes += chunk.length;
+      frameBuf = Buffer.concat([frameBuf, chunk]);
+      // Wait for at least one complete gRPC message
+      while (frameBuf.length >= 5) {
+        const msgLen = frameBuf.readUInt32BE(1);
+        const frameLen = 5 + msgLen;
+        if (frameBuf.length < frameLen) break;
+        gotMessage = true;
+        frameBuf = frameBuf.subarray(frameLen);
+      }
+      if (gotMessage) {
+        req.close();
+        setTimeout(() => {
+          clearTimeout(timeoutId);
+          client.close();
+          resolve({ bytes, ok: true });
+        }, 100);
+      }
+    });
+
+    req.on('end', () => {
+      clearTimeout(timeoutId);
+      client.close();
+      resolve({ bytes, ok: bytes > 0 });
+    });
+
+    req.on('error', () => {
+      clearTimeout(timeoutId);
+      client.close();
+      resolve({ bytes, ok: false });
+    });
+  });
+}
+
+/**
+ * Inject `count` individual gRPC requests sequentially. Each goes through the
+ * full HAProxy pipeline and generates its own log entry.
+ */
+async function injectRequests(
+  port: number,
+  apiKey: string,
+  count: number,
+): Promise<{ mode: 'requests'; requests: number; successCount: number; totalBytes: number }> {
+  let successCount = 0;
+  let totalBytes = 0;
+
+  for (let i = 0; i < count; i++) {
+    const r = await makeOneRequest(port, apiKey);
+    if (r.ok) successCount++;
+    totalBytes += r.bytes;
+  }
+
+  return { mode: 'requests', requests: count, successCount, totalBytes };
+}
+
+/**
+ * Open one streaming checkpoint subscription for `durationSecs` seconds.
+ * Generates one HAProxy log entry with cumulative bytes.
+ */
+function injectStream(
+  port: number,
+  apiKey: string,
+  durationSecs: number,
+): Promise<{ mode: 'stream'; checkpoints: number; bytes: number; durationMs: number; status: number }> {
+  const durationMs = durationSecs * 1000;
+
+  return new Promise((resolve) => {
+    const client = http2.connect(`http://localhost:${port}`);
+
+    const timeoutId = setTimeout(() => {
+      client.close();
+      resolve({ mode: 'stream', checkpoints: 0, bytes: 0, durationMs, status: 0 });
+    }, durationMs + 10_000);
+
+    client.on('error', () => {
+      clearTimeout(timeoutId);
+      client.close();
+      resolve({ mode: 'stream', checkpoints: 0, bytes: 0, durationMs, status: 0 });
+    });
+
+    const req = client.request(GRPC_HEADERS(apiKey));
+    req.write(EMPTY_GRPC_FRAME);
+    req.end();
+
+    let status = 0;
+    let totalBytes = 0;
+    let messageCount = 0;
+    let frameBuf = Buffer.alloc(0);
+
+    req.on('response', (h) => { status = (h[':status'] as number) ?? 0; });
+
+    req.on('data', (chunk: Buffer) => {
+      totalBytes += chunk.length;
+      frameBuf = Buffer.concat([frameBuf, chunk]);
+      while (frameBuf.length >= 5) {
+        const msgLen = frameBuf.readUInt32BE(1);
+        const frameLen = 5 + msgLen;
+        if (frameBuf.length < frameLen) break;
+        messageCount++;
+        frameBuf = frameBuf.subarray(frameLen);
+      }
+    });
+
+    const durationTimer = setTimeout(() => {
+      req.close();
+      setTimeout(() => {
+        clearTimeout(timeoutId);
+        client.close();
+        resolve({ mode: 'stream', checkpoints: messageCount, bytes: totalBytes, durationMs, status });
+      }, 200);
+    }, durationMs);
+
+    req.on('end', () => {
+      clearTimeout(timeoutId);
+      clearTimeout(durationTimer);
+      client.close();
+      resolve({ mode: 'stream', checkpoints: messageCount, bytes: totalBytes, durationMs, status });
+    });
+
+    req.on('error', () => {
+      clearTimeout(timeoutId);
+      clearTimeout(durationTimer);
+      client.close();
+      resolve({ mode: 'stream', checkpoints: messageCount, bytes: totalBytes, durationMs, status });
+    });
+  });
+}

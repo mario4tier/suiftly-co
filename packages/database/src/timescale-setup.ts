@@ -255,6 +255,7 @@ export async function setupTimescaleDB() {
       SUM(bytes_sent * repeat) AS total_bytes,
       -- Response time (weighted average)
       SUM(time_total::bigint * repeat)::double precision / NULLIF(SUM(repeat), 0) AS avg_rt_ms,
+      MIN(time_total) AS min_rt_ms,
       MAX(time_total) AS max_rt_ms
     FROM haproxy_raw_logs
     WHERE customer_id IS NOT NULL

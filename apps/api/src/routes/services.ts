@@ -9,7 +9,8 @@ import { router, protectedProcedure } from '../lib/trpc';
 import { db, withCustomerLockForAPI } from '@suiftly/database';
 import { customers, serviceInstances, systemControl, lmStatus, apiKeys, sealKeys, sealPackages } from '@suiftly/database/schema';
 import { eq, and, sql, min, ne, isNull, count } from 'drizzle-orm';
-import { SERVICE_TYPE, SERVICE_TIER, SERVICE_STATE, API_KEY_ORIGIN } from '@suiftly/shared/constants';
+import { SERVICE_TYPE, SERVICE_TIER, SERVICE_STATE, API_KEY_ORIGIN, isServiceAvailable } from '@suiftly/shared/constants';
+import { assertServiceAvailable } from '../lib/service-availability';
 import type { ServiceType } from '@suiftly/shared/constants';
 import { DEFAULT_SERVICE_CONFIG, buildProvisionConfig } from '@suiftly/shared/schemas';
 import { testDelayManager } from '../lib/test-delays';
@@ -48,8 +49,17 @@ function getServiceChangeSeqColumn(serviceType: ServiceType, expectedVaultSeq: n
   }
 }
 
-// Zod schemas for input validation
-const serviceTypeSchema = z.enum([SERVICE_TYPE.SEAL, SERVICE_TYPE.GRPC, SERVICE_TYPE.GRAPHQL, SERVICE_TYPE.PLATFORM]);
+// Zod schema covers ALL SERVICE_TYPE values — runtime availability is gated
+// by assertServiceAvailable (see lib/service-availability.ts).
+const serviceTypeSchema = z.enum([
+  SERVICE_TYPE.SEAL,
+  SERVICE_TYPE.GRPC,
+  SERVICE_TYPE.GRAPHQL,
+  SERVICE_TYPE.PLATFORM,
+  SERVICE_TYPE.SSFN,
+  SERVICE_TYPE.SEALO,
+]);
+
 const serviceTierSchema = z.enum([SERVICE_TIER.STARTER, SERVICE_TIER.PRO]);
 
 const subscribeInputSchema = z.object({
@@ -80,6 +90,8 @@ export const servicesRouter = router({
           message: 'Not authenticated',
         });
       }
+
+      assertServiceAvailable(input.serviceType);
 
       // Apply test delay if configured
       await testDelayManager.applyDelay('subscribe');
@@ -286,7 +298,10 @@ export const servicesRouter = router({
 
         // 7. Auto-provision non-platform services now that platform payment succeeded.
         // Idempotent (onConflictDoNothing + key existence check) so safe to re-run.
-        const nonPlatformServices = [SERVICE_TYPE.SEAL, SERVICE_TYPE.GRPC, SERVICE_TYPE.GRAPHQL] as const;
+        // Derived from API_AVAILABLE_SERVICES so reserved-but-gated services
+        // (ssfn, sealo) are automatically excluded until launched.
+        const nonPlatformServices = (Object.values(SERVICE_TYPE) as ServiceType[])
+          .filter((s) => s !== SERVICE_TYPE.PLATFORM && isServiceAvailable(s));
         const provisionConfig = buildProvisionConfig(input.tier!);
         for (const serviceType of nonPlatformServices) {
           await tx
@@ -371,6 +386,8 @@ export const servicesRouter = router({
         });
       }
 
+      assertServiceAvailable(input.serviceType);
+
       const service = await db.query.serviceInstances.findFirst({
         where: and(
           eq(serviceInstances.customerId, ctx.user.customerId),
@@ -421,6 +438,8 @@ export const servicesRouter = router({
           message: 'Not authenticated',
         });
       }
+
+      assertServiceAvailable(input.serviceType);
 
       // Platform subscription cannot be toggled — it is always "on"
       if (input.serviceType === SERVICE_TYPE.PLATFORM) {
@@ -544,6 +563,8 @@ export const servicesRouter = router({
           message: 'Not authenticated',
         });
       }
+
+      assertServiceAvailable(input.serviceType);
 
       // Wrap entire operation in customer advisory lock
       const result = await withCustomerLockForAPI(

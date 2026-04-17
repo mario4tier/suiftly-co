@@ -887,6 +887,8 @@ const UPGRADE_SERVICES = [
   { service: 'sealo', network: 'testnet', label: 'Seal Open Testnet' },
   { service: 'grpc', network: 'mainnet', label: 'gRPC Mainnet' },
   { service: 'grpc', network: 'testnet', label: 'gRPC Testnet' },
+  { service: 'ssfn', network: 'mainnet', label: 'SSFN Mainnet' },
+  { service: 'ssfn', network: 'testnet', label: 'SSFN Testnet' },
 ];
 
 // GET /api/upgrades/status - Get upgrade status for all service types from LM (parallel)
@@ -1062,11 +1064,15 @@ const infraRangeQuerySchema = z.object({
   range: z.enum(['24h', '7d', '2y']).optional().default('24h'),
 });
 
-// Service type names for display
+// Service type names for display. Keep in sync with SERVICE_TYPE_NUMBER in
+// packages/shared/src/constants/index.ts and scripts/config/service_types.py.
 const SERVICE_TYPE_NAMES: Record<number, string> = {
   1: 'Seal',
   2: 'RPC',
   3: 'GraphQL',
+  4: 'Platform',
+  5: 'SSFN',
+  6: 'Sealo',
 };
 
 // Event type names for display

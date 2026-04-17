@@ -37,8 +37,13 @@ try {
 
 const connectionString = process.env.DATABASE_URL || 'postgresql://localhost/suiftly_dev';
 
+// All internal code runs in UTC. This ensures date_trunc('day', …) and any
+// other session-TZ-sensitive expression produce UTC-aligned results that
+// match JS Date.UTC(…) in application-level merge/compare logic. User-facing
+// timezone handling is a UI concern, not an internal one.
 const pool = new Pool({
   connectionString,
+  options: '-c timezone=UTC',
 });
 
 export const db = drizzle(pool, { schema });

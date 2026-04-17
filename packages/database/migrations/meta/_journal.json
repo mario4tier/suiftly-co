@@ -29,6 +29,13 @@
       "when": 1776120045902,
       "tag": "0003_lonely_trish_tilby",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1776371354805,
+      "tag": "0004_public_lightspeed",
+      "breakpoints": true
     }
   ]
 }

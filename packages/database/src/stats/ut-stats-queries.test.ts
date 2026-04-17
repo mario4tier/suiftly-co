@@ -14,6 +14,7 @@ import {
   insertMockHAProxyLogs,
   insertMockMixedLogs,
   refreshStatsAggregate,
+  refreshStatsPerMin,
   clearAllLogs,
   clearAllStats,
 } from './test-helpers';
@@ -22,6 +23,10 @@ import {
   getStatsSummary,
   getUsageStats,
   getResponseTimeStats,
+  getTrafficStats,
+  getBandwidthStats,
+  getBillableRequestCount,
+  getBillableBandwidth,
   type StatsSummary,
   type UsageDataPoint,
   type ResponseTimeDataPoint,
@@ -59,9 +64,13 @@ describe('Stats Queries', () => {
     // Reset clock to a known time
     clock = new MockDBClock({ currentTime: new Date('2024-01-15T12:00:00Z') });
 
-    // Clear all stats data (raw logs + materialized aggregate) for clean state
+    // Clear all stats data (raw logs + both materialized aggregates) for clean state.
+    // Must refresh BOTH aggregates after clearing to reset TimescaleDB's internal
+    // watermarks — otherwise a subsequent refresh inside a test may skip ranges
+    // it thinks were already materialized.
     await clearAllStats(db);
     await refreshStatsAggregate(db);
+    await refreshStatsPerMin(db);
   });
 
   afterAll(async () => {
@@ -369,6 +378,382 @@ describe('Stats Queries', () => {
 
       // Should only include the 200 from 12 hours ago
       expect(summary.successCount).toBe(200);
+    });
+  });
+
+  // ==========================================================================
+  // Hybrid real-time query tests (stats_per_hour + stats_per_min tail)
+  // ==========================================================================
+  describe('Hybrid real-time queries', () => {
+    // Clock at 12:30 — 30 minutes into the current hour.
+    // Cutoff = 12:00 (start of current hour).
+    // Data at 10:00 → completed hour → covered by stats_per_hour.
+    // Data at 12:15 → current hour → only in stats_per_min.
+    const COMPLETED_HOUR = new Date('2024-01-15T10:00:00Z');
+    const CURRENT_HOUR   = new Date('2024-01-15T12:15:00Z');
+
+    beforeEach(() => {
+      clock = new MockDBClock({ currentTime: new Date('2024-01-15T12:30:00Z') });
+    });
+
+    describe('getStatsSummary with range', () => {
+      it('should combine hourly aggregate + minute tail', async () => {
+        // 100 requests in completed hour
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 100,
+          timestamp: COMPLETED_HOUR, statusCode: 200,
+        });
+        // 50 requests in current hour
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 50,
+          timestamp: CURRENT_HOUR, statusCode: 200,
+        });
+        await refreshStatsAggregate(db);
+        await refreshStatsPerMin(db);
+
+        const summary = await getStatsSummary(db, TEST_CUSTOMER_ID, 1, clock, '24h');
+
+        expect(summary.successCount).toBe(150);
+        expect(summary.totalRequests).toBe(150);
+      });
+
+      it('should include minute-tail data even without hourly refresh', async () => {
+        // Only insert in current hour — don't refresh stats_per_hour
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 30,
+          timestamp: CURRENT_HOUR, statusCode: 200,
+        });
+        // Only refresh stats_per_min (NOT stats_per_hour)
+        await refreshStatsPerMin(db);
+
+        const summary = await getStatsSummary(db, TEST_CUSTOMER_ID, 1, clock, '24h');
+
+        // Minute tail picks up the 30 requests
+        expect(summary.successCount).toBe(30);
+        expect(summary.totalRequests).toBe(30);
+      });
+
+      it('should respect the range parameter', async () => {
+        // Insert data 3 days ago (outside 24h, inside 7d)
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 200,
+          timestamp: new Date('2024-01-12T10:00:00Z'), statusCode: 200,
+        });
+        // Insert data 2 hours ago (inside 24h)
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 75,
+          timestamp: COMPLETED_HOUR, statusCode: 200,
+        });
+        await refreshStatsAggregate(db);
+        await refreshStatsPerMin(db);
+
+        const summary24h = await getStatsSummary(db, TEST_CUSTOMER_ID, 1, clock, '24h');
+        const summary7d = await getStatsSummary(db, TEST_CUSTOMER_ID, 1, clock, '7d');
+
+        expect(summary24h.successCount).toBe(75);
+        expect(summary7d.successCount).toBe(275);
+      });
+
+      it('should count mixed traffic types in minute tail', async () => {
+        // Guaranteed success in current hour
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 40,
+          timestamp: CURRENT_HOUR, statusCode: 200, trafficType: 1,
+        });
+        // Client error in current hour
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 10,
+          timestamp: CURRENT_HOUR, statusCode: 429, trafficType: 3,
+        });
+        await refreshStatsPerMin(db);
+
+        const summary = await getStatsSummary(db, TEST_CUSTOMER_ID, 1, clock, '24h');
+
+        expect(summary.successCount).toBe(40);
+        expect(summary.droppedCount).toBe(10);
+        expect(summary.totalRequests).toBe(50);
+      });
+    });
+
+    describe('getBillableRequestCount hybrid', () => {
+      it('should include minute-tail in billing counts', async () => {
+        const monthStart = new Date('2024-01-01T00:00:00Z');
+
+        // Completed hour
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 100,
+          timestamp: COMPLETED_HOUR, trafficType: 1,
+        });
+        // Current hour
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 25,
+          timestamp: CURRENT_HOUR, trafficType: 1,
+        });
+        await refreshStatsAggregate(db);
+        await refreshStatsPerMin(db);
+
+        const count = await getBillableRequestCount(
+          db, TEST_CUSTOMER_ID, 1, monthStart, clock.now()
+        );
+
+        expect(count).toBe(125);
+      });
+
+      it('should exclude non-billable traffic from minute tail', async () => {
+        const monthStart = new Date('2024-01-01T00:00:00Z');
+
+        // Billable in current hour
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 20,
+          timestamp: CURRENT_HOUR, trafficType: 1,
+        });
+        // Non-billable (dropped) in current hour
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 10,
+          timestamp: CURRENT_HOUR, trafficType: 3,
+        });
+        await refreshStatsPerMin(db);
+
+        const count = await getBillableRequestCount(
+          db, TEST_CUSTOMER_ID, 1, monthStart, clock.now()
+        );
+
+        expect(count).toBe(20);
+      });
+    });
+
+    describe('getBillableBandwidth hybrid', () => {
+      it('should include minute-tail bandwidth in billing', async () => {
+        const monthStart = new Date('2024-01-01T00:00:00Z');
+
+        // Completed hour: 100 requests × 4096 bytes
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 100,
+          timestamp: COMPLETED_HOUR, trafficType: 1, bytesSent: 4096,
+        });
+        // Current hour: 10 requests × 2048 bytes
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 10,
+          timestamp: CURRENT_HOUR, trafficType: 1, bytesSent: 2048,
+        });
+        await refreshStatsAggregate(db);
+        await refreshStatsPerMin(db);
+
+        const bytes = await getBillableBandwidth(
+          db, TEST_CUSTOMER_ID, 1, monthStart, clock.now()
+        );
+
+        expect(bytes).toBe(100 * 4096 + 10 * 2048);
+      });
+    });
+
+    describe('Chart partial bar', () => {
+      it('getTrafficStats should append partial bar for current hour', async () => {
+        // Completed hour
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 80,
+          timestamp: COMPLETED_HOUR, statusCode: 200, trafficType: 1,
+        });
+        // Current hour
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 20,
+          timestamp: CURRENT_HOUR, statusCode: 200, trafficType: 1,
+        });
+        await refreshStatsAggregate(db);
+        await refreshStatsPerMin(db);
+
+        const stats = await getTrafficStats(db, TEST_CUSTOMER_ID, 1, '24h', clock);
+
+        // Should have at least 2 points
+        expect(stats.length).toBeGreaterThanOrEqual(2);
+
+        // Last point should be partial (current hour)
+        const lastPoint = stats[stats.length - 1];
+        expect(lastPoint.partial).toBe(true);
+        expect(lastPoint.guaranteed).toBe(20);
+
+        // Earlier points should not be partial
+        const completedPoints = stats.filter(p => !p.partial);
+        expect(completedPoints.length).toBeGreaterThan(0);
+        const totalCompleted = completedPoints.reduce((s, p) => s + p.guaranteed, 0);
+        expect(totalCompleted).toBe(80);
+      });
+
+      it('getUsageStats should append partial bar for current hour', async () => {
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 60,
+          timestamp: COMPLETED_HOUR, trafficType: 1,
+        });
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 15,
+          timestamp: CURRENT_HOUR, trafficType: 1,
+        });
+        await refreshStatsAggregate(db);
+        await refreshStatsPerMin(db);
+
+        const stats = await getUsageStats(db, TEST_CUSTOMER_ID, 1, '24h', clock);
+
+        const lastPoint = stats[stats.length - 1];
+        expect(lastPoint.partial).toBe(true);
+        expect(lastPoint.billableRequests).toBe(15);
+      });
+
+      it('getBandwidthStats should append partial bar for current hour', async () => {
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 50,
+          timestamp: COMPLETED_HOUR, bytesSent: 1024,
+        });
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 5,
+          timestamp: CURRENT_HOUR, bytesSent: 2048,
+        });
+        await refreshStatsAggregate(db);
+        await refreshStatsPerMin(db);
+
+        const stats = await getBandwidthStats(db, TEST_CUSTOMER_ID, 1, '24 hours', clock);
+
+        const lastPoint = stats[stats.length - 1];
+        expect(lastPoint.partial).toBe(true);
+        expect(lastPoint.bytes).toBe(5 * 2048);
+      });
+
+      it('getBandwidthStats should reflect streaming pattern (1 request, high bytes)', async () => {
+        // Streaming: 1 long-lived connection → 1 log entry with large bytesSent
+        // Completed hour: one 10-second stream → ~50KB
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 1,
+          timestamp: COMPLETED_HOUR, trafficType: 1, bytesSent: 51200,
+        });
+        // Current hour: one 3-second stream → ~15KB
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 1,
+          timestamp: CURRENT_HOUR, trafficType: 1, bytesSent: 15360,
+        });
+        await refreshStatsAggregate(db);
+        await refreshStatsPerMin(db);
+
+        const stats = await getBandwidthStats(db, TEST_CUSTOMER_ID, 1, '24 hours', clock);
+
+        // Completed hour bar
+        const completedPoints = stats.filter(p => !p.partial);
+        const completedBytes = completedPoints.reduce((s, p) => s + p.bytes, 0);
+        expect(completedBytes).toBe(51200);
+
+        // Partial current-hour bar
+        const lastPoint = stats[stats.length - 1];
+        expect(lastPoint.partial).toBe(true);
+        expect(lastPoint.bytes).toBe(15360);
+      });
+
+      it('should combine requests + streaming patterns correctly', async () => {
+        // Current hour: 10 short requests (1KB each) + 1 streaming connection (50KB)
+        // Simulates a customer using both injection modes in the same hour
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 10,
+          timestamp: CURRENT_HOUR, trafficType: 1, bytesSent: 1024, statusCode: 200,
+        });
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 1,
+          timestamp: new Date(CURRENT_HOUR.getTime() + 60000), // 1 min later
+          trafficType: 1, bytesSent: 51200, statusCode: 200,
+        });
+        await refreshStatsPerMin(db);
+
+        // Summary should count 11 total requests
+        const summary = await getStatsSummary(db, TEST_CUSTOMER_ID, 1, clock, '24h');
+        expect(summary.successCount).toBe(11);
+        expect(summary.totalRequests).toBe(11);
+
+        // Billing requests: 11 billable
+        const monthStart = new Date('2024-01-01T00:00:00Z');
+        const billableCount = await getBillableRequestCount(
+          db, TEST_CUSTOMER_ID, 1, monthStart, clock.now()
+        );
+        expect(billableCount).toBe(11);
+
+        // Billing bandwidth: 10*1024 + 1*51200 = 61440
+        const billableBytes = await getBillableBandwidth(
+          db, TEST_CUSTOMER_ID, 1, monthStart, clock.now()
+        );
+        expect(billableBytes).toBe(10 * 1024 + 51200);
+
+        // Chart bandwidth partial bar: same total
+        const bwStats = await getBandwidthStats(db, TEST_CUSTOMER_ID, 1, '24 hours', clock);
+        const lastPoint = bwStats[bwStats.length - 1];
+        expect(lastPoint.partial).toBe(true);
+        expect(lastPoint.bytes).toBe(10 * 1024 + 51200);
+
+        // Traffic chart partial bar: 11 guaranteed
+        const trafficStats = await getTrafficStats(db, TEST_CUSTOMER_ID, 1, '24h', clock);
+        const lastTraffic = trafficStats[trafficStats.length - 1];
+        expect(lastTraffic.partial).toBe(true);
+        expect(lastTraffic.guaranteed).toBe(11);
+      });
+
+      it('should not include partial bar when current hour has no data', async () => {
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 50,
+          timestamp: COMPLETED_HOUR,
+        });
+        await refreshStatsAggregate(db);
+        await refreshStatsPerMin(db);
+
+        const stats = await getTrafficStats(db, TEST_CUSTOMER_ID, 1, '24h', clock);
+
+        // No partial bar — current hour has no data
+        expect(stats.every(p => !p.partial)).toBe(true);
+      });
+
+      it('getResponseTimeStats (24h) should append partial bar for current hour', async () => {
+        // Completed hour: 100 requests at 50ms → hourly avg=50, min=50, max=50
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 100,
+          timestamp: COMPLETED_HOUR, trafficType: 1, responseTimeMs: 50,
+        });
+        // Current hour: 50 requests at 100ms → tail avg=100, min=100, max=100
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 50,
+          timestamp: CURRENT_HOUR, trafficType: 1, responseTimeMs: 100,
+        });
+        await refreshStatsAggregate(db);
+        await refreshStatsPerMin(db);
+
+        const stats = await getResponseTimeStats(db, TEST_CUSTOMER_ID, 1, '24h', clock);
+
+        const lastPoint = stats[stats.length - 1];
+        expect(lastPoint.partial).toBe(true);
+        expect(lastPoint.avgResponseTimeMs).toBe(100);
+        // True min from min_rt_ms (not min-of-avg). Fixed-value mocks → min=100.
+        expect(lastPoint.minResponseTimeMs).toBe(100);
+        expect(lastPoint.maxResponseTimeMs).toBe(100);
+      });
+
+      it('getResponseTimeStats (7d) should merge tail into today bucket with weighted avg', async () => {
+        // Completed hour today: 100 req @ 50ms → hourly (avg,min,max)=(50,50,50), count=100
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 100,
+          timestamp: COMPLETED_HOUR, trafficType: 1, responseTimeMs: 50,
+        });
+        // Current hour today: 50 req @ 100ms → tail (avg,min,max)=(100,100,100), count=50
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 50,
+          timestamp: CURRENT_HOUR, trafficType: 1, responseTimeMs: 100,
+        });
+        await refreshStatsAggregate(db);
+        await refreshStatsPerMin(db);
+
+        const stats = await getResponseTimeStats(db, TEST_CUSTOMER_ID, 1, '7d', clock);
+
+        // Exactly one day bucket (today).
+        const todayStart = new Date(Date.UTC(2024, 0, 15));
+        const today = stats.find(p => p.bucket.getTime() === todayStart.getTime());
+        expect(today).toBeDefined();
+        expect(today!.partial).toBe(true);
+        // Weighted avg: (50*100 + 100*50) / 150 = 66.666…
+        expect(today!.avgResponseTimeMs).toBeCloseTo((50 * 100 + 100 * 50) / 150, 5);
+        expect(today!.minResponseTimeMs).toBe(50);
+        expect(today!.maxResponseTimeMs).toBe(100);
+      });
     });
   });
 });

@@ -63,15 +63,21 @@ export const SERVICE_TYPE = {
   GRPC: 'grpc',
   GRAPHQL: 'graphql',
   PLATFORM: 'platform',
+  SSFN: 'ssfn',
+  SEALO: 'sealo',
 } as const satisfies Record<string, ServiceType>;
 
 // Service Type to Database Number Mapping
 // Database uses integer IDs for service_type in haproxy_raw_logs
+// Encoded in 4 bits of HAProxy log merge_fields_1 (bits 48-51) — valid range 1-15.
+// Python mirror: scripts/config/service_types.py (enforced by test_service_types_parity.py)
 export const SERVICE_TYPE_NUMBER = {
   [SERVICE_TYPE.SEAL]: 1,
   [SERVICE_TYPE.GRPC]: 2,
   [SERVICE_TYPE.GRAPHQL]: 3,
   [SERVICE_TYPE.PLATFORM]: 4,
+  [SERVICE_TYPE.SSFN]: 5,
+  [SERVICE_TYPE.SEALO]: 6,
 } as const satisfies Record<ServiceType, number>;
 
 // Service Type to Single Character Mapping
@@ -82,6 +88,8 @@ export const SERVICE_TYPE_CHAR = {
   [SERVICE_TYPE.GRPC]: 'r',
   [SERVICE_TYPE.GRAPHQL]: 'g',
   [SERVICE_TYPE.PLATFORM]: 'p',
+  [SERVICE_TYPE.SSFN]: 'f',
+  [SERVICE_TYPE.SEALO]: 'o',
 } as const satisfies Record<ServiceType, string>;
 
 // Reverse mapping: number to service type
@@ -90,7 +98,23 @@ export const SERVICE_NUMBER_TO_TYPE = {
   2: SERVICE_TYPE.GRPC,
   3: SERVICE_TYPE.GRAPHQL,
   4: SERVICE_TYPE.PLATFORM,
+  5: SERVICE_TYPE.SSFN,
+  6: SERVICE_TYPE.SEALO,
 } as const satisfies Record<number, ServiceType>;
+
+// Services currently exposed externally. Enum values outside this set are reserved
+// but gated at the API/stats/provisioning layer — callers see a clear "not yet
+// available" error rather than silent acceptance.
+export const API_AVAILABLE_SERVICES = new Set<ServiceType>([
+  SERVICE_TYPE.SEAL,
+  SERVICE_TYPE.GRPC,
+  SERVICE_TYPE.GRAPHQL,
+  SERVICE_TYPE.PLATFORM,
+]);
+
+export function isServiceAvailable(service: ServiceType): boolean {
+  return API_AVAILABLE_SERVICES.has(service);
+}
 
 // Service States (6 distinct states - see UI_DESIGN.md)
 export const SERVICE_STATE = {
@@ -208,6 +232,8 @@ export const USAGE_PRICING_CENTS_PER_1000 = {
   [SERVICE_TYPE.GRPC]: 10,      // Same pricing
   [SERVICE_TYPE.GRAPHQL]: 10,   // Same pricing
   [SERVICE_TYPE.PLATFORM]: 0,   // Platform is subscription-only, no usage charges
+  [SERVICE_TYPE.SSFN]: 10,      // Mirror gRPC
+  [SERVICE_TYPE.SEALO]: 10,     // Mirror Seal
 } as const satisfies Record<ServiceType, number>;
 
 // Bandwidth Pricing (cents per GB transferred)
@@ -217,6 +243,8 @@ export const BANDWIDTH_PRICING_CENTS_PER_GB = {
   [SERVICE_TYPE.GRPC]: 6,       // 6 cents per GB ($0.06/GB)
   [SERVICE_TYPE.GRAPHQL]: 6,    // 6 cents per GB (same as gRPC)
   [SERVICE_TYPE.PLATFORM]: 0,   // Platform is subscription-only
+  [SERVICE_TYPE.SSFN]: 6,       // Mirror gRPC
+  [SERVICE_TYPE.SEALO]: 0,      // Mirror Seal
 } as const satisfies Record<ServiceType, number>;
 
 // Port Allocations - Single source of truth: ~/mhaxbe/PORT_MAP.md

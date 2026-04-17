@@ -54,7 +54,11 @@ export interface UsageChargeResult {
 
 /**
  * Compute a bandwidth charge line item for a service.
- * Returns null if the service has no bandwidth pricing or zero usage.
+ * Returns null only if the service has no bandwidth pricing or zero bytes
+ * were transferred. A non-zero quantity with a sub-cent charge still returns
+ * a line item (with amountUsdCents=0) so the UI can display the actual GB —
+ * otherwise a user with 15 MB of traffic would see "0.000 GB" on the overview,
+ * contradicting the bandwidth chart.
  */
 async function computeBandwidthLineItem(
   tx: Database | LockedTransaction,
@@ -70,8 +74,9 @@ async function computeBandwidthLineItem(
   const totalBytes = await getBillableBandwidth(tx, customerId, serviceTypeNum, periodStart, periodEnd);
   if (totalBytes <= 0) return null;
 
+  // Floor-round charge to whole cents. Sub-cent usage ends up as $0.00 —
+  // same conservative rounding we apply to the requests line item.
   const chargeCents = Math.floor((totalBytes / (1024 * 1024 * 1024)) * pricePerGb);
-  if (chargeCents <= 0) return null;
 
   return {
     itemType: INVOICE_LINE_ITEM_TYPE.BANDWIDTH,
@@ -288,6 +293,9 @@ export async function getUsageChargePreview(
   services: Array<{
     serviceType: string;
     requestCount: number;
+    requestChargeCents: number;
+    bandwidthBytes: number;
+    bandwidthChargeCents: number;
     chargeCents: number;
   }>;
 }> {
@@ -296,53 +304,55 @@ export async function getUsageChargePreview(
     .from(serviceInstances)
     .where(eq(serviceInstances.customerId, customerId));
 
-  const result: {
-    totalCents: number;
-    services: Array<{
-      serviceType: string;
-      requestCount: number;
-      chargeCents: number;
-    }>;
-  } = {
-    totalCents: 0,
-    services: [],
-  };
-
+  // Preview window = start of current calendar month → now.
+  // Mirrors `syncUsageToDraft`: the draft invoice accumulates *this month's*
+  // usage, so the preview must read the same window.
+  const today = clock.today();
+  const currentMonthStart = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
   const now = clock.now();
 
-  for (const service of services) {
+  // Compute per-service totals in parallel. Each service runs up to 2 hybrid
+  // queries (requests + bandwidth), and they're independent across services.
+  const perService = await Promise.all(services.map(async (service) => {
     const serviceTypeName = service.serviceType as ServiceType;
     const serviceTypeNum = SERVICE_TYPE_NUMBER[serviceTypeName];
-    if (!serviceTypeNum) continue;
+    if (!serviceTypeNum) return null;
 
-    const startTime = service.lastBilledTimestamp
-      ? new Date(service.lastBilledTimestamp)
-      : new Date(service.enabledAt ?? now);
-
-    const requestCount = await getBillableRequestCount(
-      db,
-      customerId,
-      serviceTypeNum,
-      startTime,
-      now
-    );
-
-    if (requestCount === 0) continue;
-
-    // Conservative: round down to avoid overcharging
     const pricePer1000 = USAGE_PRICING_CENTS_PER_1000[serviceTypeName];
-    const chargeCents = Math.floor((requestCount * pricePer1000) / 1000);
+    const pricePerGb = BANDWIDTH_PRICING_CENTS_PER_GB[serviceTypeName];
+    if (pricePer1000 === 0 && pricePerGb === 0) return null; // e.g. platform
 
-    result.services.push({
+    const [requestCount, bandwidthBytes] = await Promise.all([
+      pricePer1000 > 0
+        ? getBillableRequestCount(db, customerId, serviceTypeNum, currentMonthStart, now)
+        : Promise.resolve(0),
+      pricePerGb > 0
+        ? getBillableBandwidth(db, customerId, serviceTypeNum, currentMonthStart, now)
+        : Promise.resolve(0),
+    ]);
+
+    // Conservative: round down to avoid overcharging.
+    const requestChargeCents = Math.floor((requestCount * pricePer1000) / 1000);
+    const bandwidthChargeCents = Math.floor((bandwidthBytes / (1024 * 1024 * 1024)) * pricePerGb);
+    const chargeCents = requestChargeCents + bandwidthChargeCents;
+
+    if (chargeCents === 0 && requestCount === 0 && bandwidthBytes === 0) return null;
+
+    return {
       serviceType: service.serviceType,
       requestCount,
+      requestChargeCents,
+      bandwidthBytes,
+      bandwidthChargeCents,
       chargeCents,
-    });
+    };
+  }));
 
-    result.totalCents += chargeCents;
-  }
-
-  return result;
+  const filtered = perService.filter((s): s is NonNullable<typeof s> => s !== null);
+  return {
+    totalCents: filtered.reduce((sum, s) => sum + s.chargeCents, 0),
+    services: filtered,
+  };
 }
 
 // ============================================================================

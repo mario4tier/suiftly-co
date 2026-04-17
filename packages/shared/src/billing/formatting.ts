@@ -14,6 +14,8 @@ const SERVICE_DISPLAY_NAME: Record<ServiceType, string> = {
   [SERVICE_TYPE.GRPC]: 'gRPC',
   [SERVICE_TYPE.GRAPHQL]: 'GraphQL',
   [SERVICE_TYPE.PLATFORM]: 'Platform',
+  [SERVICE_TYPE.SSFN]: 'SSFN',
+  [SERVICE_TYPE.SEALO]: 'Sealo',
 };
 
 /**

@@ -19,7 +19,7 @@ import { eq, and, isNull } from 'drizzle-orm';
 import { encryptSecret, decryptSecret } from './encryption';
 import { dbClock } from '@suiftly/shared/db-clock';
 import { getSealProcessGroup } from '@mhaxbe/system-config';
-import { API_KEY_ORIGIN } from '@suiftly/shared/constants';
+import { API_KEY_ORIGIN, SERVICE_TYPE, isServiceAvailable, type ServiceType } from '@suiftly/shared/constants';
 
 /**
  * API_SECRET_KEY - 32-byte key for AES-128-CTR encryption and HMAC-SHA256
@@ -542,7 +542,11 @@ export async function ensureServiceInstancesProvisioned(customerId: number): Pro
   });
   const provisionConfig = buildProvisionConfig(customer?.platformTier ?? null);
 
-  const nonPlatformServices = ['seal', 'grpc', 'graphql'] as const;
+  // Derived from API_AVAILABLE_SERVICES so reserved-but-gated services
+  // (ssfn, sealo) are automatically excluded until launched. Must mirror
+  // the list in routes/services.ts (auto-provision on platform subscribe).
+  const nonPlatformServices = (Object.values(SERVICE_TYPE) as ServiceType[])
+    .filter((s) => s !== SERVICE_TYPE.PLATFORM && isServiceAvailable(s));
   for (const serviceType of nonPlatformServices) {
     // Create service instance (idempotent via unique constraint)
     await db.insert(serviceInstances).values({

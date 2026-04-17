@@ -325,6 +325,37 @@ if (isTestFeaturesEnabled()) {
     reply.send(result);
   });
 
+  // Wipe customer_payment_methods for a given wallet.
+  // Used by E2E tests to simulate the "wild" state where a user funds their
+  // escrow without any prior payment-method registration — the condition the
+  // implicit-escrow architectural change must tolerate.
+  server.post('/test/data/clear-payment-methods', {
+    config: { rateLimit: false },
+  }, async (request, reply) => {
+    const body = request.body as any;
+    const walletAddress = body.walletAddress;
+    if (!walletAddress) {
+      reply.code(400).send({ success: false, error: 'walletAddress required' });
+      return;
+    }
+    const { db } = await import('@suiftly/database');
+    const { customers, customerPaymentMethods } = await import('@suiftly/database/schema');
+    const { eq } = await import('drizzle-orm');
+
+    const customer = await db.query.customers.findFirst({
+      where: eq(customers.walletAddress, walletAddress),
+    });
+    if (!customer) {
+      reply.send({ success: true, deleted: 0 });
+      return;
+    }
+    const deleted = await db
+      .delete(customerPaymentMethods)
+      .where(eq(customerPaymentMethods.customerId, customer.customerId))
+      .returning();
+    reply.send({ success: true, deleted: deleted.length });
+  });
+
   // NOTE: DB truncation is handled by sudob (/api/test/reset-all on port 22800)
   // sudob owns ALL destructive test operations (never runs in production)
 

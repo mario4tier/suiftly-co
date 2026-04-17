@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { router, protectedProcedure } from '../lib/trpc';
 import { db } from '@suiftly/database';
 import { dbClockProvider } from '@suiftly/shared/db-clock';
-import { SERVICE_TYPE_NUMBER, type ServiceType } from '@suiftly/shared';
+import { SERVICE_TYPE, SERVICE_TYPE_NUMBER, type ServiceType } from '@suiftly/shared';
 import {
   getStatsSummary,
   getUsageStats,
@@ -19,27 +19,53 @@ import {
   insertMockHAProxyLogs,
   insertMockMixedLogs,
   refreshStatsAggregate,
+  refreshStatsPerMin,
   clearCustomerLogs,
   type TimeRange,
 } from '@suiftly/database/stats';
 import { getUsageChargePreview, forceSyncUsageToDraft } from '@suiftly/database/billing';
 import { config } from '../lib/config';
+import { assertServiceAvailable } from '../lib/service-availability';
 
-// Validation schemas
-const serviceTypeSchema = z.enum(['seal', 'grpc', 'graphql']);
+/**
+ * Refresh both stats_per_hour and stats_per_min in parallel, tolerant of
+ * failure. The TimescaleDB `materialization_ranges` catalog can accumulate
+ * overlap-claims in dev DBs and cause manual `refresh_continuous_aggregate`
+ * calls to fail — we log and continue so test/inject routes don't hard-fail.
+ * The auto-policy catches up on its own once the catalog is clean.
+ */
+async function bestEffortRefreshBoth(label: string): Promise<void> {
+  await Promise.all([
+    refreshStatsAggregate(db).catch(e => console.warn(`[${label}] refreshStatsAggregate failed:`, e?.message ?? e)),
+    refreshStatsPerMin(db).catch(e => console.warn(`[${label}] refreshStatsPerMin failed:`, e?.message ?? e)),
+  ]);
+}
+
+// Zod enum covers all non-platform services — runtime availability gated by
+// assertServiceAvailable (see lib/service-availability.ts).
+const serviceTypeSchema = z.enum([
+  SERVICE_TYPE.SEAL,
+  SERVICE_TYPE.GRPC,
+  SERVICE_TYPE.GRAPHQL,
+  SERVICE_TYPE.SSFN,
+  SERVICE_TYPE.SEALO,
+]);
 const timeRangeSchema = z.enum(['24h', '7d', '30d']);
 
 export const statsRouter = router({
   /**
-   * Get 24-hour summary stats for dashboard
+   * Get summary stats for dashboard over the selected time range.
    *
-   * Returns success/error counts for the last 24 hours.
+   * Uses hybrid query (stats_per_hour + stats_per_min tail) for
+   * near-real-time counts (~1-2 min freshness).
    */
   getSummary: protectedProcedure
     .input(z.object({
       serviceType: serviceTypeSchema,
+      range: timeRangeSchema.default('24h'),
     }))
     .query(async ({ ctx, input }) => {
+      assertServiceAvailable(input.serviceType);
       const clock = dbClockProvider.getClock();
       const serviceTypeNum = SERVICE_TYPE_NUMBER[input.serviceType as ServiceType];
 
@@ -47,7 +73,8 @@ export const statsRouter = router({
         db,
         ctx.user.customerId,
         serviceTypeNum,
-        clock
+        clock,
+        input.range
       );
 
       return summary;
@@ -64,6 +91,7 @@ export const statsRouter = router({
       range: timeRangeSchema.default('24h'),
     }))
     .query(async ({ ctx, input }) => {
+      assertServiceAvailable(input.serviceType);
       const clock = dbClockProvider.getClock();
       const serviceTypeNum = SERVICE_TYPE_NUMBER[input.serviceType as ServiceType];
 
@@ -75,17 +103,15 @@ export const statsRouter = router({
         clock
       );
 
-      // Transform dates to ISO strings for JSON serialization
       return stats.map(point => ({
         bucket: point.bucket.toISOString(),
         billableRequests: point.billableRequests,
+        ...(point.partial ? { partial: true } : {}),
       }));
     }),
 
   /**
    * Get response time stats over time for stats page
-   *
-   * Returns average response time per time bucket.
    */
   getResponseTime: protectedProcedure
     .input(z.object({
@@ -93,6 +119,7 @@ export const statsRouter = router({
       range: timeRangeSchema.default('24h'),
     }))
     .query(async ({ ctx, input }) => {
+      assertServiceAvailable(input.serviceType);
       const clock = dbClockProvider.getClock();
       const serviceTypeNum = SERVICE_TYPE_NUMBER[input.serviceType as ServiceType];
 
@@ -104,19 +131,17 @@ export const statsRouter = router({
         clock
       );
 
-      // Transform dates to ISO strings for JSON serialization
       return stats.map(point => ({
         bucket: point.bucket.toISOString(),
         avgResponseTimeMs: point.avgResponseTimeMs,
         minResponseTimeMs: point.minResponseTimeMs,
         maxResponseTimeMs: point.maxResponseTimeMs,
+        ...(point.partial ? { partial: true } : {}),
       }));
     }),
 
   /**
    * Get traffic breakdown stats over time for stats page
-   *
-   * Returns stacked traffic data: guaranteed, burst, dropped, client/server errors.
    */
   getTraffic: protectedProcedure
     .input(z.object({
@@ -124,6 +149,7 @@ export const statsRouter = router({
       range: timeRangeSchema.default('24h'),
     }))
     .query(async ({ ctx, input }) => {
+      assertServiceAvailable(input.serviceType);
       const clock = dbClockProvider.getClock();
       const serviceTypeNum = SERVICE_TYPE_NUMBER[input.serviceType as ServiceType];
 
@@ -135,7 +161,6 @@ export const statsRouter = router({
         clock
       );
 
-      // Transform dates to ISO strings for JSON serialization
       return stats.map(point => ({
         bucket: point.bucket.toISOString(),
         guaranteed: point.guaranteed,
@@ -143,12 +168,12 @@ export const statsRouter = router({
         dropped: point.dropped,
         clientError: point.clientError,
         serverError: point.serverError,
+        ...(point.partial ? { partial: true } : {}),
       }));
     }),
 
   /**
    * Get bandwidth stats over time for stats page charts.
-   * Returns bytes per time bucket.
    */
   getBandwidth: protectedProcedure
     .input(z.object({
@@ -156,6 +181,7 @@ export const statsRouter = router({
       range: timeRangeSchema.default('24h'),
     }))
     .query(async ({ ctx, input }) => {
+      assertServiceAvailable(input.serviceType);
       const clock = dbClockProvider.getClock();
       const serviceTypeNum = SERVICE_TYPE_NUMBER[input.serviceType as ServiceType];
       const intervalMap: Record<string, string> = { '24h': '24 hours', '7d': '7 days', '30d': '30 days' };
@@ -171,6 +197,7 @@ export const statsRouter = router({
       return stats.map(point => ({
         bucket: point.bucket.toISOString(),
         bytes: point.bytes,
+        ...(point.partial ? { partial: true } : {}),
       }));
     }),
 
@@ -194,6 +221,8 @@ export const statsRouter = router({
       totalUsd: preview.totalCents / 100,
       services: preview.services.map(s => ({
         ...s,
+        requestChargeUsd: s.requestChargeCents / 100,
+        bandwidthChargeUsd: s.bandwidthChargeCents / 100,
         chargeUsd: s.chargeCents / 100,
       })),
     };
@@ -216,6 +245,8 @@ export const statsRouter = router({
       if (config.NODE_ENV === 'production') {
         throw new Error('Test data injection not available in production');
       }
+
+      assertServiceAvailable(input.serviceType);
 
       const clock = dbClockProvider.getClock();
       const serviceTypeNum = SERVICE_TYPE_NUMBER[input.serviceType as ServiceType];
@@ -242,8 +273,7 @@ export const statsRouter = router({
         }
       );
 
-      // Refresh the aggregate to make data immediately visible
-      await refreshStatsAggregate(db);
+      await bestEffortRefreshBoth('injectTestData');
 
       // Sync usage to DRAFT invoice using production code path (force=true bypasses debouncing)
       await forceSyncUsageToDraft(db, ctx.user.customerId, clock);
@@ -279,9 +309,17 @@ export const statsRouter = router({
         throw new Error('Clear stats not available in production');
       }
 
+      assertServiceAvailable(input.serviceType);
+
+      const clock = dbClockProvider.getClock();
       const serviceTypeNum = SERVICE_TYPE_NUMBER[input.serviceType as ServiceType];
       await clearCustomerLogs(db, ctx.user.customerId, serviceTypeNum);
-      await refreshStatsAggregate(db);
+      await bestEffortRefreshBoth('clearStats');
+
+      // The draft invoice caches line items computed from raw logs. After
+      // wiping the logs we must re-sync so "usage this month" reflects zero
+      // instead of lingering on the pre-clear snapshot.
+      await forceSyncUsageToDraft(db, ctx.user.customerId, clock);
 
       return { success: true, serviceType: input.serviceType };
     }),
@@ -306,6 +344,8 @@ export const statsRouter = router({
       if (config.NODE_ENV === 'production') {
         throw new Error('Demo data injection not available in production');
       }
+
+      assertServiceAvailable(input.serviceType);
 
       const clock = dbClockProvider.getClock();
       const serviceTypeNum = SERVICE_TYPE_NUMBER[input.serviceType as ServiceType] as 1 | 2 | 3;
@@ -462,8 +502,7 @@ export const statsRouter = router({
         }
       }
 
-      // Refresh the aggregate to make data immediately visible
-      await refreshStatsAggregate(db);
+      await bestEffortRefreshBoth('injectDemoData');
 
       // Sync usage to DRAFT invoice using production code path (force=true bypasses debouncing)
       await forceSyncUsageToDraft(db, ctx.user.customerId, clock);
@@ -473,5 +512,30 @@ export const statsRouter = router({
         inserted: totalRequests, // Total requests represented (via repeat field)
         hoursOfData: 24,
       };
+    }),
+
+  /**
+   * Force sync stats pipeline (development/test only)
+   *
+   * Manually triggers what normally happens on a ~15-min natural cadence:
+   * 1. Refresh TimescaleDB stats_per_hour continuous aggregate
+   * 2. Sync usage charges to the DRAFT invoice
+   *
+   * Use after injecting real traffic to see stats/billing update immediately,
+   * or let the natural pipeline handle it to verify production behavior.
+   */
+  forceSyncStats: protectedProcedure
+    .mutation(async ({ ctx }) => {
+      if (config.NODE_ENV === 'production') {
+        throw new Error('Force sync not available in production');
+      }
+
+      const clock = dbClockProvider.getClock();
+
+      // Explicit admin action — surface errors instead of swallowing them.
+      await Promise.all([refreshStatsAggregate(db), refreshStatsPerMin(db)]);
+      await forceSyncUsageToDraft(db, ctx.user.customerId, clock);
+
+      return { success: true };
     }),
 });

@@ -297,8 +297,8 @@ interface SealKeyVaultConfig {
  * Each customer can have multiple services (seal, grpc, graphql)
  */
 interface ServiceVaultConfig {
-  /** Service type */
-  serviceType: 'seal' | 'grpc' | 'graphql';
+  /** Service type — any SERVICE_TYPE_CHAR-mapped service except platform */
+  serviceType: 'seal' | 'grpc' | 'graphql' | 'ssfn' | 'sealo';
   /** Network (mainnet or testnet) */
   network: 'mainnet' | 'testnet';
   /** API key fingerprints (32-bit integers) */
@@ -449,9 +449,10 @@ function getNetworkFromVaultType(vaultType: string): 'mainnet' | 'testnet' {
 }
 
 /**
- * Get service type string for ServiceVaultConfig
+ * Get service type string for ServiceVaultConfig.
+ * Vaults carry per-customer HAProxy config for HA-plane services (not platform).
  */
-function getServiceTypeString(serviceType: ServiceType): 'seal' | 'grpc' | 'graphql' {
+function getServiceTypeString(serviceType: ServiceType): ServiceVaultConfig['serviceType'] {
   switch (serviceType) {
     case SERVICE_TYPE.SEAL:
       return 'seal';
@@ -459,8 +460,16 @@ function getServiceTypeString(serviceType: ServiceType): 'seal' | 'grpc' | 'grap
       return 'grpc';
     case SERVICE_TYPE.GRAPHQL:
       return 'graphql';
-    default:
-      return 'seal'; // Default fallback
+    case SERVICE_TYPE.SSFN:
+      return 'ssfn';
+    case SERVICE_TYPE.SEALO:
+      return 'sealo';
+    case SERVICE_TYPE.PLATFORM:
+      throw new Error('Platform is a subscription service; it has no vault config');
+    default: {
+      const _exhaustive: never = serviceType;
+      throw new Error(`Unknown service type: ${_exhaustive}`);
+    }
   }
 }
 
@@ -928,10 +937,14 @@ function isKeyserverVaultType(vaultType: VaultTypeCode): boolean {
  */
 function serviceTypeFromVaultType(vaultType: VaultTypeCode): ServiceType {
   const ch = vaultType[0];
+  // Keep in sync with SERVICE_TYPE_CHAR in packages/shared/src/constants/index.ts
   switch (ch) {
     case 's': return SERVICE_TYPE.SEAL;
     case 'r': return SERVICE_TYPE.GRPC;
     case 'g': return SERVICE_TYPE.GRAPHQL;
+    case 'f': return SERVICE_TYPE.SSFN;
+    case 'o': return SERVICE_TYPE.SEALO;
+    // 'p' (platform) intentionally omitted: platform has no vaults.
     default: throw new Error(`Invalid service type character in vault type: ${vaultType}`);
   }
 }

@@ -9,6 +9,7 @@ export {
   insertMockHAProxyLogs,
   insertMockMixedLogs,
   refreshStatsAggregate,
+  refreshStatsPerMin,
   clearCustomerLogs,
   clearAllLogs,
   insertInfraLogs,

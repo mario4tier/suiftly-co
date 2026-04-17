@@ -20,9 +20,6 @@ export const serviceInstances = pgTable('service_instances', {
   enabledAt: timestamp('enabled_at', { withTimezone: true }),
   disabledAt: timestamp('disabled_at', { withTimezone: true }),
 
-  // Usage billing: tracks last billed timestamp to prevent double-billing (STATS_DESIGN.md D3)
-  lastBilledTimestamp: timestamp('last_billed_timestamp', { withTimezone: true }),
-
   // Vault sync tracking per vault type: records the vault seq that will contain this service's config
   // 0 = no pending changes (synced), >0 = waiting for LMs to reach this seq
   // Set to nextVaultSeq when config changes

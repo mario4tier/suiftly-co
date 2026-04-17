@@ -82,11 +82,11 @@ Detailed stats accessible via dedicated route per service.
 |----------|--------|-------|-------------|
 | **Guaranteed** | traffic_type=1, status 2xx | Green | Successfully served guaranteed traffic |
 | **Burst** | traffic_type=2, status 2xx | Blue | Successfully served burst traffic |
-| **Dropped** | traffic_type IN (3-6) | Yellow | Not served - exceeded guaranteed (burst disabled) or burst congestion |
-| **Client Errors** | status 4xx | Orange | Client-side errors (bad request, auth, etc.) |
-| **Server Errors** | status 5xx | Red | Server-side errors |
+| **Rejected** | traffic_type IN (3-6) | Yellow | Blocked at the edge — rate limit, IP block, API key issue, or service disabled |
+| **Invalid Request** | status 4xx, traffic_type NOT IN (3-6) | Orange | Reached the backend but failed validation (malformed payload, unknown endpoint, etc.) |
+| **Server Error** | status 5xx, traffic_type NOT IN (3-6) | Red | Backend responded with a 5xx — typically a transient issue on our side |
 
-**Legend with info (i):** Explains each category, particularly that "Dropped" represents requests not served due to exceeding guaranteed traffic (when burst disabled) or excessive burst congestion (pro/enterprise).
+**Naming rationale:** "Rejected" and "Invalid Request" are split by *who* refused the request, not by HTTP class. Edge-level refusals (auth, quota, IP, disabled) go into Rejected because the customer's remediation is different (top up balance, check API key, upgrade tier) from a backend 4xx (fix their payload). "Rejected" also includes traffic-type 4–6 which aren't strictly rate-limits — hence the rename from the older "Rate Limited" label.
 
 **Post-MVP:**
 - p95 rt (available in `stats_per_hour` if needed)
@@ -114,7 +114,7 @@ Detailed stats accessible via dedicated route per service.
 | Write throughput | 10,000 events/sec per service type (Seal/gRPC/GraphQL) |
 | Query rt (Service Stats Page) | < 500ms for 30-day range |
 | Billing aggregation | < 10s for all customers |
-| Dashboard staleness | MVP accepts ~1h (hourly aggregate refresh) |
+| Dashboard staleness | ~1–2 min (hybrid query: `stats_per_hour` + `stats_per_min` tail) |
 
 ### R6: Data Flow
 
@@ -149,7 +149,7 @@ HAProxy → rsyslog → Fluentd → haproxy_raw_logs (7d)
 | **Input to billing** | Query `stats_per_hour` for customer usage |
 | **Charging trigger** | 1st of month: periodic job processes DRAFT invoices |
 | **Line items** | Usage charges added per-service to DRAFT invoice |
-| **Idempotency** | Track `last_billed_timestamp` per customer to avoid double-counting |
+| **Idempotency** | Delete-then-insert usage line items per DRAFT invoice (bounded by invoice's billing period — no per-service timestamp needed) |
 
 ### R8: Stats API
 
@@ -168,7 +168,7 @@ HAProxy → rsyslog → Fluentd → haproxy_raw_logs (7d)
 | **Billing accuracy** | Exact (no sampling) |
 | **Stats accuracy** | Exact (no sampling) |
 | **High-volume (future)** | Pre-aggregation at serving node if needed |
-| **Aggregation refresh** | `stats_per_hour`: hourly, `stats_per_min`: 1 min |
+| **Aggregation refresh** | `stats_per_hour`: every 5 min (10 min lag), `stats_per_min`: every 1 min (1 min lag) |
 | **Timezone** | All timestamps UTC |
 
 ### R10: Failure Handling
@@ -245,6 +245,12 @@ GROUP BY bucket, customer_id, service_type, network;
 
 **Retention:** 90 days (TimescaleDB policy).
 
+**Freshness note:** The dashboard and stats charts read `stats_per_hour` for
+completed hours and append a tail from `stats_per_min` (1-min refresh, 1-min
+lag, 24h retention) for the current hour. End-to-end freshness is therefore
+~1–2 minutes, not 10 minutes. See `queries.ts::hourCutoff` and
+`getStatsSummary`/`getBillableRequestCount` for the hybrid query pattern.
+
 ### D3: Periodic Job Integration
 
 **Two concerns:**
@@ -260,30 +266,34 @@ GROUP BY bucket, customer_id, service_type, network;
 5. Attempt payment
 ```
 
-**Function:** `addUsageChargesToDraft()` in `packages/database/src/billing/usage-charges.ts`
+**Functions:** `syncUsageToDraft()` and `finalizeUsageChargesForBilling()` in `packages/database/src/billing/usage-charges.ts`
 
-**Flow:**
-1. Query `stats_per_hour` for each customer: `WHERE bucket >= last_billed_timestamp AND bucket < billing_period_end`
-2. Sum `billable_requests` per service_type
-3. Create `invoice_line_items` (type: `usage`) on DRAFT invoice
-4. Update `last_billed_timestamp` on `service_instances`
+**Flow (draft sync, during the month):**
+1. Compute `currentMonthStart = Date.UTC(yyyy, mm, 1)` and `now` from the clock.
+2. For each service: query `getBillableRequestCount` and `getBillableBandwidth` over `[currentMonthStart, now)` (helpers' contract: hour-aligned).
+3. Delete-then-insert `invoice_line_items` of type `requests` + `bandwidth` on the customer's DRAFT invoice (idempotent by construction).
 
-**Idempotency:** Use existing `billing_idempotency` table with key: `usage-{customerId}-{year}-{month}`.
+**Flow (month-end finalize):**
+1. Derive `usagePeriodStart` / `usagePeriodEnd` from the invoice's `billingPeriodStart` (calendar-month boundaries).
+2. Query the same helpers over that window; write line items on the DRAFT.
 
-**Schema addition:**
-```sql
-ALTER TABLE service_instances ADD COLUMN last_billed_timestamp TIMESTAMP;
-```
+**Idempotency:** Delete-then-insert usage line items (bounded by invoice id + the
+`requests`/`bandwidth` item types). Calendar-aligned windows plus bounded deletes
+make the operation naturally idempotent — no per-service cursor state is kept on
+`service_instances`.
 
 **Housekeeping (existing phase 5):** Add `stats_per_hour` retention cleanup if needed (TimescaleDB policy handles this, but verify).
 
 ### D4: Stats API
 
+Read queries are hybrid: completed hours come from `stats_per_hour`, the
+current hour is appended from `stats_per_min`. See the Freshness note above.
+
 | Endpoint | Query |
 |----------|-------|
-| `GET /stats/summary` | `stats_per_hour` last 24h, sum success/client_error/server_error |
-| `GET /stats/traffic` | `stats_per_hour` for time range, return traffic breakdown per bucket |
-| `GET /stats/rt` | `stats_per_hour` for time range, return avg_response_time_ms per bucket |
+| `GET /stats/summary` | hybrid: `stats_per_hour` for completed hours + `stats_per_min` tail |
+| `GET /stats/traffic` | hybrid (same) — returns traffic breakdown per bucket |
+| `GET /stats/rt` | hybrid (same) — returns avg/min/max response time per bucket |
 
 **Traffic endpoint returns per bucket:**
 - `guaranteed` - guaranteed_success_count
@@ -355,7 +365,7 @@ await request.post('/test/billing/run-periodic-job');
 
 ### D7: Implementation Order
 
-1. ✅ **Schema:** Add continuous aggregate + `last_billed_timestamp` column
+1. ✅ **Schema:** Add continuous aggregates (`stats_per_hour`, `stats_per_min`)
 2. ✅ **Test helpers:** `insertMockHAProxyLogs()`, `refreshStatsAggregate()`
 3. ✅ **Unit tests:** Write tests for query functions (TDD)
 4. ✅ **Query functions:** `packages/database/src/stats/queries.ts`

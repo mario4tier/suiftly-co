@@ -8,7 +8,7 @@
  * to prevent race conditions with concurrent reordering.
  */
 
-import { eq, and, asc } from 'drizzle-orm';
+import { eq, and, asc, ne } from 'drizzle-orm';
 import type { IPaymentProvider, PaymentProviderType } from '@suiftly/shared/payment-provider';
 import type { ISuiService } from '@suiftly/shared/sui-service';
 import type { IStripeService } from '@suiftly/shared/stripe-service';
@@ -26,10 +26,18 @@ export interface PaymentServices {
 }
 
 /**
- * Get a customer's payment providers in their preferred order.
+ * Get a customer's payment providers.
  *
- * Reads customer_payment_methods table ordered by priority,
- * instantiates the corresponding provider for each active method.
+ * Escrow is always tried first and is NOT driven by `customer_payment_methods`
+ * — it is implicit to being a Suiftly customer. The provider's `canPay()`
+ * checks the on-chain balance, so it's naturally skipped when there are no
+ * funds. The registry only stores user-added, per-card payment methods
+ * (Stripe / PayPal): those rows hold real state (provider_ref, cached card
+ * details) that can't be derived elsewhere.
+ *
+ * This removes the "stuck in Subscription payment pending" failure mode that
+ * happened whenever a charge ran before the escrow registry row had been
+ * inserted (previously the registration was a separate UI click / hook).
  */
 export async function getCustomerProviders(
   customerId: number,
@@ -44,13 +52,18 @@ export async function getCustomerProviders(
       and(
         eq(customerPaymentMethods.customerId, customerId),
         eq(customerPaymentMethods.status, 'active'),
+        // Skip escrow rows — escrow is implicit (see above).
+        ne(customerPaymentMethods.providerType, 'escrow'),
       ),
     )
     .orderBy(asc(customerPaymentMethods.priority));
 
-  return methods.map(m =>
+  const escrowProvider = createProvider('escrow', services, db, clock);
+  const registryProviders = methods.map(m =>
     createProvider(m.providerType as PaymentProviderType, services, db, clock),
   );
+
+  return [escrowProvider, ...registryProviders];
 }
 
 function createProvider(

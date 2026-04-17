@@ -16,10 +16,10 @@
  */
 
 import { eq, and, or, sql, inArray, desc, gt, lte } from 'drizzle-orm';
-import { billingRecords, customers, serviceInstances, invoicePayments, customerCredits, customerPaymentMethods } from '../schema';
+import { billingRecords, customers, serviceInstances, invoicePayments, customerCredits } from '../schema';
 import type { Database } from '../db';
 import { withCustomerLock, type LockedTransaction } from './locking';
-import { processInvoicePayment, finalizeSuccessfulPayment, retryUnpaidInvoices } from './payments';
+import { processInvoicePayment, finalizeSuccessfulPayment, retryUnpaidInvoices, MAX_RETRY_ATTEMPTS } from './payments';
 import { getAvailableCredits, issueCredit } from './credits';
 import {
   startGracePeriod,
@@ -717,34 +717,44 @@ async function retryFailedPayments(
   const now = config.clock.now();
   const providers = await getCustomerProviders(customerId, services, tx, config.clock);
 
-  // Skip retries when customer has no payment methods AND no credits.
-  // Without this guard, each periodic cycle would increment retryCount until
-  // maxRetryAttempts is exhausted, stranding the invoice and spamming alerts.
-  // But if credits exist, proceed — processInvoicePayment applies credits first.
-  if (providers.length === 0) {
-    const availableCredits = await getAvailableCredits(tx, customerId, config.clock);
-    if (availableCredits <= 0) {
-      // Check if there are actually failed invoices being skipped.
-      // If so, emit an operation and a one-time notification so ops can see
-      // non-paying accounts with outstanding debt (instead of silent skipping).
-      const failedInvoices = await tx
-        .select({
-          count: sql<number>`COUNT(*)`,
-          totalCents: sql<number>`COALESCE(SUM(amount_usd_cents - COALESCE(amount_paid_usd_cents, 0)), 0)`,
-          firstId: sql<number>`MIN(id)`,
-        })
-        .from(billingRecords)
-        .where(
-          and(
-            eq(billingRecords.customerId, customerId),
-            eq(billingRecords.status, 'failed'),
-          )
-        );
-      const failedCount = Number(failedInvoices[0]?.count ?? 0);
-      const failedTotalCents = Number(failedInvoices[0]?.totalCents ?? 0);
-      const firstFailedInvoiceId = Number(failedInvoices[0]?.firstId ?? 0);
+  // Skip retries when no provider can actually pay AND no credits exist.
+  // Escrow is now always returned by getCustomerProviders (see providers/index.ts),
+  // so `providers.length === 0` is unreachable — we must probe canPay() to detect
+  // the "provably cannot pay" case. Without this guard, each periodic cycle would
+  // increment retryCount until maxRetryAttempts is exhausted, stranding the
+  // invoice and spamming alerts. If credits exist, proceed — processInvoicePayment
+  // applies credits first.
+  // Only count invoices that are still eligible for retry (below max attempts)
+  // AND have never had any credits or partial payments applied. Partial-paid
+  // invoices must run to exhaustion so credits get restored; exhausted invoices
+  // are naturally skipped by retryUnpaidInvoices without burning retry counts.
+  const failedInvoices = await tx
+    .select({
+      count: sql<number>`COUNT(*)`,
+      totalCents: sql<number>`COALESCE(SUM(amount_usd_cents), 0)`,
+      firstId: sql<number>`MIN(id)`,
+    })
+    .from(billingRecords)
+    .where(
+      and(
+        eq(billingRecords.customerId, customerId),
+        eq(billingRecords.status, 'failed'),
+        sql`COALESCE(${billingRecords.retryCount}, 0) < ${MAX_RETRY_ATTEMPTS}`,
+        sql`COALESCE(${billingRecords.amountPaidUsdCents}, 0) = 0`,
+      )
+    );
+  const failedCount = Number(failedInvoices[0]?.count ?? 0);
+  const failedTotalCents = Number(failedInvoices[0]?.totalCents ?? 0);
+  const firstFailedInvoiceId = Number(failedInvoices[0]?.firstId ?? 0);
 
-      if (failedCount > 0) {
+  if (failedCount > 0) {
+    const canPayResults = await Promise.all(
+      providers.map(p => p.canPay(customerId, failedTotalCents).catch(() => false)),
+    );
+    const anyCanPay = canPayResults.some(Boolean);
+    if (!anyCanPay) {
+      const availableCredits = await getAvailableCredits(tx, customerId, config.clock);
+      if (availableCredits <= 0) {
         result.operations.push({
           type: 'payment_retry',
           timestamp: now,
@@ -764,9 +774,9 @@ async function retryFailedPayments(
             invoiceId: firstFailedInvoiceId,
           });
         } catch { /* don't let notification failure block billing */ }
-      }
 
-      return result;
+        return result;
+      }
     }
   }
 
@@ -943,20 +953,10 @@ async function checkPendingEscrowBalance(
     return result;
   }
 
-  // Only check balance if escrow is registered — avoids Sui RPC calls for
-  // customers without escrow. The deposit endpoint auto-registers escrow,
-  // so this gate only skips the rare case of external deposits without
-  // ever using our UI (acceptable — the "Check Payment Status" button covers it).
-  const escrowMethod = await tx.query.customerPaymentMethods.findFirst({
-    where: and(
-      eq(customerPaymentMethods.customerId, customerId),
-      eq(customerPaymentMethods.providerType, 'escrow'),
-      eq(customerPaymentMethods.status, 'active'),
-    ),
-  });
-  if (!escrowMethod) {
-    return result;
-  }
+  // Escrow is implicit — there's no "is escrow registered" gate (see
+  // providers/index.ts). The Sui RPC call below is cheap enough that we don't
+  // need to short-circuit on a registry check; customers without a wallet
+  // already returned above on `!customer.walletAddress`.
 
   // Get the invoice linked to pendingInvoiceId — may be 'pending' or 'failed'.
   // Skip if it has a paymentActionUrl (3DS in progress).

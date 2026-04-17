@@ -20,11 +20,15 @@ export const customerStatusEnum = pgEnum('customer_status', [
 ]);
 
 // Service types
+// Keep in sync with SERVICE_TYPE in packages/shared/src/constants/index.ts
+// and scripts/config/service_types.py (enforced by test_service_types_parity.py).
 export const serviceTypeEnum = pgEnum('service_type', [
   'seal',
   'grpc',
   'graphql',
-  'platform'
+  'platform',
+  'ssfn',
+  'sealo'
 ]);
 
 // Service states (7 distinct states - see UI_DESIGN.md and BILLING_DESIGN.md R13)

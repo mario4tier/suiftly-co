@@ -17,6 +17,7 @@ async function runMigrations() {
 
   const pool = new Pool({
     connectionString,
+    options: '-c timezone=UTC',
   });
 
   const db = drizzle(pool);

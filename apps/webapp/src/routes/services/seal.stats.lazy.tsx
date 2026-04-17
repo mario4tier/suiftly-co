@@ -11,11 +11,13 @@ import { Card } from '../../components/ui/card';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../../components/ui/tabs';
 import { trpc } from '../../lib/trpc';
 import { mockAuth } from '../../lib/config';
+import { padTimeSeries } from '../../lib/stats-time-series';
 import { toast } from 'sonner';
 import { useServicesStatus } from '../../hooks/useServicesStatus';
 import { ServiceStatusIndicator } from '../../components/ui/service-status-indicator';
 import {
   ComposedChart,
+  BarChart,
   XAxis,
   YAxis,
   Tooltip,
@@ -47,6 +49,9 @@ const TIME_RANGE_CONFIG = {
   '7d': { label: 'Last 7 Days', bucketLabel: 'Day' },
   '30d': { label: 'Last 30 Days', bucketLabel: 'Day' },
 } as const;
+
+// padTimeSeries / expectedBuckets live in lib/stats-time-series so both the
+// gRPC and Seal stats pages share the same bucket-padding behaviour.
 
 // Format date for display in UTC based on time range
 function formatBucketLabel(isoDate: string, range: TimeRange): string {
@@ -117,15 +122,16 @@ interface TrafficDataPoint {
   dropped: number;
   clientError: number;
   serverError: number;
+  partial?: boolean;
 }
 
 // Traffic category config for stacked chart
 const TRAFFIC_CATEGORIES = [
   { key: 'guaranteed', label: 'Guaranteed', color: 'bg-green-500 dark:bg-green-600', description: 'Successfully served guaranteed traffic' },
   { key: 'burst', label: 'Burst', color: 'bg-blue-500 dark:bg-blue-600', description: 'Successfully served burst traffic' },
-  { key: 'dropped', label: 'Rate Limited', color: 'bg-yellow-500 dark:bg-yellow-600', description: 'Not served - exceeds guaranteed+burst limits' },
-  { key: 'clientError', label: 'Client Errors', color: 'bg-orange-500 dark:bg-orange-600', description: 'Client-side errors (4xx) - bad request, auth, etc.' },
-  { key: 'serverError', label: 'Server Errors', color: 'bg-red-500 dark:bg-red-600', description: 'Server-side errors (5xx)' },
+  { key: 'dropped', label: 'Rejected', color: 'bg-yellow-500 dark:bg-yellow-600', description: 'Blocked at the edge — rate limit, IP block, API key issue, or service disabled' },
+  { key: 'clientError', label: 'Invalid Request', color: 'bg-orange-500 dark:bg-orange-600', description: 'Reached the backend but failed validation (malformed payload, unknown endpoint, etc.)' },
+  { key: 'serverError', label: 'Server Error', color: 'bg-red-500 dark:bg-red-600', description: 'Backend responded with a 5xx — typically a transient issue on our side' },
 ] as const;
 
 // Area colors for SVG fill (matching Tailwind classes)
@@ -137,7 +143,42 @@ const AREA_COLORS = {
   serverError: { light: '#ef4444', dark: '#dc2626' }, // red-500/600
 };
 
-// Stacked area chart for traffic breakdown
+// Traffic tooltip shared content (used by the recharts Tooltip's `content` prop)
+function TrafficTooltip({
+  active,
+  payload,
+  label,
+  range,
+  formatValue,
+}: any) {
+  if (!active || !payload || payload.length === 0) return null;
+  const data = payload[0].payload as TrafficDataPoint;
+  const total = data.guaranteed + data.burst + data.dropped + data.clientError + data.serverError;
+  return (
+    <div className="bg-gray-900 dark:bg-gray-700 text-white text-xs px-3 py-2 rounded shadow-lg whitespace-nowrap">
+      <div className="font-medium mb-1">
+        {formatBucketLabel(label, range)}
+        {data.partial && <span className="ml-1 text-gray-400 italic">(partial)</span>}
+      </div>
+      {TRAFFIC_CATEGORIES.map(cat => {
+        const value = data[cat.key as keyof TrafficDataPoint] as number;
+        if (value === 0) return null;
+        return (
+          <div key={cat.key} className="flex items-center gap-2">
+            <div className={`w-2 h-2 rounded-sm ${cat.color}`} />
+            <span>{cat.label}: {formatValue(value)}</span>
+          </div>
+        );
+      })}
+      <div className="border-t border-gray-600 mt-1 pt-1 font-medium">
+        Total: {formatValue(total)}
+      </div>
+    </div>
+  );
+}
+
+// Stacked bar chart for traffic breakdown. Uses recharts so axis/margin
+// geometry matches the sibling response-time chart exactly.
 function StackedAreaChart({
   data,
   range,
@@ -149,8 +190,6 @@ function StackedAreaChart({
   formatValue: (v: number) => string;
   emptyMessage?: string;
 }) {
-  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
-
   if (!data || data.length === 0) {
     return (
       <div className="flex items-center justify-center h-48 text-gray-400">
@@ -159,182 +198,49 @@ function StackedAreaChart({
     );
   }
 
-  const width = 800;
-  const height = 192;
-  const padding = { top: 10, right: 10, bottom: 10, left: 10 };
-  const chartWidth = width - padding.left - padding.right;
-  const chartHeight = height - padding.top - padding.bottom;
-
-  // Find max total for scaling
-  const maxTotal = Math.max(
-    ...data.map(d => d.guaranteed + d.burst + d.dropped + d.clientError + d.serverError),
-    1
-  );
-
-  // Calculate cumulative values for stacking (bottom to top: guaranteed, burst, dropped, clientError, serverError)
-  const stackOrder = ['guaranteed', 'burst', 'dropped', 'clientError', 'serverError'] as const;
-
-  // Generate area paths for each category
-  const areas = stackOrder.map((key, layerIndex) => {
-    // Calculate cumulative bottom and top for this layer
-    const points: { x: number; y0: number; y1: number }[] = data.map((point, i) => {
-      const x = padding.left + (i / (data.length - 1 || 1)) * chartWidth;
-
-      // Sum of all layers below this one
-      let y0Sum = 0;
-      for (let j = 0; j < layerIndex; j++) {
-        y0Sum += point[stackOrder[j] as keyof TrafficDataPoint] as number;
-      }
-
-      // Sum including this layer
-      const y1Sum = y0Sum + (point[key as keyof TrafficDataPoint] as number);
-
-      // Convert to y coordinates (inverted because SVG y goes down)
-      const y0 = height - padding.bottom - (y0Sum / maxTotal) * chartHeight;
-      const y1 = height - padding.bottom - (y1Sum / maxTotal) * chartHeight;
-
-      return { x, y0, y1 };
-    });
-
-    // Build path: top edge forward, then bottom edge backward
-    const topPath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y1}`).join(' ');
-    const bottomPath = [...points].reverse().map((p, i) => `${i === 0 ? 'L' : 'L'} ${p.x} ${p.y0}`).join(' ');
-    const path = `${topPath} ${bottomPath} Z`;
-
-    const category = TRAFFIC_CATEGORIES.find(c => c.key === key)!;
-    const color = AREA_COLORS[key as keyof typeof AREA_COLORS];
-
-    return { key, path, category, color };
-  });
-
-  // Hover detection zones (vertical slices)
-  const sliceWidth = chartWidth / data.length;
-
-  // Calculate tick interval - for 24h show every 4 hours, for 7d/30d show fewer
-  const tickInterval = range === '24h' ? 4 : Math.ceil(data.length / 7);
+  const tickInterval = range === '24h' ? 3 : Math.max(1, Math.floor(data.length / 7));
 
   return (
-    <div className="relative">
-      <svg
-        viewBox={`0 0 ${width} ${height}`}
-        className="w-full h-48"
-        preserveAspectRatio="none"
-      >
-        {/* Vertical gridlines (behind chart data) */}
-        {data.map((point, i) => {
-          const x = padding.left + (i / (data.length - 1 || 1)) * chartWidth;
-          const midnight = isMidnight(point.bucket);
-          return (
-            <line
-              key={`grid-${i}`}
-              x1={x}
-              y1={padding.top}
-              x2={x}
-              y2={height - padding.bottom}
-              stroke={midnight ? 'rgba(156,163,175,0.5)' : 'rgba(156,163,175,0.2)'}
-              strokeWidth={midnight ? 2 : 0.5}
-            />
-          );
-        })}
-
-        {/* Area layers */}
-        {areas.map(({ key, path, color }) => (
-          <path
-            key={key}
-            d={path}
-            className="transition-opacity duration-150"
-            fill={color.light}
-            opacity={hoveredIndex !== null ? 0.6 : 0.8}
+    <div className="h-48">
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart data={data} margin={{ top: 20, right: 20, left: 10, bottom: 10 }}>
+          <XAxis
+            dataKey="bucket"
+            tick={{ fontSize: 11, fill: '#9ca3af' }}
+            tickFormatter={(v) => formatTickLabel(v, range)}
+            axisLine={{ stroke: '#374151' }}
+            tickLine={{ stroke: '#374151' }}
+            interval={tickInterval}
           />
-        ))}
-
-        {/* Hover detection zones */}
-        {data.map((_, i) => (
-          <rect
-            key={i}
-            x={padding.left + i * sliceWidth}
-            y={padding.top}
-            width={sliceWidth}
-            height={chartHeight}
-            fill="transparent"
-            onMouseEnter={() => setHoveredIndex(i)}
-            onMouseLeave={() => setHoveredIndex(null)}
+          <YAxis
+            tick={{ fontSize: 11, fill: '#9ca3af' }}
+            tickFormatter={(v) => formatValue(v)}
+            axisLine={{ stroke: '#374151' }}
+            tickLine={{ stroke: '#374151' }}
+            width={60}
           />
-        ))}
-
-        {/* Hover line */}
-        {hoveredIndex !== null && (
-          <line
-            x1={padding.left + (hoveredIndex / (data.length - 1 || 1)) * chartWidth}
-            y1={padding.top}
-            x2={padding.left + (hoveredIndex / (data.length - 1 || 1)) * chartWidth}
-            y2={height - padding.bottom}
-            stroke="rgba(255,255,255,0.7)"
-            strokeWidth="1.5"
-            strokeDasharray="4 2"
+          <Tooltip
+            content={<TrafficTooltip range={range} formatValue={formatValue} />}
+            cursor={{ fill: 'rgba(255,255,255,0.06)' }}
           />
-        )}
-      </svg>
-
-      {/* X-axis tick labels */}
-      <div className="relative h-5 mt-1">
-        {data.map((point, i) => {
-          // Show tick at interval OR at midnight (for date context)
-          const showTick = i === 0 || i === data.length - 1 || i % tickInterval === 0 || isMidnight(point.bucket);
-          if (!showTick) return null;
-          const x = (i / (data.length - 1 || 1)) * 100;
-          const midnight = isMidnight(point.bucket);
-          return (
-            <span
-              key={`tick-${i}`}
-              className={`absolute text-xs transform -translate-x-1/2 ${
-                midnight ? 'text-gray-300 font-medium' : 'text-gray-400'
-              }`}
-              style={{ left: `${x}%` }}
+          {TRAFFIC_CATEGORIES.map(cat => (
+            <Bar
+              key={cat.key}
+              dataKey={cat.key}
+              stackId="traffic"
+              fill={AREA_COLORS[cat.key as keyof typeof AREA_COLORS]?.light ?? '#6b7280'}
+              isAnimationActive={false}
             >
-              {formatTickLabel(point.bucket, range)}
-            </span>
-          );
-        })}
-        <span className="absolute left-1/2 transform -translate-x-1/2 text-xs text-gray-500">
-          UTC
-        </span>
-      </div>
-
-      {/* Tooltip */}
-      {hoveredIndex !== null && data[hoveredIndex] && (
-        <div
-          className="absolute z-10 pointer-events-none"
-          style={{
-            left: `${((hoveredIndex / (data.length - 1 || 1)) * 100)}%`,
-            top: 0,
-            transform: 'translateX(-50%)',
-          }}
-        >
-          <div className="bg-gray-900 dark:bg-gray-700 text-white text-xs px-3 py-2 rounded shadow-lg whitespace-nowrap">
-            <div className="font-medium mb-1">{formatBucketLabel(data[hoveredIndex].bucket, range)}</div>
-            {TRAFFIC_CATEGORIES.map(cat => {
-              const value = data[hoveredIndex][cat.key as keyof TrafficDataPoint] as number;
-              if (value === 0) return null;
-              return (
-                <div key={cat.key} className="flex items-center gap-2">
-                  <div className={`w-2 h-2 rounded-sm ${cat.color}`} />
-                  <span>{cat.label}: {formatValue(value)}</span>
-                </div>
-              );
-            })}
-            <div className="border-t border-gray-600 mt-1 pt-1 font-medium">
-              Total: {formatValue(
-                data[hoveredIndex].guaranteed +
-                data[hoveredIndex].burst +
-                data[hoveredIndex].dropped +
-                data[hoveredIndex].clientError +
-                data[hoveredIndex].serverError
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+              {data.map((entry, i) => (
+                <Cell
+                  key={`${cat.key}-${i}`}
+                  fillOpacity={entry.partial ? 0.45 : 0.85}
+                />
+              ))}
+            </Bar>
+          ))}
+        </BarChart>
+      </ResponsiveContainer>
     </div>
   );
 }
@@ -512,7 +418,12 @@ function ResponseTimeChart({
     : Math.max(dataMax * 1.3, 100);
 
   // Calculate period average
-  const avgResponseTime = data.reduce((sum, d) => sum + d.avgResponseTimeMs, 0) / data.length;
+  // Average over buckets that actually had traffic — empty (zero) buckets are
+  // padding, not real data, and would otherwise drag the average down.
+  const avgPoints = data.filter(d => d.avgResponseTimeMs > 0);
+  const avgResponseTime = avgPoints.length > 0
+    ? avgPoints.reduce((sum, d) => sum + d.avgResponseTimeMs, 0) / avgPoints.length
+    : 0;
 
   // Check if any max exceeds threshold
   const hasExceededThreshold = data.some(d => d.maxResponseTimeMs >= THRESHOLD_MS);
@@ -526,7 +437,7 @@ function ResponseTimeChart({
   return (
     <div className="h-56">
       <ResponsiveContainer width="100%" height="100%">
-        <ComposedChart data={chartData} margin={{ top: 20, right: 20, bottom: 20, left: 50 }}>
+        <ComposedChart data={chartData} margin={{ top: 20, right: 20, bottom: 10, left: 10 }}>
           {/* Y Axis */}
           <YAxis
             domain={[0, yMax]}
@@ -534,20 +445,17 @@ function ResponseTimeChart({
             tick={{ fill: '#9ca3af', fontSize: 11 }}
             axisLine={{ stroke: '#374151' }}
             tickLine={{ stroke: '#374151' }}
-            width={45}
+            width={60}
           />
 
-          {/* X Axis */}
+          {/* X Axis — horizontal labels to match the custom StackedAreaChart */}
           <XAxis
             dataKey="bucket"
             tickFormatter={tickFormatter}
-            tick={{ fill: '#9ca3af', fontSize: 10 }}
+            tick={{ fill: '#9ca3af', fontSize: 11 }}
             axisLine={{ stroke: '#374151' }}
             tickLine={{ stroke: '#374151' }}
             interval={tickInterval}
-            angle={-45}
-            textAnchor="end"
-            height={50}
           />
 
           {/* Threshold reference line - only show if data approaches it */}
@@ -882,19 +790,19 @@ function SealStatsPage() {
                   />
                   <StatCard
                     icon={Ban}
-                    label="Rate Limited"
+                    label="Rejected"
                     value={formatNumber(summary?.droppedCount ?? 0)}
                     color="yellow"
                   />
                   <StatCard
                     icon={AlertTriangle}
-                    label="Client Errors (4xx)"
+                    label="Invalid Request (4xx)"
                     value={formatNumber(summary?.clientErrorCount ?? 0)}
                     color="orange"
                   />
                   <StatCard
                     icon={XCircle}
-                    label="Server Errors (5xx)"
+                    label="Server Error (5xx)"
                     value={formatNumber(summary?.serverErrorCount ?? 0)}
                     color="red"
                   />
@@ -919,10 +827,12 @@ function SealStatsPage() {
                 </div>
               ) : (
                 <StackedAreaChart
-                  data={trafficData ?? []}
+                  data={padTimeSeries(trafficData, timeRange, (b) => ({
+                    bucket: b, guaranteed: 0, burst: 0, dropped: 0, clientError: 0, serverError: 0, partial: false,
+                  }))}
                   range={timeRange}
                   formatValue={formatNumber}
-                  emptyMessage="Stats may take up to 1 hour to appear"
+                  emptyMessage="Stats may take up to 2 minutes to appear"
                 />
               )}
               {/* Legend */}
@@ -943,10 +853,12 @@ function SealStatsPage() {
                 </div>
               ) : (
                 <ResponseTimeChart
-                  data={rtData ?? []}
+                  data={padTimeSeries(rtData, timeRange, (b) => ({
+                    bucket: b, avgResponseTimeMs: 0, minResponseTimeMs: 0, maxResponseTimeMs: 0, partial: false,
+                  }))}
                   range={timeRange}
                   formatValue={formatMs}
-                  emptyMessage="Stats may take up to 1 hour to appear"
+                  emptyMessage="Stats may take up to 2 minutes to appear"
                 />
               )}
             </Card>

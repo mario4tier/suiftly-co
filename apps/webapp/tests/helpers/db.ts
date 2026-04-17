@@ -49,6 +49,23 @@ export async function resetCustomer(
 }
 
 /**
+ * Wipe customer_payment_methods rows for a wallet.
+ * Used to reproduce the "funded escrow without registration" state so tests
+ * can verify the system tolerates it (escrow should be implicit).
+ */
+export async function clearPaymentMethods(
+  request: APIRequestContext,
+  walletAddress: string
+): Promise<void> {
+  const response = await request.post(`${API_BASE}/test/data/clear-payment-methods`, {
+    data: { walletAddress },
+  });
+  if (!response.ok()) {
+    throw new Error(`Failed to clear payment methods: ${await response.text()}`);
+  }
+}
+
+/**
  * Full test environment clean-slate via sudob
  * - Stops GM, LM, HAProxy
  * - Deletes all vault files

@@ -41,11 +41,16 @@ const GM_HOST = process.env.GM_HOST || 'http://localhost:22600';
 
 /**
  * Vault type codes (3-letter: {service}{network}{purpose})
- * - First letter: service (s=seal, r=grpc, g=graphql)
+ * - First letter: service (see SERVICE_TYPE_CHAR in shared constants)
  * - Second letter: network (m=mainnet, t=testnet)
  * - Third letter: purpose (a=api, m=master, s=seed, o=open)
  */
-export type VaultType = 'sma' | 'sta' | 'rma' | 'rta' | 'gma' | 'gta';
+export type VaultType =
+  | 'sma' | 'sta'   // seal
+  | 'rma' | 'rta'   // grpc
+  | 'gma' | 'gta'   // graphql
+  | 'fma' | 'fta'   // ssfn (reserved)
+  | 'oma' | 'ota';  // sealo (reserved)
 
 /**
  * Network type for vault determination
@@ -67,14 +72,21 @@ export function getVaultType(serviceType: ServiceType, network: NetworkType = 'm
 
   switch (serviceType) {
     case SERVICE_TYPE.SEAL:
-      return `s${networkChar}a` as VaultType;  // sma or sta
+      return `s${networkChar}a` as VaultType;
     case SERVICE_TYPE.GRPC:
-      return `r${networkChar}a` as VaultType;  // rma or rta (future)
+      return `r${networkChar}a` as VaultType;
     case SERVICE_TYPE.GRAPHQL:
-      return `g${networkChar}a` as VaultType;  // gma or gta (future)
-    default:
-      // Default to seal mainnet for backward compatibility
-      return 'sma';
+      return `g${networkChar}a` as VaultType;
+    case SERVICE_TYPE.SSFN:
+      return `f${networkChar}a` as VaultType;
+    case SERVICE_TYPE.SEALO:
+      return `o${networkChar}a` as VaultType;
+    case SERVICE_TYPE.PLATFORM:
+      throw new Error(`Platform has no vault type (subscription-only service)`);
+    default: {
+      const _exhaustive: never = serviceType;
+      throw new Error(`Unknown service type: ${_exhaustive}`);
+    }
   }
 }
 
