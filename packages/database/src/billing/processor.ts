@@ -42,9 +42,6 @@ import { getCustomerProviders } from './providers';
 import { getTierPriceUsdCents } from '@suiftly/shared/pricing';
 import type { ServiceTier, ServiceType } from '@suiftly/shared/constants';
 
-// How often to sync usage to DRAFT invoices (in milliseconds)
-const USAGE_SYNC_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
-
 /**
  * Process billing for a single customer
  *
@@ -1114,14 +1111,28 @@ async function syncUsageToCustomerDraft(
     return result; // No draft invoice, nothing to sync
   }
 
-  // Check if enough time has passed since last update (unless force=true)
-  if (!force) {
-    const lastUpdated = draftInvoice.lastUpdatedAt;
-    if (lastUpdated) {
-      const timeSinceUpdate = now.getTime() - new Date(lastUpdated).getTime();
-      if (timeSinceUpdate < USAGE_SYNC_INTERVAL_MS) {
-        return result; // Updated recently, skip
-      }
+  // Activity-driven gating (replaces the old 1-hour debounce): only sync
+  // when haproxy_raw_logs has picked up new rows for this customer since
+  // the last sync. Keeps cost proportional to *active* customers rather
+  // than total customer count — idle customers short-circuit here.
+  // `force=true` (from forceSyncUsageToDraft / month-end) bypasses.
+  if (!force && draftInvoice.lastUpdatedAt) {
+    const activity = await tx.execute(sql`
+      SELECT EXISTS (
+        SELECT 1 FROM haproxy_raw_logs
+        WHERE customer_id = ${customerId}
+          AND timestamp > ${draftInvoice.lastUpdatedAt}
+        LIMIT 1
+      ) AS has_new
+    `);
+    const hasNew = (activity.rows[0] as { has_new: boolean } | undefined)?.has_new ?? false;
+    if (!hasNew) {
+      // Touch lastUpdatedAt so the reactive top-up doesn't re-fire for a
+      // customer we've already confirmed quiescent.
+      await tx.execute(sql`
+        UPDATE billing_records SET last_updated_at = ${now} WHERE id = ${draftInvoice.id}
+      `);
+      return result;
     }
   }
 
@@ -1169,6 +1180,23 @@ export async function processBilling(
   config: BillingProcessorConfig,
   services: PaymentServices
 ): Promise<CustomerBillingResult[]> {
+  // Force the stats_per_hour + stats_per_min CAggs to materialize their tails
+  // BEFORE we look at any usage numbers. The scheduled refresh policy has
+  // end_offset=10min, so at wall-clock HH:00 the bucket for (HH-1):00 — the
+  // one finalization needs on the 1st of the month — is not yet materialized.
+  // A targeted 2-hour tail refresh closes that gap; everything further back
+  // was already materialized by earlier scheduled runs.
+  //
+  // CALL refresh_continuous_aggregate is a procedure and cannot run inside
+  // a transaction, so do it here at the top of the billing run, outside any
+  // per-customer lock. Cheap: bounded window, idempotent.
+  try {
+    await db.execute(sql`CALL refresh_continuous_aggregate('stats_per_hour', NOW() - INTERVAL '2 hours', NOW())`);
+    await db.execute(sql`CALL refresh_continuous_aggregate('stats_per_min', NOW() - INTERVAL '10 minutes', NOW())`);
+  } catch (err) {
+    console.error('[billing] CAgg tail refresh failed; proceeding with potentially stale stats:', err);
+  }
+
   // Get all active customers (we process all customers, even suspended ones, to handle payments)
   const allCustomers = await db
     .select({ customerId: customers.customerId })

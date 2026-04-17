@@ -9,6 +9,7 @@ import { router, protectedProcedure } from '../lib/trpc';
 import { getSuiService } from '@suiftly/database/sui-mock';
 import { getStripeService } from '@suiftly/database/stripe-mock';
 import { db, logActivity, findOrCreateCustomerWithEscrow } from '@suiftly/database';
+import { forceSyncUsageToDraft } from '@suiftly/database/billing';
 import { ledgerEntries, customers, billingRecords, invoiceLineItems, invoicePayments, customerPaymentMethods } from '@suiftly/database/schema';
 import { eq, and, desc, sql, asc } from 'drizzle-orm';
 import { SPENDING_LIMIT, INVOICE_LINE_ITEM_TYPE } from '@suiftly/shared/constants';
@@ -931,6 +932,20 @@ export const billingRouter = router({
         usageChargesUsd: 0,
         dueDate: null,
       };
+    }
+
+    // Reactive top-up: if the draft's cached line items are older than 60s,
+    // kick off a force-sync in the background. Return *current* data now so
+    // the response stays snappy; React Query will refetch and pick up the
+    // fresh usage on the next poll. Activity-driven gating inside
+    // syncUsageToCustomerDraft makes this a no-op for quiescent customers,
+    // so mashing refresh is harmless.
+    const STALE_MS = 60_000;
+    const lastSync = draft.lastUpdatedAt?.getTime() ?? 0;
+    if (Date.now() - lastSync > STALE_MS) {
+      forceSyncUsageToDraft(db, customer.customerId, dbClock).catch((err) => {
+        console.error('[billing] background draft sync failed:', err);
+      });
     }
 
     const lineItems = await buildDraftLineItems(draft.id);
