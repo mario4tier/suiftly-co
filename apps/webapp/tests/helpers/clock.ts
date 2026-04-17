@@ -20,13 +20,25 @@ const API_BASE = 'http://localhost:22700'; // API Server - billing info only
  *
  * This should be called in beforeEach() to ensure each test
  * starts with real time unless it specifically needs mock time.
+ *
+ * Retries on ECONNREFUSED for up to 30 s: any earlier test that called
+ * sudob's reset-all restarts GM, and GM can be mid-restart when this
+ * fixture fires. Without the retry, the next test fails before it starts.
  */
 export async function resetClock(request: APIRequestContext): Promise<void> {
-  const response = await request.post(`${GM_BASE}/api/test/clock/real`);
-
-  if (!response.ok()) {
-    throw new Error(`Failed to reset clock: ${await response.text()}`);
+  const deadline = Date.now() + 30_000;
+  let lastErr: unknown;
+  while (Date.now() < deadline) {
+    try {
+      const response = await request.post(`${GM_BASE}/api/test/clock/real`);
+      if (response.ok()) return;
+      lastErr = new Error(`HTTP ${response.status()}: ${await response.text()}`);
+    } catch (err) {
+      lastErr = err;
+    }
+    await new Promise(resolve => setTimeout(resolve, 500));
   }
+  throw new Error(`Failed to reset clock after 30s: ${lastErr instanceof Error ? lastErr.message : String(lastErr)}`);
 }
 
 /**
