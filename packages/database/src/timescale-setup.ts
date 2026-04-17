@@ -182,7 +182,7 @@ export async function setupTimescaleDB() {
       -- Error breakdown (exclude dropped traffic - those have their own category)
       SUM(repeat) FILTER (WHERE status_code >= 400 AND status_code < 500 AND traffic_type NOT IN (3, 4, 5, 6)) AS client_error_count,
       SUM(repeat) FILTER (WHERE status_code >= 500 AND traffic_type NOT IN (3, 4, 5, 6)) AS server_error_count,
-      -- Billing (guaranteed + burst, regardless of status)
+      -- Billing: request count (unary only — stream deltas excluded)
       SUM(repeat) FILTER (WHERE traffic_type IN (1, 2)) AS billable_requests,
       -- Legacy/summary (all 2xx)
       SUM(repeat) FILTER (WHERE status_code >= 200 AND status_code < 300) AS success_count,
@@ -191,7 +191,8 @@ export async function setupTimescaleDB() {
       MIN(time_total) FILTER (WHERE traffic_type IN (1, 2)) AS min_response_time_ms,
       MAX(time_total) FILTER (WHERE traffic_type IN (1, 2)) AS max_response_time_ms,
       SUM(bytes_sent * repeat) AS total_bytes,
-      SUM(bytes_sent * repeat) FILTER (WHERE traffic_type IN (1, 2)) AS billable_bytes
+      -- Billing: bandwidth (unary + stream deltas; see STREAM_METERING_FEATURE.md)
+      SUM(bytes_sent * repeat) FILTER (WHERE traffic_type IN (1, 2, 7)) AS billable_bytes
     FROM haproxy_raw_logs
     WHERE customer_id IS NOT NULL
     GROUP BY bucket, customer_id, service_type, network;

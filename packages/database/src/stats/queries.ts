@@ -672,8 +672,11 @@ export async function getBillableBandwidth(
 
   // stats_per_min doesn't have billable_bytes; compute from traffic_type filter.
   // Contract: startTime is hour-aligned (billing window = calendar cycle).
+  // traffic_type = 7 = stream_delta (periodic bytes from long-lived streams);
+  // see docs/STREAM_METERING_FEATURE.md. Stream deltas count toward billable
+  // bandwidth but not toward billable_requests.
   const minuteResult = await db.execute(sql`
-    SELECT COALESCE(SUM(total_bytes) FILTER (WHERE traffic_type IN (1, 2)), 0)::bigint AS total
+    SELECT COALESCE(SUM(total_bytes) FILTER (WHERE traffic_type IN (1, 2, 7)), 0)::bigint AS total
     FROM stats_per_min
     WHERE customer_id = ${customerId}
       AND service_type = ${serviceType}

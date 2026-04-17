@@ -547,6 +547,101 @@ describe('Stats Queries', () => {
       });
     });
 
+    // Stream metering (docs/STREAM_METERING_FEATURE.md Phase 2):
+    // traffic_type = 7 marks a periodic byte delta from the stream-meter
+    // poller. It must count toward billable_bytes (bandwidth) but NOT
+    // toward billable_requests (stream deltas aren't requests).
+    describe('stream-delta traffic (traffic_type = 7)', () => {
+      it('getBillableBandwidth should include stream-delta bytes in both hourly and minute-tail', async () => {
+        const monthStart = new Date('2024-01-01T00:00:00Z');
+
+        // Completed hour: stream delta of 8192 bytes
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 1,
+          timestamp: COMPLETED_HOUR, trafficType: 7, bytesSent: 8192,
+        });
+        // Current hour: stream delta of 3072 bytes
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 1,
+          timestamp: CURRENT_HOUR, trafficType: 7, bytesSent: 3072,
+        });
+        await refreshStatsAggregate(db);
+        await refreshStatsPerMin(db);
+
+        const bytes = await getBillableBandwidth(
+          db, TEST_CUSTOMER_ID, 1, monthStart, clock.now()
+        );
+
+        expect(bytes).toBe(8192 + 3072);
+      });
+
+      it('getBillableRequestCount should exclude stream deltas', async () => {
+        const monthStart = new Date('2024-01-01T00:00:00Z');
+
+        // Unary request (billable)
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 20,
+          timestamp: CURRENT_HOUR, trafficType: 1,
+        });
+        // Stream delta (not a request)
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 5,
+          timestamp: CURRENT_HOUR, trafficType: 7,
+        });
+        // Completed hour has the same mix
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 30,
+          timestamp: COMPLETED_HOUR, trafficType: 1,
+        });
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 7,
+          timestamp: COMPLETED_HOUR, trafficType: 7,
+        });
+        await refreshStatsAggregate(db);
+        await refreshStatsPerMin(db);
+
+        const count = await getBillableRequestCount(
+          db, TEST_CUSTOMER_ID, 1, monthStart, clock.now()
+        );
+
+        // Only the unary rows (20 + 30); stream deltas excluded.
+        expect(count).toBe(50);
+      });
+
+      it('getBillableBandwidth should include a mix of unary and stream-delta bytes', async () => {
+        const monthStart = new Date('2024-01-01T00:00:00Z');
+
+        // Unary bytes in completed hour
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 10,
+          timestamp: COMPLETED_HOUR, trafficType: 1, bytesSent: 1024,
+        });
+        // Stream delta in completed hour
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 1,
+          timestamp: COMPLETED_HOUR, trafficType: 7, bytesSent: 4096,
+        });
+        // Unary bytes in current hour
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 5,
+          timestamp: CURRENT_HOUR, trafficType: 1, bytesSent: 512,
+        });
+        // Stream delta in current hour
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 1,
+          timestamp: CURRENT_HOUR, trafficType: 7, bytesSent: 2048,
+        });
+        await refreshStatsAggregate(db);
+        await refreshStatsPerMin(db);
+
+        const bytes = await getBillableBandwidth(
+          db, TEST_CUSTOMER_ID, 1, monthStart, clock.now()
+        );
+
+        expect(bytes).toBe(10 * 1024 + 4096 + 5 * 512 + 2048);
+      });
+    });
+
     describe('Chart partial bar', () => {
       it('getTrafficStats should append partial bar for current hour', async () => {
         // Completed hour
