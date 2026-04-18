@@ -199,7 +199,11 @@ describe('Checkpoint Streaming Metering', () => {
     expect(result.status).toBe(401);
   });
 
-  it('should stream checkpoints with valid API key on metered port', { timeout: 15000 }, async () => {
+  // Retry once for a cold upstream: sui-proxy's stream_merge has a 2s
+  // "no initial frame received" timeout, so a cold 3s window can land 0
+  // messages if dedup-session warmup eats most of it. First attempt warms
+  // the upstream; retry reliably hits a populated stream.
+  it('should stream checkpoints with valid API key on metered port', { timeout: 15000, retry: 1 }, async () => {
     if (!haproxyAvailable || !backendAvailable || !apiAvailable) return;
 
     const result = await grpcSubscribeCheckpoints({
@@ -211,7 +215,14 @@ describe('Checkpoint Streaming Metering', () => {
 
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(200);
-    expect(result.messageCount).toBeGreaterThanOrEqual(2);
+    if (result.messageCount < 2) {
+      throw new Error(
+        `only ${result.messageCount} checkpoints in ${result.elapsedMs}ms ` +
+        `(http=${result.status}, grpc-status=${result.grpcStatus ?? 'none'}, ` +
+        `grpc-message=${result.grpcMessage ?? 'none'}). Likely cold sui-proxy ` +
+        `dedup-session; see crates/sui-proxy/src/stream_merge.rs STALE_TIMEOUT.`
+      );
+    }
     expect(result.totalBytes).toBeGreaterThan(0);
 
     console.log(
@@ -219,8 +230,22 @@ describe('Checkpoint Streaming Metering', () => {
     );
   });
 
-  it('should meter stream bytes via poller matching client bytes', { timeout: 60000 }, async () => {
+  it('should meter stream bytes via poller matching client bytes', { timeout: 90000 }, async () => {
     if (!haproxyAvailable || !backendAvailable || !apiAvailable) return;
+
+    // Warmup stream establishes the api_key in HAProxy's stick-table, then we
+    // wait ≥1 poll cycle (10s) so the poller captures a baseline for it. Without
+    // this, the measurement stream below is the poller's *first sight* of this
+    // api_key — the state machine treats first-sight as "baseline capture, no
+    // emit" (by design, to avoid bogus lifetime-counter deltas after restart),
+    // so early stream bytes would go uncounted and the ratio assertion flakes.
+    await grpcSubscribeCheckpoints({
+      port: GRPC_PORT.MAINNET_PUBLIC,
+      apiKey: grpcApiKey,
+      clientIp: '127.0.0.1',
+      durationMs: 1500,
+    });
+    await new Promise(resolve => setTimeout(resolve, 11000));
 
     const timestampBefore = new Date();
 
@@ -272,8 +297,14 @@ describe('Checkpoint Streaming Metering', () => {
     // sum should be in the same ballpark as client-received bytes.
     expect(meteredBytes).toBeGreaterThan(0);
     const ratio = meteredBytes / result.totalBytes;
-    expect(ratio).toBeGreaterThan(0.5);
-    expect(ratio).toBeLessThan(2.0);
+    if (ratio < 0.5 || ratio > 2.0) {
+      throw new Error(
+        `meter ratio out of range: tt=7 sum=${meteredBytes}, tt=8 close=${closeLogBytes}, ` +
+        `client=${result.totalBytes}, ratio=${ratio.toFixed(2)}. ` +
+        `Likely the poller missed a poll cycle or lost baseline — check ` +
+        `"journalctl -u stream-meter-poller --since '<test start>'" for emit timing.`
+      );
+    }
 
     // Close-log row exists (traffic_type=8), carries bytes-for-lifecycle
     // analytics but MUST NOT be counted for billing — aggregator filters
