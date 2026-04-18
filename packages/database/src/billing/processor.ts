@@ -35,6 +35,7 @@ import { logInternalError, logInternalErrorOnce } from './admin-notifications';
 import { applyScheduledTierChanges, processScheduledCancellations } from './tier-changes';
 import { recalculateDraftInvoice } from './draft-invoice';
 import { finalizeUsageChargesForBilling, syncUsageToDraft } from './usage-charges';
+import { refreshStatsAggregate, refreshStatsPerMin } from '../stats';
 import type { BillingProcessorConfig, CustomerBillingResult, BillingOperation } from './types';
 import type { DBClock } from '@suiftly/shared/db-clock';
 import type { PaymentServices } from './providers';
@@ -1073,16 +1074,10 @@ async function checkGracePeriodExpiration(
 }
 
 /**
- * Sync usage to customer's DRAFT invoice (for display)
+ * Sync usage to customer's DRAFT invoice (for display).
  *
- * Called hourly to keep DRAFT invoices updated with current usage.
- * Skips if less than an hour has passed since last update (unless force=true).
- *
- * @param tx Transaction handle (must have customer lock)
- * @param customerId Customer ID
- * @param clock DBClock for time reference
- * @param force If true, bypasses debouncing and always syncs
- * @returns Billing result
+ * Called every sweep; delegates to the idempotent syncUsageToDraft.
+ * line_items is guaranteed to track stats_per_hour within one cycle.
  */
 async function syncUsageToCustomerDraft(
   tx: LockedTransaction,
@@ -1110,17 +1105,6 @@ async function syncUsageToCustomerDraft(
     return result; // No draft invoice, nothing to sync
   }
 
-  // No gating: every sweep re-runs syncUsageToDraft unconditionally,
-  // so line_items is guaranteed to track stats_per_hour within one cycle
-  // (5 min prod, 5 sec dev). An earlier "raw-log activity" gate was subtly
-  // wrong — line_items is a cache of stats_per_hour, not of
-  // haproxy_raw_logs — so wipes or backfills at the CAgg layer were
-  // invisible to it and line_items could stay stale forever. Comparing
-  // derived totals was tempting but has ugly edge cases (disabled
-  // services with historical stats, pendingInvoiceId spin, platform
-  // service_types). syncUsageToDraft is idempotent and cheap (~4 queries
-  // per customer), so "just sync" wins on robustness. Scale via shard /
-  // cadence when volume demands it.
   const syncResult = await syncUsageToDraft(tx, customerId, draftInvoice.id, clock);
 
   if (syncResult.success) {
@@ -1164,19 +1148,15 @@ export async function processBilling(
   config: BillingProcessorConfig,
   services: PaymentServices
 ): Promise<CustomerBillingResult[]> {
-  // Force the stats_per_hour + stats_per_min CAggs to materialize their tails
-  // BEFORE we look at any usage numbers. The scheduled refresh policy has
-  // end_offset=10min, so at wall-clock HH:00 the bucket for (HH-1):00 — the
-  // one finalization needs on the 1st of the month — is not yet materialized.
-  // A targeted 2-hour tail refresh closes that gap; everything further back
-  // was already materialized by earlier scheduled runs.
-  //
-  // CALL refresh_continuous_aggregate is a procedure and cannot run inside
-  // a transaction, so do it here at the top of the billing run, outside any
-  // per-customer lock. Cheap: bounded window, idempotent.
+  // Scheduled CAgg refresh has end_offset=10min, so the (HH-1):00 bucket
+  // isn't materialized at HH:00 — the exact bucket month-end finalization
+  // needs on the 1st. Targeted tail refreshes close that gap.
+  const now = new Date();
   try {
-    await db.execute(sql`CALL refresh_continuous_aggregate('stats_per_hour', NOW() - INTERVAL '2 hours', NOW())`);
-    await db.execute(sql`CALL refresh_continuous_aggregate('stats_per_min', NOW() - INTERVAL '10 minutes', NOW())`);
+    await Promise.all([
+      refreshStatsAggregate(db, new Date(now.getTime() - 2 * 60 * 60_000), now),
+      refreshStatsPerMin(db, new Date(now.getTime() - 10 * 60_000), now),
+    ]);
   } catch (err) {
     console.error('[billing] CAgg tail refresh failed; proceeding with potentially stale stats:', err);
   }

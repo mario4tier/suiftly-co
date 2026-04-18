@@ -18,7 +18,7 @@ export type {
 export {
   processBilling,
   processCustomerBilling,
-  forceSyncUsageToDraft, // On-demand usage sync with force=true (bypasses debouncing)
+  forceSyncUsageToDraft, // On-demand usage sync (UI reactive top-up + dev T-menu)
 } from './processor';
 
 // Payment processing

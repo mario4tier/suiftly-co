@@ -934,17 +934,16 @@ export const billingRouter = router({
       };
     }
 
-    // Reactive top-up: if the draft's cached line items are older than 60s,
-    // kick off a force-sync in the background. Return *current* data now so
-    // the response stays snappy; React Query will refetch and pick up the
-    // fresh usage on the next poll. Activity-driven gating inside
-    // syncUsageToCustomerDraft makes this a no-op for quiescent customers,
-    // so mashing refresh is harmless.
+    // Reactive top-up: if cached line items are >60s old, trigger a sync
+    // in the background. The response returns stale data immediately;
+    // React Query refetches on next poll and hydrates the fresh numbers.
+    // withCustomerLock inside forceSyncUsageToDraft serialises concurrent
+    // calls, so mashing refresh is at worst redundant DB work.
     const STALE_MS = 60_000;
     const lastSync = draft.lastUpdatedAt?.getTime() ?? 0;
-    if (Date.now() - lastSync > STALE_MS) {
+    if (dbClock.now().getTime() - lastSync > STALE_MS) {
       forceSyncUsageToDraft(db, customer.customerId, dbClock).catch((err) => {
-        console.error('[billing] background draft sync failed:', err);
+        ctx.req.log.error({ err }, 'background draft sync failed');
       });
     }
 
