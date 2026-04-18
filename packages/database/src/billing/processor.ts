@@ -1087,8 +1087,7 @@ async function checkGracePeriodExpiration(
 async function syncUsageToCustomerDraft(
   tx: LockedTransaction,
   customerId: number,
-  clock: DBClock,
-  force: boolean = false
+  clock: DBClock
 ): Promise<CustomerBillingResult> {
   const result: CustomerBillingResult = {
     customerId,
@@ -1111,32 +1110,17 @@ async function syncUsageToCustomerDraft(
     return result; // No draft invoice, nothing to sync
   }
 
-  // Activity-driven gating (replaces the old 1-hour debounce): only sync
-  // when haproxy_raw_logs has picked up new rows for this customer since
-  // the last sync. Keeps cost proportional to *active* customers rather
-  // than total customer count — idle customers short-circuit here.
-  // `force=true` (from forceSyncUsageToDraft / month-end) bypasses.
-  if (!force && draftInvoice.lastUpdatedAt) {
-    const activity = await tx.execute(sql`
-      SELECT EXISTS (
-        SELECT 1 FROM haproxy_raw_logs
-        WHERE customer_id = ${customerId}
-          AND timestamp > ${draftInvoice.lastUpdatedAt}
-        LIMIT 1
-      ) AS has_new
-    `);
-    const hasNew = (activity.rows[0] as { has_new: boolean } | undefined)?.has_new ?? false;
-    if (!hasNew) {
-      // Touch lastUpdatedAt so the reactive top-up doesn't re-fire for a
-      // customer we've already confirmed quiescent.
-      await tx.execute(sql`
-        UPDATE billing_records SET last_updated_at = ${now} WHERE id = ${draftInvoice.id}
-      `);
-      return result;
-    }
-  }
-
-  // Sync usage
+  // No gating: every sweep re-runs syncUsageToDraft unconditionally,
+  // so line_items is guaranteed to track stats_per_hour within one cycle
+  // (5 min prod, 5 sec dev). An earlier "raw-log activity" gate was subtly
+  // wrong — line_items is a cache of stats_per_hour, not of
+  // haproxy_raw_logs — so wipes or backfills at the CAgg layer were
+  // invisible to it and line_items could stay stale forever. Comparing
+  // derived totals was tempting but has ugly edge cases (disabled
+  // services with historical stats, pendingInvoiceId spin, platform
+  // service_types). syncUsageToDraft is idempotent and cheap (~4 queries
+  // per customer), so "just sync" wins on robustness. Scale via shard /
+  // cadence when volume demands it.
   const syncResult = await syncUsageToDraft(tx, customerId, draftInvoice.id, clock);
 
   if (syncResult.success) {
@@ -1258,17 +1242,9 @@ export async function processBilling(
 }
 
 /**
- * Force sync usage to customer's DRAFT invoice (on-demand)
- *
- * This is the exported wrapper for syncUsageToCustomerDraft with force=true.
- * Used by test/dev endpoints to immediately sync usage after injecting data.
- *
- * Follows the same production code path but bypasses the hourly debounce.
- *
- * @param db Database instance
- * @param customerId Customer ID
- * @param clock DBClock for time reference
- * @returns Billing result
+ * Explicit on-demand sync (used by test/dev endpoints + the UI's reactive
+ * top-up in getNextScheduledPayment). Identical to the periodic path now
+ * that the debounce/gating is gone — name preserved for callers.
  */
 export async function forceSyncUsageToDraft(
   db: Database,
@@ -1276,6 +1252,6 @@ export async function forceSyncUsageToDraft(
   clock: DBClock
 ): Promise<CustomerBillingResult> {
   return await withCustomerLock(db, customerId, async (tx) => {
-    return await syncUsageToCustomerDraft(tx, customerId, clock, true);
+    return await syncUsageToCustomerDraft(tx, customerId, clock);
   });
 }
