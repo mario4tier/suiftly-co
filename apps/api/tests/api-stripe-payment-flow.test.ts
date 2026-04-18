@@ -34,6 +34,7 @@ import {
   runPeriodicBillingJob,
   addStripePaymentMethod,
   reconcilePendingPayments,
+  waitForGMSyncCustomer,
 } from './helpers/http.js';
 import { login, TEST_WALLET } from './helpers/auth.js';
 import { clearNotifications, expectNotifications, expectNoNotifications } from './helpers/notifications.js';
@@ -327,7 +328,7 @@ describe('API: Stripe Payment Flow', () => {
 
       // Wait for GM to finish processing the sync-customer (it's a no-op but needs to complete
       // before subscribe, so GM doesn't interfere with the subscribe's 3DS billing record)
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await waitForGMSyncCustomer(customerId);
 
       // Subscribe — escrow ($2) insufficient for Pro ($39), Stripe requires 3DS → pending
       await trpcMutation<any>('billing.acceptTos', {}, accessToken);
@@ -840,7 +841,7 @@ describe('API: Stripe Payment Flow', () => {
       // could fire after the clock change and process billing with GM's own mock
       // Stripe (which doesn't have forceCardDeclined), paying the DRAFT before
       // our periodic job runs.
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await waitForGMSyncCustomer(customerId);
 
       // Advance to 1st of next month to trigger monthly billing → payment fails
       await setClockTime('2025-02-01T00:05:00Z');
@@ -889,7 +890,7 @@ describe('API: Stripe Payment Flow', () => {
       });
 
       // Wait for any in-flight GM async webhooks to complete before advancing clock
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await waitForGMSyncCustomer(customerId);
 
       // Advance to 1st of Feb → monthly billing fails → grace period starts
       await setClockTime('2025-02-01T00:05:00Z');

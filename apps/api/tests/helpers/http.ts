@@ -216,6 +216,31 @@ export async function reconcilePendingPayments(customerId: number): Promise<{
 }
 
 /**
+ * Wait for GM's sync-customer queue to drain for a given customer.
+ *
+ * Production webhooks (e.g. stripe setup_intent.succeeded) enqueue a
+ * sync-customer task on GM with `?async=true` so the webhook returns fast.
+ * Tests that mutate state and then advance the mock clock need a deterministic
+ * barrier, otherwise GM's sync-customer can fire after the clock change and
+ * charge draft invoices via GM's own Stripe mock (which doesn't honor the
+ * API-side forceCardDeclined flag).
+ *
+ * This calls GM's sync-customer endpoint in sync mode (default, no async=true).
+ * GM's queue dedups per-customer and returns a completion promise that
+ * resolves after any in-flight task AND any pending follow-up complete.
+ */
+export async function waitForGMSyncCustomer(customerId: number): Promise<void> {
+  const response = await fetch(
+    `${GM_BASE}/api/queue/sync-customer/${customerId}?source=test`,
+    { method: 'POST' }
+  );
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`waitForGMSyncCustomer failed: ${response.status} ${text}`);
+  }
+}
+
+/**
  * Reset test data (delete customer and related data)
  */
 export async function resetTestData(walletAddress?: string): Promise<void> {
