@@ -576,9 +576,11 @@ export async function getBandwidthStats(
     }));
   }
 
-  // Append partial current-period from stats_per_min
+  // Append partial current-period from stats_per_min.
+  // Exclude traffic_type=8 stream-close echoes — the underlying bytes were
+  // already counted via the poller's traffic_type=7 rows.
   const tailResult = await db.execute(sql`
-    SELECT COALESCE(SUM(total_bytes), 0)::bigint AS bytes
+    SELECT COALESCE(SUM(total_bytes) FILTER (WHERE traffic_type <> 8), 0)::bigint AS bytes
     FROM stats_per_min
     WHERE customer_id = ${customerId}
       AND service_type = ${serviceType}

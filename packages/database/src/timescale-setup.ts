@@ -190,7 +190,9 @@ export async function setupTimescaleDB() {
       SUM(time_total::bigint * repeat) FILTER (WHERE traffic_type IN (1, 2))::double precision / NULLIF(SUM(repeat) FILTER (WHERE traffic_type IN (1, 2)), 0) AS avg_response_time_ms,
       MIN(time_total) FILTER (WHERE traffic_type IN (1, 2)) AS min_response_time_ms,
       MAX(time_total) FILTER (WHERE traffic_type IN (1, 2)) AS max_response_time_ms,
-      SUM(bytes_sent * repeat) AS total_bytes,
+      -- Excludes stream-close rows (traffic_type=8) — those echo bytes the
+      -- stream-meter poller already emitted via traffic_type=7.
+      SUM(bytes_sent * repeat) FILTER (WHERE traffic_type <> 8) AS total_bytes,
       -- Billing: bandwidth (unary + stream deltas; see STREAM_METERING_FEATURE.md)
       SUM(bytes_sent * repeat) FILTER (WHERE traffic_type IN (1, 2, 7)) AS billable_bytes
     FROM haproxy_raw_logs

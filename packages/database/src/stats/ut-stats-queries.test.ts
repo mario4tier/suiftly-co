@@ -608,6 +608,119 @@ describe('Stats Queries', () => {
         expect(count).toBe(50);
       });
 
+      // Close-log rows for a metered gRPC stream (traffic_type=8) repeat
+      // the cumulative bytes the poller already emitted via traffic_type=7
+      // AND carry the stream's lifetime (e.g. 10s) in time_total. They
+      // must be excluded from billable_bytes (to avoid double-count), from
+      // billable_requests (streams are not unary requests), and from
+      // response-time aggregates (a 10s stream would skew avg_rt).
+      it('getBillableBandwidth should exclude stream-close bytes', async () => {
+        const monthStart = new Date('2024-01-01T00:00:00Z');
+
+        // Poller already emitted the bytes as tt=7
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 1,
+          timestamp: CURRENT_HOUR, trafficType: 7, bytesSent: 50_000,
+        });
+        // HAProxy then emits the close-log row repeating the cumulative bytes
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 1,
+          timestamp: CURRENT_HOUR, trafficType: 8, bytesSent: 50_000,
+        });
+        await refreshStatsAggregate(db);
+        await refreshStatsPerMin(db);
+
+        const bytes = await getBillableBandwidth(
+          db, TEST_CUSTOMER_ID, 1, monthStart, clock.now()
+        );
+
+        // Should only count the tt=7 row, not the tt=8 close-log echo.
+        expect(bytes).toBe(50_000);
+      });
+
+      it('getBillableRequestCount should exclude stream-close rows', async () => {
+        const monthStart = new Date('2024-01-01T00:00:00Z');
+
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 10,
+          timestamp: CURRENT_HOUR, trafficType: 1,
+        });
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 3,
+          timestamp: CURRENT_HOUR, trafficType: 8,
+        });
+        await refreshStatsAggregate(db);
+        await refreshStatsPerMin(db);
+
+        const count = await getBillableRequestCount(
+          db, TEST_CUSTOMER_ID, 1, monthStart, clock.now()
+        );
+
+        // Only unary (tt=1) rows count; stream-close (tt=8) excluded.
+        expect(count).toBe(10);
+      });
+
+      it('getBandwidthStats should exclude stream-close bytes from the chart', async () => {
+        // Chart totals must not double-count. Poller emits the bytes via
+        // tt=7; HAProxy's close-log row (tt=8) echoes the same bytes for
+        // lifecycle analytics only.
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 1,
+          timestamp: COMPLETED_HOUR, trafficType: 7, bytesSent: 40_000,
+        });
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 1,
+          timestamp: COMPLETED_HOUR, trafficType: 8, bytesSent: 40_000,
+        });
+        await refreshStatsAggregate(db);
+        await refreshStatsPerMin(db);
+
+        const stats = await getBandwidthStats(db, TEST_CUSTOMER_ID, 1, '24 hours', clock);
+        const totalBytes = stats.reduce((s, p) => s + p.bytes, 0);
+
+        // Should be 40_000, not 80_000 (tt=8 excluded).
+        expect(totalBytes).toBe(40_000);
+      });
+
+      it('getBandwidthStats minute-tail should exclude stream-close bytes', async () => {
+        // Same invariant, current-hour tail path (reads stats_per_min).
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 1,
+          timestamp: CURRENT_HOUR, trafficType: 7, bytesSent: 15_000,
+        });
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 1,
+          timestamp: CURRENT_HOUR, trafficType: 8, bytesSent: 15_000,
+        });
+        await refreshStatsPerMin(db);
+
+        const stats = await getBandwidthStats(db, TEST_CUSTOMER_ID, 1, '24 hours', clock);
+        const totalBytes = stats.reduce((s, p) => s + p.bytes, 0);
+
+        expect(totalBytes).toBe(15_000);
+      });
+
+      it('getResponseTimeStats should exclude stream-close time_total', async () => {
+        // Unary request with 50ms response time in CURRENT_HOUR
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 10,
+          timestamp: CURRENT_HOUR, trafficType: 1, responseTimeMs: 50,
+        });
+        // Stream-close row: 10s lifetime — would wreck avg if included
+        await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+          serviceType: 1, network: 1, count: 1,
+          timestamp: CURRENT_HOUR, trafficType: 8, responseTimeMs: 10_000,
+        });
+        await refreshStatsAggregate(db);
+        await refreshStatsPerMin(db);
+
+        const stats = await getResponseTimeStats(db, TEST_CUSTOMER_ID, 1, '24h', clock);
+        const tail = stats.find(p => p.partial) ?? stats[stats.length - 1];
+
+        // Expect ~50ms — if tt=8 leaked in, avg would be (10×50 + 1×10000)/11 ≈ 954ms.
+        expect(tail.avgResponseTimeMs).toBeLessThan(100);
+      });
+
       it('getBillableBandwidth should include a mix of unary and stream-delta bytes', async () => {
         const monthStart = new Date('2024-01-01T00:00:00Z');
 
