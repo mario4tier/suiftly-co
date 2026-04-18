@@ -224,6 +224,19 @@ export const FIELD_LIMITS = {
   INVOICE_ID: 50,           // Invoice references
 } as const;
 
+// Traffic-type codes — mirror of scripts/utilities/error_consts.py.
+// Parity is enforced by scripts/test/test-traffic-types-parity.py.
+export const TRAFFIC_TYPE = {
+  GUARANTEED: 1,
+  BURST: 2,
+  DENIED: 3,
+  DROPPED: 4,
+  IP_DROPPED: 5,
+  UNAVAILABLE: 6,
+  STREAM_DELTA: 7,
+  STREAM_CLOSE: 8,
+} as const;
+
 // Usage-Based Pricing (cents per 1000 requests)
 // Pricing: $0.0001 per request = 0.01 cents per request = $1.00 per 10,000 requests
 // Value stored as: cents per 1000 requests (e.g., 10 = $1.00 per 10,000 requests)

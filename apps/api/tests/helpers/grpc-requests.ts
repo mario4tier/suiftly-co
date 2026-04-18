@@ -109,6 +109,30 @@ export async function isGrpcBackendAvailable(): Promise<boolean> {
 /**
  * Trigger GM vault sync + sync-files + wait for LM to apply.
  */
+/**
+ * Ensure stream-meter-poller is active so streaming tests observe
+ * traffic_type=7 rows in haproxy_raw_logs. Safe to call multiple times:
+ * a no-op when the service is already running.
+ */
+export async function ensureStreamMeterPollerRunning(): Promise<void> {
+  try {
+    const statusRes = await fetch(
+      'http://localhost:22800/api/service/status?service=stream-meter-poller'
+    );
+    if (statusRes.ok) {
+      const status = await statusRes.json() as { active?: boolean };
+      if (status.active) return;
+    }
+  } catch {
+    // sudob unreachable — best-effort start below.
+  }
+  await fetch('http://localhost:22800/api/service/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ service: 'stream-meter-poller' }),
+  });
+}
+
 export async function triggerGrpcVaultSync(timeoutMs = 20000): Promise<void> {
   const { db, systemControl } = await import('@suiftly/database');
   const { eq } = await import('drizzle-orm');
