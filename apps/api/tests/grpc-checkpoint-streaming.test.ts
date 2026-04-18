@@ -192,18 +192,7 @@ describe('Checkpoint Streaming Metering', () => {
     );
   });
 
-  // TODO(stream-meter): unskip once the stick-table population bug is
-  // resolved. `track-sc0 var(txn.api_key_fp_binary) table BE_mgrpc_local_regional`
-  // validates cleanly in `haproxy -c` but the live table never gets
-  // populated — `show table BE_mgrpc_local_regional` stays at `used:0`
-  // even after an authenticated streaming request that produces a
-  // close-log row with valid api_key_fp + customer_id. Tried both
-  // backend-local and frontend-post-ratelimit placement; neither
-  // populates. HAProxy 3.0.19 default MAX_SESS_STKCTR=3 (sc0-sc2, all
-  // used by the frontend's existing customer/IP rate tables); adding a
-  // 4th slot via `tune.stick-counters 4` and using `track-sc3` is one
-  // path forward to rule out sc0-contention semantics.
-  it.skip('should meter stream bytes via poller matching client bytes', { timeout: 60000 }, async () => {
+  it('should meter stream bytes via poller matching client bytes', { timeout: 60000 }, async () => {
     if (!haproxyAvailable || !backendAvailable || !apiAvailable) return;
 
     const timestampBefore = new Date();
