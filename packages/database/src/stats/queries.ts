@@ -139,10 +139,12 @@ export async function getStatsSummary(
   const startTime = new Date(now.getTime() - parseInterval(interval));
   const cutoff = hourCutoff(now);
 
-  // Hourly aggregate for completed hours
+  // Both paths below scope success_count to tt IN (1, 2) so poller
+  // stream-delta rows (tt=7) and stream-close echoes (tt=8) don't inflate
+  // the request count.
   const hourlyResult = await db.execute(sql`
     SELECT
-      COALESCE(SUM(success_count), 0)::integer AS success_count,
+      (COALESCE(SUM(guaranteed_success_count), 0) + COALESCE(SUM(burst_success_count), 0))::integer AS success_count,
       COALESCE(SUM(dropped_count), 0)::integer AS dropped_count,
       COALESCE(SUM(client_error_count), 0)::integer AS client_error_count,
       COALESCE(SUM(server_error_count), 0)::integer AS server_error_count
@@ -153,10 +155,9 @@ export async function getStatsSummary(
       AND bucket < ${cutoff}
   `);
 
-  // Minute aggregate for current-hour tail
   const minuteResult = await db.execute(sql`
     SELECT
-      COALESCE(SUM(request_count) FILTER (WHERE status_code >= 200 AND status_code < 300), 0)::integer AS success_count,
+      COALESCE(SUM(request_count) FILTER (WHERE status_code >= 200 AND status_code < 300 AND traffic_type IN (1, 2)), 0)::integer AS success_count,
       COALESCE(SUM(request_count) FILTER (WHERE traffic_type IN (3, 4, 5, 6)), 0)::integer AS dropped_count,
       COALESCE(SUM(request_count) FILTER (WHERE status_code >= 400 AND status_code < 500 AND traffic_type NOT IN (3, 4, 5, 6)), 0)::integer AS client_error_count,
       COALESCE(SUM(request_count) FILTER (WHERE status_code >= 500 AND traffic_type NOT IN (3, 4, 5, 6)), 0)::integer AS server_error_count
@@ -541,11 +542,12 @@ export async function getBandwidthStats(
 
   let points: Array<{ bucket: Date; bytes: number; partial?: boolean }>;
 
+  // Bandwidth chart = billable_bytes so graph equals invoice.
   if (isDaily) {
     const result = await db.execute(sql`
       SELECT
         date_trunc('day', bucket) AS bucket,
-        COALESCE(SUM(total_bytes), 0)::bigint AS bytes
+        COALESCE(SUM(billable_bytes), 0)::bigint AS bytes
       FROM stats_per_hour
       WHERE customer_id = ${customerId}
         AND service_type = ${serviceType}
@@ -561,7 +563,7 @@ export async function getBandwidthStats(
     }));
   } else {
     const result = await db.execute(sql`
-      SELECT bucket, COALESCE(total_bytes, 0)::bigint AS bytes
+      SELECT bucket, COALESCE(billable_bytes, 0)::bigint AS bytes
       FROM stats_per_hour
       WHERE customer_id = ${customerId}
         AND service_type = ${serviceType}
@@ -576,11 +578,9 @@ export async function getBandwidthStats(
     }));
   }
 
-  // Append partial current-period from stats_per_min.
-  // Exclude traffic_type=8 stream-close echoes — the underlying bytes were
-  // already counted via the poller's traffic_type=7 rows.
+  // Partial current-period bar from stats_per_min — same billable filter.
   const tailResult = await db.execute(sql`
-    SELECT COALESCE(SUM(total_bytes) FILTER (WHERE traffic_type <> 8), 0)::bigint AS bytes
+    SELECT COALESCE(SUM(total_bytes) FILTER (WHERE traffic_type IN (1, 2, 7)), 0)::bigint AS bytes
     FROM stats_per_min
     WHERE customer_id = ${customerId}
       AND service_type = ${serviceType}

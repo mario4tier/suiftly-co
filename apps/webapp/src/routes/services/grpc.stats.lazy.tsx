@@ -3,7 +3,7 @@
  * Shows usage and performance metrics with time-series visualization
  */
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createLazyFileRoute } from '@tanstack/react-router';
 import { TextRoute } from '../../components/ui/text-route';
 import { DashboardLayout } from '../../components/layout/DashboardLayout';
@@ -14,6 +14,7 @@ import { mockAuth } from '../../lib/config';
 import { padTimeSeries } from '../../lib/stats-time-series';
 import { toast } from 'sonner';
 import { useServicesStatus } from '../../hooks/useServicesStatus';
+import { liveRefetchInterval } from '../../hooks/liveRefetchInterval';
 import { ServiceStatusIndicator } from '../../components/ui/service-status-indicator';
 import {
   ComposedChart,
@@ -579,8 +580,16 @@ function StatCard({
 function GrpcStatsPage() {
   const [timeRange, setTimeRange] = useState<TimeRange>('24h');
   const [testMenuOpen, setTestMenuOpen] = useState(false);
+  // Off-switch so the dev can observe the real polling UX (wait up to
+  // 60s for organic refresh) instead of the dev-ergonomics forceSync.
+  const [autoSync, setAutoSync] = useState(true);
 
   const utils = trpc.useUtils();
+
+  // Pending auto-sync timers — cleared on unmount so a navigation during
+  // the 16s window doesn't leave stray mutations in flight.
+  const autoSyncTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  useEffect(() => () => { autoSyncTimers.current.forEach(clearTimeout); }, []);
 
   // Fetch service to check enabled state (for onboarding check)
   const { data: services } = trpc.services.list.useQuery();
@@ -592,35 +601,42 @@ function GrpcStatsPage() {
   const grpcStatus = getServiceStatus('grpc');
   const isSyncing = grpcStatus?.syncStatus === 'pending';
 
+  // Live polling: 60s → 10m backoff after 1h of no change;
+  // auto-refresh on tab focus.
+  const liveOpts = { refetchInterval: liveRefetchInterval, refetchOnWindowFocus: true } as const;
+
   // Fetch summary stats (matches selected time range, hybrid real-time)
   const { data: summary, isLoading: summaryLoading } = trpc.stats.getSummary.useQuery({
     serviceType: 'grpc',
     range: timeRange,
-  });
+  }, liveOpts);
 
   // Fetch traffic breakdown over time (for stacked chart)
   const { data: trafficData, isLoading: trafficLoading } = trpc.stats.getTraffic.useQuery({
     serviceType: 'grpc',
     range: timeRange,
-  });
+  }, liveOpts);
 
   // Fetch response time over time
   const { data: rtData, isLoading: rtLoading } = trpc.stats.getResponseTime.useQuery({
     serviceType: 'grpc',
     range: timeRange,
-  });
+  }, liveOpts);
 
   // Fetch bandwidth over time
   const { data: bwData, isLoading: bwLoading } = trpc.stats.getBandwidth.useQuery({
     serviceType: 'grpc',
     range: timeRange,
-  });
+  }, liveOpts);
 
   const invalidateAll = () => {
     utils.stats.getSummary.invalidate();
     utils.stats.getTraffic.invalidate();
     utils.stats.getResponseTime.invalidate();
     utils.stats.getBandwidth.invalidate();
+    // Usage-This-Month on the overview page reads from billing — keep it
+    // in lockstep with the stats charts.
+    utils.billing.getNextScheduledPayment.invalidate();
   };
 
   // Inject test data mutation (random distribution)
@@ -650,11 +666,12 @@ function GrpcStatsPage() {
     onError: () => toast.error('Failed to clear stats'),
   });
 
-  // Force sync: refresh stats aggregate + sync usage to DRAFT invoice
+  // Force sync: refresh stats aggregate + sync usage to DRAFT invoice.
+  // Toast is owned by each call site so manual vs auto-triggered runs
+  // can be told apart in the UI.
   const forceSyncStats = trpc.stats.forceSyncStats.useMutation({
     onSuccess: () => {
       invalidateAll();
-      toast.success('Stats synced');
     },
     onError: (err) => toast.error(`Sync failed: ${err.message}`),
   });
@@ -667,6 +684,15 @@ function GrpcStatsPage() {
         toast.success(`Real traffic: ${data.successCount}/${data.requests} requests, ${(data.totalBytes / 1024).toFixed(0)}KB`);
       } else {
         toast.success(`Real traffic: ${data.checkpoints} checkpoints, ${(data.bytes / 1024).toFixed(0)}KB in ${data.durationMs / 1000}s`);
+      }
+      // Two forceSyncs at 8s + 16s cover typical + worst-case fluentd
+      // flush timing. Timers tracked so they cancel on unmount.
+      if (autoSync) {
+        const autoSyncToast = { onSuccess: () => toast.success('Auto Force Sync Done') };
+        autoSyncTimers.current.push(
+          setTimeout(() => forceSyncStats.mutate(undefined, autoSyncToast), 8_000),
+          setTimeout(() => forceSyncStats.mutate(undefined, autoSyncToast), 16_000),
+        );
       }
     },
     onError: (err) => toast.error(`Real traffic failed: ${err.message}`),
@@ -712,7 +738,9 @@ function GrpcStatsPage() {
         generateRealTraffic.mutate({ mode: 'stream', durationSecs: 10 });
         break;
       case 'forceSyncStats':
-        forceSyncStats.mutate();
+        forceSyncStats.mutate(undefined, {
+          onSuccess: () => toast.success('Force Sync Done'),
+        });
         break;
     }
   };
@@ -796,6 +824,18 @@ function GrpcStatsPage() {
                       >
                         Force Sync Stats
                       </button>
+                      <label
+                        className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-green-600 dark:text-green-400 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={autoSync}
+                          onChange={(e) => setAutoSync(e.target.checked)}
+                          className="h-3 w-3"
+                        />
+                        Auto Force Sync
+                      </label>
                       <div className="border-t border-gray-200 dark:border-gray-700 my-1" />
                       <button
                         type="button"

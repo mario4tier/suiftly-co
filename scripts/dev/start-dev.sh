@@ -319,35 +319,36 @@ fi
 echo "  Local Manager started"
 
 # ============================================================================
-# Start Fluentd services (systemd via sudob) - for HAProxy log ingestion
+# Start Fluentd services (systemd via sudob) — HAProxy log ingestion.
+# Hard-fail on startup failure: without fluentd the bandwidth/usage UI
+# silently reads zero and mock-row unit tests don't catch it.
 # ============================================================================
 echo "Starting Fluentd services..."
 
-# Start fluentd-gm (aggregates logs from LM and writes to DB)
-if is_service_running "fluentd-gm"; then
-  echo "  fluentd-gm already running"
-else
-  sudob_service start fluentd-gm >/dev/null 2>&1 || true
-  sleep 1
-  if is_service_running "fluentd-gm"; then
-    echo "  fluentd-gm started"
-  else
-    echo "  WARNING: fluentd-gm failed to start (may not be configured)"
+start_fluentd_or_die() {
+  local svc="$1"
+  if is_service_running "$svc"; then
+    echo "  $svc already running"
+    return
   fi
-fi
+  sudob_service start "$svc" >/dev/null 2>&1 || true
+  sleep 1
+  if is_service_running "$svc"; then
+    echo "  $svc started"
+    return
+  fi
+  {
+    echo "  ERROR: $svc failed to start"
+    echo "    Without $svc, HAProxy logs never reach the DB and"
+    echo "    all bandwidth / usage stats will silently read zero."
+    echo "    Check: sudo journalctl -u $svc -n 50"
+    echo "    Install/configure: sudo ~/mhaxbe/scripts/setup-user.py <user>"
+  } >&2
+  exit 1
+}
 
-# Start fluentd-lm (forwards HAProxy logs to GM)
-if is_service_running "fluentd-lm"; then
-  echo "  fluentd-lm already running"
-else
-  sudob_service start fluentd-lm >/dev/null 2>&1 || true
-  sleep 1
-  if is_service_running "fluentd-lm"; then
-    echo "  fluentd-lm started"
-  else
-    echo "  WARNING: fluentd-lm failed to start (may not be configured)"
-  fi
-fi
+start_fluentd_or_die "fluentd-gm"
+start_fluentd_or_die "fluentd-lm"
 
 # ============================================================================
 # Start API server (direct npm - not systemd)

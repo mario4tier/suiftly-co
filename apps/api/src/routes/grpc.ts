@@ -562,23 +562,26 @@ export const grpcRouter = router({
 // Traffic injection helpers — real gRPC through HAProxy, no mock data
 // ---------------------------------------------------------------------------
 
-const GRPC_HEADERS = (apiKey: string): http2.OutgoingHttpHeaders => ({
+// Path must NOT be in mhaxbe's STREAMING_GRPC_PATHS — otherwise HAProxy
+// retags the close-log to traffic_type=8 and it disappears from the UI.
+const UNARY_GRPC_PATH = '/sui.rpc.v2.LedgerService/GetServiceInfo';
+const STREAM_GRPC_PATH = '/sui.rpc.v2.SubscriptionService/SubscribeCheckpoints';
+
+const GRPC_HEADERS = (apiKey: string, path: string): http2.OutgoingHttpHeaders => ({
   ':method': 'POST',
-  ':path': '/sui.rpc.v2.SubscriptionService/SubscribeCheckpoints',
+  ':path': path,
   'content-type': 'application/grpc',
   'te': 'trailers',
   'x-api-key': apiKey,
   'cf-connecting-ip': '127.0.0.1',
 });
 
-// Empty gRPC frame: [0x00 (not compressed), 0x00000000 (zero-length message)]
+// Zero-length protobuf message — valid for both GetServiceInfoRequest {}
+// and SubscribeCheckpointsRequest with no read_mask.
 const EMPTY_GRPC_FRAME = Buffer.from([0x00, 0x00, 0x00, 0x00, 0x00]);
 
-/**
- * Make a single short-lived gRPC streaming request: connect, receive one
- * checkpoint message, close. Each call generates one HAProxy log entry.
- */
-function makeOneRequest(
+/** Single unary GetServiceInfo call — drives request/timing/usage charts. */
+function makeOneUnaryRequest(
   port: number,
   apiKey: string,
 ): Promise<{ bytes: number; ok: boolean }> {
@@ -595,7 +598,7 @@ function makeOneRequest(
       resolve({ bytes: 0, ok: false });
     });
 
-    const req = client.request(GRPC_HEADERS(apiKey));
+    const req = client.request(GRPC_HEADERS(apiKey, UNARY_GRPC_PATH));
     req.write(EMPTY_GRPC_FRAME);
     req.end();
 
@@ -651,7 +654,7 @@ async function injectRequests(
   let totalBytes = 0;
 
   for (let i = 0; i < count; i++) {
-    const r = await makeOneRequest(port, apiKey);
+    const r = await makeOneUnaryRequest(port, apiKey);
     if (r.ok) successCount++;
     totalBytes += r.bytes;
   }
@@ -684,7 +687,7 @@ function injectStream(
       resolve({ mode: 'stream', checkpoints: 0, bytes: 0, durationMs, status: 0 });
     });
 
-    const req = client.request(GRPC_HEADERS(apiKey));
+    const req = client.request(GRPC_HEADERS(apiKey, STREAM_GRPC_PATH));
     req.write(EMPTY_GRPC_FRAME);
     req.end();
 

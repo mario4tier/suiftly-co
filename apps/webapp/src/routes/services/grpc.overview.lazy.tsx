@@ -20,6 +20,7 @@ import { type ServiceState, type ServiceTier, USAGE_PRICING_CENTS_PER_1000, BAND
 import { trpc } from '../../lib/trpc';
 import { toast } from 'sonner';
 import { useServicesStatus } from '../../hooks/useServicesStatus';
+import { liveRefetchInterval } from '../../hooks/liveRefetchInterval';
 import { ServiceStatusIndicator } from '../../components/ui/service-status-indicator';
 import { UsageThisMonth } from '../../components/services/UsageThisMonth';
 import type { InvoiceLineItem } from '@suiftly/shared/types';
@@ -240,7 +241,11 @@ function GrpcInteractiveForm({ serviceState, tier, isEnabled, isGated = false }:
   const { data: moreSettings } = trpc.grpc.getMoreSettings.useQuery(undefined, { enabled: !isGated });
 
   // Draft invoice for usage display
-  const { data: nextPayment } = trpc.billing.getNextScheduledPayment.useQuery(undefined, { enabled: !isGated });
+  const { data: nextPayment } = trpc.billing.getNextScheduledPayment.useQuery(undefined, {
+    enabled: !isGated,
+    refetchInterval: liveRefetchInterval,
+    refetchOnWindowFocus: true,
+  });
 
   const createApiKeyMutation = trpc.grpc.createApiKey.useMutation({
     onSuccess: (data) => {

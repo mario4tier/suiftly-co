@@ -58,8 +58,11 @@ export function formatLineItemDescription(
     case INVOICE_LINE_ITEM_TYPE.REQUESTS:
       return `${prefix}${item.quantity.toLocaleString()} requests @ $${item.unitPriceUsd.toFixed(4)}/req`;
     case INVOICE_LINE_ITEM_TYPE.BANDWIDTH: {
+      // `<` prefix keeps trace usage distinguishable from true zero.
       const gb = item.quantity / (1024 * 1024 * 1024);
-      return `${prefix}${gb.toFixed(3)} GB @ $${item.unitPriceUsd.toFixed(2)}/GB`;
+      const gbStr = gb.toFixed(3);
+      const display = item.quantity > 0 && gbStr === '0.000' ? '<0.001' : gbStr;
+      return `${prefix}${display} GB @ $${item.unitPriceUsd.toFixed(2)}/GB`;
     }
     case INVOICE_LINE_ITEM_TYPE.EXTRA_API_KEYS:
       return `${prefix}extra API keys: ${item.quantity} @ $${item.unitPriceUsd.toFixed(2)}/key`;

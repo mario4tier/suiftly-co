@@ -964,4 +964,380 @@ describe('Stats Queries', () => {
       });
     });
   });
+
+  describe('getStatsSummary.successCount must exclude stream-meter poller rows', () => {
+    const COMPLETED = new Date('2024-01-15T10:00:00Z');
+    const CURRENT   = new Date('2024-01-15T12:15:00Z');
+
+    it('hourly path: tt=7 rows must not inflate successCount', async () => {
+      const midClock = new MockDBClock({ currentTime: new Date('2024-01-15T12:30:00Z') });
+      // 10 real unary requests + 1 stream-meter poller emit (all status 200)
+      await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+        serviceType: 1, network: 1, count: 10,
+        timestamp: COMPLETED, trafficType: 1, statusCode: 200,
+      });
+      await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+        serviceType: 1, network: 1, count: 1,
+        timestamp: COMPLETED, trafficType: 7, statusCode: 200,
+      });
+      await refreshStatsAggregate(db);
+      await refreshStatsPerMin(db);
+
+      const summary = await getStatsSummary(db, TEST_CUSTOMER_ID, 1, midClock, '24h');
+
+      // 10 unary — the poller row is a byte observation, not a request.
+      expect(summary.successCount).toBe(10);
+      expect(summary.totalRequests).toBe(10);
+    });
+
+    it('minute-tail path: tt=7 rows must not inflate successCount', async () => {
+      const midClock = new MockDBClock({ currentTime: new Date('2024-01-15T12:30:00Z') });
+      await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+        serviceType: 1, network: 1, count: 10,
+        timestamp: CURRENT, trafficType: 1, statusCode: 200,
+      });
+      await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+        serviceType: 1, network: 1, count: 1,
+        timestamp: CURRENT, trafficType: 7, statusCode: 200,
+      });
+      await refreshStatsAggregate(db);
+      await refreshStatsPerMin(db);
+
+      const summary = await getStatsSummary(db, TEST_CUSTOMER_ID, 1, midClock, '24h');
+
+      expect(summary.successCount).toBe(10);
+      expect(summary.totalRequests).toBe(10);
+    });
+  });
+
+  // Business rule: bandwidth graph = invoice. Errors/denials/drops are on
+  // the requests chart only.
+  describe('Bandwidth chart matches billing scope (graph = invoice)', () => {
+    const COMPLETED = new Date('2024-01-15T10:00:00Z');
+    const CURRENT   = new Date('2024-01-15T12:15:00Z');
+    const MONTH_START = new Date('2024-01-01T00:00:00Z');
+    // Mid-hour clock so the minute-tail range [cutoff, now) is non-empty
+    // and a row at CURRENT (12:15Z) falls inside it.
+    const MID_HOUR_CLOCK = () => new MockDBClock({ currentTime: new Date('2024-01-15T12:30:00Z') });
+
+    it('hourly path excludes denied/dropped traffic from the bandwidth chart', async () => {
+      // Billable traffic
+      await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+        serviceType: 1, network: 1, count: 10,
+        timestamp: COMPLETED, trafficType: 1, bytesSent: 1024,
+      });
+      // Non-billable: tt=3 rate-limited 429, tt=4 dropped, tt=6 unavailable
+      await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+        serviceType: 1, network: 1, count: 5,
+        timestamp: COMPLETED, trafficType: 3, bytesSent: 200, statusCode: 429,
+      });
+      await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+        serviceType: 1, network: 1, count: 3,
+        timestamp: COMPLETED, trafficType: 4, bytesSent: 150, statusCode: 503,
+      });
+      await refreshStatsAggregate(db);
+      await refreshStatsPerMin(db);
+
+      const chartBytes = (await getBandwidthStats(db, TEST_CUSTOMER_ID, 1, '24 hours', clock))
+        .reduce((s, p) => s + p.bytes, 0);
+
+      // Only billable bytes counted; denied/dropped excluded.
+      expect(chartBytes).toBe(10 * 1024);
+    });
+
+    it('minute-tail path excludes denied/dropped traffic from the bandwidth chart', async () => {
+      const midClock = MID_HOUR_CLOCK();
+      await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+        serviceType: 1, network: 1, count: 7,
+        timestamp: CURRENT, trafficType: 1, bytesSent: 512,
+      });
+      await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+        serviceType: 1, network: 1, count: 4,
+        timestamp: CURRENT, trafficType: 3, bytesSent: 100, statusCode: 429,
+      });
+      await refreshStatsAggregate(db);
+      await refreshStatsPerMin(db);
+
+      const chartBytes = (await getBandwidthStats(db, TEST_CUSTOMER_ID, 1, '24 hours', midClock))
+        .reduce((s, p) => s + p.bytes, 0);
+
+      expect(chartBytes).toBe(7 * 512);
+    });
+
+    it('invariant: bandwidth chart total equals getBillableBandwidth', async () => {
+      // Mix of everything: billable (tt=1,7) + non-billable (tt=3,4) across
+      // both a completed hour and the current-hour tail. The chart and the
+      // billing query must agree to the byte.
+      const midClock = MID_HOUR_CLOCK();
+      await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+        serviceType: 1, network: 1, count: 10,
+        timestamp: COMPLETED, trafficType: 1, bytesSent: 1024,
+      });
+      await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+        serviceType: 1, network: 1, count: 1,
+        timestamp: COMPLETED, trafficType: 7, bytesSent: 5000,
+      });
+      await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+        serviceType: 1, network: 1, count: 5,
+        timestamp: CURRENT, trafficType: 1, bytesSent: 512,
+      });
+      // Non-billable noise
+      await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+        serviceType: 1, network: 1, count: 8,
+        timestamp: COMPLETED, trafficType: 3, bytesSent: 200, statusCode: 429,
+      });
+      await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+        serviceType: 1, network: 1, count: 2,
+        timestamp: CURRENT, trafficType: 4, bytesSent: 150, statusCode: 503,
+      });
+      await refreshStatsAggregate(db);
+      await refreshStatsPerMin(db);
+
+      const chartBytes = (await getBandwidthStats(db, TEST_CUSTOMER_ID, 1, '24 hours', midClock))
+        .reduce((s, p) => s + p.bytes, 0);
+      const invoiceBytes = await getBillableBandwidth(
+        db, TEST_CUSTOMER_ID, 1, MONTH_START, midClock.now(),
+      );
+
+      expect(chartBytes).toBe(invoiceBytes);
+      expect(chartBytes).toBe(10 * 1024 + 5000 + 5 * 512);
+    });
+  });
+
+  // fluentd-lm's haproxy_aggregator emits rows where bytes_sent is the
+  // SUM across `repeat` merged requests — aggregates must use SUM(bytes_sent),
+  // NOT * repeat, or billable_bytes overcharges customers by `repeat`×.
+  describe('Pre-aggregated log rows (repeat > 1)', () => {
+    const COMPLETED_HOUR = new Date('2024-01-15T10:00:00Z');
+    const CURRENT_HOUR   = new Date('2024-01-15T12:15:00Z');
+
+    it('getBillableBandwidth (hourly aggregate) must not multiply by repeat', async () => {
+      // 1 aggregated row standing in for 5 guaranteed requests, 1000 bytes total.
+      await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+        serviceType: 1, network: 1, count: 1,
+        timestamp: COMPLETED_HOUR, trafficType: 1,
+        bytesSent: 1000, repeat: 5,
+      });
+      await refreshStatsAggregate(db);
+      await refreshStatsPerMin(db);
+
+      const bytes = await getBillableBandwidth(
+        db, TEST_CUSTOMER_ID, 1,
+        new Date('2024-01-01T00:00:00Z'),
+        clock.now(),
+      );
+
+      // bytes_sent on the row is the SUM over the 5 merged requests (=1000).
+      // SUM(bytes_sent * repeat) would compute 1000*5 = 5000 → wrong, a
+      // 5× billing multiplier.
+      expect(bytes).toBe(1000);
+    });
+
+    it('getBillableBandwidth (minute-tail) must not multiply by repeat', async () => {
+      // Same scenario but in the CURRENT hour → goes through stats_per_min.
+      // getBillableBandwidth splits the window at `cutoff = hourCutoff(endTime)`:
+      //   [startTime, cutoff)  → stats_per_hour
+      //   [cutoff, endTime)    → stats_per_min
+      // To exercise the minute-tail path, endTime must be mid-hour (not
+      // hour-aligned) and the row must fall inside (cutoff, endTime).
+      const endTime = new Date('2024-01-15T12:30:00Z');
+      const rowTs   = new Date('2024-01-15T12:15:00Z');
+
+      await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+        serviceType: 1, network: 1, count: 1,
+        timestamp: rowTs, trafficType: 1,
+        bytesSent: 1000, repeat: 5,
+      });
+      await refreshStatsAggregate(db);
+      await refreshStatsPerMin(db);
+
+      const bytes = await getBillableBandwidth(
+        db, TEST_CUSTOMER_ID, 1,
+        new Date('2024-01-01T00:00:00Z'),
+        endTime,
+      );
+
+      expect(bytes).toBe(1000);
+    });
+
+    it('getBandwidthStats (chart) must not multiply by repeat', async () => {
+      await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+        serviceType: 1, network: 1, count: 1,
+        timestamp: COMPLETED_HOUR, trafficType: 1,
+        bytesSent: 1000, repeat: 5,
+      });
+      await refreshStatsAggregate(db);
+      await refreshStatsPerMin(db);
+
+      const points = await getBandwidthStats(db, TEST_CUSTOMER_ID, 1, '24h', clock);
+      const totalBytes = points.reduce((s, p) => s + (p.bytes ?? 0), 0);
+
+      expect(totalBytes).toBe(1000);
+    });
+
+    it('consistent: aggregated row produces same total as un-aggregated rows', async () => {
+      // Sanity invariant — two equivalent inputs must produce identical
+      // billable_bytes, regardless of whether fluentd-lm chose to merge
+      // them. This is the cleanest formulation of the "no hidden
+      // multiplier" requirement from the business side.
+      //   (a) 1 row  at (bytes_sent=1000, repeat=5)   ← aggregator output
+      //   (b) 5 rows at (bytes_sent=200,  repeat=1)   ← un-aggregated equivalent
+      // Both represent "5 requests, 1000 bytes total".
+      await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+        serviceType: 1, network: 1, count: 1,
+        timestamp: COMPLETED_HOUR, trafficType: 1,
+        bytesSent: 1000, repeat: 5,
+      });
+      await refreshStatsAggregate(db);
+      const bytesAggregated = await getBillableBandwidth(
+        db, TEST_CUSTOMER_ID, 1,
+        new Date('2024-01-01T00:00:00Z'),
+        clock.now(),
+      );
+
+      await clearAllStats(db);
+      await refreshStatsAggregate(db);
+      await refreshStatsPerMin(db);
+
+      await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+        serviceType: 1, network: 1, count: 5,
+        timestamp: COMPLETED_HOUR, trafficType: 1,
+        bytesSent: 200, repeat: 1,
+      });
+      await refreshStatsAggregate(db);
+      const bytesUnaggregated = await getBillableBandwidth(
+        db, TEST_CUSTOMER_ID, 1,
+        new Date('2024-01-01T00:00:00Z'),
+        clock.now(),
+      );
+
+      expect(bytesAggregated).toBe(bytesUnaggregated);
+      expect(bytesAggregated).toBe(1000);
+    });
+  });
+
+  // Realtime aggregate on stats_per_min + hybrid split contract:
+  //   - hybrid query partitions on cutoff = hourCutoff(now)
+  //   - stats_per_hour: bucket < cutoff (closed hours only)
+  //   - stats_per_min:  bucket >= cutoff (current-hour tail)
+  // These MUST be mutually exclusive or a single row gets counted twice.
+  // With materialized_only=false on stats_per_min, the minute-tail query
+  // also pulls live-from-hypertable rows for not-yet-materialized buckets
+  // — we verify that (a) realtime actually picks them up and (b) the
+  // hybrid split doesn't overlap at the hour boundary.
+  describe('Realtime aggregate + hybrid split (no double-count)', () => {
+    it('stats_per_min is materialized_only=false (realtime on)', async () => {
+      const result = await db.execute(sql`
+        SELECT materialized_only FROM timescaledb_information.continuous_aggregates
+        WHERE view_name = 'stats_per_min'
+      `);
+      expect((result.rows[0] as any).materialized_only).toBe(false);
+    });
+
+    it('stats_per_hour is materialized_only=true (no unnecessary realtime scan)', async () => {
+      const result = await db.execute(sql`
+        SELECT materialized_only FROM timescaledb_information.continuous_aggregates
+        WHERE view_name = 'stats_per_hour'
+      `);
+      // If this flips to false, the hybrid's stats_per_hour path pays
+      // for an on-the-fly hypertable scan on every query — yet the
+      // current-hour partial always comes from stats_per_min anyway.
+      // See docs & timescale-setup.ts for the rationale.
+      expect((result.rows[0] as any).materialized_only).toBe(true);
+    });
+
+    it('fresh row in current minute appears without a manual refresh', async () => {
+      // Simulates the production flow: a row lands in haproxy_raw_logs
+      // DURING the current (open) 1-minute bucket. Only realtime
+      // aggregates make it visible to getStatsSummary without another
+      // refresh call.
+      //
+      // TimescaleDB quirk: the beforeEach's refresh pushes the
+      // continuous-aggregate watermark to `real NOW() + 1 hour`, and
+      // watermarks only advance. Rows below the watermark that were
+      // inserted AFTER the last refresh are treated as "should be
+      // materialized" (but aren't) and are invisible. Realtime serves
+      // from the hypertable only ABOVE the watermark. Using a future
+      // timestamp sidesteps this — real production runs the refresh
+      // policy every minute so the watermark naturally trails NOW().
+      const farFuture = new Date('2030-01-15T12:15:30Z');
+      const futureClock = new MockDBClock({ currentTime: farFuture });
+
+      await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+        serviceType: 1, network: 1, count: 1,
+        timestamp: new Date('2030-01-15T12:15:15Z'),
+        trafficType: 1, statusCode: 200, bytesSent: 1000,
+      });
+
+      // Deliberately NO refresh call here — the whole point of this test
+      // is to verify realtime aggregates surface the row without one.
+      const summary = await getStatsSummary(db, TEST_CUSTOMER_ID, 1, futureClock, '24h');
+      expect(summary.successCount).toBe(1);
+      expect(summary.totalRequests).toBe(1);
+    });
+
+    it('row at exact hour boundary (12:00:00) is counted exactly once', async () => {
+      // Row at 12:00:00 belongs to:
+      //   - time_bucket('1 hour', 12:00) = 12:00  → stats_per_hour bucket 12:00
+      //   - time_bucket('1 minute', 12:00) = 12:00 → stats_per_min bucket 12:00
+      // With clock at 12:30 (cutoff = 12:00):
+      //   - hourly query: WHERE bucket < cutoff  → 12:00 EXCLUDED
+      //   - minute query: WHERE bucket >= cutoff → 12:00 INCLUDED
+      // → counted ONCE in the tail. If the hourly WHERE were `<= cutoff`
+      // by mistake, we'd get 2. This test pins the exclusive boundary.
+      const clockMidHour = new MockDBClock({ currentTime: new Date('2024-01-15T12:30:00Z') });
+
+      await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+        serviceType: 1, network: 1, count: 1,
+        timestamp: new Date('2024-01-15T12:00:00Z'),  // exact boundary
+        trafficType: 1, statusCode: 200, bytesSent: 500,
+      });
+      await refreshStatsAggregate(db);
+      await refreshStatsPerMin(db);
+
+      const summary = await getStatsSummary(db, TEST_CUSTOMER_ID, 1, clockMidHour, '24h');
+      expect(summary.successCount).toBe(1);  // not 0, not 2
+    });
+
+    it('row just before hour boundary (11:59:59) is counted exactly once (hourly)', async () => {
+      // Mirror of the boundary test — row just inside the PREVIOUS hour
+      // must land ONLY in the hourly path, never in the minute tail.
+      const clockMidHour = new MockDBClock({ currentTime: new Date('2024-01-15T12:30:00Z') });
+
+      await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+        serviceType: 1, network: 1, count: 1,
+        timestamp: new Date('2024-01-15T11:59:59Z'),
+        trafficType: 1, statusCode: 200, bytesSent: 500,
+      });
+      await refreshStatsAggregate(db);
+      await refreshStatsPerMin(db);
+
+      const summary = await getStatsSummary(db, TEST_CUSTOMER_ID, 1, clockMidHour, '24h');
+      expect(summary.successCount).toBe(1);  // not 0, not 2
+    });
+
+    it('hybrid: mix of completed-hour and current-hour rows totals exactly', async () => {
+      // Integration-style: N rows across the two paths, assert
+      // count matches no matter which path each row falls into.
+      const clockMidHour = new MockDBClock({ currentTime: new Date('2024-01-15T12:30:00Z') });
+
+      // 3 rows in completed hours (must flow through stats_per_hour)
+      await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+        serviceType: 1, network: 1, count: 3,
+        timestamp: new Date('2024-01-15T10:00:00Z'),
+        trafficType: 1, statusCode: 200,
+      });
+      // 2 rows in the current hour (must flow through stats_per_min)
+      await insertMockHAProxyLogs(db, TEST_CUSTOMER_ID, {
+        serviceType: 1, network: 1, count: 2,
+        timestamp: new Date('2024-01-15T12:15:00Z'),
+        trafficType: 1, statusCode: 200,
+      });
+      await refreshStatsAggregate(db);
+      await refreshStatsPerMin(db);
+
+      const summary = await getStatsSummary(db, TEST_CUSTOMER_ID, 1, clockMidHour, '24h');
+      expect(summary.successCount).toBe(5);  // 3 + 2, zero overlap
+    });
+  });
 });

@@ -190,11 +190,11 @@ export async function setupTimescaleDB() {
       SUM(time_total::bigint * repeat) FILTER (WHERE traffic_type IN (1, 2))::double precision / NULLIF(SUM(repeat) FILTER (WHERE traffic_type IN (1, 2)), 0) AS avg_response_time_ms,
       MIN(time_total) FILTER (WHERE traffic_type IN (1, 2)) AS min_response_time_ms,
       MAX(time_total) FILTER (WHERE traffic_type IN (1, 2)) AS max_response_time_ms,
-      -- Excludes stream-close rows (traffic_type=8) — those echo bytes the
-      -- stream-meter poller already emitted via traffic_type=7.
-      SUM(bytes_sent * repeat) FILTER (WHERE traffic_type <> 8) AS total_bytes,
-      -- Billing: bandwidth (unary + stream deltas; see STREAM_METERING_FEATURE.md)
-      SUM(bytes_sent * repeat) FILTER (WHERE traffic_type IN (1, 2, 7)) AS billable_bytes
+      -- SUM(bytes_sent), NOT * repeat: fluentd-lm's haproxy_aggregator
+      -- stores bytes_sent as the already-summed total across `repeat`
+      -- merged requests (filter_haproxy_aggregator.rb, sum_fields).
+      SUM(bytes_sent) FILTER (WHERE traffic_type <> 8) AS total_bytes,
+      SUM(bytes_sent) FILTER (WHERE traffic_type IN (1, 2, 7)) AS billable_bytes
     FROM haproxy_raw_logs
     WHERE customer_id IS NOT NULL
     GROUP BY bucket, customer_id, service_type, network;
@@ -252,10 +252,8 @@ export async function setupTimescaleDB() {
       network,
       traffic_type,
       status_code,
-      -- Request count (supports pre-aggregated logs)
       SUM(repeat) AS request_count,
-      -- Bytes
-      SUM(bytes_sent * repeat) AS total_bytes,
+      SUM(bytes_sent) AS total_bytes,  -- already-summed; see stats_per_hour above
       -- Response time (weighted average)
       SUM(time_total::bigint * repeat)::double precision / NULLIF(SUM(repeat), 0) AS avg_rt_ms,
       MIN(time_total) AS min_rt_ms,
@@ -287,6 +285,13 @@ export async function setupTimescaleDB() {
   `);
   console.log('✓ Created stats_per_min index');
 
+  // Realtime aggregate: include the current (open) minute bucket live
+  // from haproxy_raw_logs so the partial-bar queries (minute-tail +
+  // today-tail fold into daily charts) reflect sub-minute events without
+  // waiting for the bucket boundary + refresh policy tick.
+  // Only stats_per_min needs this — stats_per_hour is only queried for
+  // completed hours (current hour/day tail always comes through stats_per_min).
+  await db.execute(sql`ALTER MATERIALIZED VIEW stats_per_min SET (timescaledb.materialized_only = false)`);
   await db.execute(sql`ALTER MATERIALIZED VIEW stats_per_min OWNER TO deploy`);
   console.log('✓ Transferred stats_per_min ownership to deploy');
 
