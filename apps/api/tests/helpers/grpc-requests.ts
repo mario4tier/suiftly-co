@@ -180,6 +180,12 @@ export interface StreamingResult {
   elapsedMs: number;
   /** Error message if something went wrong. */
   error?: string;
+  /** gRPC status code from trailers (0 = OK). Captured from `grpc-status`
+   *  trailer when server ends the stream. Non-zero explains an empty
+   *  stream that otherwise looks fine at the HTTP/2 layer. */
+  grpcStatus?: number;
+  /** Human-readable gRPC status message (from `grpc-message` trailer). */
+  grpcMessage?: string;
 }
 
 /**
@@ -238,11 +244,28 @@ export function grpcSubscribeCheckpoints(options: {
     let status = 0;
     let totalBytes = 0;
     let messageCount = 0;
+    let grpcStatus: number | undefined;
+    let grpcMessage: string | undefined;
     // Buffer for parsing gRPC length-prefixed frames across DATA chunks.
     let frameBuf = Buffer.alloc(0);
 
     req.on('response', (h) => {
       status = (h[':status'] as number) ?? 0;
+      // gRPC implementations sometimes return trailers-only (no DATA + no
+      // HEADERS_END_STREAM flag on response HEADERS). In that case the
+      // gRPC trailers land in the response headers, not a separate
+      // 'trailers' event. Capture both paths.
+      const s = h['grpc-status'];
+      if (s !== undefined) grpcStatus = Number(s);
+      const m = h['grpc-message'];
+      if (m !== undefined) grpcMessage = String(m);
+    });
+
+    req.on('trailers', (t) => {
+      const s = t['grpc-status'];
+      if (s !== undefined) grpcStatus = Number(s);
+      const m = t['grpc-message'];
+      if (m !== undefined) grpcMessage = String(m);
     });
 
     req.on('data', (chunk: Buffer) => {
@@ -265,7 +288,7 @@ export function grpcSubscribeCheckpoints(options: {
       setTimeout(() => {
         clearTimeout(timeoutId);
         client.close();
-        resolve({ totalBytes, messageCount, status, elapsedMs: Date.now() - start });
+        resolve({ totalBytes, messageCount, status, elapsedMs: Date.now() - start, grpcStatus, grpcMessage });
       }, 200);
     }, durationMs);
 
@@ -273,14 +296,14 @@ export function grpcSubscribeCheckpoints(options: {
       clearTimeout(timeoutId);
       clearTimeout(durationTimer);
       client.close();
-      resolve({ totalBytes, messageCount, status, elapsedMs: Date.now() - start });
+      resolve({ totalBytes, messageCount, status, elapsedMs: Date.now() - start, grpcStatus, grpcMessage });
     });
 
     req.on('error', (err) => {
       clearTimeout(timeoutId);
       clearTimeout(durationTimer);
       client.close();
-      resolve({ totalBytes, messageCount, status, elapsedMs: Date.now() - start, error: err.message });
+      resolve({ totalBytes, messageCount, status, elapsedMs: Date.now() - start, error: err.message, grpcStatus, grpcMessage });
     });
   });
 }
