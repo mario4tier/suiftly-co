@@ -15,6 +15,7 @@ import {
   ledgerEntries,
   billingRecords,
   customerCredits,
+  customerPaymentMethods,
   invoicePayments,
   sealKeys,
   serviceInstances,
@@ -51,6 +52,12 @@ export async function cleanupCustomerById(customerId: number) {
     .where(eq(billingRecords.customerId, customerId));
   await db.delete(customerCredits)
     .where(eq(customerCredits.customerId, customerId));
+  // customer_payment_methods FKs customers.customer_id — must be deleted
+  // before the customers row. Tests like sui-mock create an escrow method
+  // on first deposit (see MockSuiService.deposit), and resetTestData
+  // already handles this via its own path.
+  await db.delete(customerPaymentMethods)
+    .where(eq(customerPaymentMethods.customerId, customerId));
   await db.delete(sealKeys)
     .where(eq(sealKeys.customerId, customerId));
   await db.delete(serviceCancellationHistory)

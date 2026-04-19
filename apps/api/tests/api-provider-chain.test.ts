@@ -24,6 +24,7 @@ import {
 } from './helpers/http.js';
 import { login, TEST_WALLET } from './helpers/auth.js';
 import { clearNotifications, expectNoNotifications } from './helpers/notifications.js';
+import { waitForState } from './helpers/wait-for-state.js';
 
 describe('API: Provider Chain & Service Gates', () => {
   let accessToken: string;
@@ -203,10 +204,15 @@ describe('API: Provider Chain & Service Gates', () => {
       // Trigger reconciliation via deposit flow (same as GM would do)
       await reconcilePendingPayments(customerId);
 
-      // Verify pending invoice was cleared on customer
-      const customer = await db.query.customers.findFirst({
-        where: eq(customers.customerId, customerId),
-      });
+      // Verify pending invoice was cleared on customer. Poll — commit is
+      // GM-async on the tick that processed the reconcile.
+      const customer = await waitForState(
+        () => db.query.customers.findFirst({
+          where: eq(customers.customerId, customerId),
+        }),
+        (c) => c?.pendingInvoiceId === null && c?.paidOnce === true,
+        `pendingInvoiceId cleared & paidOnce=true after reconcile`,
+      );
       expect(customer?.pendingInvoiceId).toBeNull();
       expect(customer?.paidOnce).toBe(true);
 

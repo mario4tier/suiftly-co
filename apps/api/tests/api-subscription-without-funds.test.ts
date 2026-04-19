@@ -32,6 +32,7 @@ import {
 } from './helpers/http.js';
 import { login, TEST_WALLET } from './helpers/auth.js';
 import { clearNotifications, expectNoNotifications } from './helpers/notifications.js';
+import { waitForState } from './helpers/wait-for-state.js';
 import { PLATFORM_TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
 
 describe('API: Subscription Without Funds', () => {
@@ -142,9 +143,16 @@ describe('API: Subscription Without Funds', () => {
     // ============================================================================
     // Step 3: Verify service is now paid
     // ============================================================================
-    const customerAfterDeposit = await db.query.customers.findFirst({
-      where: eq(customers.customerId, customerId),
-    });
+    // Poll — customer state commits on a GM tick after reconcile returns.
+    // Once this converges, the downstream billing_records / invoice_payments
+    // reads below are stable (written in the same GM transaction).
+    const customerAfterDeposit = await waitForState(
+      () => db.query.customers.findFirst({
+        where: eq(customers.customerId, customerId),
+      }),
+      (c) => c?.pendingInvoiceId === null && c?.paidOnce === true,
+      `pendingInvoiceId cleared & paidOnce=true after reconcile`,
+    );
     expect(customerAfterDeposit?.pendingInvoiceId).toBeNull(); // Pending invoice cleared
     expect(customerAfterDeposit?.paidOnce).toBe(true);
 
@@ -473,10 +481,14 @@ describe('API: Subscription Without Funds', () => {
     // Trigger reconciliation (in production, this is done asynchronously by GM)
     await reconcilePendingPayments(customerId);
 
-    // Verify customer is now paid
-    customerRec = await db.query.customers.findFirst({
-      where: eq(customers.customerId, customerId),
-    });
+    // Verify customer is now paid. Poll for GM-async commit.
+    customerRec = await waitForState(
+      () => db.query.customers.findFirst({
+        where: eq(customers.customerId, customerId),
+      }),
+      (c) => c?.paidOnce === true && c?.pendingInvoiceId === null,
+      `paidOnce=true & pendingInvoiceId=null after reconcile`,
+    );
     expect(customerRec?.paidOnce).toBe(true);
     expect(customerRec?.pendingInvoiceId).toBeNull();
 

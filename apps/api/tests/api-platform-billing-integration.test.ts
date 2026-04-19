@@ -36,6 +36,7 @@ import {
 import { login, TEST_WALLET } from './helpers/auth.js';
 import { expectNoNotifications, clearNotifications } from './helpers/notifications.js';
 import { setupBillingTest } from './helpers/setup.js';
+import { waitForState } from './helpers/wait-for-state.js';
 import { PLATFORM_TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
 
 describe('API: Platform Billing Integration', () => {
@@ -372,10 +373,17 @@ describe('API: Platform Billing Integration', () => {
       const result = await runPeriodicBillingJob(customerId);
       expect(result.success).toBe(true);
 
-      // Verify tier changed
-      const customer = await db.query.customers.findFirst({
-        where: eq(customers.customerId, customerId),
-      });
+      // Verify tier changed. Poll because runPeriodicBillingJob is
+      // fire-and-forget on the GM side: the call returns once the tick
+      // is queued, but the customer-row write commits on a subsequent
+      // GM iteration. A single read can race that commit.
+      const customer = await waitForState(
+        () => db.query.customers.findFirst({
+          where: eq(customers.customerId, customerId),
+        }),
+        (c) => c?.platformTier === 'starter' && c?.scheduledPlatformTier === null,
+        `customer.platformTier='starter' & scheduledPlatformTier=null after billing tick`,
+      );
       expect(customer?.platformTier).toBe('starter');
       expect(customer?.scheduledPlatformTier).toBeNull();
 
@@ -453,9 +461,14 @@ describe('API: Platform Billing Integration', () => {
       const result = await runPeriodicBillingJob(customerId);
       expect(result.success).toBe(true);
 
-      const customer = await db.query.customers.findFirst({
-        where: eq(customers.customerId, customerId),
-      });
+      // Poll for cancellation-apply commit (GM-async).
+      const customer = await waitForState(
+        () => db.query.customers.findFirst({
+          where: eq(customers.customerId, customerId),
+        }),
+        (c) => !!c?.platformCancellationEffectiveAt && c?.platformCancellationScheduledFor === null,
+        `customer.platformCancellationEffectiveAt set & scheduledFor cleared`,
+      );
       expect(customer?.platformCancellationEffectiveAt).toBeTruthy();
       expect(customer?.platformCancellationScheduledFor).toBeNull();
 

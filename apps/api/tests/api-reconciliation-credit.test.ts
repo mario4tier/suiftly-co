@@ -28,6 +28,7 @@ import {
 import { login, TEST_WALLET } from './helpers/auth.js';
 import { PLATFORM_TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
 import { expectNoNotifications, clearNotifications } from './helpers/notifications.js';
+import { waitForState } from './helpers/wait-for-state.js';
 
 describe('API: Reconciliation Credit Calculation', () => {
   let accessToken: string;
@@ -138,10 +139,16 @@ describe('API: Reconciliation Credit Calculation', () => {
       await reconcilePendingPayments(customerId);
 
       // ---- Step 4: Verify the reconciliation credit ----
-      credits = await db.query.customerCredits.findMany({
-        where: eq(customerCredits.customerId, customerId),
-        orderBy: [desc(customerCredits.createdAt)],
-      });
+      // Poll because the reconcile call returns once the GM job is queued;
+      // the customer_credits row commits on a subsequent GM iteration.
+      credits = await waitForState(
+        () => db.query.customerCredits.findMany({
+          where: eq(customerCredits.customerId, customerId),
+          orderBy: [desc(customerCredits.createdAt)],
+        }),
+        (rows) => rows.length === 1,
+        `customerCredits has 1 row after reconcile`,
+      );
 
       // Should have exactly one credit
       expect(credits.length).toBe(1);
@@ -164,10 +171,16 @@ describe('API: Reconciliation Credit Calculation', () => {
 
       expect(Number(credits[0].originalAmountUsdCents)).toBe(expectedCreditCents);
 
-      // Verify customer state after reconciliation
-      customer = await db.query.customers.findFirst({
-        where: eq(customers.customerId, customerId),
-      });
+      // Verify customer state after reconciliation. Poll because customer
+      // post-pay state (paidOnce, pendingInvoiceId) may flip on the same
+      // async GM iteration as the credit row.
+      customer = await waitForState(
+        () => db.query.customers.findFirst({
+          where: eq(customers.customerId, customerId),
+        }),
+        (c) => c?.paidOnce === true && c?.pendingInvoiceId === null,
+        `customer.paidOnce=true & pendingInvoiceId=null after reconcile`,
+      );
       expect(customer?.paidOnce).toBe(true);
       expect(customer?.pendingInvoiceId).toBeNull();
 
@@ -275,10 +288,15 @@ describe('API: Reconciliation Credit Calculation', () => {
       // Trigger reconciliation
       await reconcilePendingPayments(customerId);
 
-      // Verify credit is based on starter (the tier that was charged)
-      const credits = await db.query.customerCredits.findMany({
-        where: eq(customerCredits.customerId, customerId),
-      });
+      // Verify credit is based on starter (the tier that was charged).
+      // Poll for the credit row to commit (GM-async).
+      const credits = await waitForState(
+        () => db.query.customerCredits.findMany({
+          where: eq(customerCredits.customerId, customerId),
+        }),
+        (rows) => rows.length === 1,
+        `customerCredits has 1 row after reconcile`,
+      );
 
       expect(credits.length).toBe(1);
 
@@ -332,20 +350,27 @@ describe('API: Reconciliation Credit Calculation', () => {
 
       await reconcilePendingPayments(customerId);
 
-      // Should have exactly one reconciliation credit
-      let credits = await db.query.customerCredits.findMany({
-        where: and(
-          eq(customerCredits.customerId, customerId),
-          eq(customerCredits.reason, 'reconciliation'),
-        ),
-      });
+      // Should have exactly one reconciliation credit. Poll for commit.
+      let credits = await waitForState(
+        () => db.query.customerCredits.findMany({
+          where: and(
+            eq(customerCredits.customerId, customerId),
+            eq(customerCredits.reason, 'reconciliation'),
+          ),
+        }),
+        (rows) => rows.length === 1,
+        `reconciliation credit committed`,
+      );
       expect(credits.length).toBe(1);
       const firstCreditAmount = Number(credits[0].originalAmountUsdCents);
 
       // Reconcile AGAIN (simulates duplicate queue dispatch)
       await reconcilePendingPayments(customerId);
 
-      // Should still have exactly one reconciliation credit (idempotent)
+      // Should still have exactly one reconciliation credit (idempotent).
+      // Single-shot read here is fine: idempotency means the count cannot
+      // INCREASE after the second call returns. If it had incorrectly
+      // produced a 2nd credit, polling would only mask the bug.
       credits = await db.query.customerCredits.findMany({
         where: and(
           eq(customerCredits.customerId, customerId),

@@ -25,6 +25,7 @@ import {
 import { TEST_WALLET } from './helpers/auth.js';
 import { expectNoNotifications } from './helpers/notifications.js';
 import { setupBillingTest } from './helpers/setup.js';
+import { waitForState } from './helpers/wait-for-state.js';
 
 describe('API: Billing Flow', () => {
   let accessToken: string;
@@ -90,10 +91,14 @@ describe('API: Billing Flow', () => {
       const result = await runPeriodicBillingJob(customerId);
       expect(result.success).toBe(true);
 
-      // Verify tier changed
-      customer = await db.query.customers.findFirst({
-        where: eq(customers.customerId, customerId),
-      });
+      // Verify tier changed. Poll — GM-async apply on next tick.
+      customer = await waitForState(
+        () => db.query.customers.findFirst({
+          where: eq(customers.customerId, customerId),
+        }),
+        (c) => c?.platformTier === 'starter' && c?.scheduledPlatformTier === null,
+        `customer tier downgraded to starter & scheduled cleared`,
+      );
       expect(customer?.platformTier).toBe('starter');
       expect(customer?.scheduledPlatformTier).toBeNull();
 
@@ -144,10 +149,14 @@ describe('API: Billing Flow', () => {
       const result = await runPeriodicBillingJob(customerId);
       expect(result.success).toBe(true);
 
-      // Verify platform cancellation state
-      customerRec = await db.query.customers.findFirst({
-        where: eq(customers.customerId, customerId),
-      });
+      // Verify platform cancellation state. Poll for GM-async commit.
+      customerRec = await waitForState(
+        () => db.query.customers.findFirst({
+          where: eq(customers.customerId, customerId),
+        }),
+        (c) => c?.platformCancellationScheduledFor === null && !!c?.platformCancellationEffectiveAt,
+        `platformCancellationEffectiveAt set & scheduledFor cleared`,
+      );
       expect(customerRec?.platformCancellationScheduledFor).toBeNull();
       expect(customerRec?.platformCancellationEffectiveAt).toBeTruthy();
 
@@ -196,10 +205,15 @@ describe('API: Billing Flow', () => {
       const result = await runPeriodicBillingJob(customerId);
       expect(result.success).toBe(true);
 
-      // Check invoices after billing run
-      const allRecords = await db.query.billingRecords.findMany({
-        where: eq(billingRecords.customerId, customerId),
-      });
+      // Check invoices after billing run. Poll for DRAFT → non-draft
+      // transition commit (GM-async on next tick after job).
+      const allRecords = await waitForState(
+        () => db.query.billingRecords.findMany({
+          where: eq(billingRecords.customerId, customerId),
+        }),
+        (rows) => rows.some(r => r.status !== 'draft'),
+        `at least one billing record transitioned out of 'draft'`,
+      );
 
       // Should have at least one non-draft invoice (either pending or paid)
       const nonDraft = allRecords.filter(r => r.status !== 'draft');

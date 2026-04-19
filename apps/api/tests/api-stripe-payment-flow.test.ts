@@ -38,6 +38,7 @@ import {
 } from './helpers/http.js';
 import { login, TEST_WALLET } from './helpers/auth.js';
 import { clearNotifications, expectNotifications, expectNoNotifications } from './helpers/notifications.js';
+import { waitForState } from './helpers/wait-for-state.js';
 
 /**
  * Find a Stripe payment across all paid billing records.
@@ -207,10 +208,14 @@ describe('API: Stripe Payment Flow', () => {
       // Reconcile pending payments → retries platform pending invoice via Stripe
       await reconcilePendingPayments(customerId);
 
-      // Verify pending invoice was cleared on customer
-      const customer = await db.query.customers.findFirst({
-        where: eq(customers.customerId, customerId),
-      });
+      // Verify pending invoice was cleared. Poll — GM-async commit.
+      const customer = await waitForState(
+        () => db.query.customers.findFirst({
+          where: eq(customers.customerId, customerId),
+        }),
+        (c) => c?.pendingInvoiceId === null,
+        `customer.pendingInvoiceId cleared after reconcile`,
+      );
       expect(customer?.pendingInvoiceId).toBeNull();
 
       // Verify billing record is now paid with Stripe source
@@ -502,6 +507,16 @@ describe('API: Stripe Payment Flow', () => {
       // idempotency key (retryCount incremented in 3DS path) → succeeds
       await reconcilePendingPayments(customerId);
 
+      // Poll for GM-async reconcile commit; once customer settles the
+      // billing_records read below is stable (same GM transaction).
+      const customer = await waitForState(
+        () => db.query.customers.findFirst({
+          where: eq(customers.customerId, customerId),
+        }),
+        (c) => c?.pendingInvoiceId === null,
+        `customer.pendingInvoiceId cleared after reconcile`,
+      );
+
       // Verify billing record is now paid
       records = await db.select()
         .from(billingRecords)
@@ -509,10 +524,6 @@ describe('API: Stripe Payment Flow', () => {
       const paidRecords = records.filter(r => r.status === 'paid');
       expect(paidRecords.length).toBeGreaterThanOrEqual(1);
 
-      // Verify pendingInvoiceId is cleared on customer
-      const customer = await db.query.customers.findFirst({
-        where: eq(customers.customerId, customerId),
-      });
       expect(customer?.pendingInvoiceId).toBeNull();
       await expectNoNotifications(customerId, { tolerateGM: true });
     });
@@ -553,6 +564,15 @@ describe('API: Stripe Payment Flow', () => {
       // Reconcile → retries the failed invoice → succeeds
       await reconcilePendingPayments(customerId);
 
+      // Poll for GM-async reconcile commit.
+      const customer = await waitForState(
+        () => db.query.customers.findFirst({
+          where: eq(customers.customerId, customerId),
+        }),
+        (c) => c?.pendingInvoiceId === null,
+        `customer.pendingInvoiceId cleared after reconcile`,
+      );
+
       // Verify billing record is now paid
       records = await db.select()
         .from(billingRecords)
@@ -560,10 +580,6 @@ describe('API: Stripe Payment Flow', () => {
       const paidRecords = records.filter(r => r.status === 'paid');
       expect(paidRecords.length).toBeGreaterThanOrEqual(1);
 
-      // Verify pendingInvoiceId is cleared on customer
-      const customer = await db.query.customers.findFirst({
-        where: eq(customers.customerId, customerId),
-      });
       expect(customer?.pendingInvoiceId).toBeNull();
       await expectNoNotifications(customerId, { tolerateGM: true });
     });

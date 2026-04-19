@@ -237,12 +237,20 @@ test.describe('Escrow Mock - Service Subscription Scenarios', () => {
     // Subscribe to platform Starter via the platform subscription UI
     await subscribePlatformService(page);
 
-    // Verify via API that balance decreased by Starter price (charged immediately via escrow)
-    const balanceResponse = await page.request.get(`${API_BASE}/test/wallet/balance`, {
-      params: { walletAddress: MOCK_WALLET_ADDRESS },
-    });
-    const balanceData = await balanceResponse.json();
-    expect(balanceData.balanceUsd).toBe(100 - STARTER_PRICE_USD);
+    // Verify via API that balance decreased by Starter price (charged immediately via escrow).
+    // Poll because the subscribe → GM billing → escrow deduction pipeline is async:
+    // subscribePlatformService waits for the UI's onboarding form to disappear, but GM
+    // may not have committed the charge yet. Without polling this races the GM tick.
+    await expect.poll(
+      async () => {
+        const resp = await page.request.get(`${API_BASE}/test/wallet/balance`, {
+          params: { walletAddress: MOCK_WALLET_ADDRESS },
+        });
+        const data = await resp.json();
+        return data.balanceUsd;
+      },
+      { timeout: 10_000, intervals: [200, 500, 1000] },
+    ).toBe(100 - STARTER_PRICE_USD);
 
     console.log(`✅ Balance correctly updated to $${100 - STARTER_PRICE_USD}.00 after platform Starter subscription`);
   });
@@ -379,13 +387,20 @@ test.describe('Subscription Charge Architecture - Critical Business Logic', () =
     await page.goto('/services/seal/overview');
     await page.waitForLoadState('networkidle');
 
-    // Verify balance decreased via API (robust — no DOM scraping race)
+    // Verify balance decreased via API (robust — no DOM scraping race).
+    // Poll because subscribe → GM billing → escrow deduction is async; the
+    // helper's UI signal precedes the actual charge commit.
     const expectedBalance = 100 - PRO_PRICE_USD;
-    const balanceAfterFirst = await page.request.get(`${API_BASE}/test/wallet/balance`, {
-      params: { walletAddress: MOCK_WALLET_ADDRESS },
-    });
-    const afterFirstData = await balanceAfterFirst.json();
-    expect(afterFirstData.balanceUsd).toBe(expectedBalance);
+    await expect.poll(
+      async () => {
+        const resp = await page.request.get(`${API_BASE}/test/wallet/balance`, {
+          params: { walletAddress: MOCK_WALLET_ADDRESS },
+        });
+        const data = await resp.json();
+        return data.balanceUsd;
+      },
+      { timeout: 10_000, intervals: [200, 500, 1000] },
+    ).toBe(expectedBalance);
 
     // Try to subscribe again by navigating back to Seal
     await page.click('text=Seal');

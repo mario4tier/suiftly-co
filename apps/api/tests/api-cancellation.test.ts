@@ -32,6 +32,7 @@ import { INVOICE_LINE_ITEM_TYPE } from '@suiftly/shared/constants';
 import { PLATFORM_TIER_PRICES_USD_CENTS } from '@suiftly/shared/pricing';
 import { clearNotifications } from './helpers/notifications.js';
 import { setupBillingTest } from './helpers/setup.js';
+import { waitForState } from './helpers/wait-for-state.js';
 
 const SUBSCRIPTION_ITEM_TYPES = [
   INVOICE_LINE_ITEM_TYPE.SUBSCRIPTION_STARTER,
@@ -290,10 +291,15 @@ describe('API: Cancellation Flow', () => {
       // Run the periodic billing job to process the cancellation
       await runPeriodicBillingJob(customerId);
 
-      // Platform should be in cancellation_pending state (7-day grace period)
-      custRec = await db.query.customers.findFirst({
-        where: eq(customers.customerId, customerId),
-      });
+      // Platform should be in cancellation_pending state (7-day grace period).
+      // Poll for GM-async commit.
+      custRec = await waitForState(
+        () => db.query.customers.findFirst({
+          where: eq(customers.customerId, customerId),
+        }),
+        (c) => c?.platformCancellationEffectiveAt !== undefined && c?.platformCancellationScheduledFor === null,
+        `cancellation effectiveAt set & scheduledFor cleared`,
+      );
       expect(custRec?.platformCancellationEffectiveAt).toBeDefined();
       expect(custRec?.platformCancellationScheduledFor).toBeNull();
 
@@ -303,10 +309,14 @@ describe('API: Cancellation Flow', () => {
       // Run the periodic billing job again to trigger cleanup
       await runPeriodicBillingJob(customerId);
 
-      // Platform subscription should now be cleared (not_provisioned = platformTier null)
-      custRec = await db.query.customers.findFirst({
-        where: eq(customers.customerId, customerId),
-      });
+      // Platform subscription should now be cleared. Poll for cleanup commit.
+      custRec = await waitForState(
+        () => db.query.customers.findFirst({
+          where: eq(customers.customerId, customerId),
+        }),
+        (c) => c?.platformTier === null,
+        `platformTier cleared to null after grace period`,
+      );
       expect(custRec?.platformTier).toBeNull();
 
       // ---- Step 4: Re-subscribe to platform ----

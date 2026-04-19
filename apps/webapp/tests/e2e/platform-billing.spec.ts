@@ -162,10 +162,20 @@ test.describe('Platform Billing', () => {
       await waitAfterMutation(page);
       await waitForToastsToDisappear(page);
 
-      // Verify escrow balance decreased via API (was $10, now should be $10 - Starter price)
-      const balanceResp = await request.get(`${API_BASE}/test/wallet/balance`);
-      const balanceData = await balanceResp.json();
-      expect(balanceData.balanceUsd).toBe(10 - STARTER_PRICE_USD);
+      // Verify escrow balance decreased via API (was $10, now should be $10 - Starter price).
+      // Poll because the subscribe → GM billing → escrow deduction pipeline is async:
+      // the subscribe mutation returns before GM has charged the escrow, and the inline
+      // subscribe flow used here doesn't wait for the post-charge UI signal that
+      // subscribePlatformService() relies on. Without polling this races the GM tick
+      // and intermittently sees the pre-charge balance.
+      await expect.poll(
+        async () => {
+          const resp = await request.get(`${API_BASE}/test/wallet/balance`);
+          const data = await resp.json();
+          return data.balanceUsd;
+        },
+        { timeout: 10_000, intervals: [200, 500, 1000] },
+      ).toBe(10 - STARTER_PRICE_USD);
     });
   });
 

@@ -10,6 +10,13 @@ export default defineConfig({
   globalSetup: './playwright-global-setup.ts',
   globalTeardown: './playwright-global-teardown.ts',
   maxFailures: 1, // Stop on first test failure for fast feedback
+  // 60s per-test timeout (Playwright default is 30s). Long E2E suites
+  // run for 15+ minutes on this dev box, and individual UI interactions
+  // can occasionally exceed 30s under system load even though the test
+  // itself is correct (observed: platform-subscription 30s timeout that
+  // passes in 10s when run in isolation). A 60s budget absorbs load
+  // jitter; a truly hung test still fails, just 30s later.
+  timeout: 60_000,
 
   use: {
     baseURL: 'http://localhost:22710', // See ~/mhaxbe/PORT_MAP.md for port allocation
