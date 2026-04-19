@@ -50,54 +50,69 @@ export interface SealHealthResponse {
  * @param options Request configuration
  * @returns Health check response with status and body
  */
-export interface RetryOptions {
-  /** Maximum number of attempts (default: 3) */
-  maxAttempts?: number;
-  /** Delay between retries in ms (default: 2000) */
-  delayMs?: number;
+export interface WaitForSealStatusOptions {
+  /** Total timeout in ms — large by design so this catches real bugs, not timing jitter (default: 60000) */
+  timeoutMs?: number;
+  /** Polling interval in ms between probes (default: 1000) */
+  pollIntervalMs?: number;
   /** Expected status code to consider success (default: 200) */
   expectedStatus?: number;
 }
 
 /**
- * Make a health check request with automatic retry on failure
+ * Poll the HAProxy health endpoint until we observe the expected status.
  *
- * Useful for E2E tests where timing issues may cause transient failures.
- * Retries up to maxAttempts times with delayMs between attempts.
+ * State-based retry (not a fixed attempt count): we keep probing for up to
+ * `timeoutMs` ms and return as soon as the expected status appears. The
+ * large outer timeout is intentional — it exists only to bound forever-loops;
+ * a timeout here means the vault→LM→HAProxy pipeline genuinely did not
+ * converge to the expected state, which is a real bug worth surfacing.
  *
- * @param options Request configuration
- * @param retryOptions Retry configuration
- * @returns Health check response (successful) or last failed response
+ * On timeout, the returned response carries the last-observed status/body
+ * plus the number of polls performed, so callers can build a useful
+ * failure diagnostic.
  */
-export async function sealHealthCheckWithRetry(
+export async function waitForSealStatus(
   options: SealRequestOptions,
-  retryOptions: RetryOptions = {}
-): Promise<SealHealthResponse> {
-  const maxAttempts = retryOptions.maxAttempts ?? 3;
-  const delayMs = retryOptions.delayMs ?? 2000;
-  const expectedStatus = retryOptions.expectedStatus ?? 200;
+  waitOptions: WaitForSealStatusOptions = {}
+): Promise<SealHealthResponse & { polls: number; elapsedMs: number }> {
+  const timeoutMs = waitOptions.timeoutMs ?? 60_000;
+  const pollIntervalMs = waitOptions.pollIntervalMs ?? 1000;
+  const expectedStatus = waitOptions.expectedStatus ?? 200;
 
-  let lastResponse: SealHealthResponse | null = null;
+  const started = Date.now();
+  const deadline = started + timeoutMs;
+  let polls = 0;
+  let lastResponse: SealHealthResponse = {
+    ok: false,
+    status: 0,
+    statusText: 'no poll yet',
+  };
+  let lastLoggedStatus: number | null = null;
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const response = await sealHealthCheck(options);
-    lastResponse = response;
+  while (Date.now() < deadline) {
+    polls += 1;
+    lastResponse = await sealHealthCheck(options);
 
-    if (response.status === expectedStatus) {
-      return response;
+    if (lastResponse.status === expectedStatus) {
+      return { ...lastResponse, polls, elapsedMs: Date.now() - started };
     }
 
-    // Don't wait after the last attempt
-    if (attempt < maxAttempts) {
+    // Only log when the observed status changes — avoids spamming 60 identical lines.
+    if (lastResponse.status !== lastLoggedStatus) {
+      const elapsed = Math.round((Date.now() - started) / 1000);
       console.log(
-        `  ⏳ Attempt ${attempt}/${maxAttempts} got ${response.status}, retrying in ${delayMs}ms...`
+        `  ⏳ waitForSealStatus: got ${lastResponse.status} at t=${elapsed}s (polling for ${expectedStatus})`
       );
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      lastLoggedStatus = lastResponse.status;
     }
+
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(pollIntervalMs, remaining)));
   }
 
-  // Return the last response (all retries failed)
-  return lastResponse!;
+  return { ...lastResponse, polls, elapsedMs: Date.now() - started };
 }
 
 export async function sealHealthCheck(

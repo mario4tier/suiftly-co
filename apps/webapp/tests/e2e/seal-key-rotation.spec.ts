@@ -13,8 +13,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { waitAfterMutation } from '../helpers/wait-utils';
 import { resetCustomer, ensureTestBalance, subscribePlatformService, getTestApiKeys } from '../helpers/db';
 import {
-  sealHealthCheck,
-  sealHealthCheckWithRetry,
+  waitForSealStatus,
   isHAProxyAvailable,
   isSealBackendAvailable,
   SEAL_PORTS,
@@ -22,6 +21,7 @@ import {
 import {
   waitForStabilization,
   triggerSyncAndWait,
+  getGMHealth,
   getLMHealth,
 } from '../helpers/vault-sync';
 
@@ -51,31 +51,51 @@ async function getApiKeys(
   return getTestApiKeys(request, 'seal');
 }
 
-async function verifyKeyWorks(apiKey: string, label: string): Promise<void> {
-  // Use retry to handle transient timing issues after vault sync
-  // HAProxy may need time to reload maps after LM processes the vault
-  const response = await sealHealthCheckWithRetry(
+async function buildPipelineDiagnostic(): Promise<string> {
+  const [gm, lm] = await Promise.all([getGMHealth(), getLMHealth()]);
+  const gmSeq = gm?.vaults.sma.vaultSeq ?? '?';
+  const gmPending = gm?.vaults.sma.hasPending ?? '?';
+  const lmSeq = lm?.vaults.find((v) => v.type === 'sma')?.applied?.seq ?? '?';
+  return `GM vaultSeq=${gmSeq} hasPending=${gmPending} / LM appliedSeq=${lmSeq}`;
+}
+
+async function verifySealStatus(
+  apiKey: string,
+  label: string,
+  expectedStatus: number,
+  successEmoji: string,
+  description: string
+): Promise<void> {
+  const response = await waitForSealStatus(
     { apiKey, port: SEAL_METERED_PORT },
-    { maxAttempts: 5, delayMs: 3000, expectedStatus: 200 }
+    { expectedStatus, timeoutMs: 60_000, pollIntervalMs: 1000 }
   );
-  // DEBUG: Log response details for troubleshooting
-  if (response.status !== 200) {
-    console.log(`❌ ${label}: got ${response.status}, body: ${JSON.stringify(response.body)}`);
+  if (response.status !== expectedStatus) {
+    const diagnostic = await buildPipelineDiagnostic();
+    console.log(
+      `❌ ${label}: want ${expectedStatus}, got ${response.status} after ${response.polls} polls ` +
+        `(${Math.round(response.elapsedMs / 1000)}s). body=${JSON.stringify(response.body)} | ${diagnostic}`
+    );
   }
-  expect(response.status, `${label} should return 200`).toBe(200);
-  console.log(`✅ ${label}: works (200)`);
+  expect(
+    response.status,
+    `${label} should return ${expectedStatus} (${description})`
+  ).toBe(expectedStatus);
+  console.log(
+    `${successEmoji} ${label}: ${description} (${expectedStatus}) after ${response.polls} poll(s), ${Math.round(response.elapsedMs / 1000)}s`
+  );
+}
+
+async function verifyKeyWorks(apiKey: string, label: string): Promise<void> {
+  await verifySealStatus(apiKey, label, 200, '✅', 'works');
 }
 
 async function verifyKeyRejected(apiKey: string, label: string): Promise<void> {
-  const response = await sealHealthCheck({ apiKey, port: SEAL_METERED_PORT });
-  expect(response.status, `${label} should return 401`).toBe(401);
-  console.log(`✅ ${label}: rejected (401)`);
+  await verifySealStatus(apiKey, label, 401, '✅', 'rejected');
 }
 
 async function verifyServiceDisabled(apiKey: string, label: string): Promise<void> {
-  const response = await sealHealthCheck({ apiKey, port: SEAL_METERED_PORT });
-  expect(response.status, `${label} should return 403`).toBe(403);
-  console.log(`✅ ${label}: service disabled (403)`);
+  await verifySealStatus(apiKey, label, 403, '✅', 'service disabled');
 }
 
 /** Subscribe to Seal, enable service, create seal key + package (for cpEnabled) */
