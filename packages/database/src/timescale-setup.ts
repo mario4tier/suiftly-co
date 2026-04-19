@@ -191,7 +191,7 @@ export async function setupTimescaleDB() {
       MIN(time_total) FILTER (WHERE traffic_type IN (1, 2)) AS min_response_time_ms,
       MAX(time_total) FILTER (WHERE traffic_type IN (1, 2)) AS max_response_time_ms,
       -- SUM(bytes_sent), NOT * repeat: fluentd-lm's haproxy_aggregator
-      -- stores bytes_sent as the already-summed total across `repeat`
+      -- stores bytes_sent as the already-summed total across repeat
       -- merged requests (filter_haproxy_aggregator.rb, sum_fields).
       SUM(bytes_sent) FILTER (WHERE traffic_type <> 8) AS total_bytes,
       SUM(bytes_sent) FILTER (WHERE traffic_type IN (1, 2, 7)) AS billable_bytes
@@ -241,10 +241,15 @@ export async function setupTimescaleDB() {
   // Per-minute stats for fine-grained customer debugging.
   // Includes status_code breakdown for detailed error analysis.
 
+  // materialized_only=false so the minute-tail / today-tail queries see
+  // sub-minute events live from haproxy_raw_logs without waiting for the
+  // refresh policy tick. Set at CREATE time (initialized once, never
+  // flipped) to match production — only stats_per_min needs realtime;
+  // stats_per_hour is only queried for completed hours.
   await db.execute(sql`DROP MATERIALIZED VIEW IF EXISTS stats_per_min`);
   await db.execute(sql`
     CREATE MATERIALIZED VIEW stats_per_min
-    WITH (timescaledb.continuous) AS
+    WITH (timescaledb.continuous, timescaledb.materialized_only = false) AS
     SELECT
       time_bucket('1 minute', timestamp) AS bucket,
       customer_id,
@@ -285,13 +290,6 @@ export async function setupTimescaleDB() {
   `);
   console.log('✓ Created stats_per_min index');
 
-  // Realtime aggregate: include the current (open) minute bucket live
-  // from haproxy_raw_logs so the partial-bar queries (minute-tail +
-  // today-tail fold into daily charts) reflect sub-minute events without
-  // waiting for the bucket boundary + refresh policy tick.
-  // Only stats_per_min needs this — stats_per_hour is only queried for
-  // completed hours (current hour/day tail always comes through stats_per_min).
-  await db.execute(sql`ALTER MATERIALIZED VIEW stats_per_min SET (timescaledb.materialized_only = false)`);
   await db.execute(sql`ALTER MATERIALIZED VIEW stats_per_min OWNER TO deploy`);
   console.log('✓ Transferred stats_per_min ownership to deploy');
 
