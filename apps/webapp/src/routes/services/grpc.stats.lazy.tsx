@@ -946,7 +946,7 @@ function GrpcStatsPage() {
               <div className="flex items-center gap-2 mb-4">
                 <BarChart3 className="h-5 w-5 text-blue-500" />
                 <h2 className="text-lg font-medium text-gray-900 dark:text-gray-50">
-                  Traffic per {TIME_RANGE_CONFIG[timeRange].bucketLabel.toLowerCase()}
+                  Requests per {TIME_RANGE_CONFIG[timeRange].bucketLabel.toLowerCase()}
                 </h2>
               </div>
               {trafficLoading ? (

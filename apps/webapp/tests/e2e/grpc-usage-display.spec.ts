@@ -55,4 +55,13 @@ test.describe('gRPC Usage This Month Display', () => {
 
     console.log('✅ Usage This Month: no NaN, correct line item format');
   });
+
+  test('stats chart title reflects time bucket on grpc and seal pages', async ({ page }) => {
+    for (const path of ['/services/grpc/stats', '/services/seal/stats']) {
+      await page.goto(path);
+      await expect(page.getByRole('heading', { name: 'Requests per hour' })).toBeVisible({ timeout: 5000 });
+      await page.getByRole('tab', { name: 'Last 7 Days' }).click();
+      await expect(page.getByRole('heading', { name: 'Requests per day' })).toBeVisible({ timeout: 5000 });
+    }
+  });
 });
