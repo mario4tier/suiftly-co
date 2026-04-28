@@ -130,6 +130,49 @@ export const systemControl = pgTable('system_control', {
  * - Service is synced when configChangeVaultSeq <= MIN(appliedSeq for all relevant vaults)
  * - Service shows "Updating" when configChangeVaultSeq > MIN(appliedSeq) for any relevant vault
  */
+/**
+ * TLS Certificate Probe State
+ *
+ * Per (fqdn, provider, ip, port) row tracking the last-observed cert state for
+ * each monitored TLS endpoint. Persisted (rather than in-memory only) so:
+ *   1. The streak counter survives GM restart — a cert that's been failing
+ *      for 23 hours doesn't reset to 0 and need another 24+ hours to alert.
+ *   2. The Certs page can show last-known state immediately on startup,
+ *      before the first post-restart probe cycle runs.
+ *
+ * `status` is the effective status (gated by streak threshold) used by the
+ * dashboard rollup. `rawStatus` is what the latest probe actually saw.
+ * See services/global-manager/src/tasks/probe-certs.ts for the gate logic.
+ */
+export const certProbeState = pgTable('cert_probe_state', {
+  fqdn:     varchar('fqdn',     { length: 253 }).notNull(),
+  provider: varchar('provider', { length: 64 }).notNull(),
+  ip:       varchar('ip',       { length: 45 }).notNull().default(''),
+  port:     integer('port').notNull(),
+
+  pipeline: varchar('pipeline', { length: 1 }).notNull(),
+
+  status:    varchar('status',     { length: 8 }).notNull(),
+  rawStatus: varchar('raw_status', { length: 8 }).notNull(),
+
+  consecutiveFailures: integer('consecutive_failures').notNull().default(0),
+
+  reason: text('reason').notNull(),
+  resolvedFromDns: boolean('resolved_from_dns').notNull().default(false),
+
+  notAfter:        timestamp('not_after',  { withTimezone: true }),
+  notBefore:       timestamp('not_before', { withTimezone: true }),
+  daysUntilExpiry: integer('days_until_expiry'),
+  issuer:   text('issuer'),
+  subject:  text('subject'),
+  altNames: text('alt_names').array(),
+
+  probedAt:  timestamp('probed_at',  { withTimezone: true }).notNull(),
+  updatedAt: timestamp('updated_at',  { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.fqdn, table.provider, table.ip, table.port] }),
+}));
+
 export const lmStatus = pgTable('lm_status', {
   lmId: varchar('lm_id', { length: 64 }).notNull(),
   displayName: varchar('display_name', { length: 128 }),

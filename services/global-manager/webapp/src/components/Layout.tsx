@@ -29,6 +29,7 @@ const navItems: NavItem[] = [
   { path: '/kvcrypt', label: 'KVCrypt Debug', icon: 'M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4' },
   { path: '/upgrades', label: 'Upgrades', icon: 'M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15' },
   { path: '/checkpoints', label: 'Checkpoints', icon: 'M13 10V3L4 14h7v7l9-11h-7z' },
+  { path: '/certs', label: 'Certs', icon: 'M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z' },
 ];
 
 function NavIcon({ d }: { d: string }) {

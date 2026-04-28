@@ -36,6 +36,13 @@
       "when": 1776371354805,
       "tag": "0004_public_lightspeed",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1777354516363,
+      "tag": "0005_nostalgic_maximus",
+      "breakpoints": true
     }
   ]
 }

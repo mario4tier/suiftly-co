@@ -1,0 +1,21 @@
+CREATE TABLE "cert_probe_state" (
+	"fqdn" varchar(253) NOT NULL,
+	"provider" varchar(64) NOT NULL,
+	"ip" varchar(45) DEFAULT '' NOT NULL,
+	"port" integer NOT NULL,
+	"pipeline" varchar(1) NOT NULL,
+	"status" varchar(8) NOT NULL,
+	"raw_status" varchar(8) NOT NULL,
+	"consecutive_failures" integer DEFAULT 0 NOT NULL,
+	"reason" text NOT NULL,
+	"resolved_from_dns" boolean DEFAULT false NOT NULL,
+	"not_after" timestamp with time zone,
+	"not_before" timestamp with time zone,
+	"days_until_expiry" integer,
+	"issuer" text,
+	"subject" text,
+	"alt_names" text[],
+	"probed_at" timestamp with time zone NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "cert_probe_state_fqdn_provider_ip_port_pk" PRIMARY KEY("fqdn","provider","ip","port")
+);

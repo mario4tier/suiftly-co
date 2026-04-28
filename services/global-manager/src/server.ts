@@ -33,6 +33,13 @@ import {
   SYNC_ALL_INTERVAL_DEV_MS,
   SYNC_ALL_INTERVAL_PROD_MS,
 } from './task-queue.js';
+import {
+  startCertProbing,
+  stopCertProbing,
+  runProbeCycle,
+  probeFqdn,
+  getProbeResults,
+} from './tasks/probe-certs.js';
 
 const PORT = parseInt(process.env.GM_PORT || '22600', 10);
 const HOST = process.env.GM_HOST || '0.0.0.0';
@@ -2453,12 +2460,37 @@ server.post<{ Params: { invoiceId: string } }>('/api/invoice/:invoiceId/reset-re
 });
 
 // ============================================================================
+// Certs Monitoring API (admin Certs page)
+// ============================================================================
+
+server.get('/api/certs/list', async () => getProbeResults());
+
+const probeBodySchema = z.object({
+  fqdn: z.string().min(1).max(253).optional(),
+});
+
+server.post('/api/certs/probe', async (request, reply) => {
+  const body = validate(probeBodySchema, request.body ?? {}, reply);
+  if (!body) return;
+  if (body.fqdn) {
+    const probed = await probeFqdn(body.fqdn);
+    if (probed.length === 0) {
+      return reply.status(404).send({ error: `Unknown FQDN: ${body.fqdn}` });
+    }
+  } else {
+    await runProbeCycle();
+  }
+  return getProbeResults();
+});
+
+// ============================================================================
 // Graceful shutdown
 // ============================================================================
 
 const shutdown = async (signal: string) => {
   server.log.info(`${signal} received, shutting down gracefully...`);
   stopPeriodicSync();
+  stopCertProbing();
   await server.close();
   process.exit(0);
 };
@@ -2505,6 +2537,12 @@ async function start() {
       : SYNC_ALL_INTERVAL_PROD_MS; // 5 minutes (production)
 
     startPeriodicSync(syncAllInterval);
+
+    // Start cert probing (independent timer; cadence in CERT_PROBE_INTERVAL_MS).
+    // Awaits DB load so the cache + streak counters are restored from
+    // cert_probe_state before the first post-restart cycle runs.
+    await startCertProbing();
+    server.log.info('Cert probing started');
   } catch (err) {
     server.log.error(err);
     process.exit(1);

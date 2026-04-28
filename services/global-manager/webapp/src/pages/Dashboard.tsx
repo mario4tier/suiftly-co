@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { useAdminPollingContext } from '../contexts/AdminPollingContext';
 import { SyncIndicator, SyncState } from '../components/SyncIndicator';
 import { GMStatusBadge } from '../components/GMStatusBadge';
+import { StatusDot, STATUS_COLORS, type ProbeStatus } from './Certs';
 
 interface LMStatus {
   name: string;
@@ -33,6 +34,24 @@ interface NotificationCounts {
   byCategory: Record<string, number>;
 }
 
+interface CertSummary {
+  rollupStatus: ProbeStatus;
+  okCount: number;
+  problemCount: number;
+  totalCount: number;
+}
+
+// Cert state moves on the order of days, not seconds. Poll independently of
+// the dashboard's adaptive cadence (which can be as fast as 1s) so we don't
+// hammer /api/certs/list during active admin sessions.
+const CERTS_POLL_MS = 60_000;
+
+function rollupLabel(s: CertSummary): string {
+  if (s.rollupStatus === 'green') return 'All OK';
+  if (s.rollupStatus === 'red') return `${s.problemCount} problem${s.problemCount === 1 ? '' : 's'}`;
+  return 'No data';
+}
+
 // Categories with dedicated pages get links
 const CATEGORY_PAGES: Record<string, string> = {
   billing: '/billing',
@@ -45,6 +64,7 @@ export function Dashboard() {
   const [lmError, setLmError] = useState<string | null>(null);
   const [alarmCounts, setAlarmCounts] = useState<AlarmCounts | null>(null);
   const [notifCounts, setNotifCounts] = useState<NotificationCounts | null>(null);
+  const [certSummary, setCertSummary] = useState<CertSummary | null>(null);
 
   const { pollingInterval, markUpdated, gmHealth: health, gmHealthError: healthError } = useAdminPollingContext();
 
@@ -92,6 +112,30 @@ export function Dashboard() {
     const interval = setInterval(fetchAll, pollingInterval);
     return () => clearInterval(interval);
   }, [fetchLMStatus, fetchAlarmCounts, fetchNotifCounts, pollingInterval, markUpdated]);
+
+  useEffect(() => {
+    const fetchCertSummary = async () => {
+      try {
+        const res = await fetch('/api/certs/list');
+        if (!res.ok) return;
+        const data = await res.json() as {
+          rollupStatus: ProbeStatus;
+          results: Array<{ status: ProbeStatus }>;
+        };
+        setCertSummary({
+          rollupStatus: data.rollupStatus,
+          okCount: data.results.filter(r => r.status === 'green').length,
+          problemCount: data.results.filter(r => r.status === 'red').length,
+          totalCount: data.results.length,
+        });
+      } catch {
+        // Ignore
+      }
+    };
+    fetchCertSummary();
+    const interval = setInterval(fetchCertSummary, CERTS_POLL_MS);
+    return () => clearInterval(interval);
+  }, []);
 
   // Calculate LM sync state from status
   const getLMState = (lm: LMStatus): SyncState => {
@@ -155,6 +199,43 @@ export function Dashboard() {
             <span style={{ color: '#94a3b8', fontSize: '0.875rem' }}>
               Last check: {new Date(health.timestamp).toLocaleTimeString()}
             </span>
+          </div>
+        ) : (
+          <p style={{ color: '#94a3b8' }}>Loading...</p>
+        )}
+      </div>
+
+      {/* TLS Certs Status */}
+      <div style={{
+        background: '#1e293b',
+        padding: '1rem',
+        borderRadius: '0.5rem',
+        marginBottom: '1rem',
+      }}>
+        <h2 style={{ fontSize: '1rem', marginBottom: '0.5rem', color: '#94a3b8' }}>
+          TLS Certs
+        </h2>
+        {certSummary ? (
+          <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.5rem',
+                color: STATUS_COLORS[certSummary.rollupStatus],
+                fontWeight: 600,
+                fontSize: '0.9375rem',
+              }}
+            >
+              <StatusDot status={certSummary.rollupStatus} size={12} />
+              {rollupLabel(certSummary)}
+            </span>
+            <span style={{ color: '#94a3b8', fontSize: '0.875rem' }}>
+              {certSummary.okCount}/{certSummary.totalCount} certs OK
+            </span>
+            <Link to="/certs" style={{ color: '#60a5fa', fontSize: '0.875rem', textDecoration: 'none', marginLeft: 'auto' }}>
+              View all certs &rarr;
+            </Link>
           </div>
         ) : (
           <p style={{ color: '#94a3b8' }}>Loading...</p>

@@ -11,6 +11,7 @@ import { CustomerDetail } from './pages/CustomerDetail';
 import { InvoiceDetail } from './pages/InvoiceDetail';
 import { Upgrades } from './pages/Upgrades';
 import { CheckpointStats } from './pages/CheckpointStats';
+import { Certs } from './pages/Certs';
 
 function App() {
   return (
@@ -31,6 +32,7 @@ function App() {
                 <Route path="/kvcrypt" element={<KVCryptDebug />} />
                 <Route path="/upgrades" element={<Upgrades />} />
                 <Route path="/checkpoints" element={<CheckpointStats />} />
+                <Route path="/certs" element={<Certs />} />
               </Routes>
             </Layout>
           </AdminPollingProvider>
